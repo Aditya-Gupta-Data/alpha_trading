@@ -31,8 +31,9 @@ src/data_fetcher.py     <- gets prices (yfinance, free, no API key)
 src/rules.py            <- the alert conditions + the engine that checks them
 src/notifier.py         <- sends the alert (prints for now; Telegram next)
 src/main.py             <- CLI entry point
-src/web/api.py          <- FastAPI web server (3 API endpoints)
-src/web/static/         <- dashboard frontend (single HTML file, no framework)
+src/web/api.py          <- FastAPI web server (health, watchlist GET/POST/DELETE, alerts)
+src/web/watchlist_store.py <- add/remove items + index mapping + safe YAML writes
+src/web/static/         <- dashboard frontend with add/remove UI (single HTML file)
 tests/test_rules.py     <- proves the rule logic works (no internet needed)
 ```
 
@@ -78,14 +79,29 @@ It prints each stock's status and an `[ALERT]` line for anything that triggered.
 
 ## Editing your watchlist
 
-Open `config/watchlist.yaml` in any text editor. Each rule is three lines:
-a `ticker` (NSE ends in `.NS`, BSE ends in `.BO`), a `condition`, and a `value`.
-The file has comments explaining every option. No coding needed.
+**Easiest way — from the web app.** On the dashboard, use the box under
+"Live prices":
+
+- **Add a stock:** keep the toggle on **Stock**, type a symbol like `RELIANCE`
+  (NSE is assumed; type `TCS.BO` for BSE), and press **Add**.
+- **Add an index:** click **Index**, type a friendly name like `NIFTY 50` or
+  `Bank Nifty` (also: Sensex, Nifty IT, Nifty Midcap 50, India VIX), press **Add**.
+- **Remove anything:** click the ✕ on its row.
+
+Adds are checked against a live price before saving, and your changes are written
+straight back to `config/watchlist.yaml` (comments are kept).
+
+**By hand (still works).** Open `config/watchlist.yaml` in any text editor. A rule
+is a `ticker` (NSE ends in `.NS`, BSE ends in `.BO`), a `condition`, and a `value`.
+An entry with just a `ticker` (and optional `type: index`) is "watch only" — it
+shows a live price but never fires an alert.
 
 ---
 
 ## Roadmap / what's next
 
+- [x] Add/remove stocks and indices from inside the web app
+- [ ] Set/edit alert rules from the web app too (adds are watch-only for now)
 - [ ] Send alerts to your phone (Telegram recommended) instead of just printing
 - [ ] Run automatically on a schedule during market hours
 - [ ] Host it so your laptop doesn't have to stay open

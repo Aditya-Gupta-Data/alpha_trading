@@ -27,8 +27,12 @@ def evaluate_watchlist():
     results = []
     for item in load_watchlist():
         ticker = item["ticker"]
-        condition = item["condition"]
-        value = item["value"]
+        condition = item.get("condition")
+        value = item.get("value")
+
+        # Watch-only entries (added from the web app) have no alert rule — skip.
+        if condition is None:
+            continue
 
         quote = get_quote(ticker)
         if quote is None:

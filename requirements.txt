@@ -1,4 +1,5 @@
 yfinance
 PyYAML
+ruamel.yaml
 fastapi
 uvicorn

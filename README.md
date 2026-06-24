@@ -11,6 +11,14 @@ Repo: https://github.com/Aditya-Gupta-Data/alpha_trading
 
 ---
 
+## How this repo is built
+
+This project is developed with local AI coding tools — primarily Claude Code,
+with Gemini CLI as an occasional backup. Both work directly on the files in this
+folder, which is the source of truth. GitHub is the remote backup copy.
+
+---
+
 ## What works right now (Phase 1)
 
 You keep a watchlist of stocks and rules in one plain file. The tool fetches the

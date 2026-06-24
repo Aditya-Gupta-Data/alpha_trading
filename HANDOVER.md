@@ -5,6 +5,23 @@ at the start of the next chat, paste it back in (or point Claude at the repo).
 
 ---
 
+## Multi-tool workflow (read this)
+
+This repo is built with more than one AI coding tool (Claude Code is primary,
+Gemini CLI is an occasional backup). A few simple rules keep things from getting
+tangled:
+
+- **This folder on the Mac is the single source of truth.** GitHub is just the
+  backup / cloud copy.
+- **Only ONE tool edits at a time.** Never run two tools on this folder at once.
+- **Always commit and push before ending a session or switching tools**, so the
+  next tool or session starts from a clean, current state.
+- **Before starting work, run `git pull` first** to make sure you have the latest
+  pushed changes.
+- Commits may come from either Claude Code or Gemini CLI — that is expected and fine.
+
+---
+
 ## Where we are
 **Phase 1: Alerting — web dashboard added, running locally.**
 

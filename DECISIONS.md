@@ -18,6 +18,7 @@ never have to re-argue it in a future chat.
 | 11 | Watchlist is now user-editable from inside the web app (add/remove stocks and indices) | No more hand-editing YAML for everyday changes. The web layer validates a live price before saving and writes config/watchlist.yaml with comments preserved (ruamel.yaml). |
 | 12 | Indices are supported via their yfinance "^" symbols (e.g. NIFTY 50 = ^NSEI, BANK NIFTY = ^NSEBANK) | User picks a friendly name; we store/fetch the raw ticker. A watchlist entry can be "watch-only" (price shown, no alert rule). |
 | 13 | Kite/Zerodha stays out until the trading phase | Phase 1 is read-only, paper mode. No broker, no API keys, no orders. Any future action is Approve/Dismiss only. |
+| 14 | `src/web/` is the single canonical web app | An earlier merge of unrelated histories left a duplicate app (`app/server.py` + `src/engine.py`). It was retired so there's one app to build on, run, and reason about. Run command: `uvicorn src.web.api:app`. The design reference lives at `design/alpha_dashboard_clean.html`. |
 
 ## Still open
 - Alert delivery channel (Telegram vs email) — user undecided; Claude recommends Telegram.

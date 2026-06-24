@@ -36,7 +36,7 @@ Done:
   - `POST /api/watchlist` — **add** a stock or index `{symbol, type}`. Validates a
     real yfinance price BEFORE saving; rejects bad/duplicate symbols.
   - `DELETE /api/watchlist/{ticker}` — **remove** an instrument and its rules.
-  - `GET  /` — dashboard UI (design matches alpha_dashboard_clean.html).
+  - `GET  /` — dashboard UI (design matches design/alpha_dashboard_clean.html).
   - 30-second price cache so the UI can auto-refresh without hammering yfinance.
 - **Editable watchlist (new this milestone):** add/remove stocks AND Indian indices
   from the Watchlist screen; changes are saved back to config/watchlist.yaml with
@@ -57,9 +57,12 @@ How to use add/remove (in the browser):
   `Bank Nifty`, press Add.
 - **Remove:** click the ✕ button on any row.
 
-Note on the repo: a parallel app from the other tool (`app/server.py`,
-`src/engine.py`) still exists from an earlier merge. This milestone built on the
-`src/web/` app per the task. Both were made tolerant of watch-only entries.
+Repo cleanup (done): the duplicate web app left over from an earlier merge has
+been **retired** — `app/server.py`, `app/__init__.py`, `app/static/index.html`
+(the whole `app/` folder) and the orphaned `src/engine.py` were deleted. `src/web/`
+is now the single canonical app. Also fixed the design reference: the broken 1-byte
+`design` file was replaced by the real design at `design/alpha_dashboard_clean.html`
+(moved from the repo root — one canonical copy).
 
 ## How to run the web app
 
@@ -82,8 +85,8 @@ src/web/
   static/
     index.html       ← single-page dashboard with add/remove UI, vanilla JS, no framework
 ```
-Engine files data_fetcher.py and rules.py were NOT changed. main.py and src/engine.py
-got a one-line guard to skip watch-only entries (entries with no alert rule).
+Engine files data_fetcher.py and rules.py were NOT changed. main.py has a one-line
+guard to skip watch-only entries (entries with no alert rule).
 
 ## Next steps (in order)
 1. Let users set/edit alert RULES from the UI too (right now adds are watch-only;
@@ -91,8 +94,7 @@ got a one-line guard to skip watch-only entries (entries with no alert rule).
 2. Add Telegram (or email) alert delivery — plug into notifier.py, nothing else changes.
 3. Add a scheduler so it checks automatically during market hours.
 4. Host somewhere free (Railway, Fly.io, etc.) so the laptop doesn't need to stay on.
-5. Decide whether to retire the duplicate `app/` version and keep one app.
-6. Expand watchlist condition types, then move toward Phase 2 (suggestions).
+5. Expand watchlist condition types, then move toward Phase 2 (suggestions).
 
 ## Open questions for the user
 - Telegram or email for alerts? (Claude recommends Telegram.)

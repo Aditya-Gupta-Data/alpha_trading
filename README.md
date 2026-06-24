@@ -57,6 +57,23 @@ It prints each stock's status and an `[ALERT]` line for anything that triggered.
 
 ---
 
+## Run the web app
+
+A basic web app lets you see your watchlist and run a check in the browser
+(works on your phone's browser too). One-time install, then one command:
+
+```
+pip install -r requirements.txt
+uvicorn app.server:app --reload
+```
+
+Then open http://localhost:8000 in your browser and tap "Check now".
+
+(The look is a simple placeholder for now — it'll be reskinned with the Google
+Stitch design later.)
+
+---
+
 ## Editing your watchlist
 
 Open `config/watchlist.yaml` in any text editor. Each rule is three lines:

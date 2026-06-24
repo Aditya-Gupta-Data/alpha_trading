@@ -1,2 +1,4 @@
 yfinance
 PyYAML
+fastapi
+uvicorn

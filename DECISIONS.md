@@ -18,3 +18,11 @@ never have to re-argue it in a future chat.
 ## Still open
 - Alert delivery channel (Telegram vs email) — user undecided; Claude recommends Telegram.
 - Where it runs always-on (hosting) — to be decided after the logic is solid.
+
+## Added later
+| # | Decision | Why |
+|---|----------|-----|
+| 10 | App is a web app first, phone app via PWA later | One shared backend; web works on phone + laptop now; PWA gives an installable app feel with no app-store overhead; native wrapper (Capacitor) reuses the web code if ever needed. |
+| 11 | Backend: FastAPI | Lightweight Python; reuses the existing engine with zero rewrite. |
+| 12 | Shared `evaluate_watchlist()` seam in `src/engine.py` | Both the CLI and the web app call one function — no duplicated logic. |
+| 13 | UI is a functional MVP for now | Real look comes from the Google Stitch design later; don't over-invest before then. |

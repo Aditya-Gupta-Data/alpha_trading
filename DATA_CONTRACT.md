@@ -4,6 +4,23 @@
 This file is the single source of truth for every JSON structure the Python
 backend produces. Build UI state against these shapes exactly.
 
+## Branch strategy (adopted 2026-07-05) — READ FIRST
+
+This repo uses a **decoupled two-branch model**:
+
+- **`main`** — the core Python trading engine (`src/`). Runs headless (cloud
+  cron jobs, Discord bot) with no Node/build step. Backend code stays strictly
+  independent of any frontend framework.
+- **`lovable-ui`** — the Lovable web/mobile frontend. It reads schemas from
+  `main` (this file) but **commits all frontend code to `lovable-ui`, never to
+  `main`.**
+
+The two branches are kept isolated on purpose: frontend churn must not touch
+the execution pipeline. **Do not merge `lovable-ui` into `main`** (or vice
+versa) unless the repo owner explicitly says so. When the UI needs backend
+data, the fix is a new read-only endpoint added on `main` (see Part 3), not
+frontend code creeping into the engine.
+
 Why this file exists: all live engine output is written to `data/`, which is
 **git-ignored** (it holds the user's personal paper portfolio and journal).
 You will never see real data files in this repository — do not guess their

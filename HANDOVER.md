@@ -372,7 +372,33 @@ NOT started:**
    src.tuner` periodically once there are 5+ resolved plan-carrying trades, so
    `src/forecast.py` starts leaning on whichever BUY archetype has actually
    been paying off.
-5. Upload scaffold to the GitHub repo (deferred until logic is solid).
+5. ✅ DONE 2026-07-05: project pushed to GitHub
+   (https://github.com/Aditya-Gupta-Data/alpha_trading, branch main).
+   IMPORTANT things learned during the push:
+   - The remote repo was NOT empty (this doc's old "repo created (empty)"
+     note was stale): it held ~10 commits of a PARALLEL WORKSTREAM this
+     local history didn't know about — a read-only web dashboard
+     (`src/web/api.py`, `src/web/static/index.html`,
+     `src/web/watchlist_store.py`), `ARCHITECTURE.md`, and
+     `design/alpha_dashboard_clean.html`, built per its commit messages
+     with a Claude Code + Gemini CLI workflow. It was MERGED, not
+     overwritten: the web files now live in this repo too; on every
+     overlapping file (README/HANDOVER/DECISIONS/src engine files) the
+     LOCAL Phase-4 version won wholesale — the remote's older
+     HANDOVER/README text survives only in git history, so any web-app
+     status notes in it were not carried into this file.
+   - The local `src/web/` code is untested here and its watchlist_store
+     may not match the current config/watchlist.yaml conventions — treat
+     it as unreviewed third-track code until someone actually runs it.
+   - Security: `.gitignore` was hardened before the first commit —
+     `.env*` (allowlisting only `.env.example`), `data/`, `logs/`,
+     `.claude/`. Critically, a stray `.env.save` file in the project root
+     contains a REAL Gmail app password and was NOT covered by the old
+     `.env`-only rule; it is ignored now and never got committed. It
+     should probably just be deleted (it's a garbled duplicate of
+     .env.example with real credentials pasted in).
+   - Git identity/auth: push went through over HTTPS with the user's
+     existing credentials; commits are on `main`, remote `origin`.
 6. If future code changes touch src/config/requirements, remember to re-scp
    them to the VM — nothing auto-deploys yet. `src/forecast.py` and
    `src/tuner.py` aren't on the VM at all yet (not needed there — see the

@@ -1,0 +1,89 @@
+# ─────────────────────────────────────────────────────────────
+# YOUR WATCHLIST
+# This is the only file you need to edit day-to-day. No coding required.
+#
+# Add one block per rule. Each rule needs three things:
+#   ticker     - the stock symbol. NSE stocks end in .NS, BSE stocks end in .BO
+#                e.g. RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS
+#   condition  - what should trigger the alert (see the list below)
+#   value      - the number that goes with the condition
+#
+# Conditions available right now:
+#   price_above    -> alert when price goes ABOVE value
+#   price_below    -> alert when price drops BELOW value
+#   percent_up     -> alert when the stock is UP value% or more today
+#   percent_down   -> alert when the stock is DOWN value% or more today
+#
+# (We'll add more condition types whenever you want them.)
+# ─────────────────────────────────────────────────────────────
+
+watchlist:
+  # ---- Banking ----
+  - ticker: HDFCBANK.NS
+    condition: percent_up
+    value: 3
+  - ticker: HDFCBANK.NS
+    condition: percent_down
+    value: 3
+  - ticker: ICICIBANK.NS
+    condition: percent_up
+    value: 3
+  - ticker: ICICIBANK.NS
+    condition: percent_down
+    value: 3
+
+  # ---- IT ----
+  - ticker: TCS.NS
+    condition: percent_up
+    value: 3
+  - ticker: TCS.NS
+    condition: percent_down
+    value: 3
+  - ticker: INFY.NS
+    condition: percent_up
+    value: 3
+  - ticker: INFY.NS
+    condition: percent_down
+    value: 3
+
+  # ---- Energy / Oil & Gas ----
+  - ticker: RELIANCE.NS
+    condition: percent_up
+    value: 3
+  - ticker: RELIANCE.NS
+    condition: percent_down
+    value: 3
+  - ticker: ONGC.NS
+    condition: percent_up
+    value: 3
+  - ticker: ONGC.NS
+    condition: percent_down
+    value: 3
+
+  # ---- FMCG ----
+  - ticker: HINDUNILVR.NS
+    condition: percent_up
+    value: 3
+  - ticker: HINDUNILVR.NS
+    condition: percent_down
+    value: 3
+  - ticker: ITC.NS
+    condition: percent_up
+    value: 3
+  - ticker: ITC.NS
+    condition: percent_down
+    value: 3
+
+  # ---- Auto ----
+  - ticker: MARUTI.NS
+    condition: percent_up
+    value: 3
+  - ticker: MARUTI.NS
+    condition: percent_down
+    value: 3
+  - ticker: TMPV.NS
+    condition: percent_up
+    value: 3
+  - ticker: TMPV.NS
+    condition: percent_down
+    value: 3

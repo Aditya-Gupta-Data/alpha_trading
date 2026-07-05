@@ -1,0 +1,21 @@
+{
+  "rsi_overbought": 70,
+  "rsi_oversold": 30,
+  "moving_average_fast": 50,
+  "moving_average_slow": 200,
+  "default_stop_loss_pct": 3.0,
+  "default_investment_size": 10000,
+  "risk_level": "moderate",
+  "risk_levels": {
+    "conservative": 0.5,
+    "moderate": 1.0,
+    "aggressive": 2.0
+  },
+  "take_profit_rr": 2.0,
+  "max_concurrent_positions": 4,
+  "alt_entry_pullback_pct": 2.0,
+  "plan_max_days": 30,
+  "tuner_min_samples": 5,
+  "tuner_weight_sensitivity": 0.25,
+  "tuner_weight_bounds": [0.5, 1.5]
+}

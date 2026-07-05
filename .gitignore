@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+
+# Secrets (Gmail app password, Gemini/Discord keys, broker keys, etc.)
+# Blocks any .env variant (.env, .env.save, .env.local, ...) except the
+# committed template, which only has placeholder values.
+.env*
+!.env.example
+
+# Virtual environments
+venv/
+.venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Scheduler run logs
+logs/
+
+# Paper-trading state (portfolio, journal, news sentiment, brain map/weights
+# are personal runtime data, not source code)
+data/
+
+# Claude Code's local, machine-specific settings -- not part of the app
+.claude/

@@ -17,8 +17,12 @@ for anything more recent than what's written here.
 - **Market data has been fully migrated from yfinance to the DhanHQ Data
   API** (`src/dhan_client.py`). This is the single source of prices/OHLC for
   the whole engine now.
-- **Known gap**: the GCP VM's cron jobs still run the OLD pre-Dhan code — see
-  "GCP VM redeploy" below.
+- **The backend is deployed to a fresh GCP VM (2026-07-06)** running the
+  DhanHQ-backed FastAPI server continuously as a systemd service — see
+  "GCP VM (cloud hosting)" below. The old cron VM is superseded.
+- **Known gap**: the scheduled email jobs (`src.main` alerts, `src.suggest`
+  suggestions) that the *old* VM ran via cron are NOT yet set up on the new
+  VM — only the API server runs there. See the VM section for how to add them.
 
 ## Credentials & environment variables
 
@@ -72,28 +76,68 @@ entries).
 
 ## GCP VM (cloud hosting)
 
-- `alpha-trading-vm`, zone `us-central1-a`, machine type `e2-micro` (GCP
-  Always Free tier — $0/month), Debian 12, timezone `Asia/Kolkata`.
-- SSH: `gcloud compute ssh alpha-trading-vm --zone=us-central1-a` (run from
-  this project folder with gcloud CLI + billing project already configured).
-- Cron (`crontab -l` on the VM): `35 15 * * 1-5` -> `python3 -m src.main`
-  (alerts), `0 8 * * 1-5` -> `python3 -m src.suggest` (suggestions). Logs to
-  `~/alpha_trading/logs/` on the VM (separate from local `logs/`).
-- **⚠️ REDEPLOY NEEDED**: the VM still has the pre-Dhan, pre-`config.json`
-  code. It will crash or silently keep using yfinance-era behavior until
-  redeployed. The full, current deploy command (copy everything the engine
-  needs, nothing it doesn't):
+**Rebuilt from scratch 2026-07-06.** The original cron VM (project
+`alpha-trading-app-2026`) had a lost login and is abandoned; a new VM was
+created and now runs the current DhanHQ FastAPI backend.
+
+- **VM**: `alpha-trading-vm`, project `project-37632031-10d0-47dd-b6f`
+  ("My First Project", org `adigupta1998-org`), zone `us-central1-a`, machine
+  type `e2-micro`, Debian 13 (trixie), Python 3.13. Billing has ₹28,321
+  free-trial credit expiring 2026-10-01.
+- **External IP**: `35.239.254.99` — ⚠️ *ephemeral*, can change if the VM is
+  stopped/started. Reserve a static IP before relying on it externally.
+- **SSH**: GCP Console → Compute Engine → VM instances → **SSH** button
+  (browser terminal, no key files). `gcloud compute ssh` also works if the
+  gcloud CLI is configured locally, but it is not set up as of this writing.
+- **Code lives at** `~/alpha_trading` on the VM, cloned from GitHub (`main`),
+  with a Python venv at `~/alpha_trading/venv`.
+- **Runtime**: the unified FastAPI API (`src.api:app`) runs continuously on
+  port 8000 as a **systemd service** named `alpha-trading`
+  (`/etc/systemd/system/alpha-trading.service`): `Restart=always`, enabled on
+  boot. This includes the built-in hourly auto-sync loop. Health check:
+  `http://localhost:8000/api/health` → `{"status":"ok","mode":"paper-only"}`.
+
   ```bash
-  gcloud compute scp --recurse --zone=us-central1-a \
-    src config config.json requirements.txt .env \
-    alpha-trading-vm:~/alpha_trading/
-  # then on the VM:
-  pip install -r requirements.txt
+  # deploy an update (on the VM)
+  cd ~/alpha_trading && git pull && venv/bin/pip install -r requirements.txt
+  sudo systemctl restart alpha-trading
+
+  # operate
+  systemctl status alpha-trading          # is it running?
+  sudo journalctl -u alpha-trading -f      # live logs (Ctrl+C to exit)
+  sudo systemctl restart|stop alpha-trading
   ```
-  `config.json` and `.env` are NOT optional — `src/config.py` fails loudly
-  at import if `config.json` is missing, and `src/dhan_client.py` needs
-  `.env`'s Dhan keys. `data/`, `tests/`, `logs/` are deliberately NOT copied
-  (paper-trading state stays local only; see `OVERVIEW.md`).
+
+- **`.env` on the VM** is NOT in git and must be transferred by hand. ⚠️
+  **Do not paste the DhanHQ JWT directly into the browser SSH terminal** — a
+  secret-scanner silently replaces the `eyJ...` token with bullet characters,
+  causing `'latin-1' codec can't encode` errors at runtime. Working method:
+  on the Mac, `base64`-encode `.env` and pipe a decode command to the
+  clipboard, then paste that (the base64 blob isn't recognized as a token, so
+  it survives):
+  ```bash
+  # on the Mac (fills clipboard with a ready-to-run command):
+  printf 'echo %s | base64 -d > ~/alpha_trading/.env && echo OK\n' \
+    "$(base64 < ~/Documents/Claude/alpha_trading/.env | tr -d '\n')" | pbcopy
+  # then paste into the VM SSH window + Enter, then restart the service.
+  ```
+  Because `DHAN_ACCESS_TOKEN` is short-lived (~24h), this refresh is a
+  recurring manual step until token auto-refresh is built.
+- **Not exposed to the internet**: port 8000 is reachable only on the VM
+  itself (no firewall rule opened). To connect a deployed frontend, the
+  recommended path is a **Cloudflare Tunnel** (free HTTPS, nothing exposed,
+  survives IP changes) plus an API-key check in `src.api` — deferred, not yet
+  done.
+- **⚠️ Scheduled email jobs not migrated**: the old VM ran `src.main`
+  (alerts, `35 15 * * 1-5`) and `src.suggest` (suggestions, `0 8 * * 1-5`)
+  via cron. The new VM runs *only* the API server. To restore the daily
+  cloud emails, add those two cron entries on the new VM (`crontab -e`, using
+  `~/alpha_trading/venv/bin/python -m src.main`, logging to
+  `~/alpha_trading/logs/`).
+- `data/`, `tests/`, `logs/` are not part of the deploy (paper-trading state
+  stays local only; see `OVERVIEW.md`). `config.json` and `.env` are required
+  — `src/config.py` fails loudly at import without `config.json`, and
+  `src/dhan_client.py` needs `.env`'s Dhan keys.
 
 ## Watchlist (current)
 

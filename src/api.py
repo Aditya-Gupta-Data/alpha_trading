@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from src import journal
 from src import portfolio as pf
 from src.data_fetcher import get_quote
+from src.plan_tracker import run_tracker
 from src.rules import check_rule, describe
 from src.strategy import propose_plans
 from src.suggestions import analyze
@@ -407,6 +408,7 @@ def _executed_trade(entry: dict, idx: int) -> dict:
     stop = plan.get("stop_loss") or {}
     target = plan.get("target") or {}
     outcome = entry.get("outcome") or {}
+    rev = entry.get("review") or {}
     return {
         "id": f"{entry['date']}-{entry['ticker']}-{idx}",
         "date": entry["date"],
@@ -424,6 +426,11 @@ def _executed_trade(entry: dict, idx: int) -> dict:
         "net_pnl": outcome.get("pnl_rs") or 0,
         "mode": "PAPER",
         "created_at": entry["date"],
+        # Post-mortem review (from /api/review), so the modal can pre-fill.
+        "pm_right": rev.get("pm_right"),
+        "pm_wrong": rev.get("pm_wrong"),
+        "pm_error_category": rev.get("pm_error_category"),
+        "reviewed_at": rev.get("reviewed_at"),
     }
 
 
@@ -580,6 +587,45 @@ def review(req: ReviewRequest):
     journal.rewrite_all(entries)
     return {"ok": True, "ticker": req.ticker, "date": req.date,
             "review": entries[idx]["review"]}
+
+
+# =========================================================== /api/sync-market
+
+@app.post("/api/sync-market")
+def sync_market():
+    """Resolve OPEN paper trades against the market.
+
+    Delegates to the Phase 4C plan tracker (src/plan_tracker.py) rather than
+    re-implementing resolution here, so there is ONE source of truth for how a
+    trade resolves. The tracker scans each open plan's daily OHLC since entry:
+      * price traded through the stop  -> STOP_HIT
+      * price traded through the target -> TARGET_HIT
+      * neither within plan_max_days    -> time stop (closed at market)
+    On a resolved BUY it also closes the paper position in portfolio.json at
+    the exit price (bracket-order semantics), and writes r_multiple / pnl_rs /
+    days_in_trade into the entry's `outcome` — exactly what /api/scorecard
+    reads. Same-day stop+target ambiguity breaks pessimistically (stop first).
+
+    Note: only plan-carrying trades are trackable. Older entries with no
+    stop/target (e.g. a pre-4B manual buy) are intentionally left OPEN here —
+    they are scored by the 7-day review path instead, not resolved on a
+    stop/target that was never set. Email digest is suppressed for the API.
+    """
+    try:
+        resolved = run_tracker(email=False)
+    except Exception as e:
+        return JSONResponse(
+            status_code=502,
+            content={"ok": False, "error": f"Market sync failed: {e}"},
+        )
+    return {
+        "ok": True,
+        "resolved": resolved,
+        "message": (f"Resolved {resolved} trade(s) against the market."
+                    if resolved else
+                    "No open plan-carrying trades resolved (nothing hit its "
+                    "stop or target yet)."),
+    }
 
 
 # ================================================================== misc

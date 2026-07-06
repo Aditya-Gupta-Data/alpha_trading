@@ -2,3 +2,6 @@ yfinance
 PyYAML
 certifi
 discord.py
+fastapi
+uvicorn
+ruamel.yaml

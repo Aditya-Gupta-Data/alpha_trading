@@ -42,9 +42,12 @@ shape from the Python source; it is documented precisely here instead.
 
 ---
 
-## Part 1 — Live HTTP API (already served by `src/web/api.py`, FastAPI)
+## Part 1 — Live HTTP API (served by the unified `src/api.py`, FastAPI)
 
-Base: wherever `uvicorn src.web.api:app` runs. All responses JSON.
+Base: wherever `uvicorn src.api:app` runs (default `http://localhost:8000`).
+All responses JSON. As of 2026-07-06 this is ONE app — the old `src/web/api.py`
+was merged into `src/api.py`, so watchlist/alerts, chat, decision, and
+scorecard all live under the same server.
 
 ### `GET /api/health`
 ```json
@@ -102,9 +105,14 @@ E.g. `/api/watchlist/RELIANCE.NS`. `200 {"ok": true}` or `404 {"ok": false}`.
 ## Part 2 — Engine artifacts NOT yet served over HTTP
 
 These are the JSON files/structures the Phase 3–4 engine writes locally.
-**There are no endpoints for them yet.** When the dashboard needs one, the
-backend adds a read-only FastAPI route in `src/web/api.py` serving these
-exact shapes — the frontend must NOT stub them with invented fields.
+Since 2026-07-06 three of them ARE now served by `src/api.py`
+(`POST /api/chat` returns generated plans, `POST /api/decision` writes a
+decision to the journal + paper portfolio, `GET /api/scorecard` rolls up
+journaled outcomes). The raw files below (portfolio, full journal, news
+sentiment, forecast, brain weights) still have no direct endpoint. When the
+dashboard needs one, the backend adds a read-only FastAPI route in
+`src/api.py` serving these exact shapes — the frontend must NOT stub them
+with invented fields.
 
 ### 2.1 Paper portfolio — `data/portfolio.json`
 ```json

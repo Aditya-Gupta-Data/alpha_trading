@@ -161,21 +161,28 @@ the working pattern used throughout this project's history.
 
 ## Next steps / roadmap
 
-**Start the next session here: build Phase 6 (the Brain Map).** The design is
-finalized and banked in `DECISIONS.md` → "Phase 6 — Brain Map design". Build
-order (follow the project's one-file-at-a-time rule, confirm before each):
+**Phase 6 (Brain Map) steps 1–2 landed 2026-07-06**: `src/brain_map.py`
+(native `sqlite3` store at `data/brain_map.db` — `events`, `outcomes`,
+`event_outcome_link` tables, record/link helpers, and
+`query_similar_events(tags)` returning `{count, win_rate, avg_r_multiple,
+examples}`) plus `tests/test_brain_map.py` (16 offline in-memory tests;
+full suite now **46/46**). The design remains banked in `DECISIONS.md` →
+"Phase 6 — Brain Map design". Note: `data/brain_map.db` does not exist yet
+— nothing has been recorded into the store.
 
-1. **`src/brain_map.py`** — native `sqlite3` store at `data/brain_map.db`
-   with the three tables (`events`, `outcomes`, `event_outcome_link`), the
-   insert helpers, `query_similar_events(tags)`, and `ingest_existing()`.
-2. **`tests/test_brain_map.py`** — offline test (in-memory DB, no network)
-   proving insert → link → query math.
-3. *(later)* seed via `ingest_existing()`, then add a stable `id` to new
-   `journal.py` entries, then — as a separate step — let `forecast.py` query
-   the map.
+**Start the next session here — remaining Phase 6 steps** (one file at a
+time, confirm before each):
 
-Keep it **strictly additive**: do not modify `tuner.py`, `brain_weights.json`,
-or `forecast.py`'s behaviour in Step 1–2.
+1. **`ingest_existing()`** in `src/brain_map.py` — seed `events` from
+   existing `pattern_tags` / strategy signals / `data/news_sentiment.json`
+   and backfill `outcomes` from resolved `journal.jsonl` entries, keyed by
+   the composite `journal_ref` (`date|ticker|action|price`).
+2. Add a stable `id` to new `journal.py` entries (composite-key fallback
+   for old rows).
+3. *(separate step)* let `forecast.py` query the map.
+
+Keep it **strictly additive**: `tuner.py` and `brain_weights.json` stay
+untouched, and `forecast.py` stays unwired until step 3.
 
 Other open items (not next, but tracked): restore the cloud-scheduled email
 jobs on the new VM, expose the VM API via a Cloudflare Tunnel for a deployed

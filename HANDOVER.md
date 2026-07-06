@@ -165,24 +165,27 @@ the working pattern used throughout this project's history.
 (native `sqlite3` store at `data/brain_map.db` — `events`, `outcomes`,
 `event_outcome_link` tables, record/link helpers, and
 `query_similar_events(tags)` returning `{count, win_rate, avg_r_multiple,
-examples}`) plus `tests/test_brain_map.py` (16 offline in-memory tests;
-full suite now **46/46**). The design remains banked in `DECISIONS.md` →
-"Phase 6 — Brain Map design". Note: `data/brain_map.db` does not exist yet
-— nothing has been recorded into the store.
+examples}`) plus `tests/test_brain_map.py` (offline in-memory tests). The
+design remains banked in `DECISIONS.md` → "Phase 6 — Brain Map design".
 
-**Start the next session here — remaining Phase 6 steps** (one file at a
-time, confirm before each):
+**Phase 6 steps 3–4 landed later on 2026-07-06**: new journal entries now
+carry a stable `short_id` (8-char uuid hex, `src/journal.py` — older lines
+without one are fine, readers fall back to a composite
+`date|ticker|action|price` key via `brain_map.journal_ref_for()`), and
+`ingest_existing()` in `src/brain_map.py` idempotently seeds the map from
+resolved `journal.jsonl` trades and `data/news_sentiment.json`. Run it any
+time with `python3 -m src.brain_map ingest` (re-running is safe and picks
+up newly resolved trades). The real `data/brain_map.db` now exists,
+holding 10 news events; 0 outcomes so far because no journal trade has
+resolved yet. Full suite: **55/55**.
 
-1. **`ingest_existing()`** in `src/brain_map.py` — seed `events` from
-   existing `pattern_tags` / strategy signals / `data/news_sentiment.json`
-   and backfill `outcomes` from resolved `journal.jsonl` entries, keyed by
-   the composite `journal_ref` (`date|ticker|action|price`).
-2. Add a stable `id` to new `journal.py` entries (composite-key fallback
-   for old rows).
-3. *(separate step)* let `forecast.py` query the map.
-
-Keep it **strictly additive**: `tuner.py` and `brain_weights.json` stay
-untouched, and `forecast.py` stays unwired until step 3.
+**Start the next session here — the one remaining Phase 6 step** (its own
+step, confirm before building): let `forecast.py` query the map via
+`query_similar_events(tags)`. Until then keep it **strictly additive**:
+`tuner.py` and `brain_weights.json` stay untouched, `forecast.py` stays
+unwired. Worth doing around the same time: re-run the ingest after the
+plan tracker resolves the open 2026-07-06 trades, so the map holds real
+outcomes before forecasts start reading it.
 
 Other open items (not next, but tracked): restore the cloud-scheduled email
 jobs on the new VM, expose the VM API via a Cloudflare Tunnel for a deployed

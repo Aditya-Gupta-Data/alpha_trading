@@ -220,9 +220,19 @@ When `stale` is true, render "no news data", never a neutral-0 gauge.
     "negative news — sharp price crash (sentiment -5/5)"
   ],
   "time_horizon": "swing (multi-day to multi-week)",
-  "price": 2093.5
+  "price": 2093.5,
+  "memory": {                          // Phase 6 Brain Map stats, or null
+    "tags": ["fresh_cross", "golden_cross"],
+    "count": 3,                        // linked historical trades matched
+    "win_rate": 0.67,                  // 0-1, null never happens when count > 0
+    "avg_r_multiple": 0.67             // may be null (no R recorded yet)
+  },
+  "memory_context": "Historical Performance for active patterns [fresh_cross, golden_cross]: Win Rate: 67%, Avg R-Multiple: +0.67 over 3 historical trades."
 }
 ```
+`memory` / `memory_context` are both `null` whenever the setup has no
+active pattern tags or the Brain Map has no matching history — advisory
+context only, never part of `score`.
 
 ### 2.5 Learning-loop weights — `data/brain_weights.json`
 ```json

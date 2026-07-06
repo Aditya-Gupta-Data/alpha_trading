@@ -28,6 +28,20 @@ can flex a bit either way once there's enough evidence). The bearish
 mirrors (Death Cross, overbought) and the trend/news drivers have no
 matching journaled BUY archetype to learn from, so they stay fixed.
 
+Phase 6 (src/brain_map.py) adds pattern MEMORY on top: when the current
+setup carries active pattern tags (a fresh Golden Cross, an oversold
+RSI), the forecast asks the Brain Map how that cluster of patterns has
+historically paid, and -- if there's any history -- attaches a
+`memory_context` line ("Historical Performance for active patterns
+[...]: Win Rate: X%, ...") plus structured `memory` stats to the result.
+This is ADVISORY CONTEXT ONLY: it adds no points to the score (the
+tuner's learned weights already adjust the score from outcomes), it just
+rides along in the payload so every downstream consumer -- the terminal,
+the Discord bot's /analyze, API routes, and any LLM prompt that embeds a
+forecast -- sees the historical evidence. If the Brain Map is empty,
+missing, or errors, both keys are simply None and the forecast proceeds
+exactly as before.
+
 Run it from the project folder with:
 
     python -m src.forecast
@@ -38,6 +52,8 @@ from pathlib import Path
 
 import yaml
 
+from src import brain_map
+from src.brain_map import query_similar_events
 from src.suggestions import analyze
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -148,9 +164,59 @@ def _news_driver(news_entry: dict):
     return points, f"{direction} news -- {focus} (sentiment {sentiment:+d}/5)"
 
 
-def forecast(ticker: str, news_by_ticker: dict = None, weights: dict = None) -> dict:
+def _active_pattern_tags(result: dict, rsi_oversold: float) -> list:
+    """The Brain Map tags describing the CURRENT setup, in the same tag
+    vocabulary ingest_existing() writes: the tuner archetype plus the
+    normalized user pattern tag that names the same pattern (a fresh
+    Golden Cross setup matches both `fresh_cross` signal events and
+    `golden_cross` pattern-tag events)."""
+    tags = []
+    if result["fresh_cross"] and result["uptrend"]:
+        tags += ["fresh_cross", "golden_cross"]
+    rsi = result["rsi"]
+    if rsi is not None and rsi <= rsi_oversold:
+        tags.append("rsi_oversold")
+    return tags
+
+
+def _memory_lookup(tags: list, brain=None):
+    """Phase 6: ask the Brain Map how this cluster of patterns has paid
+    historically. Returns {tags, count, win_rate, avg_r_multiple, context}
+    or None. Fail-safe by design: no active tags, no history (count 0), a
+    missing database, or any query error all degrade to None -- a forecast
+    never depends on the Brain Map existing."""
+    if not tags:
+        return None
+    opened_here = brain is None
+    try:
+        if brain is None:
+            brain = brain_map.connect()
+        stats = query_similar_events(brain, tags)
+    except Exception:
+        return None
+    finally:
+        if opened_here and brain is not None:
+            brain.close()
+    if not stats["count"]:
+        return None
+    avg = stats["avg_r_multiple"]
+    context = (
+        f"Historical Performance for active patterns [{', '.join(tags)}]: "
+        f"Win Rate: {round(stats['win_rate'] * 100)}%, "
+        f"Avg R-Multiple: {f'{avg:+.2f}' if avg is not None else 'n/a'} "
+        f"over {stats['count']} historical trades."
+    )
+    return {"tags": tags, "count": stats["count"], "win_rate": stats["win_rate"],
+            "avg_r_multiple": avg, "context": context}
+
+
+def forecast(ticker: str, news_by_ticker: dict = None, weights: dict = None,
+             brain=None) -> dict:
     """Returns a forecast dict, or None if there isn't enough price history
-    yet (same 200+ day requirement as suggestions.analyze)."""
+    yet (same 200+ day requirement as suggestions.analyze). `brain` is an
+    optional open brain_map connection (run_once shares one across the
+    watchlist; tests pass ':memory:'); default opens the real database per
+    call."""
     from src.config import RSI_OVERBOUGHT, RSI_OVERSOLD
 
     result = analyze(ticker)
@@ -188,6 +254,10 @@ def forecast(ticker: str, news_by_ticker: dict = None, weights: dict = None) -> 
     # but this keeps the contract stable if more signals are added later).
     ranked = sorted(drivers, key=lambda d: abs(d[0]), reverse=True)[:5]
 
+    # Phase 6: advisory pattern memory -- rides along in the payload, adds
+    # nothing to the score (see module docstring).
+    memory = _memory_lookup(_active_pattern_tags(result, RSI_OVERSOLD), brain)
+
     return {
         "ticker": ticker,
         "bias": bias,
@@ -196,6 +266,9 @@ def forecast(ticker: str, news_by_ticker: dict = None, weights: dict = None) -> 
         "drivers": [label for _, label in ranked],
         "time_horizon": TIME_HORIZON,
         "price": result["price"],
+        "memory": ({k: memory[k] for k in ("tags", "count", "win_rate", "avg_r_multiple")}
+                   if memory else None),
+        "memory_context": memory["context"] if memory else None,
     }
 
 
@@ -207,6 +280,8 @@ def describe(result: dict) -> str:
         f"-- now Rs.{result['price']:.1f}"
     )
     driver_lines = "".join(f"\n    - {d}" for d in result["drivers"])
+    if result.get("memory_context"):
+        driver_lines += f"\n    - memory: {result['memory_context']}"
     return header + driver_lines
 
 
@@ -226,14 +301,23 @@ def run_once():
         print("No brain_weights.json found yet -- run `python3 -m src.tuner` once you "
               "have resolved trades to learn from. Continuing with neutral weights.\n")
 
+    # One shared Brain Map connection for the whole sweep (memory context
+    # is optional -- None just means every forecast runs without it).
+    try:
+        brain = brain_map.connect()
+    except Exception:
+        brain = None
+
     print(f"Forecasting {len(tickers)} stock(s)...\n")
     for ticker in tickers:
-        result = forecast(ticker, news_by_ticker, weights)
+        result = forecast(ticker, news_by_ticker, weights, brain)
         if result is None:
             print(f"  skip  {ticker}: not enough price history yet")
             continue
         print(f"  {describe(result)}")
 
+    if brain is not None:
+        brain.close()
     print("\nDone.")
 
 

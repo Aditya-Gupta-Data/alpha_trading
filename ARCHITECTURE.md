@@ -95,15 +95,18 @@ architecture as of the 2026-07-06 milestone (post Dhan migration).
 
 ## 3. Hosting (current + roadmap)
 
-- **Cloud VM**: GCP Compute Engine, `alpha-trading-vm`, `us-central1-a`,
-  `e2-micro` (GCP Always Free tier — $0/month), Debian 12, timezone
-  `Asia/Kolkata`. Runs the passive cron jobs (alerts + suggestions) so they
-  don't depend on the user's laptop being open.
-  ⚠️ **Known gap**: the VM currently runs the OLD pre-Dhan, pre-config.py
-  code (still yfinance). It has NOT been redeployed since the Dhan migration
-  or since `config.json`/`api.py`/`discord_bot.py` were added. Redeploying it
-  is a real next milestone, not yet done — see `HANDOVER.md` for the exact
-  deploy command and what must ship together.
+- **Cloud VM** (rebuilt 2026-07-06): GCP Compute Engine, `alpha-trading-vm`,
+  project `project-37632031-10d0-47dd-b6f`, `us-central1-a`, `e2-micro`,
+  Debian 13, Python 3.13. Runs the current DhanHQ-backed FastAPI server
+  (`src.api:app`, port 8000) continuously as a systemd service
+  (`alpha-trading`, `Restart=always`, enabled on boot), including the hourly
+  auto-sync loop. Deployed by `git clone` of `main` into `~/alpha_trading`
+  with a venv; updates via `git pull` + `systemctl restart`.
+  ⚠️ **Known gaps**: (1) the old VM's scheduled cron emails (`src.main`
+  alerts, `src.suggest` suggestions) are not yet set up on this VM — only the
+  API runs; (2) the API is not exposed to the internet yet (local to the VM,
+  no firewall rule). See `HANDOVER.md` → "GCP VM (cloud hosting)" for
+  operations, the `.env` token-transfer gotcha, and next steps.
 - **Local (Mac)**: paper trading (`src/trade.py`), the FastAPI server
   (`src/api.py`), the Discord bot (`src/discord_bot.py`), and the React
   dashboard dev server all run locally today. Interactive/stateful pieces

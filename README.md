@@ -142,27 +142,36 @@ no single stock may exceed 25% of the portfolio.
 
 ---
 
-## Hosting (alerts + suggestions run in the cloud)
+## Hosting (the backend runs in the cloud)
 
-Phase 1 (alerts) and Phase 2 (suggestions) run automatically on a free-tier
-Google Cloud VM (`alpha-trading-vm`, project `alpha-trading-app-2026`) — your
-laptop doesn't need to be open for those. Phase 3 (paper trading) stays on
-your Mac since it's interactive.
+The DhanHQ-backed API server (`src/api.py`) runs 24/7 on a free-tier Google
+Cloud VM (`alpha-trading-vm`, project `project-37632031-10d0-47dd-b6f`),
+rebuilt fresh on 2026-07-06. It starts automatically on boot and restarts
+itself if it crashes (a systemd service called `alpha-trading`). Phase 3
+(paper trading) stays on your Mac since it's interactive.
 
-To check on the cloud VM:
+To get onto the VM: GCP Console → Compute Engine → VM instances → click the
+**SSH** button next to `alpha-trading-vm` (opens a terminal in your browser —
+no keys or extra tools needed).
+
+To check on it (in that SSH window):
 ```
-gcloud compute ssh alpha-trading-vm --zone=us-central1-a
-crontab -l                          # see the schedule
-cat ~/alpha_trading/logs/run.log    # see the last alert check
-cat ~/alpha_trading/logs/suggest.log
+systemctl status alpha-trading             # is the server running?
+sudo journalctl -u alpha-trading -n 40      # recent logs
+python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/api/health').read().decode())"
 ```
 
-If you ever change anything in `src/`, `config/`, or `requirements.txt`, copy
-it to the VM again (nothing auto-deploys):
+To ship code changes (nothing auto-deploys — push to GitHub first, then on
+the VM):
 ```
-gcloud compute scp --recurse --zone=us-central1-a \
-  src config requirements.txt alpha-trading-vm:~/alpha_trading/
+cd ~/alpha_trading && git pull && venv/bin/pip install -r requirements.txt
+sudo systemctl restart alpha-trading
 ```
+
+Notes: the server isn't exposed to the internet yet (reachable only on the VM
+itself), and the old VM's scheduled email alerts/suggestions aren't running on
+this new VM yet. See `HANDOVER.md` → "GCP VM (cloud hosting)" for the full
+picture, the `.env` token-transfer gotcha, and next steps.
 
 ---
 

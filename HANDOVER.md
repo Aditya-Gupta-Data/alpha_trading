@@ -34,7 +34,7 @@ reader in each entry point (`_load_env()`), not a shared library, by design
 | Variable | Purpose | Notes |
 |---|---|---|
 | `DHAN_CLIENT_ID` | DhanHQ account id | `1109738713` as of this writing |
-| `DHAN_ACCESS_TOKEN` | DhanHQ Data API token | **Short-lived (~24h)** — regenerate from the Dhan web/app dashboard when calls start failing with an auth error. This is a recurring manual step, not automated yet. |
+| `DHAN_ACCESS_TOKEN` | DhanHQ Data API token | **Short-lived (~24h)**. `python3 -m src.renew_token` renews it in place via Dhan's `/v2/RenewToken` (rewrites the .env line, keeps `.env.bak`) — but it can only renew a still-valid token, so it must run at least daily (cron it). If it prints CRITICAL (token already expired, e.g. DH-906), do one manual refresh from the Dhan dashboard and the automation takes over again. |
 | `GEMINI_API_KEY` | Google Gemini (news sentiment + chat) | Get from Google AI Studio, create the key against the *existing billed* `alpha-trading-app-2026` GCP project (a key from AI Studio's "new project" flow gets zero free-tier quota — see `DECISIONS.md`). |
 | `DISCORD_BOT_TOKEN` | Discord bot login | From the Discord Developer Portal, needs "Message Content Intent" enabled. |
 | `ALERT_EMAIL_FROM` / `ALERT_EMAIL_APP_PASSWORD` / `ALERT_EMAIL_TO` | Gmail SMTP for alert/suggestion/session digests | App Password (16-char), not the normal Gmail password. |
@@ -121,8 +121,13 @@ created and now runs the current DhanHQ FastAPI backend.
     "$(base64 < ~/Documents/Claude/alpha_trading/.env | tr -d '\n')" | pbcopy
   # then paste into the VM SSH window + Enter, then restart the service.
   ```
-  Because `DHAN_ACCESS_TOKEN` is short-lived (~24h), this refresh is a
-  recurring manual step until token auto-refresh is built.
+  Because `DHAN_ACCESS_TOKEN` is short-lived (~24h), keep it alive with the
+  auto-renewal script instead of daily manual pastes: after ONE manual seed
+  of a valid token, schedule `python3 -m src.renew_token` on the VM
+  (`crontab -e`, e.g. `0 6 * * * cd ~/alpha_trading && venv/bin/python -m
+  src.renew_token >> logs/renew_token.log 2>&1`). The manual base64 paste
+  above is then only needed if a renewal window is missed and the token
+  dies (script prints CRITICAL).
 - **Not exposed to the internet**: port 8000 is reachable only on the VM
   itself (no firewall rule opened). To connect a deployed frontend, the
   recommended path is a **Cloudflare Tunnel** (free HTTPS, nothing exposed,

@@ -21,6 +21,15 @@ plan metrics: exit price/date, %, R-multiple, days in trade, rupee P&L.
 Entries WITHOUT a stop-carrying plan (pre-4B entries, sell/exit decisions)
 are not touched here — src/review.py keeps scoring those as before.
 
+Phase 6 core loop: the moment a plan resolves, the tracker also (a) asks
+the post-mortem analyst (src/analyst.py, Gemini) to compare the original
+plan with what actually happened, and (b) writes the outcome + its
+signal/pattern events + that post-mortem into the Brain Map
+(data/brain_map.db), keyed by the entry's journal short_id. Both steps
+are strictly fail-safe: no Gemini key, no network, or any Brain Map error
+just prints a note — the journal outcome above is already saved and is
+never blocked by the memory write.
+
 Runs automatically at the start of every trade session, or manually:
 
     python3 -m src.plan_tracker
@@ -33,6 +42,8 @@ usually predates the entry).
 
 from datetime import date
 
+from src import analyst
+from src import brain_map
 from src import journal
 from src import portfolio as pf
 from src.config import PLAN_MAX_DAYS
@@ -107,6 +118,54 @@ def _close_paper_position(entry: dict, exit_price: float) -> bool:
     return True
 
 
+# Patchable seam for tests (point it at a temp DB) — production always
+# opens the real data/brain_map.db.
+_brain_connect = brain_map.connect
+
+
+def _post_mortem_payloads(entry: dict) -> tuple:
+    """(initial_plan, actual_execution) for the analyst — captured at the
+    exact moment of resolution. initial_plan is the forecasting thesis we
+    journaled at entry (signal, user reasoning, pattern tags, the full 4B
+    plan JSON); actual_execution is what the market really did (the
+    trigger that fired plus the realized metrics)."""
+    o = entry["outcome"]
+    initial_plan = {
+        "date": entry["date"],
+        "ticker": entry["ticker"],
+        "action": entry["action"],
+        "thesis_signal": entry.get("signal"),
+        "user_reasoning": entry.get("why"),
+        "pattern_tags": entry.get("pattern_tags") or [],
+        "plan": entry.get("plan"),
+        "entry_price": entry["price"],
+        "shares": entry["shares"],
+    }
+    actual_execution = {
+        "trigger": o["resolution"],  # stop_hit / target_hit / time_stop
+        "entry_price": entry["price"],
+        "exit_price": o["price"],
+        "exit_date": o["exit_date"],
+        "pct_change": o["pct"],
+        "r_multiple": o["r_multiple"],
+        "days_in_trade": o["days_in_trade"],
+        "pnl_rs": o["pnl_rs"],
+        "verdict": o["verdict"],
+        "hypothetical": o.get("hypothetical", False),
+    }
+    return initial_plan, actual_execution
+
+
+def record_post_mortem(entry: dict, brain) -> None:
+    """Phase 6 core loop, per resolved entry: generate the analyst's
+    post-mortem (None is fine — the trade is recorded either way) and
+    write outcome + events + post-mortem to the Brain Map, keyed by the
+    entry's short_id via brain_map.journal_ref_for."""
+    initial_plan, actual_execution = _post_mortem_payloads(entry)
+    post_mortem = analyst.generate_post_mortem(initial_plan, actual_execution)
+    brain_map.record_resolved_entry(brain, entry, post_mortem=post_mortem)
+
+
 def _outcome_line(entry: dict) -> str:
     o = entry["outcome"]
     label = {"stop_hit": "STOPPED OUT", "target_hit": "TARGET HIT",
@@ -135,6 +194,14 @@ def run_tracker(email: bool = True) -> int:
     if not open_plans:
         print("Plan tracker: no open plans to check.")
         return 0
+
+    # One Brain Map connection for the whole sweep. Optional by design:
+    # if it can't open, plans still resolve and journal normally.
+    try:
+        brain = _brain_connect()
+    except Exception as e:
+        print(f"Plan tracker: Brain Map unavailable ({e}) — resolving without memory writes.")
+        brain = None
 
     resolved_lines, resolved = [], 0
     for entry in open_plans:
@@ -175,6 +242,18 @@ def run_tracker(email: bool = True) -> int:
         resolved_lines.append(_outcome_line(entry))
         print(f"Plan tracker: resolved {entry['ticker']} — {entry['outcome']['verdict']}")
 
+        # Phase 6 core loop: post-mortem + Brain Map write. Fail-safe —
+        # the journal outcome above is already set and never blocked.
+        if brain is not None:
+            try:
+                record_post_mortem(entry, brain)
+                print(f"Plan tracker: {entry['ticker']} outcome recorded in the Brain Map.")
+            except Exception as e:
+                print(f"Plan tracker: Brain Map write failed for {entry['ticker']} "
+                      f"({e}) — outcome still journaled.")
+
+    if brain is not None:
+        brain.close()
     if resolved:
         journal.rewrite_all(entries)
         if email:

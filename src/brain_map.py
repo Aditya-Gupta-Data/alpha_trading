@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS outcomes (
     ticker      TEXT NOT NULL,
     archetype   TEXT,
     r_multiple  REAL,
-    result      TEXT NOT NULL CHECK (result IN ('win', 'loss', 'scratch'))
+    result      TEXT NOT NULL CHECK (result IN ('win', 'loss', 'scratch')),
+    post_mortem TEXT                -- JSON post-mortem from src/analyst.py, or NULL
 );
 
 CREATE TABLE IF NOT EXISTS event_outcome_link (
@@ -105,6 +106,12 @@ def connect(db_path=None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
+    # In-place upgrade for databases created before the post_mortem column
+    # existed -- CREATE TABLE IF NOT EXISTS can't add columns to an
+    # already-created table.
+    outcome_cols = {row["name"] for row in conn.execute("PRAGMA table_info(outcomes)")}
+    if "post_mortem" not in outcome_cols:
+        conn.execute("ALTER TABLE outcomes ADD COLUMN post_mortem TEXT")
     conn.commit()
     return conn
 
@@ -126,25 +133,36 @@ def record_event(conn, date, ticker, event_type, tag,
 
 
 def record_outcome(conn, journal_ref, date, ticker, archetype=None,
-                   r_multiple=None, result=None) -> int:
+                   r_multiple=None, result=None, post_mortem=None) -> int:
     """Insert one resolved trade and return its outcome id. `journal_ref`
     is the stable key back to the journal entry; re-recording the same ref
     is a no-op that returns the existing row's id, so future backfills can
     re-run safely. If `result` isn't given it's derived from r_multiple
-    (positive -> win, negative -> loss, zero -> scratch)."""
+    (positive -> win, negative -> loss, zero -> scratch). `post_mortem` is
+    the analyst's comparative breakdown (dict, stored as JSON); when the
+    row already exists without one, a provided post_mortem is backfilled
+    rather than dropped."""
     if result is None:
         if r_multiple is None:
             raise ValueError("record_outcome needs `result` or an r_multiple to derive it from")
         result = "win" if r_multiple > 0 else ("loss" if r_multiple < 0 else "scratch")
+    if post_mortem is not None and not isinstance(post_mortem, str):
+        post_mortem = json.dumps(post_mortem)
     cur = conn.execute(
-        "INSERT INTO outcomes (journal_ref, date, ticker, archetype, r_multiple, result) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
+        "INSERT INTO outcomes (journal_ref, date, ticker, archetype, r_multiple, result, post_mortem) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (journal_ref) DO NOTHING",
-        (journal_ref, date, ticker, archetype, r_multiple, result),
+        (journal_ref, date, ticker, archetype, r_multiple, result, post_mortem),
     )
     conn.commit()
     if cur.lastrowid and cur.rowcount:
         return cur.lastrowid
+    if post_mortem is not None:
+        conn.execute(
+            "UPDATE outcomes SET post_mortem = ? WHERE journal_ref = ? AND post_mortem IS NULL",
+            (post_mortem, journal_ref),
+        )
+        conn.commit()
     row = conn.execute("SELECT id FROM outcomes WHERE journal_ref = ?", (journal_ref,)).fetchone()
     return row["id"]
 
@@ -278,6 +296,46 @@ def _get_or_create_event(conn, date, ticker, event_type, tag,
                         sentiment=sentiment, entities=entities, source=source)
 
 
+def record_resolved_entry(conn, entry, post_mortem=None):
+    """One resolved journal entry -> its `outcomes` row plus the signal /
+    pattern-tag events that were "in the air" at entry, all linked. This is
+    the single write path shared by ingest_existing() (backfill sweeps)
+    and plan_tracker (live, at the moment of resolution, with the
+    analyst's post-mortem attached). Keyed by journal_ref_for(entry) --
+    the short_id when present -- and idempotent like everything else here.
+    Returns the outcome id, or None if the entry isn't resolved with an
+    r_multiple yet."""
+    outcome = entry.get("outcome")
+    if not outcome or outcome.get("r_multiple") is None:
+        return None
+    signal = entry.get("signal", "")
+    archetype = _archetype_for(signal)
+    outcome_id = record_outcome(
+        conn,
+        journal_ref=journal_ref_for(entry),
+        date=outcome.get("exit_date") or entry["date"],
+        ticker=entry["ticker"],
+        archetype=archetype,
+        r_multiple=outcome["r_multiple"],
+        post_mortem=post_mortem,
+    )
+    # One event for the strategy signal (tagged by archetype when it's a
+    # known one, else by the normalized signal text) + one per user-chosen
+    # pattern tag.
+    events = []
+    if signal:
+        sig_tag = archetype if archetype != "other" else _normalize_tag(signal)
+        events.append(("signal", sig_tag, {"signal": signal}))
+    for raw_tag in entry.get("pattern_tags") or []:
+        events.append(("pattern", _normalize_tag(raw_tag), {"pattern_tag": raw_tag}))
+    for event_type, tag, entities in events:
+        event_id = _get_or_create_event(conn, entry["date"], entry["ticker"],
+                                        event_type, tag, entities=entities,
+                                        source="journal")
+        link_event_outcome(conn, event_id, outcome_id)
+    return outcome_id
+
+
 def ingest_existing(conn, journal_entries=None, news=None) -> dict:
     """Seed the Brain Map from data the engine already produces.
 
@@ -306,34 +364,8 @@ def ingest_existing(conn, journal_entries=None, news=None) -> dict:
     skipped_unresolved = 0
 
     for entry in journal_entries:
-        outcome = entry.get("outcome")
-        if not outcome or outcome.get("r_multiple") is None:
+        if record_resolved_entry(conn, entry) is None:
             skipped_unresolved += 1
-            continue
-        signal = entry.get("signal", "")
-        archetype = _archetype_for(signal)
-        outcome_id = record_outcome(
-            conn,
-            journal_ref=journal_ref_for(entry),
-            date=outcome.get("exit_date") or entry["date"],
-            ticker=entry["ticker"],
-            archetype=archetype,
-            r_multiple=outcome["r_multiple"],
-        )
-        # One event for the strategy signal (tagged by archetype when it's
-        # a known one, else by the normalized signal text) + one per
-        # user-chosen pattern tag.
-        events = []
-        if signal:
-            sig_tag = archetype if archetype != "other" else _normalize_tag(signal)
-            events.append(("signal", sig_tag, {"signal": signal}))
-        for raw_tag in entry.get("pattern_tags") or []:
-            events.append(("pattern", _normalize_tag(raw_tag), {"pattern_tag": raw_tag}))
-        for event_type, tag, entities in events:
-            event_id = _get_or_create_event(conn, entry["date"], entry["ticker"],
-                                            event_type, tag, entities=entities,
-                                            source="journal")
-            link_event_outcome(conn, event_id, outcome_id)
 
     for ticker, info in (news.get("tickers") or {}).items():
         score = info.get("sentiment_score")

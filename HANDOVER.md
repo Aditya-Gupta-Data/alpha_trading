@@ -159,6 +159,29 @@ them correctly depends on `dhan_client`'s alias resolution.
 up first and restore after (or point at an isolated temp dataset) — this is
 the working pattern used throughout this project's history.
 
+## Next steps / roadmap
+
+**Start the next session here: build Phase 6 (the Brain Map).** The design is
+finalized and banked in `DECISIONS.md` → "Phase 6 — Brain Map design". Build
+order (follow the project's one-file-at-a-time rule, confirm before each):
+
+1. **`src/brain_map.py`** — native `sqlite3` store at `data/brain_map.db`
+   with the three tables (`events`, `outcomes`, `event_outcome_link`), the
+   insert helpers, `query_similar_events(tags)`, and `ingest_existing()`.
+2. **`tests/test_brain_map.py`** — offline test (in-memory DB, no network)
+   proving insert → link → query math.
+3. *(later)* seed via `ingest_existing()`, then add a stable `id` to new
+   `journal.py` entries, then — as a separate step — let `forecast.py` query
+   the map.
+
+Keep it **strictly additive**: do not modify `tuner.py`, `brain_weights.json`,
+or `forecast.py`'s behaviour in Step 1–2.
+
+Other open items (not next, but tracked): restore the cloud-scheduled email
+jobs on the new VM, expose the VM API via a Cloudflare Tunnel for a deployed
+frontend, and (Phase 7) the historical simulator — see `DECISIONS.md` →
+"Still open".
+
 ## Where to look for more detail
 
 - **Deep phase-by-phase build history** (what was built, when, and how it

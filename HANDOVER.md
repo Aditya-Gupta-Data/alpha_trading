@@ -191,10 +191,23 @@ standard flow untouched. `tuner.py`/`brain_weights.json` were never
 modified. Suite: **63/63**. Contract addition documented in
 `DATA_CONTRACT.md` § 2.4.
 
-**Ongoing Brain Map operation**: re-run `python3 -m src.brain_map ingest`
-after the plan tracker resolves trades (e.g. the open 2026-07-06 ones) so
-the map accumulates real outcomes — that's when `memory_context` starts
-appearing in live forecasts.
+**Phase 6 core loop also landed 2026-07-06 (after step 5)** — the
+feedback loop is now fully automatic. The moment `plan_tracker` resolves
+a plan it (a) captures the original thesis + realized execution metrics,
+(b) asks the new post-mortem analyst (`src/analyst.py`, Gemini,
+never-raises) for a structured `{variance_analysis, unexpected_variables,
+future_guardrails}` JSON, and (c) writes outcome + events + post-mortem
+into the Brain Map keyed by the entry's `short_id`
+(`brain_map.record_resolved_entry`, shared with `ingest_existing`). The
+`outcomes` table gained a `post_mortem` column (auto-migrated in place on
+connect). All fail-safe: no Gemini key / locked DB just prints a note,
+journal resolution is never blocked. Suite: **71/71**.
+
+**Ongoing Brain Map operation**: nothing manual needed anymore — resolved
+trades flow in live via the tracker. `python3 -m src.brain_map ingest`
+remains available as a backfill/repair sweep (it won't have post-mortems,
+which only generate at live resolution). `memory_context` lines appear in
+forecasts once the first trades resolve.
 
 **Next up (nothing started)**: the other open items below — restore the
 VM's scheduled email jobs, Cloudflare Tunnel for the API, Phase 7

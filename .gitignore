@@ -25,3 +25,9 @@ data/
 
 # Claude Code's local, machine-specific settings -- not part of the app
 .claude/
+
+# Lovable React frontend — co-located here for local dev convenience, but
+# version-controlled ONLY on the `lovable-ui` branch (decoupled branch
+# strategy). It must never be committed to `main`, so `main` ignores it
+# entirely. See DATA_CONTRACT.md "Branch strategy".
+lovable-frontend/

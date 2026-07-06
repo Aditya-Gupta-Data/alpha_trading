@@ -523,6 +523,65 @@ def scorecard():
     }
 
 
+# =============================================================== /api/review
+
+class ReviewRequest(BaseModel):
+    ticker: str
+    date: str
+    pm_right: str | None = None
+    pm_wrong: str | None = None
+    pm_error_category: str | None = None
+    # Optional: the scorecard row id ("<date>-<ticker>-<journalIndex>"), used
+    # to pinpoint the exact journal line when a ticker was traded more than
+    # once on the same day.
+    id: str | None = None
+
+
+def _find_review_target(entries: list, req: ReviewRequest):
+    """Locate the journal entry a post-mortem belongs to. Prefer the exact
+    line index encoded in the scorecard row id; fall back to the first entry
+    matching ticker + date. Returns the index, or None if not found."""
+    if req.id:
+        try:
+            idx = int(req.id.rsplit("-", 1)[1])
+        except (ValueError, IndexError):
+            idx = None
+        if idx is not None and 0 <= idx < len(entries):
+            e = entries[idx]
+            if e.get("ticker") == req.ticker and e.get("date") == req.date:
+                return idx
+    for i, e in enumerate(entries):
+        if e.get("ticker") == req.ticker and e.get("date") == req.date:
+            return i
+    return None
+
+
+@app.post("/api/review")
+def review(req: ReviewRequest):
+    """Attach a post-mortem (what went right/wrong + error category) to a
+    specific journal entry. Writes the review fields onto that JSON object in
+    data/journal.jsonl. This is additive — it never alters the trade's own
+    fields or its scored outcome."""
+    entries = journal.read_all()
+    idx = _find_review_target(entries, req)
+    if idx is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": f"No journal entry for "
+                     f"{req.ticker} on {req.date}."},
+        )
+
+    entries[idx]["review"] = {
+        "pm_right": (req.pm_right or "").strip() or None,
+        "pm_wrong": (req.pm_wrong or "").strip() or None,
+        "pm_error_category": req.pm_error_category or None,
+        "reviewed_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    journal.rewrite_all(entries)
+    return {"ok": True, "ticker": req.ticker, "date": req.date,
+            "review": entries[idx]["review"]}
+
+
 # ================================================================== misc
 
 @app.get("/api/health")

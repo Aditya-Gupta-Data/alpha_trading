@@ -33,24 +33,23 @@ usually predates the entry).
 
 from datetime import date
 
-import yfinance as yf
-
 from src import journal
 from src import portfolio as pf
 from src.config import PLAN_MAX_DAYS
+from src.dhan_client import get_ohlc_since
 from src.notifier import send_digest
 from src.review import MOVE_THRESHOLD
 
 
 def _daily_bars(ticker: str, start_iso: str):
-    """[(date_iso, low, high, close), ...] since start_iso, NaNs dropped."""
-    history = yf.Ticker(ticker).history(start=start_iso)
-    if history.empty:
-        return []
-    history = history.dropna(subset=["Low", "High", "Close"])
+    """[(date_iso, low, high, close), ...] since start_iso.
+
+    Uses Dhan's real daily OHLC so stop/target hits resolve on the true
+    intraday low/high of each session (migrated off yfinance 2026-07-06) —
+    NOT a naive last-price check. Dhan returns clean trading-day bars only."""
     return [
-        (idx.date().isoformat(), row["Low"], row["High"], row["Close"])
-        for idx, row in history.iterrows()
+        (bar["date"], bar["low"], bar["high"], bar["close"])
+        for bar in get_ohlc_since(ticker, start_iso)
     ]
 
 

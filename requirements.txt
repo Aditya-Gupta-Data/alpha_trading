@@ -1,4 +1,3 @@
-yfinance
 PyYAML
 certifi
 discord.py
@@ -6,3 +5,4 @@ fastapi
 uvicorn
 ruamel.yaml
 google-genai
+dhanhq

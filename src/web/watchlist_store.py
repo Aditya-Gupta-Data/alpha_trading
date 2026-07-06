@@ -9,7 +9,8 @@ and formatting already in watchlist.yaml are preserved.
 Data model
 ----------
 The watchlist is a flat list under `watchlist:`. Each entry has:
-  - ticker      : the yfinance symbol (e.g. RELIANCE.NS, ^NSEI)
+  - ticker      : the .NS/^-style symbol (e.g. RELIANCE.NS, ^NSEI); must be
+                  present in dhan_client.SECURITY_ID_MAP to be priceable
   - type        : "stock" or "index"   (optional; inferred if missing)
   - condition   : alert rule type       (optional — an entry can be watch-only)
   - value       : the rule's number     (optional, paired with condition)
@@ -124,7 +125,7 @@ def resolve_ticker(symbol: str, type_: str):
 
 def add_item(symbol: str, type_: str) -> dict:
     """
-    Validate the symbol against yfinance, then append it to watchlist.yaml as a
+    Validate the symbol against the Dhan quote API, then append it to watchlist.yaml as a
     watch-only entry (no alert rule). Returns a result dict:
         {"ok": True,  "ticker": ..., "type": ..., "name": ..., "price": ...}
         {"ok": False, "error": "..."}  on any failure (nothing is written).

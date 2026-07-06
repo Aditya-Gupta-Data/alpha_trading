@@ -49,8 +49,8 @@ import yaml
 
 # Python's urllib doesn't use the system CA store, so on macOS (and minimal
 # Linux VMs) HTTPS fails with CERTIFICATE_VERIFY_FAILED. certifi ships a CA
-# bundle (already installed as a yfinance dependency); point SSL at it so
-# both the news RSS fetch and the Gemini call verify cleanly everywhere.
+# bundle (listed explicitly in requirements.txt); point SSL at it so both the
+# news RSS fetch and the Gemini call verify cleanly everywhere.
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 ROOT = Path(__file__).resolve().parent.parent

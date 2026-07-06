@@ -4,11 +4,13 @@ Phase 2: Suggestions.
 Combines a trend signal (50-day vs 200-day moving average) with a momentum
 signal (14-day RSI) into a plain-English read on each stock. Advisory only --
 it never places a trade, it just tells you what it sees so you can decide.
+
+Price history comes from the DhanHQ Data API (via src/dhan_client.py) as of
+2026-07-06 — migrated off yfinance.
 """
 
-import yfinance as yf
-
 from src.config import MOVING_AVERAGE_FAST, MOVING_AVERAGE_SLOW, RSI_OVERBOUGHT, RSI_OVERSOLD
+from src.dhan_client import get_daily_closes
 from src.indicators import sma, rsi
 
 TREND_WINDOW_SHORT = MOVING_AVERAGE_FAST
@@ -28,12 +30,11 @@ _READS = {
 
 
 def _closing_prices(ticker: str):
-    history = yf.Ticker(ticker).history(period="1y")
-    if history.empty:
-        return None
-    # Yahoo sometimes includes an empty row for today (e.g. before the market
-    # opens) — drop NaNs so they don't poison the indicator math.
-    return history["Close"].dropna().tolist()
+    # ~1 year of daily closes (oldest first). We need 200+ for the slow SMA,
+    # so ask for a generous window; Dhan returns only real trading days (no
+    # empty/NaN rows to scrub, unlike Yahoo's pre-open placeholder rows).
+    closes = get_daily_closes(ticker, days=400)
+    return closes or None
 
 
 def analyze(ticker: str):

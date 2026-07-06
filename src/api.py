@@ -130,7 +130,8 @@ app.add_middleware(
 # ============================================================ market data
 # (formerly src/web/api.py — watchlist + alerts, read-only on the market)
 
-# 30-second in-memory cache so rapid UI refreshes don't hammer yfinance.
+# 30-second in-memory cache so rapid UI refreshes don't hammer the Dhan
+# quote API (which is rate-limited).
 _quote_cache: dict = {}
 _cache_at: datetime | None = None
 _CACHE_TTL = timedelta(seconds=30)

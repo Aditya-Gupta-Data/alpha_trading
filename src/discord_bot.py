@@ -87,8 +87,8 @@ def _normalize_ticker(raw: str) -> str:
 
 
 def _run_forecasts(tickers: list) -> list:
-    """Blocking (yfinance) -- always called via asyncio.to_thread so the
-    bot's Discord heartbeat never starves. Returns display lines."""
+    """Blocking (Dhan price fetch) -- always called via asyncio.to_thread so
+    the bot's Discord heartbeat never starves. Returns display lines."""
     news = load_news()
     weights = load_weights()
     lines = []

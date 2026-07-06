@@ -33,17 +33,30 @@ Every public function takes an open sqlite3 connection as its first
 argument (get one from connect()), so tests can run against ':memory:'
 without ever touching the real data/brain_map.db.
 
-Run a quick health summary from the project folder with:
+ingest_existing() seeds the map from the data the engine already produces
+(resolved journal.jsonl trades + news_sentiment.json) and is idempotent —
+safe to re-run any time to pick up newly resolved trades. It reads the
+journal file directly rather than importing src.journal, keeping this
+module standalone (no src.config dependency), same modularity call as the
+per-entry-point _load_env pattern (see DECISIONS.md).
 
-    python3 -m src.brain_map
+Run a quick health summary, or seed the real database, from the project
+folder with:
+
+    python3 -m src.brain_map            # row counts only
+    python3 -m src.brain_map ingest     # seed/refresh from journal + news
 """
 
 import json
+import re
 import sqlite3
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = ROOT / "data" / "brain_map.db"
+JOURNAL_PATH = ROOT / "data" / "journal.jsonl"
+NEWS_SENTIMENT_PATH = ROOT / "data" / "news_sentiment.json"
 
 # How many linked outcomes query_similar_events() returns as examples.
 MAX_EXAMPLES = 5
@@ -204,6 +217,144 @@ def query_similar_events(conn, tags) -> dict:
     }
 
 
+def journal_ref_for(entry: dict) -> str:
+    """The stable key back to a journal row: its Phase 6 `short_id` when
+    present, else the deterministic composite fallback for older lines
+    that predate short_ids (date|ticker|action|price)."""
+    if entry.get("short_id"):
+        return entry["short_id"]
+    return f"{entry.get('date')}|{entry.get('ticker')}|{entry.get('action')}|{entry.get('price')}"
+
+
+# Same signal-text -> archetype mapping tuner.py uses. Duplicated on
+# purpose rather than imported: the Brain Map must stay standalone and
+# strictly additive, touching nothing on the live tuner/forecast path.
+def _archetype_for(signal: str) -> str:
+    if "Cross" in signal:
+        return "fresh_cross"
+    if "RSI" in signal:
+        return "rsi_oversold"
+    return "other"
+
+
+def _normalize_tag(text: str) -> str:
+    """Free text -> the normalized pattern key clustering matches on:
+    "Golden Cross" -> "golden_cross", "earnings miss" -> "earnings_miss"."""
+    return re.sub(r"[^a-z0-9]+", "_", str(text).lower()).strip("_")
+
+
+def _read_journal_file(path=JOURNAL_PATH) -> list:
+    if not Path(path).exists():
+        return []
+    entries = []
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    return entries
+
+
+def _read_news_file(path=NEWS_SENTIMENT_PATH) -> dict:
+    if not Path(path).exists():
+        return {}
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def _get_or_create_event(conn, date, ticker, event_type, tag,
+                         sentiment=None, entities=None, source=None) -> int:
+    """record_event, but idempotent on (date, ticker, event_type, tag,
+    source) -- what makes re-running ingest_existing() safe. Direct
+    record_event callers who *want* repeat rows are unaffected."""
+    row = conn.execute(
+        "SELECT id FROM events WHERE date = ? AND ticker = ? AND event_type = ? "
+        "AND tag = ? AND IFNULL(source, '') = IFNULL(?, '')",
+        (date, ticker, event_type, tag, source),
+    ).fetchone()
+    if row:
+        return row["id"]
+    return record_event(conn, date, ticker, event_type, tag,
+                        sentiment=sentiment, entities=entities, source=source)
+
+
+def ingest_existing(conn, journal_entries=None, news=None) -> dict:
+    """Seed the Brain Map from data the engine already produces.
+
+    Journal (data/journal.jsonl): every *resolved* trade -- outcome present
+    with an r_multiple -- becomes one `outcomes` row keyed by
+    journal_ref_for(), plus one `events` row for its strategy signal and
+    one per pattern_tag, all linked as "in the air" at entry. Unresolved
+    trades (outcome null, or r_multiple null) are skipped and picked up by
+    a later re-run once the plan tracker resolves them.
+
+    News (data/news_sentiment.json): each ticker's current sentiment
+    snapshot becomes one `events` row (tag = normalized headline_focus).
+    Not linked to outcomes here -- news-to-trade linking needs the
+    "same ticker, around the trade date" window logic, a later step.
+
+    Idempotent: outcomes dedupe on journal_ref, events via
+    _get_or_create_event, links via INSERT OR IGNORE -- a second run adds
+    nothing. Pass journal_entries/news directly in tests; defaults read
+    the real data files. Returns a summary of what this run added."""
+    if journal_entries is None:
+        journal_entries = _read_journal_file()
+    if news is None:
+        news = _read_news_file()
+
+    before = _summary(conn)
+    skipped_unresolved = 0
+
+    for entry in journal_entries:
+        outcome = entry.get("outcome")
+        if not outcome or outcome.get("r_multiple") is None:
+            skipped_unresolved += 1
+            continue
+        signal = entry.get("signal", "")
+        archetype = _archetype_for(signal)
+        outcome_id = record_outcome(
+            conn,
+            journal_ref=journal_ref_for(entry),
+            date=outcome.get("exit_date") or entry["date"],
+            ticker=entry["ticker"],
+            archetype=archetype,
+            r_multiple=outcome["r_multiple"],
+        )
+        # One event for the strategy signal (tagged by archetype when it's
+        # a known one, else by the normalized signal text) + one per
+        # user-chosen pattern tag.
+        events = []
+        if signal:
+            sig_tag = archetype if archetype != "other" else _normalize_tag(signal)
+            events.append(("signal", sig_tag, {"signal": signal}))
+        for raw_tag in entry.get("pattern_tags") or []:
+            events.append(("pattern", _normalize_tag(raw_tag), {"pattern_tag": raw_tag}))
+        for event_type, tag, entities in events:
+            event_id = _get_or_create_event(conn, entry["date"], entry["ticker"],
+                                            event_type, tag, entities=entities,
+                                            source="journal")
+            link_event_outcome(conn, event_id, outcome_id)
+
+    for ticker, info in (news.get("tickers") or {}).items():
+        score = info.get("sentiment_score")
+        sentiment = None if score is None else (
+            "positive" if score > 0 else "negative" if score < 0 else "neutral")
+        focus = info.get("headline_focus") or "news"
+        event_date = (info.get("last_updated") or news.get("generated") or "")[:10]
+        _get_or_create_event(conn, event_date, ticker, "news", _normalize_tag(focus),
+                             sentiment=sentiment,
+                             entities={"sentiment_score": score, "headline_focus": focus},
+                             source="news_sentiment")
+
+    after = _summary(conn)
+    return {
+        "events_added": after["events"] - before["events"],
+        "outcomes_added": after["outcomes"] - before["outcomes"],
+        "links_added": after["event_outcome_link"] - before["event_outcome_link"],
+        "journal_rows_skipped_unresolved": skipped_unresolved,
+    }
+
+
 def _summary(conn) -> dict:
     """Row counts per table, for the CLI health check below."""
     return {
@@ -214,6 +365,14 @@ def _summary(conn) -> dict:
 
 if __name__ == "__main__":
     connection = connect()
+    if sys.argv[1:] == ["ingest"]:
+        added = ingest_existing(connection)
+        print("Brain Map ingest complete:")
+        print(f"  events added:   {added['events_added']}")
+        print(f"  outcomes added: {added['outcomes_added']}")
+        print(f"  links added:    {added['links_added']}")
+        print(f"  journal rows skipped (not resolved yet): "
+              f"{added['journal_rows_skipped_unresolved']}")
     counts = _summary(connection)
     print(f"Brain Map at {DEFAULT_DB_PATH}:")
     for table, n in counts.items():

@@ -11,9 +11,15 @@ Phase 4A: each entry also carries structured fields — `risk_levers`
 user saw) — so later phases can evaluate outcomes by pattern, not just by
 free-text "why". These are additive: older journal lines that predate them
 simply don't have the keys, and readers must tolerate their absence.
+
+Phase 6: each entry also carries a stable `short_id` (8-char uuid hex), the
+key the Brain Map (src/brain_map.py) uses to reference journal rows. Same
+additive rule: older lines lack it, and readers fall back to a composite
+key (see brain_map.journal_ref_for) rather than crash.
 """
 
 import json
+import uuid
 from datetime import date
 from pathlib import Path
 
@@ -31,6 +37,9 @@ _PLAN_KEYS = (
 
 
 def log(entry: dict) -> None:
+    # Safety net for any caller that builds an entry without new_entry():
+    # every line that lands in the journal must carry a stable short_id.
+    entry.setdefault("short_id", uuid.uuid4().hex[:8])
     DATA_DIR.mkdir(exist_ok=True)
     with open(JOURNAL_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -72,6 +81,7 @@ def new_entry(
     every entry is structurally complete regardless of how it was created.
     """
     return {
+        "short_id": uuid.uuid4().hex[:8],
         "date": date.today().isoformat(),
         "action": proposal["action"],
         "ticker": proposal["ticker"],

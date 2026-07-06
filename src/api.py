@@ -394,12 +394,83 @@ def _derive_archetype(signal: str) -> str:
     return signal or "Manual Setup"
 
 
+_RESOLUTION_TO_OUTCOME = {
+    "target_hit": "TARGET_HIT",
+    "stop_hit": "STOP_HIT",
+    "time_stop": "MANUAL_CLOSE",
+}
+
+
+def _executed_trade(entry: dict, idx: int) -> dict:
+    """Map an APPROVED journal entry to the frontend's ExecutedTrade shape."""
+    plan = entry.get("plan") or {}
+    stop = plan.get("stop_loss") or {}
+    target = plan.get("target") or {}
+    outcome = entry.get("outcome") or {}
+    return {
+        "id": f"{entry['date']}-{entry['ticker']}-{idx}",
+        "date": entry["date"],
+        "ticker": entry["ticker"],
+        "archetype": _derive_archetype(entry.get("signal", "")),
+        "bias": "LONG" if entry["action"] == "BUY" else "SHORT",
+        "entry_price": entry["price"],
+        "target_price": target.get("price", 0) or 0,
+        "stop_price": stop.get("price", 0) or 0,
+        "exit_price": outcome.get("price", 0) or 0,
+        "position_size": entry["shares"],
+        "capital_deployed": round(entry["shares"] * entry["price"], 2),
+        "outcome": _RESOLUTION_TO_OUTCOME.get(outcome.get("resolution"), "OPEN"),
+        "r_multiple": outcome.get("r_multiple") or 0,
+        "net_pnl": outcome.get("pnl_rs") or 0,
+        "mode": "PAPER",
+        "created_at": entry["date"],
+    }
+
+
+def _skipped_trade(entry: dict, idx: int) -> dict:
+    """Map a REJECTED journal entry to the frontend's SkippedTrade shape."""
+    plan = entry.get("plan") or {}
+    stop = plan.get("stop_loss") or {}
+    target = plan.get("target") or {}
+    outcome = entry.get("outcome") or {}
+    verdict_text = outcome.get("verdict", "")
+    if verdict_text.startswith("GOOD"):
+        verdict = "GOOD_SKIP"
+    elif verdict_text.startswith("MISSED"):
+        verdict = "MISSED_GAIN"
+    else:
+        verdict = "PENDING"
+    return {
+        "id": f"{entry['date']}-{entry['ticker']}-{idx}",
+        "date": entry["date"],
+        "ticker": entry["ticker"],
+        "archetype": _derive_archetype(entry.get("signal", "")),
+        "bias": "LONG" if entry["action"] == "BUY" else "SHORT",
+        "proposed_entry": entry["price"],
+        "proposed_target": target.get("price", 0) or 0,
+        "proposed_stop": stop.get("price", 0) or 0,
+        "hypothetical_r": outcome.get("r_multiple") or 0,
+        "hypothetical_pnl": outcome.get("pnl_rs") or 0,
+        "verdict": verdict,
+        "reject_reason": entry.get("why"),
+        "created_at": entry["date"],
+    }
+
+
 @app.get("/api/scorecard")
 def scorecard():
     """Roll up journaled outcomes for the Scorecard UI: overall win/loss/flat
-    totals plus per-archetype win-rate and average R-multiple. Read-only."""
+    totals, per-archetype win-rate and average R-multiple, plus the executed
+    and skipped trade rows the ledger tables render. Read-only."""
     entries = journal.read_all()
     scored = [e for e in entries if e.get("outcome")]
+
+    executed_trades, skipped_trades = [], []
+    for i, e in enumerate(entries):
+        if e.get("decision") == "approved":
+            executed_trades.append(_executed_trade(e, i))
+        elif e.get("decision") == "rejected":
+            skipped_trades.append(_skipped_trade(e, i))
 
     wins = losses = flat = 0
     archetypes: dict = {}
@@ -446,6 +517,8 @@ def scorecard():
             "win_rate": round(wins / total * 100, 1) if total else 0.0,
         },
         "archetype_stats": archetype_stats,
+        "executed_trades": executed_trades,
+        "skipped_trades": skipped_trades,
         "open_positions": pf.load()["holdings"],
     }
 

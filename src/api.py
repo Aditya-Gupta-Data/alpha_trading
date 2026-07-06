@@ -32,6 +32,10 @@ the terminal `src.trade` session.
 Run:  uvicorn src.api:app --reload --port 8000
 """
 
+import asyncio
+import json
+import os
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -49,9 +53,67 @@ from src.strategy import propose_plans
 from src.suggestions import analyze
 from src.web import watchlist_store as store
 
+ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 
-app = FastAPI(title="Alpha Trading Local API", docs_url="/api/docs", redoc_url=None)
+
+def _load_env() -> None:
+    """Load .env into os.environ (same self-contained reader the other entry
+    points use) so GEMINI_API_KEY is available without an external loader."""
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"'))
+
+
+_load_env()
+
+# How often the background market-refresh loop runs. 1 hour by default;
+# overridable via env (handy for tests) but never below a sane floor.
+AUTO_SYNC_INTERVAL = max(5, int(os.environ.get("AUTO_SYNC_INTERVAL_SECONDS", "3600")))
+
+
+async def _auto_sync_loop() -> None:
+    """Every AUTO_SYNC_INTERVAL seconds: resolve OPEN paper trades against the
+    market (same logic as POST /api/sync-market) and refresh the watchlist
+    price cache. Blocking engine calls run in a worker thread so the event
+    loop (and HTTP serving) never stalls. One bad cycle never kills the loop."""
+    while True:
+        await asyncio.sleep(AUTO_SYNC_INTERVAL)
+        try:
+            resolved = await asyncio.to_thread(run_tracker, False)
+            await asyncio.to_thread(_get_quotes, True)  # invalidate + refetch
+            print(f"[Auto-Sync] 1-hour market refresh complete — resolved "
+                  f"{resolved} open trade(s); watchlist price cache refreshed.",
+                  flush=True)
+        except Exception as e:
+            print(f"[Auto-Sync] refresh failed (will retry next cycle): {e}",
+                  flush=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print(f"[Auto-Sync] background market refresh armed — running every "
+          f"{AUTO_SYNC_INTERVAL}s.", flush=True)
+    task = asyncio.create_task(_auto_sync_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        print("[Auto-Sync] background market refresh stopped.", flush=True)
+
+
+app = FastAPI(title="Alpha Trading Local API", docs_url="/api/docs",
+              redoc_url=None, lifespan=lifespan)
 
 # The Vite/Bun dev server runs on localhost (its exact port varies), so a
 # localhost-only regex keeps this open for local frontend dev without
@@ -181,18 +243,145 @@ def delete_from_watchlist(symbol: str):
 
 
 # ================================================================= /api/chat
+#
+# The analyst pipeline talks to Google Gemini DIRECTLY via the official
+# google-genai SDK using the local GEMINI_API_KEY — there is NO Lovable AI
+# Gateway (or any cloud gateway) in this path. Structured trade math still
+# comes from the local engine (strategy.py); Gemini only does the natural-
+# language analyst reply and free-thesis -> plan translation.
 
-class ChatRequest(BaseModel):
-    ticker: str | None = None
-    message: str | None = None
+GEMINI_MODEL = "gemini-flash-lite-latest"  # -latest alias: survives model deprecations
+
+_gemini_client = None
+
+
+def _get_gemini():
+    """Lazily build (and cache) the google-genai client from GEMINI_API_KEY.
+    Returns None if the key isn't set, so callers can degrade gracefully
+    instead of crashing (mirrors news_processor's fallback philosophy)."""
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        return None
+    from google import genai  # imported lazily so the API boots without the SDK
+    _gemini_client = genai.Client(api_key=key)
+    return _gemini_client
+
+
+def _gemini_json(system_prompt: str, user_text: str, temperature: float) -> dict | None:
+    """One Gemini call that returns parsed JSON, or None on any failure."""
+    client = _get_gemini()
+    if client is None:
+        return None
+    from google.genai import types
+    try:
+        resp = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=user_text,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                response_mime_type="application/json",
+                temperature=temperature,
+            ),
+        )
+        return json.loads(resp.text)
+    except Exception as e:
+        print(f"[/api/chat] Gemini call failed: {e}", flush=True)
+        return None
+
+
+_ANALYST_PROMPT = (
+    "You are the ADiTrader AI Lead Analyst — a seasoned, human-sounding "
+    "portfolio analyst on an Indian (NSE) equities desk. Reply like a real "
+    "analyst on a trading floor: concise, direct, no corporate boilerplate, "
+    "no fake system-log preamble.\n\n"
+    "Classify the user's message into exactly one intent:\n"
+    "- \"conversation\": greetings, small talk, status checks, meta questions. "
+    "Reply naturally in 1-2 short sentences. Do NOT produce a trade plan.\n"
+    "- \"analysis\": a real market thesis, a named ticker, or a macro/catalyst "
+    "setup. Reply in 2-4 tight sentences framing your read, and note that a "
+    "structured trade plan is being prepared.\n\n"
+    "Return ONLY valid JSON: {\"intent\":\"conversation\"|\"analysis\","
+    "\"reply\":string}"
+)
+
+_PLAN_PROMPT = (
+    "You are ADiTrader's Autonomous Signal Engine, an elite quant analyst on "
+    "NSE-listed Indian equities. Translate a free-form macro thesis into ONE "
+    "mathematically sound trade plan.\n"
+    "- Pick ONE liquid NSE ticker that best expresses the thesis.\n"
+    "- Choose bias LONG or SHORT to fit the thesis.\n"
+    "- Use realistic current-ish INR entry prices.\n"
+    "- target and stop must be on the correct side of entry for the bias.\n"
+    "- stop_pct between 1.5 and 8. rr between 1.2 and 4.5.\n"
+    "- archetype: short Title-Case label (e.g. \"Election Front-Run\").\n"
+    "- rationale: 1-2 crisp sentences citing mechanism + precedent.\n"
+    "- tags: 2-4 short labels without '#'.\n"
+    "- asset_class defaults \"EQUITY\"; use \"OPTIONS\" only for clear convex/"
+    "event plays (then also give strike_price, expiry_date ISO YYYY-MM-DD, "
+    "option_type CALL/PUT).\n"
+    "Return ONLY valid JSON of shape: {\"ticker\":string,\"name\":string,"
+    "\"archetype\":string,\"bias\":\"LONG\"|\"SHORT\",\"entry\":number,"
+    "\"target\":number,\"stop_pct\":number,\"rr\":number,\"rationale\":string,"
+    "\"tags\":string[],\"asset_class\":\"EQUITY\"|\"OPTIONS\","
+    "\"strike_price\":number|null,\"expiry_date\":string|null,"
+    "\"option_type\":\"CALL\"|\"PUT\"|null}"
+)
+
+
+def _num_or(v, fallback: float) -> float:
+    try:
+        n = float(v)
+        return n if n > 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _clamp(n: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, n))
+
+
+def _coerce_plan(o: dict) -> dict:
+    """Coerce Gemini's plan JSON into a safe, direction-consistent payload
+    (mirrors the old frontend coerce so the UI contract is unchanged)."""
+    o = o or {}
+    ticker = str(o.get("ticker", "RELIANCE")).upper()[:24]
+    bias = "SHORT" if o.get("bias") == "SHORT" else "LONG"
+    entry = _num_or(o.get("entry"), 1000)
+    target = _num_or(o.get("target"), entry * (1.06 if bias == "LONG" else 0.94))
+    if bias == "LONG" and target <= entry:
+        target = entry * 1.05
+    if bias == "SHORT" and target >= entry:
+        target = entry * 0.95
+    stop_pct = _clamp(_num_or(o.get("stop_pct"), 3), 1.5, 8)
+    rr = _clamp(_num_or(o.get("rr"), abs(target - entry) / (entry * stop_pct / 100)), 1.2, 4.5)
+    tags = [str(t).lstrip("#")[:30] for t in (o.get("tags") or [])][:5]
+    asset_class = "OPTIONS" if o.get("asset_class") == "OPTIONS" else "EQUITY"
+    return {
+        "ticker": ticker,
+        "name": str(o.get("name", ticker))[:40],
+        "archetype": str(o.get("archetype", "Manual Thesis"))[:60],
+        "bias": bias,
+        "entry": round(entry, 2),
+        "target": round(target, 2),
+        "stop_pct": round(stop_pct, 2),
+        "rr": round(rr, 2),
+        "rationale": str(o.get("rationale", "System-generated plan from thesis."))[:500],
+        "tags": tags,
+        "asset_class": asset_class,
+        "strike_price": _num_or(o.get("strike_price"), entry) if asset_class == "OPTIONS" else None,
+        "expiry_date": o.get("expiry_date") if asset_class == "OPTIONS" else None,
+        "option_type": (o.get("option_type") or ("CALL" if bias == "LONG" else "PUT"))
+                       if asset_class == "OPTIONS" else None,
+    }
 
 
 def _plan_to_payload(plan: dict) -> dict:
-    """Flatten an engine plan dict into the flat shape the frontend's
-    PLAN_DECISION payload uses."""
+    """Flatten an engine strategy plan into the flat shape the frontend uses."""
     stop = plan.get("stop_loss") or {}
     target = plan.get("target") or {}
-    capital = round(plan["shares"] * plan["price"], 2)
     return {
         "ticker": plan["ticker"],
         "action": plan["action"],
@@ -206,53 +395,85 @@ def _plan_to_payload(plan: dict) -> dict:
         "rr_ratio": plan.get("risk_reward"),
         "max_risk": plan.get("max_loss_rs"),
         "position_size": plan["shares"],
-        "capital": capital,
+        "capital": round(plan["shares"] * plan["price"], 2),
         "invalidation": plan.get("invalidation"),
         "rationale": plan.get("rationale"),
     }
 
 
+class ChatRequest(BaseModel):
+    ticker: str | None = None
+    message: str | None = None
+    thesis: str | None = None
+    threadTag: str | None = None
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest):
-    """Run the analyst logic for one ticker and return the generated plan(s).
+    """Unified analyst endpoint — local engine + direct Gemini (no gateway).
 
-    Mirrors what a `src.trade` session does per ticker: analyze -> propose
-    plans against the current paper portfolio and live prices. Read-only:
-    nothing is journaled here."""
-    if not req.ticker:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "error": "Provide a `ticker`, e.g. ONGC.NS."},
-        )
-    ticker = req.ticker.strip().upper()
-    if "." not in ticker:
-        ticker += ".NS"
+    Three modes by input:
+      * thesis  -> Gemini translates a free-form thesis into a structured
+                   trade plan (mode "plan", key `generated_plan`).
+      * message -> Gemini gives a conversational analyst reply + intent
+                   (mode "chat"). If a watchlist ticker is named, the local
+                   strategy engine's plan(s) ride along in `plans`.
+      * ticker  -> pure local engine: analyze + propose_plans (mode "ticker").
+    Read-only: nothing is journaled here."""
 
-    analysis = analyze(ticker)
-    if analysis is None:
-        return {
-            "ok": True, "ticker": ticker, "plans": [],
-            "reply": f"Not enough price history for {ticker} to build a plan "
-                     f"yet (needs ~200 trading days).",
-        }
+    # --- thesis -> plan (Gemini) ---
+    if req.thesis and req.thesis.strip():
+        raw = _gemini_json(_PLAN_PROMPT, f"Thesis:\n{req.thesis.strip()}\n\n"
+                           "Return the JSON now.", temperature=0.4)
+        if raw is None:
+            return JSONResponse(status_code=503, content={
+                "ok": False, "mode": "plan",
+                "error": "Gemini unavailable (check GEMINI_API_KEY in .env).",
+            })
+        return {"ok": True, "mode": "plan", "generated_plan": _coerce_plan(raw)}
 
-    book = pf.load()
-    prices = {ticker: analysis["price"]}
-    plans = propose_plans(analysis, book, prices)
-    payloads = [_plan_to_payload(p) for p in plans]
+    # --- message -> conversational analyst reply (Gemini) ---
+    if req.message and req.message.strip():
+        user = (f"Active thread: {req.threadTag}\nUser message: {req.message}"
+                if req.threadTag else f"User message: {req.message}")
+        raw = _gemini_json(_ANALYST_PROMPT, user, temperature=0.7)
+        if raw is None:
+            reply = ("On the desk, but my analyst brain (Gemini) is offline — "
+                     "check GEMINI_API_KEY in .env.")
+            return {"ok": True, "mode": "chat", "intent": "conversation",
+                    "reply": reply, "plans": []}
+        intent = "analysis" if raw.get("intent") == "analysis" else "conversation"
+        reply = str(raw.get("reply") or
+                    ("Reading the setup now — structured plan coming through."
+                     if intent == "analysis" else "On the desk. What are you seeing?"))
+        return {"ok": True, "mode": "chat", "intent": intent, "reply": reply}
 
-    if payloads:
-        primary = payloads[0]
-        reply = (f"{ticker}: {primary['signal']}. Plan — enter ~Rs."
-                 f"{primary['entry']:,.2f}, stop Rs.{primary['stop_price']:,.2f}, "
-                 f"target Rs.{primary['target']:,.2f} "
-                 f"({primary['rr_ratio']:g}:1), {primary['position_size']} shares.")
-    else:
-        trend = "uptrend" if analysis["uptrend"] else "downtrend"
-        reply = (f"{ticker}: no trade signal right now ({trend}, "
-                 f"RSI {analysis['rsi']:.0f} if available). Nothing to propose.")
+    # --- ticker -> pure local engine (strategy.py) ---
+    if req.ticker and req.ticker.strip():
+        ticker = req.ticker.strip().upper()
+        if "." not in ticker:
+            ticker += ".NS"
+        analysis = analyze(ticker)
+        if analysis is None:
+            return {"ok": True, "mode": "ticker", "ticker": ticker, "plans": [],
+                    "reply": f"Not enough price history for {ticker} yet "
+                             f"(needs ~200 trading days)."}
+        book = pf.load()
+        prices = {ticker: analysis["price"]}
+        payloads = [_plan_to_payload(p) for p in propose_plans(analysis, book, prices)]
+        if payloads:
+            p = payloads[0]
+            reply = (f"{ticker}: {p['signal']}. Plan — enter ~Rs.{p['entry']:,.2f}, "
+                     f"stop Rs.{p['stop_price']:,.2f}, target Rs.{p['target']:,.2f} "
+                     f"({p['rr_ratio']:g}:1), {p['position_size']} shares.")
+        else:
+            trend = "uptrend" if analysis["uptrend"] else "downtrend"
+            reply = f"{ticker}: no trade signal right now ({trend})."
+        return {"ok": True, "mode": "ticker", "ticker": ticker,
+                "plans": payloads, "reply": reply}
 
-    return {"ok": True, "ticker": ticker, "plans": payloads, "reply": reply}
+    return JSONResponse(status_code=400, content={
+        "ok": False, "error": "Provide `thesis`, `message`, or `ticker`."})
 
 
 # ============================================================= /api/decision

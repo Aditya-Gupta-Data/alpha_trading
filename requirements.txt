@@ -5,3 +5,4 @@ discord.py
 fastapi
 uvicorn
 ruamel.yaml
+google-genai

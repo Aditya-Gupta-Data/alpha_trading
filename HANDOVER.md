@@ -6,7 +6,97 @@ at the start of the next chat, paste it back in (or point Claude at the repo).
 ---
 
 ## Where we are
-**Phase 1: Alerting — done, running automatically from the cloud. Phase 2: Suggestions — done, running automatically from the cloud. Phase 3: Paper trading — done, user ran their first real session 2026-07-03; still runs locally on the user's Mac (interactive, by design). Phase 4: replanned 2026-07-04, ALL STEPS DONE as of 2026-07-05 (4A journal/levers, 4B trade plans, 4C plan tracking, 4D news sentiment, 4E forecast layer, 4F learning-loop tuner) — Phase 4 is feature-complete, see below.**
+**Phase 1: Alerting — done, running automatically from the cloud. Phase 2: Suggestions — done, running automatically from the cloud. Phase 3: Paper trading — done, user ran their first real session 2026-07-03; still runs locally on the user's Mac (interactive, by design). Phase 4: replanned 2026-07-04, ALL STEPS DONE as of 2026-07-05 (4A journal/levers, 4B trade plans, 4C plan tracking, 4D news sentiment, 4E forecast layer, 4F learning-loop tuner) — Phase 4 is feature-complete. Phase 5 (frontend + local API): IN PROGRESS as of 2026-07-06 — a React dashboard now talks to a unified local FastAPI, Gemini is integrated directly (no cloud gateway), and an hourly auto-sync loop is live. See "Phase 5 current state" immediately below.**
+
+---
+
+## Phase 5 current state (2026-07-06) — frontend + local API
+
+This is the authoritative description of the live local system. It supersedes
+older scattered notes elsewhere in this file.
+
+### (a) Consolidated FastAPI backend — `src/api.py`
+ONE FastAPI app is the frontend's single entry point (the old `src/web/api.py`
+was merged in and deleted). Run it with:
+`uvicorn src.api:app --reload --port 8000`. It imports the existing engine
+modules and never re-implements their logic. Endpoints:
+- `GET  /api/health` — liveness + `{"mode":"paper-only"}`.
+- `GET  /api/watchlist` — instruments + live price + alert rules.
+- `POST /api/watchlist` — add a stock/index (validates a live price first).
+- `DELETE /api/watchlist/{symbol}` — remove an instrument + its rules.
+- `GET  /api/alerts` — rules triggered right now.
+- `POST /api/chat` — analyst pipeline (see (c)): `{thesis}` -> Gemini trade
+  plan; `{message}` -> Gemini conversational reply + intent; `{ticker}` ->
+  pure local engine (analyze + propose_plans). Read-only.
+- `POST /api/decision` — the frontend's `emit()` target: `PAPER_TRADE`
+  executes a paper buy/sell (cash + 25%/stock rails) and journals it;
+  `DISMISS` journals a rejection; `APPROVE_REAL` is REFUSED (403) — paper
+  only, no broker, by design.
+- `GET  /api/scorecard` — rolls up `journal.jsonl` into summary totals,
+  per-archetype win-rate/avg-R, and `executed_trades[]` / `skipped_trades[]`
+  rows (each carrying any post-mortem `pm_*` review fields).
+- `POST /api/review` — attaches a post-mortem (`pm_right`/`pm_wrong`/
+  `pm_error_category` + `reviewed_at`) to the matching journal entry.
+- `POST /api/sync-market` — resolves OPEN paper trades by DELEGATING to
+  `src/plan_tracker.py` (daily-OHLC stop/target scan, bracket-order paper
+  close, r-multiple/PnL) — one source of truth, not a naive last-price check.
+- `GET  /` — serves the legacy static dashboard (`src/web/static/index.html`).
+CORS allows any `localhost`/`127.0.0.1` port (the Vite dev server's port
+varies). Full JSON shapes for the frontend live in `DATA_CONTRACT.md`.
+
+### (b) The UI — `lovable-frontend/` (gitignored on `main`)
+The Lovable-built React app (TanStack Start SSR + Vite + Tailwind, runs under
+npm or bun) lives at repo-root `lovable-frontend/`. It is **git-ignored on
+`main`** (see root `.gitignore`) so the Python engine's version control stays
+clean; per the decoupled branch strategy the UI is version-controlled only on
+the `lovable-ui` branch, never committed to `main`. Boot it with
+`cd lovable-frontend && npm install && npm run dev` (serves on localhost:8080,
+falls back to :8081 if busy). Supabase/Lovable-Cloud auth + DB were fully
+stripped 2026-07-06; the app is a local single-user desk with no login, and
+its `emit()` / Scorecard / chat all talk to the local API above. `.env` there
+is just `VITE_API_BASE_URL="http://localhost:8000"`. The original Supabase
+`models.ts` is kept as `models.ts.supabase.bak` for reference.
+
+### (c) Gemini direct-integration (zero cloud dependencies)
+`/api/chat`'s analyst brain calls Google Gemini DIRECTLY via the official
+`google-genai` SDK, keyed by `GEMINI_API_KEY` in the root `.env` (the same key
+Phase 4D's news processor uses), model alias `gemini-flash-lite-latest`. The
+Lovable AI Gateway (`https://ai.gateway.lovable.dev`, `LOVABLE_API_KEY`) that
+the frontend shipped with was SEVERED: the two frontend server functions
+(`src/lib/ai-plan.functions.ts`, `src/lib/analyst-chat.functions.ts`) now
+`fetch` our `/api/chat` instead. Structured trade math still comes from the
+local engine (`strategy.py`); Gemini only does natural-language replies and
+free-thesis -> plan translation. If `GEMINI_API_KEY` is missing the endpoint
+degrades gracefully (503 for plans, canned reply for chat) rather than
+crashing. `google-genai` added to `requirements.txt`. (Note: Lovable *error
+telemetry* — `lovable-error-reporting.ts` — is unrelated to the AI gateway and
+was intentionally left alone.)
+
+### (d) 1-hour background auto-sync
+`src/api.py` runs an `asyncio` background loop via FastAPI's `lifespan`. On
+boot it logs `[Auto-Sync] background market refresh armed — running every
+3600s.` Every hour it runs the same logic as `/api/sync-market`
+(`plan_tracker.run_tracker`) plus a watchlist price-cache refresh, logging
+`[Auto-Sync] 1-hour market refresh complete — resolved N open trade(s);
+watchlist price cache refreshed.`. Blocking calls run in a worker thread so
+HTTP serving never stalls, and one failed cycle logs and retries next hour
+without killing the loop. Interval is overridable via the
+`AUTO_SYNC_INTERVAL_SECONDS` env var (used only for testing).
+
+### Live paper data note (IMPORTANT)
+As of 2026-07-06 `data/journal.jsonl` has 5 entries and `data/portfolio.json`
+holds ONGC.NS (106) + TCS (12) with ~Rs.28,980 cash. The 4 newer entries
+(TCS/MARUTI/ONGC dated 2026-07-06) came from the USER clicking the frontend
+chat's seeded DEMO proposal cards (entry prices like TCS 3842.55 match the
+hardcoded demo threads), which correctly POSTed to `/api/decision`. Treat
+these as the user's own test trades — do NOT wipe them without asking. Caveat:
+those demo trades used bare tickers (e.g. `TCS`, not `TCS.NS`), so the plan
+tracker / auto-sync will fetch the wrong (US) listing for them — worth
+cleaning up before relying on their resolution. Never reset
+`data/journal.jsonl` or `data/portfolio.json`; when testing anything that
+writes, back them up and restore (or point at an isolated temp dataset).
+
+---
 
 Done:
 - GitHub repo created (empty), scaffold ready to upload: https://github.com/Aditya-Gupta-Data/alpha_trading

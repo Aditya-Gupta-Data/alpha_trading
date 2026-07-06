@@ -30,7 +30,8 @@ never have to re-argue it in a future chat.
 | 22 | Data source: migrated from yfinance to the DhanHQ Data API | yfinance has no reliable NSE options data and is a scraped/unofficial feed with no SLA. Once the user subscribed to Dhan's Data API (a paid add-on, separate from a trading account), `src/dhan_client.py` became the sole market-data source — verified security IDs pulled from Dhan's own scrip master (not hand-typed), real daily OHLC (so `plan_tracker` still resolves stop/target on true daily high/low, not a naive last-price check), and Dhan's option-chain API unblocks the previously-deferred options work (decision #14). Dhan tokens are short-lived (~24h) and must be refreshed regularly — see `HANDOVER.md`. |
 | 23 | `src/api.py` is a single unified FastAPI app, not two separate backends | An earlier iteration had a standalone dashboard API (`src/web/api.py`) built before the analyst/decision/scorecard endpoints existed. Once both existed, running two servers was pure tech debt (two ports, two CORS configs, duplicate watchlist logic) — merged into one `src/api.py`; `src/web/api.py` deleted. |
 | 24 | Backend redeployed to a fresh GCP VM running the FastAPI server as a systemd service | The original cron VM (project `alpha-trading-app-2026`) had a lost login. A new VM (`alpha-trading-vm`, project `project-37632031-10d0-47dd-b6f`, Debian 13) was built 2026-07-06: code via `git clone`, deps in a venv, and `src.api:app` runs continuously via a systemd service (`Restart=always`, enabled on boot) instead of the old per-schedule cron jobs. See `HANDOVER.md` → "GCP VM (cloud hosting)". |
-| 25 | Phase 6 "Brain Map" is a relational SQLite store, additive to the existing learning loop — design banked, not yet built | The current `tuner.py`/`brain_weights.json` loop is a flat numerical nudge on two BUY archetypes; it can't answer "has *this cluster of events* happened before and did it pay?". The Brain Map adds that as a separate `data/brain_map.db` (native `sqlite3`, per decision #19's no-cloud-DB rule and VISION_PLAN's no-Postgres/Mongo rule). Kept strictly additive so it can't destabilize the working forecast/tuner path — see the dedicated design section below. |
+| 25 | Phase 6 "Brain Map" is a relational SQLite store, additive to the existing learning loop — **built and fully wired 2026-07-06** | The current `tuner.py`/`brain_weights.json` loop is a flat numerical nudge on two BUY archetypes; it can't answer "has *this cluster of events* happened before and did it pay?". The Brain Map adds that as a separate `data/brain_map.db` (native `sqlite3`, per decision #19's no-cloud-DB rule and VISION_PLAN's no-Postgres/Mongo rule). Kept strictly additive so it can't destabilize the working forecast/tuner path — see the dedicated design section below. |
+| 26 | Brain Map memory enters `forecast.py` as advisory context only, never as score points | When the current setup carries active pattern tags, forecast() attaches the map's historical stats as `memory`/`memory_context` payload fields (a "Historical Performance for active patterns [...]" line every consumer — terminal, Discord /analyze, API, LLM prompts embedding forecasts — sees). It deliberately adds **zero** points to the checklist score: score adjustment from outcomes is already the tuner's job (decision #25's additive rule), and double-counting the same resolved trades in both mechanisms would compound. Fail-safe: empty/missing DB, no tags, or any query error degrade to `memory: null` with the standard flow untouched. |
 
 ## Still open
 - Options trading build-out (Phase 5) — Dhan's option-chain data is now
@@ -43,8 +44,10 @@ never have to re-argue it in a future chat.
 - Exposing the VM API to the internet (for a deployed frontend) — currently
   local to the VM only; recommended path is a Cloudflare Tunnel + an API-key
   check in `src.api`. Not built.
-- Phase 6 (SQLite "Brain Map") — design finalized and banked below; next
-  session builds `src/brain_map.py` then `tests/test_brain_map.py`.
+- ~~Phase 6 (SQLite "Brain Map")~~ — **DONE 2026-07-06** (all steps: store +
+  tests, ingestion + journal short_ids, forecast wiring — decisions #25/#26).
+  Ongoing operational note: re-run `python3 -m src.brain_map ingest` after
+  trades resolve so the map keeps accumulating outcomes.
 - Phase 7 (historical backtest simulator) — not started. Note its
   VISION_PLAN prompt still says "fetch from yfinance"; that must be updated
   to use `src/dhan_client.py` (decision #22) when built.
@@ -83,17 +86,15 @@ it make money?"*
 **Strict rules (non-negotiable for the build):**
 - **Additive only.** `tuner.py` and `brain_weights.json` stay untouched and
   keep running; the Brain Map is a parallel store, not a replacement.
-- **`forecast.py` is NOT wired to query it yet.** Build and test the store
-  in isolation first; letting forecasts read the map is a separate, later
-  step once it holds real data.
 - **Paper-only / read-history.** It only records and reads past events and
   outcomes; it never touches execution or `data/portfolio.json`.
 - Native `sqlite3` only — no Postgres/Mongo (VISION_PLAN guardrail,
   decision #19).
 
-**Later steps (after Step 1–2 land):** add a stable `id` to new
-`journal.py` entries (composite-key fallback for old rows); then, as its own
-step, let `forecast.py` query the map.
+**Build status: ALL steps landed 2026-07-06.** Store + tests, then
+`ingest_existing()` + journal `short_id`s, then the forecast wiring
+(advisory-context-only — decision #26). `tuner.py`/`brain_weights.json`
+were never touched, per the additive rule above.
 
 ## Resolved gotchas worth remembering
 - Gemini API keys created via AI Studio's "create in new project" button get zero free-tier quota (HTTP 429, limit:0). Create keys against the existing billed `alpha-trading-app-2026` GCP project instead.

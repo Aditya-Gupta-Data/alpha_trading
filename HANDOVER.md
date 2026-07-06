@@ -179,13 +179,26 @@ up newly resolved trades). The real `data/brain_map.db` now exists,
 holding 10 news events; 0 outcomes so far because no journal trade has
 resolved yet. Full suite: **55/55**.
 
-**Start the next session here — the one remaining Phase 6 step** (its own
-step, confirm before building): let `forecast.py` query the map via
-`query_similar_events(tags)`. Until then keep it **strictly additive**:
-`tuner.py` and `brain_weights.json` stay untouched, `forecast.py` stays
-unwired. Worth doing around the same time: re-run the ingest after the
-plan tracker resolves the open 2026-07-06 trades, so the map holds real
-outcomes before forecasts start reading it.
+**Phase 6 step 5 (the final step) landed later on 2026-07-06 — PHASE 6 IS
+COMPLETE.** `forecast.py` now queries the map: when the current setup has
+active pattern tags (fresh Golden Cross → `fresh_cross`+`golden_cross`,
+oversold RSI → `rsi_oversold`), the forecast payload gains `memory` stats
+and a `memory_context` line ("Historical Performance for active patterns
+[...]: Win Rate: X%, ...") that `describe()` prints (terminal + Discord
+`/analyze`). Advisory only — zero score points (decision #26 in
+`DECISIONS.md`); empty/missing DB degrades to `memory: null` with the
+standard flow untouched. `tuner.py`/`brain_weights.json` were never
+modified. Suite: **63/63**. Contract addition documented in
+`DATA_CONTRACT.md` § 2.4.
+
+**Ongoing Brain Map operation**: re-run `python3 -m src.brain_map ingest`
+after the plan tracker resolves trades (e.g. the open 2026-07-06 ones) so
+the map accumulates real outcomes — that's when `memory_context` starts
+appearing in live forecasts.
+
+**Next up (nothing started)**: the other open items below — restore the
+VM's scheduled email jobs, Cloudflare Tunnel for the API, Phase 7
+historical simulator (see `DECISIONS.md` → "Still open").
 
 Other open items (not next, but tracked): restore the cloud-scheduled email
 jobs on the new VM, expose the VM API via a Cloudflare Tunnel for a deployed

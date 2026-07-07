@@ -149,9 +149,25 @@ for anything more recent than what's written here.
   present, and every failure abstains rather than blocking a proposal.
   Advisory only, never gates. `scikit-learn` added to `requirements.txt`.
   Tests: `tests/test_skeptic_agent.py` + proposer integration tests.
-- **Full offline test suite: 233/233 passing** (`python3 -m pytest tests/`;
+- **Phase 7 Time-Travel Simulator — BUILT (2026-07-07):** `src/simulator.py`
+  (`python3 -m src.simulator --start YYYY-MM-DD --end YYYY-MM-DD`) replays
+  history through the REAL pipeline: as-of-date SMA/RSI analysis (no future
+  data ever enters a proposal), historical VIX, a synthetic option chain,
+  the actual `build_proposal()` logic, auto-approve, then resolution via
+  `plan_tracker`'s own pure helpers — 65% profit take, pre-expiry gamma
+  rule, and the FULL 2026 friction stack, byte-identical to live. Results
+  land idempotently (deterministic `sim:` journal_refs) in the additive
+  `simulated_trades` table + standard `outcomes`/`events`/links, and
+  `encode_causal_links` runs the Sleep Phase's Task D over the simulated
+  window so graph_edges mint from simulated post-mortems exactly like real
+  ones (decision #36). The real journal/portfolio are never touched; no
+  notifier/network imports (both guard-tested). Also fixed in passing:
+  spread outcomes now record their strategy as the Brain Map `archetype`
+  ("iron_condor", not "other"), so causal summaries name the trade for
+  real trades too. Tests: `tests/test_simulator.py`.
+- **Full offline test suite: 244/244 passing** (`python3 -m pytest tests/`;
   the `for f in tests/test_*.py; do python3 "$f"; done` __main__ loop runs
-  all 22 files clean too), including `tests/test_options_spreads.py`
+  all 23 files clean too), including `tests/test_options_spreads.py`
   (condor max-loss math, STT sell-side-only, VIX gate, atomic tracker
   resolution), `tests/test_options_proposer.py` (regime mapping,
   strike selection off a fake chain, budget sizing, journal contract),
@@ -260,7 +276,7 @@ python3 -m src.options_proposer --review-pending   # decide market-loop
                                                    # (offline, no market data)
 
 # 6. Offline test suite (no internet/API calls needed)
-python3 -m pytest tests/                          # expect 233 passing
+python3 -m pytest tests/                          # expect 244 passing
 
 # 7. Market loop daemon (market hours only; headless proposals to Discord)
 python3 -m src.market_loop
@@ -468,7 +484,7 @@ entries then live in the VM's own `data/journal.jsonl`, a separate file
 from the Mac's local journal.
 
 **Next up**: upgrading to a named Cloudflare tunnel for a permanent URL
-(needs a domain), the Phase 7 historical simulator, and analyst procedural
+(needs a domain), training the skeptic model on simulated trades (Phase 7b), and analyst procedural
 evolution (see `DECISIONS.md` → "Still open"). The VM's
 scheduled jobs are handled by `scripts/setup_cron.sh` (see the GCP VM
 section).
@@ -508,9 +524,10 @@ section).
 * ~~Wire the Memory Query into the proposal path so linked historical patterns ride along in the Discord PROPOSAL ALERT rationale.~~ ✅ DONE in `src/options_proposer.py` (fail-safe 🧠 Memory block; advisory only, decision #26 philosophy). Query now seeds on ticker + view + strategy so concept-keyed causal edges surface.
 * ~~Teach `src/sleep_phase.py` to WRITE causal edges into `graph_edges`.~~ ✅ **Phase 6D DONE 2026-07-07** — Task D `write_causal_links` mines `(subject)-[predicate]->(object)` triples from reviewed outcomes + post-mortems only (decision #34), confidence 1.0, idempotent; `local_parser.extract_causal_triples()` + `tests/test_causal_writer.py`. `networkx` added to `requirements.txt`. Populates once trades resolve and a Sleep Phase runs with Ollama up.
 
-### Phase 7: The Time-Travel Simulator
-* Build `src/simulator.py` to override `datetime.now()` and loop over historical DhanHQ data.
-* Instantly fast-forward plans to resolution to populate the Brain Map without waiting months in real-time. Use a simulated portfolio to protect the live paper state.
+### Phase 7: The Time-Travel Simulator — ✅ DONE (2026-07-07)
+* ~~Build `src/simulator.py` to override `datetime.now()` and loop over historical DhanHQ data.~~ ✅ Built with **as-of-date injection instead of `datetime.now()` monkeypatching** (the safer path recorded as a caveat when this phase was planned — decision #36): per historical day it computes the same SMA/RSI analysis over only the closes known then, and drives the REAL `options_proposer.build_proposal()` (regime map, VIX gate, max-loss sizing) with historical VIX + a synthetic option chain (premiums modeled — historical chains aren't retrievable). Run: `python3 -m src.simulator --start YYYY-MM-DD --end YYYY-MM-DD [--underlying "NIFTY 50"] [--skip-causal]`.
+* ~~Instantly fast-forward plans to resolution to populate the Brain Map without waiting months in real-time. Use a simulated portfolio to protect the live paper state.~~ ✅ Resolution reuses `plan_tracker`'s pure helpers, so exits + the FULL 2026 friction stack are byte-identical to live. Results land idempotently (deterministic `sim:<hash>` journal_refs) in the new `simulated_trades` table + the standard `outcomes`/`events`/links — which the Sleep Phase's causal writer (decision #34) then turns into `graph_edges`. The real journal/portfolio are never touched (runtime-spied in `tests/test_simulator.py`); the simulated book is a plain dict.
+* Still open (Phase 7b): a training script that fits the Phase 11 skeptic's Random Forest on `simulated_trades` rows and saves `data/skeptic_model.pkl` (the table already stores every `FEATURE_NAMES` input + the win/loss label).
 
 ---
 ## 📋 Pending Phases

@@ -156,10 +156,13 @@ largely **done**: Discord Analyst (Phase 5 above) is live, the Brain Map
 (Phase 6 above, all steps) is complete and wired into `forecast.py`, and
 data ingestion moved to the DhanHQ Data API instead of scraping (superseding
 Phase 8 above's NSE-scraping approach — see `DECISIONS.md` decision #22).
-Phase 7 above (the Time-Travel Simulator) is the one piece from this
-original blueprint still **not started**, and it is carried forward under
-the same name in HANDOVER's Master Execution Plan — note its "fetch from
-yfinance" instruction is stale and must use `src/dhan_client.py` when built.
+Phase 7 above (the Time-Travel Simulator) — the last piece of this original
+blueprint — was **BUILT 2026-07-07** as `src/simulator.py`, with two
+deliberate departures from the prompt above: DhanHQ history instead of the
+stale yfinance instruction, and as-of-date parameter injection instead of
+overriding `datetime.now()` (decision #36 — the monkeypatch approach was
+flagged as a risk when this plan was first reviewed). **The original
+blueprint is now fully realized end to end.**
 
 The **current, active roadmap lives in one place: `HANDOVER.md` → "🚀 The
 Master Execution Plan", "📋 Pending Phases", and "🔮 The Long-Term Vision

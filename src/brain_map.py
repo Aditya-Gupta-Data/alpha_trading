@@ -309,7 +309,10 @@ def record_resolved_entry(conn, entry, post_mortem=None):
     if not outcome or outcome.get("r_multiple") is None:
         return None
     signal = entry.get("signal", "")
-    archetype = _archetype_for(signal)
+    # A spread's strategy IS its archetype ("iron_condor" beats "other") —
+    # this is what the Sleep Phase's causal summaries name the trade by.
+    archetype = ((entry.get("spread") or {}).get("strategy")
+                 or _archetype_for(signal))
     outcome_id = record_outcome(
         conn,
         journal_ref=journal_ref_for(entry),

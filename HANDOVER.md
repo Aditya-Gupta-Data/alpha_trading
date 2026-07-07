@@ -6,6 +6,33 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## 🔴 HIGH-PRIORITY TECHNICAL DEBT — read before Phase 7b
+
+**Pending task before Phase 7b: refactor `src/renew_token.py` to DhanHQ's V2
+auth (API Key + Secret + TOTP via `pyotp`) — the legacy `/v2/RenewToken`
+call is deprecated for tokens generated the current way.**
+
+Discovered 2026-07-07: DhanHQ overhauled its authentication system
+effective 2025-10-01 (tokens now require the new API Key + Secret + TOTP
+flow; the old direct-token renewal path is being phased out). Confirmed
+live the same day — a freshly dashboard-generated `DHAN_ACCESS_TOKEN`
+worked fine for data calls (the Phase 7 simulator ran clean on it) but
+`python3 -m src.renew_token` failed with `DH-905: "Renewal of token not
+allowed for this token type"`. **Practical effect: the 07:00 IST daily
+cron renewal will likely keep failing, and the token will fully expire
+again in ~24h, requiring another manual dashboard paste** — the exact
+manual-paste cycle the renewal automation was built to eliminate.
+Sources: [DhanHQ auth changes, effective 2025-10-01](https://github.com/marketcalls/openalgo/issues/488),
+[DhanHQ v2 authentication docs](https://dhanhq.co/docs/v2/authentication/).
+
+**Not fixed today, by explicit user decision** — logged as debt only.
+The real fix: generate an API Key + Secret (12-month validity, same
+"Access DhanHQ APIs" dashboard page) and rewrite `renew_token.py` /
+`dhan_client.py`'s auth to DhanHQ's new consent-based daily token flow
+(`pyotp` for the TOTP step). Blocks Phase 7b (training the skeptic's
+Random Forest wants a much larger simulated date range than one manual
+token's ~24h window can sustain unattended).
+
 ## Current production state (as of 2026-07-06)
 
 - **Phases 1-4 (alerting, suggestions, paper trading, journal/plans/tracking/
@@ -149,7 +176,8 @@ for anything more recent than what's written here.
   present, and every failure abstains rather than blocking a proposal.
   Advisory only, never gates. `scikit-learn` added to `requirements.txt`.
   Tests: `tests/test_skeptic_agent.py` + proposer integration tests.
-- **Phase 7 Time-Travel Simulator — BUILT (2026-07-07):** `src/simulator.py`
+- **Phase 7 Time-Travel Simulator — BUILT AND VALIDATED END-TO-END ON REAL
+  DATA (2026-07-07):** `src/simulator.py`
   (`python3 -m src.simulator --start YYYY-MM-DD --end YYYY-MM-DD`) replays
   history through the REAL pipeline: as-of-date SMA/RSI analysis (no future
   data ever enters a proposal), historical VIX, a synthetic option chain,
@@ -161,8 +189,18 @@ for anything more recent than what's written here.
   `encode_causal_links` runs the Sleep Phase's Task D over the simulated
   window so graph_edges mint from simulated post-mortems exactly like real
   ones (decision #36). The real journal/portfolio are never touched; no
-  notifier/network imports (both guard-tested). Also fixed in passing:
-  spread outcomes now record their strategy as the Brain Map `archetype`
+  notifier/network imports (both guard-tested).
+  **Live validation run (2026-07-07, real DhanHQ history, NIFTY 50,
+  2025-07-01 → 2026-06-30, 56 trading days scanned):** 56 iron-condor
+  proposals, 56/56 resolved — **48 wins (avg +Rs.140,532, avg R +1.43)**,
+  **8 losses (avg −Rs.76,802, avg R −0.78)**, 0 scratches; `brain_map.db`
+  went from empty to 182 events / 56 outcomes / 168 links; the causal
+  writer minted the graph's first two real edges,
+  `iron_condor RESULTS_IN win` and `iron_condor RESULTS_IN loss` (both
+  confidence 1.0) — the Phase 6C/6D memory stack now has real content for
+  the first time. **Phase 7 is officially validated, not just built.**
+  Also fixed in passing: spread outcomes now record their strategy as the
+  Brain Map `archetype`
   ("iron_condor", not "other"), so causal summaries name the trade for
   real trades too. Tests: `tests/test_simulator.py`.
 - **Full offline test suite: 244/244 passing** (`python3 -m pytest tests/`;
@@ -236,7 +274,7 @@ reader in each entry point (`_load_env()`), not a shared library, by design
 | Variable | Purpose | Notes |
 |---|---|---|
 | `DHAN_CLIENT_ID` | DhanHQ account id | `1109738713` as of this writing |
-| `DHAN_ACCESS_TOKEN` | DhanHQ Data API token | **Short-lived (~24h)**. `python3 -m src.renew_token` renews it in place via Dhan's `/v2/RenewToken` (rewrites the .env line, keeps `.env.bak`) — but it can only renew a still-valid token, so it must run at least daily (cron it). If it prints CRITICAL (token already expired, e.g. DH-906), do one manual refresh from the Dhan dashboard and the automation takes over again. |
+| `DHAN_ACCESS_TOKEN` | DhanHQ Data API token | **Short-lived (~24h). ⚠️ Auto-renewal is currently BROKEN for freshly-generated tokens** — see "🔴 HIGH-PRIORITY TECHNICAL DEBT" at the top of this file (DhanHQ's Oct 2025 auth overhaul; confirmed 2026-07-07 via `DH-905`). `python3 -m src.renew_token` still renews it in place via Dhan's `/v2/RenewToken` when it works, but expect it to fail and require a manual dashboard refresh + paste roughly every ~24h until the V2 auth refactor lands. |
 | `GEMINI_API_KEY` | Google Gemini (news sentiment + chat) | Get from Google AI Studio, create the key against the *existing billed* `alpha-trading-app-2026` GCP project (a key from AI Studio's "new project" flow gets zero free-tier quota — see `DECISIONS.md`). |
 | `DISCORD_BOT_TOKEN` | Discord bot login | From the Discord Developer Portal, needs "Message Content Intent" enabled. |
 | `DISCORD_WEBHOOK_URL` | Discord channel webhook (alerts + trade episodes push) | **Set and verified live 2026-07-06**, both locally and on the VM. Different thing from the bot token above — a channel gear icon → Integrations → Webhooks → New Webhook → Copy Webhook URL. Pushes to the "Alpha Trading" server's #general channel. Verify anytime with `python3 -m src.plan_tracker --mock-trade-strategy IRON_BUTTERFLY` (prints `Discord delivery: OK`/`FAILED`, journals nothing). |
@@ -483,11 +521,13 @@ VM (systemd services, same pattern as `alpha-trading`) — note the pending
 entries then live in the VM's own `data/journal.jsonl`, a separate file
 from the Mac's local journal.
 
-**Next up**: upgrading to a named Cloudflare tunnel for a permanent URL
-(needs a domain), training the skeptic model on simulated trades (Phase 7b), and analyst procedural
-evolution (see `DECISIONS.md` → "Still open"). The VM's
-scheduled jobs are handled by `scripts/setup_cron.sh` (see the GCP VM
-section).
+**Next up, in priority order**: (1) the DhanHQ V2 auth refactor —
+see "🔴 HIGH-PRIORITY TECHNICAL DEBT" at the top of this file, blocks
+Phase 7b; (2) training the skeptic model on simulated trades (Phase 7b);
+(3) upgrading to a named Cloudflare tunnel for a permanent URL (needs a
+domain); (4) analyst procedural evolution (see `DECISIONS.md` → "Still
+open"). The VM's scheduled jobs are handled by `scripts/setup_cron.sh`
+(see the GCP VM section).
 
 ## Where to look for more detail
 
@@ -524,10 +564,11 @@ section).
 * ~~Wire the Memory Query into the proposal path so linked historical patterns ride along in the Discord PROPOSAL ALERT rationale.~~ ✅ DONE in `src/options_proposer.py` (fail-safe 🧠 Memory block; advisory only, decision #26 philosophy). Query now seeds on ticker + view + strategy so concept-keyed causal edges surface.
 * ~~Teach `src/sleep_phase.py` to WRITE causal edges into `graph_edges`.~~ ✅ **Phase 6D DONE 2026-07-07** — Task D `write_causal_links` mines `(subject)-[predicate]->(object)` triples from reviewed outcomes + post-mortems only (decision #34), confidence 1.0, idempotent; `local_parser.extract_causal_triples()` + `tests/test_causal_writer.py`. `networkx` added to `requirements.txt`. Populates once trades resolve and a Sleep Phase runs with Ollama up.
 
-### Phase 7: The Time-Travel Simulator — ✅ DONE (2026-07-07)
+### Phase 7: The Time-Travel Simulator — ✅ DONE AND VALIDATED ON REAL DATA (2026-07-07)
 * ~~Build `src/simulator.py` to override `datetime.now()` and loop over historical DhanHQ data.~~ ✅ Built with **as-of-date injection instead of `datetime.now()` monkeypatching** (the safer path recorded as a caveat when this phase was planned — decision #36): per historical day it computes the same SMA/RSI analysis over only the closes known then, and drives the REAL `options_proposer.build_proposal()` (regime map, VIX gate, max-loss sizing) with historical VIX + a synthetic option chain (premiums modeled — historical chains aren't retrievable). Run: `python3 -m src.simulator --start YYYY-MM-DD --end YYYY-MM-DD [--underlying "NIFTY 50"] [--skip-causal]`.
 * ~~Instantly fast-forward plans to resolution to populate the Brain Map without waiting months in real-time. Use a simulated portfolio to protect the live paper state.~~ ✅ Resolution reuses `plan_tracker`'s pure helpers, so exits + the FULL 2026 friction stack are byte-identical to live. Results land idempotently (deterministic `sim:<hash>` journal_refs) in the new `simulated_trades` table + the standard `outcomes`/`events`/links — which the Sleep Phase's causal writer (decision #34) then turns into `graph_edges`. The real journal/portfolio are never touched (runtime-spied in `tests/test_simulator.py`); the simulated book is a plain dict.
-* Still open (Phase 7b): a training script that fits the Phase 11 skeptic's Random Forest on `simulated_trades` rows and saves `data/skeptic_model.pkl` (the table already stores every `FEATURE_NAMES` input + the win/loss label).
+* ✅ **Validated end-to-end on real DhanHQ history same day** (NIFTY 50, 2025-07-01 → 2026-06-30): 56 iron-condor proposals resolved (48 wins / 8 losses), `brain_map.db` populated from empty to 182 events / 56 outcomes / 168 links, and the causal writer minted the graph's first two real edges (`iron_condor RESULTS_IN win` / `RESULTS_IN loss`, confidence 1.0). See the production-state bullet above for full figures. **Not just built — proven working.**
+* Still open (Phase 7b): a training script that fits the Phase 11 skeptic's Random Forest on `simulated_trades` rows and saves `data/skeptic_model.pkl` (the table already stores every `FEATURE_NAMES` input + the win/loss label). **Blocked on the DhanHQ auth debt below** — Phase 7b will want to simulate a much larger date range for a meaningful training set, and the current token/renewal setup can't sustain that unattended.
 
 ---
 ## 📋 Pending Phases

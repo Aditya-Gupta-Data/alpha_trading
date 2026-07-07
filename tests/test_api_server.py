@@ -175,6 +175,31 @@ def test_already_resolved_entry_is_409_left_as_is():
     assert entry["decision"] == "pending_approval"  # untouched
 
 
+def test_pending_list_requires_key():
+    with _env_with_key():
+        r = _client().get("/api/discord/pending")
+        assert r.status_code == 401
+
+
+def test_pending_list_returns_only_undecided_pending():
+    entries = [
+        make_pending_entry("pend0001"),                       # listable
+        make_pending_entry("pend0002",
+                           outcome={"verdict": "GOOD SKIP"}),  # resolved -> out
+        make_pending_entry("pend0003", decision="approved"),   # decided -> out
+    ]
+    with _env_with_key(), \
+         mock.patch.object(op.journal, "read_all", return_value=entries):
+        r = _client().get("/api/discord/pending", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert [p["trade_id"] for p in body["pending"]] == ["pend0001"]
+    p = body["pending"][0]
+    assert p["ticker"] == "NIFTY 50" and p["strategy"] == "bull_call_spread"
+    assert p["expiry"] == "2026-07-16" and p["lots"] == 1
+
+
 def test_bad_action_is_400():
     with _env_with_key():
         r = _post_action({"action": "execute", "trade_id": "pend0001"},
@@ -199,6 +224,8 @@ if __name__ == "__main__":
     test_unknown_trade_id_is_404()
     test_non_pending_entry_is_404()
     test_already_resolved_entry_is_409_left_as_is()
+    test_pending_list_requires_key()
+    test_pending_list_returns_only_undecided_pending()
     test_bad_action_is_400()
     test_missing_fields_rejected()
     print("All API-server (gateway) tests passed.")

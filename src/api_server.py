@@ -136,6 +136,37 @@ def discord_action(req: DiscordActionRequest):
             "trade_id": req.trade_id, "entry": result["entry"]}
 
 
+@app.get("/api/discord/pending")
+def discord_pending():
+    """The bridge's read side: every journal entry still awaiting a human
+    decision (decision == pending_approval, not yet resolved hypothetically
+    by the tracker), summarized for the Discord bot's /pending command to
+    render with Approve/Reject buttons. Read-only."""
+    pending = []
+    for e in options_proposer.journal.read_all():
+        if e.get("decision") != "pending_approval" or e.get("outcome"):
+            continue
+        s = e.get("spread") or {}
+        lots = s.get("lots", 1)
+        net = (s.get("net_credit") if s.get("net_credit") is not None
+               else s.get("net_debit"))
+        pending.append({
+            "trade_id": e.get("short_id"),
+            "ticker": e.get("ticker"),
+            "strategy": s.get("strategy"),
+            "expiry": s.get("expiry"),
+            "proposed_on": e.get("date"),
+            "lots": lots,
+            "lot_size": s.get("lot_size"),
+            "net_kind": "credit" if s.get("net_credit") is not None else "debit",
+            "net_per_share": net,
+            "max_loss": (s.get("max_loss") or 0) * lots,
+            "max_profit": (s.get("max_profit") or 0) * lots,
+            "signal": e.get("signal"),
+        })
+    return {"ok": True, "pending": pending}
+
+
 # Everything else — watchlist, chat, decision, scorecard, static dashboard —
 # is the engine app, unchanged, now behind the strict gate. Mounted LAST so
 # the gateway's own routes above win the match first.

@@ -37,32 +37,49 @@ working with no behavior change until edges exist.
 from src import brain_map
 
 # Owned by this module — additive to brain_map's core tables, same .db file.
+# `context` (nullable) preserves a causal link's qualifying condition, e.g.
+# "iron_condor RESULTS_IN loss" with context "VIX > 20" (Phase 6D). The
+# UNIQUE index makes edge writes idempotent per (subject, predicate, object).
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS graph_edges (
     source_node       TEXT NOT NULL,
     relation          TEXT NOT NULL,
     target_node       TEXT NOT NULL,
-    confidence_score  REAL
+    confidence_score  REAL,
+    context           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges (source_node);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_edges_triple
+    ON graph_edges (source_node, relation, target_node);
 """
 
 
 def ensure_schema(conn) -> None:
-    """Create the graph_edges table if it doesn't exist yet (idempotent)."""
+    """Create the graph_edges table/indexes if absent (idempotent), and
+    upgrade a pre-Phase-6D table in place by adding the `context` column
+    (CREATE TABLE IF NOT EXISTS can't add a column to an existing table)."""
     conn.executescript(_SCHEMA)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(graph_edges)")}
+    if "context" not in cols:
+        conn.execute("ALTER TABLE graph_edges ADD COLUMN context TEXT")
     conn.commit()
 
 
 def add_edge(conn, source_node, relation, target_node,
-             confidence_score=None) -> None:
-    """Write one causal link. This is the seam the Sleep Phase uses to
-    populate the graph; kept here (next to the schema it targets) so the
-    writer and reader share one definition. Not called during inference."""
+             confidence_score=None, context=None) -> None:
+    """Write (or reinforce) one causal link. Idempotent on the
+    (source, relation, target) triple: re-writing the same edge UPDATES its
+    confidence/context instead of duplicating, so repeated Sleep-Phase runs
+    never grow the graph unbounded. Not called during inference — this is
+    the writer seam, kept next to the schema it targets."""
+    ensure_schema(conn)
     conn.execute(
-        "INSERT INTO graph_edges (source_node, relation, target_node, confidence_score) "
-        "VALUES (?, ?, ?, ?)",
-        (source_node, relation, target_node, confidence_score),
+        "INSERT INTO graph_edges (source_node, relation, target_node, "
+        "confidence_score, context) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT (source_node, relation, target_node) DO UPDATE SET "
+        "confidence_score = excluded.confidence_score, "
+        "context = COALESCE(excluded.context, graph_edges.context)",
+        (source_node, relation, target_node, confidence_score, context),
     )
     conn.commit()
 
@@ -85,12 +102,12 @@ class GraphEngine:
         try:
             ensure_schema(conn)
             for row in conn.execute(
-                "SELECT source_node, relation, target_node, confidence_score "
-                "FROM graph_edges"
+                "SELECT source_node, relation, target_node, confidence_score, "
+                "context FROM graph_edges"
             ):
-                src, relation, tgt, score = (
-                    row["source_node"], row["relation"],
-                    row["target_node"], row["confidence_score"],
+                src, relation, tgt, score, context = (
+                    row["source_node"], row["relation"], row["target_node"],
+                    row["confidence_score"], row["context"],
                 )
                 # A DiGraph keeps one edge per (src, tgt); if the store holds
                 # duplicates, the strongest link wins so traversal ranks it.
@@ -99,7 +116,8 @@ class GraphEngine:
                         self.graph[src][tgt].get("weight", 0.0) >= weight:
                     continue
                 self.graph.add_edge(src, tgt, relation=relation,
-                                    confidence_score=score, weight=weight)
+                                    confidence_score=score, weight=weight,
+                                    context=context)
         finally:
             if owns_conn:
                 conn.close()
@@ -136,6 +154,7 @@ class GraphEngine:
                             "relation": data.get("relation"),
                             "target": target,
                             "confidence_score": data.get("confidence_score"),
+                            "context": data.get("context"),
                             "hops": depth,
                         })
                     if target not in visited_nodes:
@@ -163,7 +182,8 @@ class GraphEngine:
             score = e["confidence_score"]
             conf = f"{score:.2f}" if isinstance(score, (int, float)) else "n/a"
             rel = (e["relation"] or "linked_to").replace("_", " ")
-            lines.append(f"{e['source']} —{rel}→ {e['target']} "
+            cond = f" when {e['context']}" if e.get("context") else ""
+            lines.append(f"{e['source']} —{rel}→ {e['target']}{cond} "
                          f"(confidence {conf}, {e['hops']} hop)")
         return "\n".join(lines)
 

@@ -85,6 +85,31 @@ _SYSTEM_PROMPT = (
     '"chat", tag "no_event", sentiment 0.'
 )
 
+# Phase 6D — causal triple extraction for the knowledge graph. Predicate is
+# constrained to a small closed vocabulary so the graph stays queryable.
+CAUSAL_PREDICATES = {"RESULTS_IN", "PRECEDES", "INDICATES", "CONTRADICTS"}
+
+_CAUSAL_PROMPT = (
+    "You are a causal-analysis engine for a trading journal. The user gives "
+    "you a summary of REVIEWED trade outcomes and their post-mortems. Extract "
+    "the causal links they support as (Subject -> Predicate -> Object) "
+    "triples. The Predicate MUST be EXACTLY one of: RESULTS_IN, PRECEDES, "
+    "INDICATES, CONTRADICTS.\n"
+    "Example: 'Iron Condor' RESULTS_IN 'Loss' when 'VIX > 20'.\n"
+    "Return ONLY a JSON object — no prose, no markdown fences — of this exact "
+    "shape:\n"
+    '{"triples": [{"subject": string, "predicate": string, "object": string, '
+    '"condition": string|null}]}\n'
+    "Rules:\n"
+    "- subject / object: short concept names — a strategy (Iron Condor), a "
+    "regime, a market condition, or an outcome (Loss / Win).\n"
+    "- predicate: EXACTLY one of the four above, uppercase.\n"
+    "- condition: the qualifying context if the link only holds under it "
+    "(e.g. 'VIX > 20'), else null.\n"
+    "- Only extract links genuinely supported by the outcomes given. Invent "
+    'nothing. If none, return {"triples": []}.'
+)
+
 
 class LocalExtractor:
     """OpenAI-compatible client for a local Ollama server. Pure
@@ -163,6 +188,23 @@ class LocalExtractor:
             print("  (local parser: model did not return valid JSON)")
             return None
 
+    def extract_causal_triples(self, summarized_text: str) -> list:
+        """Phase 6D: a summary of REVIEWED trade outcomes (+ post-mortems) ->
+        a list of validated causal triples for the knowledge graph:
+
+            [{"subject": str, "predicate": str, "object": str,
+              "condition": str-or-None}, ...]
+
+        `predicate` is constrained to CAUSAL_PREDICATES; subject/object are
+        normalized to the same snake_case tags the Brain Map clusters on, so
+        an edge like 'Iron Condor' -> 'Loss' becomes iron_condor -> loss and
+        matches the strategy/regime nodes the proposer queries. Returns []
+        when Ollama is unavailable or returns nothing usable. Never raises."""
+        if not summarized_text or not str(summarized_text).strip():
+            return []
+        raw = self.chat_json(_CAUSAL_PROMPT, str(summarized_text))
+        return _coerce_triples(raw)
+
 
 def _strip_fences(content: str) -> str:
     """Small local models love ```json fences despite instructions."""
@@ -211,6 +253,36 @@ def _coerce_event(content) -> dict:
 
     return {"event_type": event_type, "tag": tag,
             "sentiment": sentiment, "entities": entities}
+
+
+def _coerce_triples(raw) -> list:
+    """LLM causal output -> a clean list of validated triples. Lenient on
+    input (drops non-dict items, junk predicates, empty subject/object),
+    strict on output: predicate is upper-cased and must be in
+    CAUSAL_PREDICATES, subject/object are normalized tags, condition is a
+    trimmed string or None."""
+    if not isinstance(raw, dict):
+        return []
+    triples = raw.get("triples")
+    if not isinstance(triples, list):
+        return []
+    out = []
+    for t in triples:
+        if not isinstance(t, dict):
+            continue
+        predicate = str(t.get("predicate") or "").strip().upper()
+        if predicate not in CAUSAL_PREDICATES:
+            continue
+        subject = brain_map._normalize_tag(t.get("subject") or "")
+        obj = brain_map._normalize_tag(t.get("object") or "")
+        if not subject or not obj:
+            continue
+        raw_cond = t.get("condition")
+        condition = (str(raw_cond).strip()[:120]
+                     if raw_cond and str(raw_cond).strip() else None)
+        out.append({"subject": subject, "predicate": predicate,
+                    "object": obj, "condition": condition})
+    return out
 
 
 def process_unstructured_input(conn, text: str, ticker: str = "MARKET",

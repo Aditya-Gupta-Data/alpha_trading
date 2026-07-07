@@ -234,7 +234,7 @@ def test_decay_never_double_counts_the_same_days():
 def test_settings_fall_back_when_config_missing_or_bare():
     s = sleep_phase.load_settings(config_path="/nonexistent/config.json")
     assert s == {"decay_lambda": 0.05, "prune_threshold": 0.20,
-                 "consolidation_hours": 24}
+                 "consolidation_hours": 24, "causal_window_days": 30}
     # The real config.json (no sleep_* keys yet) also yields the defaults:
     s2 = sleep_phase.load_settings()
     assert s2["decay_lambda"] == 0.05 and s2["prune_threshold"] == 0.20

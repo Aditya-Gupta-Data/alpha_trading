@@ -24,6 +24,12 @@ Runs three tasks in sequence against data/brain_map.db:
                   Below the prune threshold the node is FLAGGED inactive
                   (active=0) — never deleted, so history survives and a
                   re-observed theme reactivates.
+  D. CAUSAL LINKS (Phase 6D) reviewed trade OUTCOMES + their post-mortems
+                  -> causal (subject -> predicate -> object) triples via
+                  local_parser.extract_causal_triples() -> `graph_edges`
+                  rows the Phase 6C GraphEngine reads. Drawn ONLY from
+                  reviewed outcomes, never raw news sentiment (decision
+                  #34); idempotent per triple at confidence 1.0.
 
 STRICT DECOUPLING (DECISIONS.md #30): this script never invokes trading
 actions and never touches dhan_client or any market price feed. Its only
@@ -52,6 +58,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from src import brain_map
+from src import graph_engine
 from src.local_parser import LocalExtractor, process_unstructured_input
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +67,10 @@ CONFIG_PATH = ROOT / "config.json"
 DEFAULT_DECAY_LAMBDA = 0.05
 DEFAULT_PRUNE_THRESHOLD = 0.20
 DEFAULT_CONSOLIDATION_HOURS = 24
+# Task D: how far back to look for reviewed outcomes when extracting causal
+# links. Wider than the consolidation window because resolved trades are
+# sparse — the graph is cumulative knowledge, and edge writes are idempotent.
+DEFAULT_CAUSAL_WINDOW_DAYS = 30
 
 # Owned by this module — additive to brain_map's core tables, same file.
 _SCHEMA = """
@@ -123,6 +134,8 @@ def load_settings(config_path=CONFIG_PATH) -> dict:
         "prune_threshold": float(raw.get("sleep_prune_threshold", DEFAULT_PRUNE_THRESHOLD)),
         "consolidation_hours": float(raw.get("sleep_consolidation_hours",
                                              DEFAULT_CONSOLIDATION_HOURS)),
+        "causal_window_days": int(raw.get("sleep_causal_window_days",
+                                          DEFAULT_CAUSAL_WINDOW_DAYS)),
     }
 
 
@@ -300,6 +313,67 @@ def apply_decay(conn, decay_lambda: float = None, prune_threshold: float = None,
     return stats
 
 
+# ------------------------------------------------ D. causal triple writer
+
+def _outcome_summary_text(rows) -> str:
+    """Reviewed outcomes -> a numbered plain-text brief for the causal
+    extractor. Includes the archetype, ticker, result, R-multiple, and the
+    analyst post-mortem — the material the causal links are drawn from."""
+    lines = []
+    for i, r in enumerate(rows):
+        pm = ""
+        if r["post_mortem"]:
+            try:
+                data = json.loads(r["post_mortem"])
+                pm = " Post-mortem: " + "; ".join(
+                    str(data[k]) for k in
+                    ("variance_analysis", "unexpected_variables", "future_guardrails")
+                    if isinstance(data, dict) and data.get(k))
+            except (ValueError, TypeError):
+                pm = f" Post-mortem: {str(r['post_mortem'])[:200]}"
+        lines.append(
+            f"{i + 1}. {r['archetype'] or 'trade'} on {r['ticker']} -> "
+            f"{r['result']} (R {r['r_multiple']}).{pm}")
+    return "\n".join(lines)
+
+
+def write_causal_links(conn, extractor=None, window_days: int = None,
+                       today: date = None, default_confidence: float = 1.0) -> dict:
+    """Task D (decision #34): extract causal (subject -> predicate -> object)
+    triples ONLY from REVIEWED trade outcomes and their post-mortems — never
+    from raw, unverified news sentiment — and write them into the knowledge
+    graph's `graph_edges` at confidence 1.0, idempotently per triple.
+
+    Sourced strictly from the `outcomes` table (each row is a resolved trade
+    keyed by journal_ref); news `events` are deliberately not read here.
+    Returns {"outcomes_considered", "triples_written", "triples_skipped"}."""
+    today = today or date.today()
+    if window_days is None:
+        window_days = load_settings()["causal_window_days"]
+    graph_engine.ensure_schema(conn)
+    cutoff = (today - timedelta(days=max(1, window_days))).isoformat()
+
+    rows = conn.execute(
+        "SELECT archetype, ticker, r_multiple, result, post_mortem "
+        "FROM outcomes WHERE date >= ? ORDER BY id", (cutoff,)).fetchall()
+    stats = {"outcomes_considered": len(rows), "triples_written": 0,
+             "triples_skipped": 0}
+    if not rows:
+        return stats  # nothing reviewed to learn from — no LLM call at all
+
+    extractor = extractor or LocalExtractor()
+    triples = extractor.extract_causal_triples(_outcome_summary_text(rows))
+    for t in triples or []:
+        try:
+            graph_engine.add_edge(
+                conn, t["subject"], t["predicate"], t["object"],
+                confidence_score=default_confidence, context=t.get("condition"))
+            stats["triples_written"] += 1
+        except Exception:
+            stats["triples_skipped"] += 1
+    return stats
+
+
 # --------------------------------------------------------------- runner
 
 def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
@@ -336,6 +410,13 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  C. decay failed: {e}")
         results["decay"] = None
+    try:
+        results["causal"] = write_causal_links(conn, extractor=extractor,
+                                               today=today)
+        print(f"  D. causal links:  {results['causal']}")
+    except Exception as e:
+        print(f"  D. causal links failed: {e}")
+        results["causal"] = None
 
     conn.close()
     return results

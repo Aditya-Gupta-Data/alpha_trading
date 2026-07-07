@@ -121,14 +121,29 @@ for anything more recent than what's written here.
   on paper, tracker takes over; n -> rejected + why; entries the tracker
   already resolved hypothetically are left alone — no hindsight
   approvals). One bad cycle never kills the loop.
-- **Full offline test suite: 199/199 passing** (`python3 -m pytest tests/`;
+- **Discord approval buttons — DONE (2026-07-07):** `/pending` in Discord
+  lists every PENDING_APPROVAL proposal with tappable ✅ Approve / ❌
+  Reject buttons (persistent across bot restarts — the trade_id round-trips
+  through the component custom_id via `discord.ui.DynamicItem`); each tap
+  opens a one-line "why" prompt, then POSTs to the gateway's
+  `POST /api/discord/action` with the `x-api-key` — the bot never touches
+  the journal or engine modules itself (its read-only guardrail holds; the
+  gateway owns the mutation). New read side: `GET /api/discord/pending` on
+  `src/api_server.py`. The bot reads `BRIDGE_BASE_URL` (default
+  `http://127.0.0.1:8000` — correct when it runs on the same VM as the
+  gateway, which also makes the quick-tunnel URL irrelevant for approvals).
+  Tests: `tests/test_discord_buttons.py` + pending-list tests in
+  `tests/test_api_server.py`.
+- **Full offline test suite: 219/219 passing** (`python3 -m pytest tests/`;
   the `for f in tests/test_*.py; do python3 "$f"; done` __main__ loop runs
-  all 18 files clean too), including `tests/test_options_spreads.py`
+  all 21 files clean too), including `tests/test_options_spreads.py`
   (condor max-loss math, STT sell-side-only, VIX gate, atomic tracker
   resolution), `tests/test_options_proposer.py` (regime mapping,
   strike selection off a fake chain, budget sizing, journal contract),
-  `tests/test_api_server.py` (Phase 9 gateway auth + Discord bridge), and
-  `tests/test_graph_engine.py` (Phase 6C 2-hop BFS + confidence sorting).
+  `tests/test_api_server.py` (Phase 9 gateway auth + Discord bridge),
+  `tests/test_graph_engine.py` (Phase 6C 2-hop BFS + confidence sorting),
+  and `tests/test_causal_writer.py` (Phase 6D triple extraction + decision
+  #34 sourcing).
 - **Discord episodic encoder — DONE (2026-07-06):** `src/discord_client.py`
   (async `httpx` webhook client, `DISCORD_WEBHOOK_URL` in `.env`, optional
   `thread_id` grouping, fully fail-safe) + `notifier.send_discord_message()`.
@@ -162,10 +177,23 @@ for anything more recent than what's written here.
   no rule/score change, decision #26 philosophy). Additive: `brain_map.py`
   untouched; SQLite stays the only persistent store, `networkx` is just the
   in-memory reasoning layer (no new DB). Tests: `tests/test_graph_engine.py`
-  (+ proposer memory-block tests). **Open follow-up**: the `graph_edges`
-  table is created but empty — the Sleep Phase (`src/sleep_phase.py`) does
-  not yet WRITE causal edges, so the Memory block stays empty until that
-  writer lands. `networkx` was added to `requirements.txt`.
+  (+ proposer memory-block tests). `networkx` was added to
+  `requirements.txt`.
+- **Phase 6D Causal Triple Writer — DONE (2026-07-07):** the Sleep Phase now
+  WRITES the graph. `src/sleep_phase.py` gained Task D `write_causal_links`
+  (the pass is now A→B→C→**D**): it reads reviewed trades from the
+  `outcomes` table (with their `src/analyst.py` post-mortems), calls the new
+  `local_parser.LocalExtractor.extract_causal_triples()` — which mines
+  `(subject)-[predicate]->(object)` triples, predicate ∈ RESULTS_IN /
+  PRECEDES / INDICATES / CONTRADICTS — and writes each into `graph_edges` at
+  confidence 1.0, idempotently (a `UNIQUE(source, relation, target)` upsert;
+  a new nullable `context` column preserves the "when VIX > 20" qualifier).
+  **Sourced ONLY from reviewed outcomes, never raw news sentiment
+  (decision #34)** — with no resolved trades it makes no LLM call at all.
+  The proposer's Memory Query now seeds on ticker + view + **strategy**, so
+  these concept-keyed causal edges actually surface in the Discord PROPOSAL
+  ALERT. Tests: `tests/test_causal_writer.py`. Live effect appears once the
+  first trades resolve and a Sleep Phase runs with Ollama up.
 
 ## Credentials & environment variables
 
@@ -217,7 +245,7 @@ python3 -m src.options_proposer --review-pending   # decide market-loop
                                                    # (offline, no market data)
 
 # 6. Offline test suite (no internet/API calls needed)
-python3 -m pytest tests/                          # expect 199 passing
+python3 -m pytest tests/                          # expect 219 passing
 
 # 7. Market loop daemon (market hours only; headless proposals to Discord)
 python3 -m src.market_loop
@@ -293,16 +321,32 @@ created and now runs the current DhanHQ FastAPI backend.
   above is then only needed if a renewal window is missed and the token
   dies (script prints CRITICAL).
 - **No firewall port is ever opened — inbound goes through a Cloudflare
-  Tunnel only** (Phase 9, decision #32): port 8000 stays reachable only on
-  the VM itself; `cloudflared` dials out and forwards public HTTPS traffic
-  to `localhost:8000`. The process on that port for public exposure is the
-  strict gateway `uvicorn src.api_server:app --host 127.0.0.1 --port 8000`
-  (it wraps the full `src.api` app and adds the two-way Discord bridge
-  `POST /api/discord/action`). The gateway is fail-closed: every request
-  needs an `x-api-key` header matching `.env`'s `API_KEY` (401 otherwise),
-  and it refuses everything with 503 if `API_KEY` is unset — only
-  `GET /api/health` stays public. Running `cloudflared` itself on the VM
-  is the remaining setup step (not yet installed).
+  Tunnel only** (Phase 9, decision #32) — **LIVE end-to-end 2026-07-07**:
+  port 8000 is reachable only on the VM itself, bound to `127.0.0.1`
+  (`alpha-trading.service`'s `ExecStart` now runs
+  `uvicorn src.api_server:app --host 127.0.0.1 --port 8000`, the strict
+  gateway wrapping the full `src.api` app + the two-way Discord bridge
+  `POST /api/discord/action`). `cloudflared` is installed and runs as its
+  own systemd service, `cloudflared-tunnel` (`ExecStart=<cloudflared path>
+  tunnel --url http://localhost:8000`, `Restart=always`, enabled on boot,
+  `Requires=alpha-trading.service`), dialing OUT to Cloudflare and
+  forwarding public HTTPS traffic in. The gateway is fail-closed: every
+  request needs an `x-api-key` header matching `.env`'s `API_KEY` (401
+  otherwise), and it refuses everything with 503 if `API_KEY` is unset —
+  only `GET /api/health` stays public. Verified live from an outside
+  network (not just VM loopback): `GET /api/health` → 200, and
+  `POST /api/discord/action` with a real key and a bogus `trade_id` → 404
+  (proving the full chain: Cloudflare edge → tunnel → gateway auth →
+  `options_proposer.decide_pending` → journal lookup).
+  ⚠️ **This is a "quick tunnel"** (no Cloudflare account/domain needed) —
+  free and fast to stand up, but the public URL is **randomly regenerated
+  on every restart** of `cloudflared-tunnel` (crash, VM reboot). Fetch the
+  current one anytime with:
+  `sudo journalctl -u cloudflared-tunnel --no-pager | grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' | tail -1`
+  For a permanent, never-changing URL (needed before hardcoding it into a
+  Discord bot integration), upgrade to a **named tunnel** — requires adding
+  a domain to a Cloudflare account (`cloudflared tunnel create` +
+  `tunnel route dns`). Not done — deferred until a domain is available.
 - **Scheduled jobs**: `scripts/setup_cron.sh` (idempotent, safe to re-run
   after every `git pull`) installs the full cron block — `src.renew_token`
   07:00 IST daily, `src.main` 15:35 IST Mon-Fri, `src.suggest` 08:00 IST
@@ -386,16 +430,31 @@ remains available as a backfill/repair sweep (it won't have post-mortems,
 which only generate at live resolution). `memory_context` lines appear in
 forecasts once the first trades resolve.
 
-**Phase 9 backend half landed 2026-07-07**: `src/api_server.py` is the
-strict public gateway (fail-closed API-key auth on every route, wraps the
-full `src.api` app) with the two-way Discord bridge
-`POST /api/discord/action` — approve/reject a `pending_approval` journal
-entry by its `short_id`, exactly the `--review-pending` semantics
-(`options_proposer.decide_pending`). Tests: `tests/test_api_server.py`.
+**Phase 9 backend landed 2026-07-07, and the VM exposure is now LIVE**:
+`src/api_server.py` is the strict public gateway (fail-closed API-key auth
+on every route, wraps the full `src.api` app) with the two-way Discord
+bridge `POST /api/discord/action` — approve/reject a `pending_approval`
+journal entry by its `short_id`, exactly the `--review-pending` semantics
+(`options_proposer.decide_pending`). Tests: `tests/test_api_server.py`. On
+the VM: `alpha-trading.service` now runs `src.api_server:app` on
+`127.0.0.1:8000`, and `cloudflared` runs as its own systemd service
+(`cloudflared-tunnel`) forwarding a public quick-tunnel URL to it — see the
+GCP VM section above for the exact setup and the "URL changes on restart"
+caveat. Verified end-to-end from an outside network: health check and the
+Discord bridge both round-trip correctly through the tunnel.
 
-**Next up (nothing started)**: installing `cloudflared` on the VM (the
-gateway is ready for it), the Phase 7 historical simulator, and analyst
-procedural evolution (see `DECISIONS.md` → "Still open"). The VM's
+**Discord approval buttons landed later on 2026-07-07** (see the bullet in
+"Current production state"): `/pending` + persistent Approve/Reject buttons
+in the bot, `GET /api/discord/pending` on the gateway. For the phone flow
+to be fully hands-off, the bot (`python3 -m src.discord_bot`) and the
+market loop (`python3 -m src.market_loop`) need to run continuously on the
+VM (systemd services, same pattern as `alpha-trading`) — note the pending
+entries then live in the VM's own `data/journal.jsonl`, a separate file
+from the Mac's local journal.
+
+**Next up**: upgrading to a named Cloudflare tunnel for a permanent URL
+(needs a domain), the Phase 7 historical simulator, and analyst procedural
+evolution (see `DECISIONS.md` → "Still open"). The VM's
 scheduled jobs are handled by `scripts/setup_cron.sh` (see the GCP VM
 section).
 
@@ -431,8 +490,8 @@ section).
 
 ### Phase 6C: Knowledge Graph Reasoning Layer — 🟡 READER DONE (2026-07-07)
 * ~~Build `src/graph_engine.py`: a read-only `GraphEngine` loading the additive `graph_edges` table from `data/brain_map.db` into a `networkx.DiGraph`, with `get_relevant_context(node, max_hops=2)` (2-hop BFS, confidence-sorted).~~ ✅ DONE — memory-resident, never writes during inference (decision #33); `tests/test_graph_engine.py`.
-* ~~Wire the Memory Query into the proposal path so linked historical patterns ride along in the Discord PROPOSAL ALERT rationale.~~ ✅ DONE in `src/options_proposer.py` (fail-safe 🧠 Memory block; advisory only, decision #26 philosophy).
-* **Open**: teach `src/sleep_phase.py` to WRITE causal edges into `graph_edges` (needs its own LLM extraction prompt) — until then the Memory block is empty. `networkx` added to `requirements.txt`.
+* ~~Wire the Memory Query into the proposal path so linked historical patterns ride along in the Discord PROPOSAL ALERT rationale.~~ ✅ DONE in `src/options_proposer.py` (fail-safe 🧠 Memory block; advisory only, decision #26 philosophy). Query now seeds on ticker + view + strategy so concept-keyed causal edges surface.
+* ~~Teach `src/sleep_phase.py` to WRITE causal edges into `graph_edges`.~~ ✅ **Phase 6D DONE 2026-07-07** — Task D `write_causal_links` mines `(subject)-[predicate]->(object)` triples from reviewed outcomes + post-mortems only (decision #34), confidence 1.0, idempotent; `local_parser.extract_causal_triples()` + `tests/test_causal_writer.py`. `networkx` added to `requirements.txt`. Populates once trades resolve and a Sleep Phase runs with Ollama up.
 
 ### Phase 7: The Time-Travel Simulator
 * Build `src/simulator.py` to override `datetime.now()` and loop over historical DhanHQ data.
@@ -469,7 +528,7 @@ These upcoming features are officially added to the roadmap:
 (To be executed only after Phase 7 Simulator proves statistical Alpha)
 
 ### Phase 9: Secure Web Exposure & UI Deployment
-* ~~Expose GCP VM API to the internet securely via Cloudflare Tunnel with API-key middleware to connect the React dashboard and Discord bot.~~ **Backend half DONE 2026-07-07**: `src/api_server.py` (strict fail-closed `x-api-key` gateway wrapping the full `src.api` app) + two-way Discord bridge `POST /api/discord/action` (approve/reject pending journal entries by `short_id`, `--review-pending` semantics). Still open: install/configure `cloudflared` on the VM (tunnel → `localhost:8000`), point the deployed React dashboard + Discord bot at the tunnel URL.
+* ~~Expose GCP VM API to the internet securely via Cloudflare Tunnel with API-key middleware to connect the React dashboard and Discord bot.~~ ✅ **DONE 2026-07-07, end to end**: `src/api_server.py` (strict fail-closed `x-api-key` gateway wrapping the full `src.api` app) + two-way Discord bridge `POST /api/discord/action` (approve/reject pending journal entries by `short_id`, `--review-pending` semantics). On the VM, `alpha-trading.service` runs the gateway on `127.0.0.1:8000` and a new `cloudflared-tunnel.service` forwards a public quick-tunnel URL to it (`Restart=always`, enabled on boot). Verified live from an outside network: health check + the Discord bridge both round-trip correctly. Still open: this is a quick tunnel, so the URL changes on restart — upgrading to a named tunnel (permanent URL) needs a Cloudflare-registered domain; and the React dashboard / Discord bot aren't yet pointed at the tunnel URL (the bot in particular has no button/command calling the bridge endpoint yet).
 
 ### Phase 10: Local LLM "Maker/Checker" (Hallucination Guardrails)
 * Run a local open-source model (Llama 3 / Phi-3) on the local Mac as a strict auditor.

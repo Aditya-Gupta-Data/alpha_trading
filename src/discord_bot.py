@@ -7,20 +7,32 @@ slash command with the Phase 4E forecast (technicals + news sentiment),
 and holds a plain conversation when you reply to it (replies go to Gemini,
 the same free-tier model the news processor uses).
 
-STRICT GUARDRAIL (VISION_PLAN.md): this bot is read-only on the system.
+STRICT GUARDRAIL (VISION_PLAN.md): this bot is read-only on the ENGINE.
 It imports the forecast layer to ANSWER QUESTIONS -- it does not import
-portfolio/trade/strategy, cannot execute paper trades, and there is no
-broker anywhere in this project. Trade approval stays in the terminal
-(`python3 -m src.trade`) until a later Phase 5 step deliberately moves it.
+portfolio/trade/strategy/journal, cannot execute paper trades, and there
+is no broker anywhere in this project. The Phase 9 two-way bridge keeps
+that rule intact: /pending's Approve/Reject buttons do NOT touch the
+journal from here -- they POST to the authenticated gateway
+(`/api/discord/action` on src/api_server.py, x-api-key required), which
+owns the mutation with exactly the --review-pending semantics. The bot is
+just another API client; the only state it can change is a PAPER journal
+decision, and only through the gateway.
 
 Commands:
   /analyze              -- forecast every watchlist stock
   /analyze ticker:ONGC  -- forecast one stock (`.NS` added if omitted)
+  /pending              -- list PENDING_APPROVAL proposals with tappable
+                           ✅ Approve / ❌ Reject buttons (each opens a
+                           one-line "why" prompt, journaled verbatim)
   (reply to any bot message, or @mention it, to chat -- answered by Gemini)
 
 Setup: DISCORD_BOT_TOKEN in .env (from the Discord Developer Portal, with
 Message Content Intent enabled); GEMINI_API_KEY in .env for the chat side
 (without it, the bot still runs -- /analyze works, chat replies apologize).
+For /pending, the machine running the bot must also reach the Phase 9
+gateway: API_KEY in .env plus BRIDGE_BASE_URL (default
+http://127.0.0.1:8000 -- right when the bot runs on the same VM as the
+gateway, which also makes the quick-tunnel URL irrelevant here).
 Run:   python3 -m src.discord_bot     (stays running until Ctrl+C)
 """
 
@@ -147,9 +159,10 @@ def _ask_gemini(user_text: str, api_key: str) -> str:
         "stocks from their personal PAPER-TRADING tool. Be conversational and "
         "brief (this is a chat message, not a report). Plain English, no "
         "jargon unless the user uses it first. Never claim to place trades -- "
-        "the tool is paper-only and trades are approved in a terminal "
-        "session, not by you. If asked for financial advice, share the "
-        "data-driven read but remind them it's their call.\n\n"
+        "the tool is paper-only; proposals are approved by the user via the "
+        "/pending buttons or a terminal session, and approving only journals "
+        "a paper decision (no broker exists). If asked for financial advice, "
+        "share the data-driven read but remind them it's their call.\n\n"
         f"Context:\n{_chat_context()}\n\n"
         f"The user says: {user_text}"
     )
@@ -168,6 +181,173 @@ def _ask_gemini(user_text: str, api_key: str) -> str:
     return body["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
+# ------------------------------------------------- Phase 9 bridge client
+#
+# Everything below talks to the strict gateway (src/api_server.py) over
+# HTTP with the x-api-key header -- the bot NEVER touches the journal or
+# any engine module directly. Blocking urllib calls, always run through
+# asyncio.to_thread from the async handlers.
+
+BRIDGE_DEFAULT_URL = "http://127.0.0.1:8000"
+BRIDGE_TIMEOUT = 15  # seconds
+
+
+def _bridge_base_url() -> str:
+    return (os.environ.get("BRIDGE_BASE_URL") or BRIDGE_DEFAULT_URL).rstrip("/")
+
+
+def _bridge_call(method: str, path: str, payload: dict = None) -> tuple:
+    """One authenticated gateway call -> (http_status, parsed_json_body).
+    Never raises for HTTP error statuses (401/404/409 are meaningful
+    answers here); connection-level failures do raise, and callers report
+    them as 'gateway unreachable'."""
+    base = _bridge_base_url()
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        base + path, data=data, method=method,
+        headers={"x-api-key": os.environ.get("API_KEY", ""),
+                 "Content-Type": "application/json"},
+    )
+    ctx = _SSL_CTX if base.startswith("https") else None
+    try:
+        with urllib.request.urlopen(req, timeout=BRIDGE_TIMEOUT, context=ctx) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read())
+        except Exception:
+            body = {"ok": False, "error": f"HTTP {e.code}"}
+        return e.code, body
+
+
+def _fetch_pending() -> list:
+    """GET /api/discord/pending -> the list of undecided proposals."""
+    status, body = _bridge_call("GET", "/api/discord/pending")
+    if status != 200 or not isinstance(body, dict):
+        raise RuntimeError(body.get("error") if isinstance(body, dict)
+                           else f"gateway answered HTTP {status}")
+    return body.get("pending") or []
+
+
+def _decide(trade_id: str, action: str, why: str) -> tuple:
+    """POST /api/discord/action -> (status, body). 200 decided, 404 gone,
+    409 already tracker-resolved."""
+    return _bridge_call("POST", "/api/discord/action",
+                        {"action": action, "trade_id": trade_id, "why": why})
+
+
+def _format_pending(p: dict) -> str:
+    """One pending proposal -> the Discord message the buttons ride on."""
+    strategy = (p.get("strategy") or "proposal").replace("_", " ").title()
+    net = p.get("net_per_share")
+    net_text = f"Rs.{net:,.2f}" if isinstance(net, (int, float)) else "n/a"
+    return (
+        f"⏳ **Pending: {strategy} on {p.get('ticker')}**"
+        f"  (trade id `{p.get('trade_id')}`)\n"
+        f"proposed {p.get('proposed_on')} | expiry {p.get('expiry')} | "
+        f"{p.get('lots')} lot(s) x {p.get('lot_size')}\n"
+        f"net {p.get('net_kind')} {net_text}/share | "
+        f"max loss Rs.{p.get('max_loss', 0):,.0f} | "
+        f"max profit Rs.{p.get('max_profit', 0):,.0f}\n"
+        f"signal: {p.get('signal')}\n"
+        f"*(paper only -- approving hands the exit to the plan tracker)*"
+    )
+
+
+def _custom_id(action: str, trade_id: str) -> str:
+    """The stable component id the persistent buttons round-trip through:
+    'adit:approve:<trade_id>' / 'adit:reject:<trade_id>'."""
+    return f"adit:{action}:{trade_id}"
+
+
+_DECISION_TEMPLATE = r"adit:(?P<action>approve|reject):(?P<trade_id>[^:]+)"
+
+
+class WhyModal(discord.ui.Modal):
+    """The one-line 'why' prompt (same question the terminal asks). The
+    reason is optional -- blank journals the bridge's default note."""
+
+    why = discord.ui.TextInput(label="Why? (optional, one line)",
+                               required=False, max_length=200)
+
+    def __init__(self, action: str, trade_id: str, origin: discord.Message = None):
+        title = ("Approve on paper" if action == "approve" else "Reject (skip)")
+        super().__init__(title=f"{title} — {trade_id}"[:45])
+        self._action = action
+        self._trade_id = trade_id
+        self._origin = origin
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        try:
+            status, body = await asyncio.to_thread(
+                _decide, self._trade_id, self._action, str(self.why.value or "").strip())
+        except Exception as e:
+            await interaction.followup.send(f"Gateway unreachable: {e}")
+            return
+
+        if status == 200:
+            marker = "✅" if body.get("decision") == "approved" else "❌"
+            note = (f"{marker} **{body.get('decision', '').upper()}** "
+                    f"(`{self._trade_id}`) — journaled. "
+                    + ("The plan tracker manages the exit from here."
+                       if body.get("decision") == "approved"
+                       else "The tracker will score the skip."))
+        elif status == 404:
+            note = (f"🤷 `{self._trade_id}` has no pending entry anymore — "
+                    "it was probably already decided elsewhere.")
+        elif status == 409:
+            note = (f"⏱️ Too late — the tracker already resolved "
+                    f"`{self._trade_id}` hypothetically. Left as-is "
+                    "(no hindsight approvals).")
+        else:
+            note = (f"⚠️ Gateway said HTTP {status}: "
+                    f"{body.get('error', 'unknown error')}")
+
+        # Retire the buttons on the original proposal message (best-effort;
+        # the journal is already correct even if this edit fails).
+        origin = self._origin or interaction.message
+        if origin is not None and status in (200, 404, 409):
+            try:
+                await origin.edit(content=f"{origin.content}\n\n{note}", view=None)
+            except Exception:
+                pass
+        await interaction.followup.send(note)
+
+
+class DecisionButton(discord.ui.DynamicItem[discord.ui.Button],
+                     template=_DECISION_TEMPLATE):
+    """A persistent Approve/Reject button. Its state lives entirely in the
+    custom_id, so taps still work after the bot restarts (Discord replays
+    the id and this class is rebuilt from the regex template)."""
+
+    def __init__(self, action: str, trade_id: str):
+        self.action = action
+        self.trade_id = trade_id
+        super().__init__(discord.ui.Button(
+            label="Approve (paper)" if action == "approve" else "Reject",
+            style=(discord.ButtonStyle.success if action == "approve"
+                   else discord.ButtonStyle.danger),
+            emoji="✅" if action == "approve" else "❌",
+            custom_id=_custom_id(action, trade_id),
+        ))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(match["action"], match["trade_id"])
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            WhyModal(self.action, self.trade_id, origin=interaction.message))
+
+
+def _pending_view(trade_id: str) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(DecisionButton("approve", trade_id))
+    view.add_item(DecisionButton("reject", trade_id))
+    return view
+
+
 # ---------------------------------------------------------------------- bot
 
 intents = discord.Intents.default()
@@ -175,6 +355,9 @@ intents.message_content = True  # needs Message Content Intent in the portal
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+# Persistent buttons: taps on Approve/Reject keep working across bot
+# restarts because the trade_id round-trips through the custom_id.
+client.add_dynamic_items(DecisionButton)
 
 
 @client.event
@@ -211,6 +394,28 @@ async def analyze(interaction: discord.Interaction, ticker: str = None):
         return
     for chunk in _chunk(lines):
         await interaction.followup.send(chunk)
+
+
+@tree.command(name="pending",
+              description="Pending trade proposals with Approve/Reject buttons (paper only)")
+async def pending(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    try:
+        items = await asyncio.to_thread(_fetch_pending)
+    except Exception as e:
+        await interaction.followup.send(
+            f"Can't reach the gateway at {_bridge_base_url()}: {e}\n"
+            "(Is the alpha-trading service running, and API_KEY set in .env "
+            "on this machine?)")
+        return
+    if not items:
+        await interaction.followup.send(
+            "No pending proposals right now — the market loop will alert "
+            "here when it journals one.")
+        return
+    for p in items:
+        await interaction.followup.send(_format_pending(p),
+                                        view=_pending_view(p["trade_id"]))
 
 
 @client.event

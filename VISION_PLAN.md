@@ -175,7 +175,11 @@ the original blueprint above and the "why" behind each phase — while
   `networkx` reasoning layer (`src/graph_engine.py`) over an additive
   `graph_edges` table in the same `data/brain_map.db`. It walks 2-hop causal
   links and surfaces historically-linked patterns as advisory context in the
-  Discord trade proposal — never a rule change (decision #33). Reader + proposer
-  wiring are built; the Sleep Phase edge-writer is the open follow-up.
+  Discord trade proposal — never a rule change (decision #33).
+- **Phase 6D — Causal Triple Writer** (2026-07-07): the Sleep Phase
+  (`src/sleep_phase.py` Task D) mines `(subject)-[predicate]->(object)`
+  causal triples from reviewed trade outcomes + post-mortems ONLY — never raw
+  news sentiment (decision #34) — and writes them into `graph_edges` for 6C to
+  read. Populates once trades resolve and a Sleep Phase runs with Ollama up.
 
 **Do not execute any roadmap item until explicitly prompted by the user.**

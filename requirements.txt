@@ -2,7 +2,9 @@ PyYAML
 certifi
 discord.py
 fastapi
+httpx
 uvicorn
 ruamel.yaml
 google-genai
 dhanhq
+networkx

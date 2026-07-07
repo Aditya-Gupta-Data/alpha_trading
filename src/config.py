@@ -88,3 +88,12 @@ TUNER_WEIGHT_SENSITIVITY = _CONFIG["tuner_weight_sensitivity"]
 # Weight is clamped to this [min, max] so no single archetype can swamp the
 # forecast checklist.
 TUNER_WEIGHT_BOUNDS = tuple(_CONFIG["tuner_weight_bounds"])
+
+# Phase 5 options: % of portfolio value a single defined-risk spread's
+# ABSOLUTE MAX LOSS may consume. Deliberately higher than the equity
+# RISK_PER_TRADE_PCT: an equity stop can gap through (soft risk number),
+# while a spread's max loss is a hard structural ceiling — and a single
+# NIFTY lot-75 condor (~Rs.6k max loss) must be affordable on the
+# Rs.1,00,000 paper book or no options trade could ever size above 0 lots.
+# Optional key so older config.json copies (e.g. on the VM) keep working.
+OPTIONS_RISK_PER_TRADE_PCT = float(_CONFIG.get("options_risk_per_trade_pct", 10.0))

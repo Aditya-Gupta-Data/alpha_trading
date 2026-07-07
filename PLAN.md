@@ -229,8 +229,7 @@ Files: new `src/tuner.py`, `src/forecast.py` (reads weights).
 
 ## Deferred (real scope, later phases)
 
-- **Phase 5 — Options support**: needs its own reliable NSE options data
-  source before building; yfinance's options data is not trustworthy enough.
+- **Phase 5 — Options support**: [✅ DONE 2026-07-06] - Migrated to the DhanHQ Data API, built defined-risk spreads, VIX-gating, SPAN margin offsets, dynamic bid-ask slippage, 2026 STT frictions, and atomic basket auto-exits.
 - **Phase 5 — Intraday**: needs real-time/streaming price data and a faster
   fetch-decide loop; current daily-cron architecture can't do this as-is.
 

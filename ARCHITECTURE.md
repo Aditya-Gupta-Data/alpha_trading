@@ -73,18 +73,40 @@ architecture as of the 2026-07-06 milestone (post Dhan migration).
 │  chat replies via     │        │  lives on `lovable-ui`      │
 │  Gemini               │        │  branch only)               │
 └──────────┬───────────┘        └────────────┬─────────────────┘
-           │  reads forecast.py directly       │  HTTP (localhost)
+           │  reads forecast.py directly       │  HTTP Public / Tunnel
            ▼                                   ▼
-                        ┌──────────────────────────────┐
-                        │   src/api.py (FastAPI, unified)│
-                        │   GET/POST /api/*               │
-                        └──────────────────────────────┘
+                         ┌──────────────────────────────┐
+                         │   Cloudflare Tunnel (Public) │
+                         └──────────────┬───────────────┘
+                                        │
+                                        ▼
+                         ┌──────────────────────────────┐
+                         │ src/api_server.py (Gateway)  │
+                         │ - Strict fail-closed API key │
+                         │ - Discord action bridge      │
+                         └──────────────┬───────────────┘
+                                        │ localhost (port 8000)
+                                        ▼
+                         ┌──────────────────────────────┐
+                         │ src/api.py (FastAPI unified) │
+                         │ GET/POST /api/*              │
+                         └──────────────────────────────┘
 ```
-- **Discord bot**: read-only on the engine (imports only `src.forecast`), no
-  portfolio/trade/strategy access, cannot execute anything. Chat goes to
-  Gemini directly (no cloud AI gateway).
-- **React dashboard**: talks ONLY to `src/api.py` over HTTP — never reads
-  `data/*.json` files directly. See `DATA_CONTRACT.md` for exact schemas.
+- **Discord bot**: read-only on the engine internals (imports only
+  `src.forecast`) — it never touches portfolio/trade/strategy modules and
+  places no real orders (paper-only holds). Chat replies go to Gemini
+  directly. For the **two-way bridge**, approve/reject actions are sent to the
+  gated `POST /api/discord/action` endpoint; that endpoint (not the bot) then
+  updates a `pending_approval` journal entry to approved-on-paper or rejected.
+  So the only state the bot can change is a paper journal decision, and only
+  through the authenticated gateway.
+- **React dashboard**: talks to `src/api_server.py` via public HTTPS forwarded
+  through the Cloudflare Tunnel, attaching the mandatory `X-API-Key` or
+  `Authorization: Bearer` token.
+- **src/api_server.py**: The strict fail-closed API-key gateway (Phase 9 backend)
+  that mounts `src/api.py` internally on `localhost:8000`. It ensures no
+  unauthenticated traffic can access any endpoints, and includes a direct bridge
+  `POST /api/discord/action` to decide `pending_approval` entries from Discord webhooks.
 - **src/api.py** is the single unified backend (the old separate
   `src/web/api.py` dashboard app was merged in and deleted 2026-07-06). It
   imports engine modules directly; it does not duplicate their logic.
@@ -97,24 +119,26 @@ architecture as of the 2026-07-06 milestone (post Dhan migration).
 
 - **Cloud VM** (rebuilt 2026-07-06): GCP Compute Engine, `alpha-trading-vm`,
   project `project-37632031-10d0-47dd-b6f`, `us-central1-a`, `e2-micro`,
-  Debian 13, Python 3.13. Runs the current DhanHQ-backed FastAPI server
-  (`src.api:app`, port 8000) continuously as a systemd service
-  (`alpha-trading`, `Restart=always`, enabled on boot), including the hourly
-  auto-sync loop. Deployed by `git clone` of `main` into `~/alpha_trading`
-  with a venv; updates via `git pull` + `systemctl restart`.
-  ⚠️ **Known gaps**: (1) the old VM's scheduled cron emails (`src.main`
-  alerts, `src.suggest` suggestions) are not yet set up on this VM — only the
-  API runs; (2) the API is not exposed to the internet yet (local to the VM,
-  no firewall rule). See `HANDOVER.md` → "GCP VM (cloud hosting)" for
-  operations, the `.env` token-transfer gotcha, and next steps.
+  Debian 13, Python 3.13. Runs the FastAPI server as a systemd service
+  (`alpha-trading`, `Restart=always`, enabled on boot). Deployed by `git clone`
+  of `main` into `~/alpha_trading` with a venv; updates via `git pull` +
+  `systemctl restart`. Scheduled cron jobs (`src.renew_token` at 07:00 IST,
+  `src.main` at 15:35 IST, `src.suggest` at 08:00 IST, and `src.sleep_phase` at
+  20:00 IST) are fully deployed via `scripts/setup_cron.sh`.
+- **API Server & Cloudflare Tunnel**: All inbound internet traffic reaches the VM
+  only via `cloudflared` dialing out to form a Cloudflare Tunnel, which forwards
+  public HTTPS traffic to the internal port 8000. On `localhost:8000`, the strict
+  gateway `src/api_server.py` listens, requiring an API key. No firewall port is
+  ever opened on the GCP VM.
 - **Local (Mac)**: paper trading (`src/trade.py`), the FastAPI server
-  (`src/api.py`), the Discord bot (`src/discord_bot.py`), and the React
-  dashboard dev server all run locally today. Interactive/stateful pieces
-  (anything touching `data/portfolio.json`) deliberately stay local, not on
-  the VM — the VM is for unattended, read-only-on-portfolio jobs only.
-- **Roadmap**: move the Discord bot and/or FastAPI server to the VM (or a
-  similar always-on host) once the Dhan-based deploy is current, so the
-  Discord analyst and dashboard work without the Mac being on. Not started.
+  (`src/api.py`), the Discord bot (`src/discord_bot.py`), the React
+  dashboard dev server, and local Ollama + `llama3` for news extraction/the sleep
+  phase run locally today. Interactive/stateful pieces (anything touching
+  `data/portfolio.json`) stay local on the Mac—the VM only hosts read-only-on-portfolio
+  tasks.
+- **Roadmap**: Continue migrating frontend integrations to the public Cloudflare
+  Tunnel URL, so the dashboard and Discord webhook actions work fully end-to-end
+  without local Mac hosting.
 
 ## 4. State & storage
 

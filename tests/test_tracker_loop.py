@@ -66,7 +66,7 @@ def run_tracker_offline(tmp, entries, post_mortem_fn=lambda plan, execution: dic
     plan_tracker.journal = fake_journal
     # Target 110 trades on 2026-07-02 (high 111) -> target_hit.
     plan_tracker._daily_bars = lambda ticker, start: [("2026-07-02", 99.0, 111.0, 110.5)]
-    plan_tracker._close_paper_position = lambda entry, price: True
+    plan_tracker._close_paper_position = lambda entry, price, *args, **kwargs: True
     plan_tracker._brain_connect = brain_connect or (lambda: brain_map.connect(db_path))
     analyst.generate_post_mortem = post_mortem_fn
     resolved = plan_tracker.run_tracker(email=False)

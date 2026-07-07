@@ -49,10 +49,25 @@ All responses JSON. As of 2026-07-06 this is ONE app — the old `src/web/api.py
 was merged into `src/api.py`, so watchlist/alerts, chat, decision, and
 scorecard all live under the same server.
 
+### Authentication (when `API_KEY` is set in `.env`)
+
+For localhost dev, leave `API_KEY` blank — no header needed. When the API is
+exposed (e.g. Cloudflare Tunnel to the VM), set `API_KEY` on the server and
+send the same value on every request:
+
+- Header: `X-API-Key: <your-key>` (preferred), or
+- Header: `Authorization: Bearer <your-key>`
+
+`GET /api/health` stays public for liveness probes. All other routes return
+`401 {"ok": false, "error": "Unauthorized — valid X-API-Key required."}`
+without a valid key. The deployed frontend should read the key from its own
+env (e.g. `VITE_API_KEY`) and attach it to every `fetch()`.
+
 ### `GET /api/health`
 ```json
-{ "status": "ok" }
+{ "status": "ok", "mode": "paper-only" }
 ```
+When auth is enabled, also includes `"auth": "required"`.
 
 ### `GET /api/watchlist`
 One entry per instrument; quotes cached 30s server-side.
@@ -198,7 +213,8 @@ badge colors off that prefix.
   "source": "gemini",                  // "gemini" (real) | "fallback" (placeholder)
   "tickers": {
     "TCS.NS": {
-      "sentiment_score": -5,           // int, -5 bearish .. +5 bullish
+      "short_term_catalyst_score": -5, // int, -5 bearish .. +5 bullish
+      "long_term_macro_score": -5,     // int, -5 bearish .. +5 bullish
       "headline_focus": "sharp price crash",   // ≤ 3 words
       "last_updated": "2026-07-05T07:36:22+00:00",
       "stale": false                   // true == neutral placeholder, NOT a real read
@@ -207,6 +223,8 @@ badge colors off that prefix.
 }
 ```
 When `stale` is true, render "no news data", never a neutral-0 gauge.
+
+*Note: The `sleep_phase` background task will attach `duration: short|long` tags to Episodic Event Frames in the Brain Map based on this dual-horizon data.*
 
 ### 2.4 Forecast (computed on demand by `src/forecast.py`, not persisted)
 ```json

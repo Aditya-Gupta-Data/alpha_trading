@@ -12,6 +12,10 @@
     "aggressive": 2.0
   },
   "take_profit_rr": 2.0,
+  "options_risk_per_trade_pct": 10.0,
+  "sleep_decay_lambda": 0.05,
+  "sleep_prune_threshold": 0.20,
+  "sleep_consolidation_hours": 24,
   "max_concurrent_positions": 4,
   "alt_entry_pullback_pct": 2.0,
   "plan_max_days": 30,

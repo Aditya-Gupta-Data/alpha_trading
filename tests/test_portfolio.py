@@ -34,7 +34,7 @@ def make_analysis(ticker="TEST.NS", uptrend=True, fresh_cross=False, rsi=50, pri
 def test_buy_updates_cash_and_holdings():
     book = fresh_book()
     buy(book, "TEST.NS", 10, 100.0)
-    assert book["cash"] == STARTING_CASH - 1000
+    assert book["cash"] == STARTING_CASH - 1023.67  # includes BUY frictions (Rs. 23.67)
     assert book["holdings"]["TEST.NS"]["shares"] == 10
 
 
@@ -51,7 +51,8 @@ def test_sell_returns_cash_and_clears_position():
     book = fresh_book()
     buy(book, "TEST.NS", 10, 100.0)
     sell(book, "TEST.NS", 110.0)
-    assert book["cash"] == STARTING_CASH + 100  # 10 shares x Rs.10 profit
+    # 10 shares x Rs.10 profit (Rs.100) minus BUY and SELL frictions (Rs.23.67 + Rs.25.30 = Rs.48.97)
+    assert book["cash"] == STARTING_CASH + 51.03
     assert "TEST.NS" not in book["holdings"]
 
 
@@ -64,7 +65,7 @@ def test_position_cap_limits_shares():
 def test_total_value_uses_live_prices():
     book = fresh_book()
     buy(book, "TEST.NS", 10, 100.0)
-    assert total_value(book, {"TEST.NS": 120.0}) == STARTING_CASH + 200
+    assert total_value(book, {"TEST.NS": 120.0}) == STARTING_CASH + 176.33
 
 
 def test_propose_buys_on_dip_in_uptrend():
@@ -98,6 +99,40 @@ def test_verdicts():
     rejected_buy = {"action": "BUY", "decision": "rejected"}
     assert verdict_for(rejected_buy, -5.0).startswith("GOOD SKIP")
     assert verdict_for(rejected_buy, +5.0).startswith("MISSED GAIN")
+
+
+def test_calculate_trade_frictions_and_slippage():
+    from src.portfolio import calculate_trade_frictions
+    from src.plan_tracker import apply_slippage, _get_instrument_type
+
+    # 1. Friction tests (2026 stack: STT sell-only, Stamp buy-only, Rs.20
+    #    brokerage, NSE exchange 0.00345%, SEBI 0.0001%, 18% GST on the
+    #    brokerage+exchange+SEBI service charges)
+    # BUY 100 x Rs.150 = turnover Rs.15,000:
+    #   Stamp 0.45 + Brokerage 20 + Exchange 0.5175 + SEBI 0.015
+    #   + GST 0.18*(20+0.5175+0.015)=3.69585  -> 24.68 (STT=0 on buys)
+    assert calculate_trade_frictions("STOCK", "BUY", 150.0, 100) == 24.68
+
+    # SELL same turnover:
+    #   STT 22.50 + Brokerage 20 + Exchange 0.5175 + SEBI 0.015
+    #   + GST 3.69585  -> 46.73 (Stamp=0 on sells)
+    assert calculate_trade_frictions("STOCK", "SELL", 150.0, 100) == 46.73
+
+    # 2. Slippage tests
+    assert _get_instrument_type("RELIANCE.NS") == "STOCK"
+    assert _get_instrument_type("NIFTY 50") == "INDEX"
+    assert _get_instrument_type("NIFTY26JUL25000CE") == "OPTION"
+
+    # Index slippage: 0.05%
+    assert apply_slippage(10000.0, "INDEX") == 5.0
+
+    # Option slippage (liquidity dummy):
+    # premium < 50: 0.50%
+    assert apply_slippage(40.0, "OPTION") == 0.20
+    # premium < 150: 0.30%
+    assert apply_slippage(100.0, "OPTION") == 0.30
+    # premium >= 150: 0.10%
+    assert apply_slippage(200.0, "OPTION") == 0.20
 
 
 if __name__ == "__main__":

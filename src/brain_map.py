@@ -336,6 +336,43 @@ def record_resolved_entry(conn, entry, post_mortem=None):
     return outcome_id
 
 
+def build_episode_snapshot(entry: dict, news=None) -> dict:
+    """The "Trade Episode" context snapshot for one *resolved* journal
+    entry: what the market felt like (news sentiment), what prices did
+    (entry/exit), and which plan rule fired (stop/target/time stop).
+
+    Pure and read-only by design — no network, no DB writes — per the
+    strictly-additive rule (DECISIONS.md #25): the Brain Map only records
+    and reads history. The caller (plan_tracker -> src/api.py's background
+    loop) decides where to send it (Discord, via notifier). Returns None
+    for entries that haven't resolved yet."""
+    outcome = entry.get("outcome")
+    if not outcome:
+        return None
+    if news is None:
+        news = _read_news_file()
+    info = (news.get("tickers") or {}).get(entry.get("ticker")) or {}
+    return {
+        "journal_ref": journal_ref_for(entry),
+        "ticker": entry.get("ticker"),
+        "entry_date": entry.get("date"),
+        "entry_price": entry.get("price"),
+        "exit_date": outcome.get("exit_date"),
+        "exit_price": outcome.get("price"),
+        "resolution": outcome.get("resolution"),
+        "rules_breached": [r for r in [outcome.get("resolution")] if r],
+        "r_multiple": outcome.get("r_multiple"),
+        "pnl_rs": outcome.get("pnl_rs"),
+        "verdict": outcome.get("verdict"),
+        "signal": entry.get("signal"),
+        "pattern_tags": entry.get("pattern_tags") or [],
+        "market_sentiment": {
+            "score": info.get("sentiment_score"),
+            "headline_focus": info.get("headline_focus"),
+        },
+    }
+
+
 def ingest_existing(conn, journal_entries=None, news=None) -> dict:
     """Seed the Brain Map from data the engine already produces.
 

@@ -69,6 +69,9 @@ SECURITY_ID_MAP = {
     "TMPV.NS":       {"id": "3456",  "seg": "NSE_EQ", "inst": "EQUITY"},
     "NIFTY 50":      {"id": "13",    "seg": "IDX_I",  "inst": "INDEX"},
     "NIFTY BANK":    {"id": "25",    "seg": "IDX_I",  "inst": "INDEX"},
+    # id 21 verified against api-scrip-master-detailed.csv on 2026-07-06
+    # (NSE, segment I, SYMBOL_NAME "INDIA VIX").
+    "INDIA VIX":     {"id": "21",    "seg": "IDX_I",  "inst": "INDEX"},
 }
 
 # Friendly / legacy aliases -> a key in SECURITY_ID_MAP. Lets the rest of the
@@ -77,6 +80,7 @@ SECURITY_ID_MAP = {
 _ALIASES = {
     "^NSEI": "NIFTY 50", "NIFTY": "NIFTY 50", "NIFTY50": "NIFTY 50",
     "^NSEBANK": "NIFTY BANK", "BANKNIFTY": "NIFTY BANK",
+    "^INDIAVIX": "INDIA VIX", "INDIAVIX": "INDIA VIX", "VIX": "INDIA VIX",
 }
 
 _client = None
@@ -231,6 +235,14 @@ def get_quote(ticker: str) -> dict | None:
         "prev_close": round(prev, 2),
         "percent_change": round(pct, 2),
     }
+
+
+def get_india_vix() -> float | None:
+    """Latest India VIX level, or None when unavailable (no creds, market
+    data hiccup). Callers must treat None as "regime unknown" and fail
+    safe — the Phase 5 strategy layer refuses to propose range-bound
+    spreads without a VIX reading rather than assuming calm."""
+    return get_live_price("INDIA VIX")
 
 
 # ----------------------------------------------------------- option chain

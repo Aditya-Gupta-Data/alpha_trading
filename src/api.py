@@ -30,11 +30,17 @@ do is a paper buy/sell against data/portfolio.json, using the same rails as
 the terminal `src.trade` session.
 
 Run:  uvicorn src.api:app --reload --port 8000
+
+When exposed via Cloudflare Tunnel (or any public ingress), set API_KEY in
+.env — every route then requires a matching X-API-Key header (or
+Authorization: Bearer <key>), except GET /api/health for liveness probes.
+Leave API_KEY unset for localhost-only dev (no auth).
 """
 
 import asyncio
 import json
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -43,8 +49,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from src import journal
+from src import notifier
 from src import portfolio as pf
 from src.data_fetcher import get_quote
 from src.plan_tracker import run_tracker
@@ -73,9 +82,135 @@ def _load_env() -> None:
 
 _load_env()
 
+# Optional gate for public exposure (Cloudflare Tunnel). Unset = open (local dev).
+_PUBLIC_PATHS = frozenset({"/api/health"})
+
+
+def _read_api_key() -> str | None:
+    """Configured API_KEY from the environment, or None when auth is off."""
+    raw = os.environ.get("API_KEY") or ""
+    key = raw.strip().strip('"').strip("'")
+    return key or None
+
+
+def _extract_api_key(request: Request) -> str | None:
+    """Client key from X-API-Key or Authorization: Bearer."""
+    header = request.headers.get("X-API-Key")
+    if header and header.strip():
+        return header.strip()
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        return token or None
+    return None
+
+
+def _keys_match(provided: str, expected: str) -> bool:
+    if len(provided) != len(expected):
+        return False
+    return secrets.compare_digest(provided, expected)
+
+
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    """Require API_KEY when configured. OPTIONS and /api/health stay open."""
+
+    async def dispatch(self, request: Request, call_next):
+        expected = _read_api_key()
+        if expected is None:
+            return await call_next(request)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        if request.url.path in _PUBLIC_PATHS:
+            return await call_next(request)
+        provided = _extract_api_key(request)
+        if not provided or not _keys_match(provided, expected):
+            return JSONResponse(
+                status_code=401,
+                content={"ok": False, "error": "Unauthorized — valid X-API-Key required."},
+            )
+        return await call_next(request)
+
+
+if _read_api_key():
+    print("[API] API_KEY is set — all routes except GET /api/health require "
+          "X-API-Key (or Authorization: Bearer).", flush=True)
+
 # How often the background market-refresh loop runs. 1 hour by default;
 # overridable via env (handy for tests) but never below a sane floor.
 AUTO_SYNC_INTERVAL = max(5, int(os.environ.get("AUTO_SYNC_INTERVAL_SECONDS", "3600")))
+
+# How often the fast polling loop runs. 60 seconds by default.
+POLL_INTERVAL = max(5, int(os.environ.get("WATCHLIST_POLL_INTERVAL_SECONDS", "60")))
+
+# Keep track of notified breaches to avoid duplicate emails/logs within the same day.
+# Format: (ticker, condition, value, date_str)
+_notified_breaches: set[tuple[str, str, float, str]] = set()
+
+
+async def _poll_watchlist_loop() -> None:
+    """Every POLL_INTERVAL seconds: poll prices via DhanHQ for all watchlist items,
+    evaluate configured alert rules, and trigger notifications on new breaches.
+    Blocking engine calls run in a worker thread so the event loop never stalls."""
+    while True:
+        await asyncio.sleep(POLL_INTERVAL)
+        try:
+            items = await asyncio.to_thread(store.load_items)
+            if not items:
+                continue
+
+            # Identify unique tickers that have rules
+            tickers_with_rules = set()
+            rules_by_ticker = {}
+            for item in items:
+                ticker = item.get("ticker")
+                condition = item.get("condition")
+                value = item.get("value")
+                if ticker and condition is not None and value is not None:
+                    tickers_with_rules.add(ticker)
+                    rules_by_ticker.setdefault(ticker, []).append((condition, value))
+
+            if not tickers_with_rules:
+                continue
+
+            # Fetch fresh quotes for these tickers via DhanHQ (in worker thread)
+            quotes = {}
+            for ticker in tickers_with_rules:
+                q = await asyncio.to_thread(get_quote, ticker)
+                if q:
+                    quotes[ticker] = q
+                await asyncio.sleep(0.01)
+
+            # Evaluate alert rules
+            today_str = date.today().isoformat()
+            new_breaches = []
+
+            for ticker, rules in rules_by_ticker.items():
+                q = quotes.get(ticker)
+                if not q:
+                    continue
+                for condition, value in rules:
+                    key = (ticker, condition, value, today_str)
+                    if key in _notified_breaches:
+                        continue  # Already notified today
+
+                    if check_rule(q, condition, value):
+                        message = describe(q, condition, value)
+                        new_breaches.append(message)
+                        _notified_breaches.add(key)
+
+            # Trigger alert notifications if any new breaches occurred
+            if new_breaches:
+                print(f"[Watchlist Poll] {len(new_breaches)} new breach(es) detected!", flush=True)
+                for line in new_breaches:
+                    print(f"  [ALERT] {line}", flush=True)
+
+                from src.notifier import send_digest
+                await asyncio.to_thread(send_digest, "ADiTrader Watchlist Alert", new_breaches)
+                await notifier.send_discord_message(
+                    "\n".join(["🔔 **ADiTrader Watchlist Alert**"] + new_breaches))
+
+        except Exception as e:
+            print(f"[Watchlist Poll] Error in background poll loop: {e}", flush=True)
 
 
 async def _auto_sync_loop() -> None:
@@ -86,11 +221,16 @@ async def _auto_sync_loop() -> None:
     while True:
         await asyncio.sleep(AUTO_SYNC_INTERVAL)
         try:
-            resolved = await asyncio.to_thread(run_tracker, False)
+            episodes: list = []
+            resolved = await asyncio.to_thread(run_tracker, False, episodes.append)
             await asyncio.to_thread(_get_quotes, True)  # invalidate + refetch
             print(f"[Auto-Sync] 1-hour market refresh complete — resolved "
                   f"{resolved} open trade(s); watchlist price cache refreshed.",
                   flush=True)
+            # Episodic encoding: push each resolution's context snapshot to
+            # Discord. Fail-safe — an unconfigured webhook returns False.
+            for episode in episodes:
+                await notifier.send_discord_message(notifier.format_episode(episode))
         except Exception as e:
             print(f"[Auto-Sync] refresh failed (will retry next cycle): {e}",
                   flush=True)
@@ -100,16 +240,20 @@ async def _auto_sync_loop() -> None:
 async def lifespan(app: FastAPI):
     print(f"[Auto-Sync] background market refresh armed — running every "
           f"{AUTO_SYNC_INTERVAL}s.", flush=True)
-    task = asyncio.create_task(_auto_sync_loop())
+    print(f"[Watchlist Poll] background watchlist polling armed — running every "
+          f"{POLL_INTERVAL}s.", flush=True)
+    task_sync = asyncio.create_task(_auto_sync_loop())
+    task_poll = asyncio.create_task(_poll_watchlist_loop())
     try:
         yield
     finally:
-        task.cancel()
+        task_sync.cancel()
+        task_poll.cancel()
         try:
-            await task
-        except asyncio.CancelledError:
+            await asyncio.gather(task_sync, task_poll, return_exceptions=True)
+        except Exception:
             pass
-        print("[Auto-Sync] background market refresh stopped.", flush=True)
+        print("[Auto-Sync] background loops stopped.", flush=True)
 
 
 app = FastAPI(title="Alpha Trading Local API", docs_url="/api/docs",
@@ -125,6 +269,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ApiKeyMiddleware)
 
 
 # ============================================================ market data
@@ -854,7 +999,10 @@ def sync_market():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "mode": "paper-only"}
+    payload = {"status": "ok", "mode": "paper-only"}
+    if _read_api_key():
+        payload["auth"] = "required"
+    return payload
 
 
 @app.get("/")

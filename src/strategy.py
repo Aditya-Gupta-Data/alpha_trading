@@ -174,3 +174,185 @@ def propose(analysis: dict, portfolio: dict, prices: dict):
     trade.py learns to display it (next 4B step)."""
     plans = propose_plans(analysis, portfolio, prices)
     return plans[0] if plans else None
+
+
+# ======================================================================
+# Phase 5 — options: defined-risk multi-leg spread construction
+# ======================================================================
+# Appended below the Phase 3/4 equity logic, which is untouched (strict
+# Phase 5 rule). Everything here is proposal-only paper math — no chain
+# fetching, no execution. Locked directives (DECISIONS.md #27):
+#   * ZERO naked options — every structure built here is defined-risk;
+#   * India VIX regime gate — VIX above VIX_BLOCK_ABOVE strictly blocks
+#     range-bound (credit/short-volatility) structures;
+#   * sizing by ABSOLUTE MAX LOSS, never stop-distance.
+
+from src.portfolio import calculate_span_margin  # noqa: E402  (Phase 5 section)
+
+# Above this India VIX level, breakout risk makes short-range structures
+# (iron condor / iron butterfly) untradeable — strictly blocked. Debit
+# spreads are directional defined-risk and stay allowed in any regime.
+VIX_BLOCK_ABOVE = 16.0
+RANGE_BOUND_STRATEGIES = {"iron_condor", "iron_butterfly"}
+
+
+class StrategyConstructor:
+    """Builds defined-risk multi-leg option structures as plain dicts.
+
+    `vix` is injected (tests pass a number; live callers pass
+    dhan_client.get_india_vix()). A None vix means "regime unknown" and
+    fails safe: range-bound structures are refused, directional debit
+    spreads still build.
+
+    Every constructor returns None when the structure is blocked or
+    incoherent, else a spread dict:
+      {strategy, direction, legs, lot_size, spread_width,
+       net_credit | net_debit (per share), max_loss, max_profit (per lot),
+       margin {total_margin, naked_margin, offset_savings}}
+    Legs are {"side", "option_type", "strike", "premium"} — the exact
+    shape portfolio.calculate_span_margin() consumes."""
+
+    def __init__(self, vix: float = None, lot_size: int = 75):
+        self.vix = vix
+        self.lot_size = int(lot_size)
+
+    # ---------------------------------------------------------- regime
+
+    def validate_regime(self, strategy: str) -> tuple:
+        """(allowed, reason). Range-bound strategies are STRICTLY blocked
+        when VIX > VIX_BLOCK_ABOVE — or when VIX is unknown (fail safe)."""
+        if strategy not in RANGE_BOUND_STRATEGIES:
+            return True, "directional defined-risk — allowed in any VIX regime"
+        if self.vix is None:
+            return False, "India VIX unavailable — range-bound strategies refused (fail safe)"
+        if self.vix > VIX_BLOCK_ABOVE:
+            return False, (f"India VIX {self.vix:.2f} > {VIX_BLOCK_ABOVE:g} — "
+                           f"breakout risk too high for range-bound structures")
+        return True, f"India VIX {self.vix:.2f} <= {VIX_BLOCK_ABOVE:g} — calm regime"
+
+    # ----------------------------------------------------- constructors
+
+    def _package(self, strategy: str, direction: str, legs: list) -> dict:
+        """Common defined-risk math for any leg basket: net premium, width,
+        absolute max loss/profit per lot (the sizing quantity), and the
+        SPAN margin simulation with hedge offsets."""
+        lot = self.lot_size
+        credit = sum(l["premium"] for l in legs if l["side"] == "SELL")
+        debit = sum(l["premium"] for l in legs if l["side"] == "BUY")
+        net = credit - debit  # >0 credit structure, <0 debit structure
+
+        # Worst-case width: for verticals it's the strike gap; for a condor/
+        # butterfly the loss side is the wider wing (only one side can lose).
+        widths = []
+        for opt_type in ("CE", "PE"):
+            strikes = [l["strike"] for l in legs if l["option_type"] == opt_type]
+            if len(strikes) == 2:
+                widths.append(abs(strikes[0] - strikes[1]))
+        width = max(widths) if widths else 0.0
+
+        if net >= 0:  # credit: max loss = (width - net credit) x lot
+            max_loss = (width - net) * lot
+            max_profit = net * lot
+        else:         # debit: max loss = premium paid; profit capped by width
+            max_loss = -net * lot
+            max_profit = (width + net) * lot
+
+        return {
+            "strategy": strategy,
+            "direction": direction,
+            "legs": legs,
+            "lot_size": lot,
+            "spread_width": round(width, 2),
+            "net_credit": round(net, 2) if net >= 0 else None,
+            "net_debit": round(-net, 2) if net < 0 else None,
+            "max_loss": round(max_loss, 2),
+            "max_profit": round(max_profit, 2),
+            "margin": calculate_span_margin(legs, lot),
+        }
+
+    def construct_bull_call_spread(self, buy_strike: float, sell_strike: float,
+                                   buy_premium: float, sell_premium: float) -> dict:
+        """Debit vertical for a BULLISH trend: buy the lower call, sell the
+        higher call. Directional — allowed in any VIX regime."""
+        if sell_strike <= buy_strike:
+            return None
+        legs = [
+            {"side": "BUY",  "option_type": "CE", "strike": buy_strike,  "premium": buy_premium},
+            {"side": "SELL", "option_type": "CE", "strike": sell_strike, "premium": sell_premium},
+        ]
+        return self._package("bull_call_spread", "bullish", legs)
+
+    def construct_bear_put_spread(self, buy_strike: float, sell_strike: float,
+                                  buy_premium: float, sell_premium: float) -> dict:
+        """Debit vertical for a BEARISH trend: buy the higher put, sell the
+        lower put. Directional — allowed in any VIX regime."""
+        if sell_strike >= buy_strike:
+            return None
+        legs = [
+            {"side": "BUY",  "option_type": "PE", "strike": buy_strike,  "premium": buy_premium},
+            {"side": "SELL", "option_type": "PE", "strike": sell_strike, "premium": sell_premium},
+        ]
+        return self._package("bear_put_spread", "bearish", legs)
+
+    def construct_iron_condor(self, lower_put: float, upper_call: float,
+                              wing_width: float,
+                              put_sell_premium: float, put_buy_premium: float,
+                              call_sell_premium: float, call_buy_premium: float) -> dict:
+        """Credit range-bound 4-leg: sell the put at `lower_put` and the call
+        at `upper_call`, buy protective wings `wing_width` further out on
+        each side. STRICTLY blocked when VIX > VIX_BLOCK_ABOVE."""
+        allowed, reason = self.validate_regime("iron_condor")
+        if not allowed:
+            print(f"Strategy: iron condor BLOCKED — {reason}")
+            return None
+        if not (lower_put < upper_call) or wing_width <= 0:
+            return None
+        legs = [
+            {"side": "SELL", "option_type": "PE", "strike": lower_put,               "premium": put_sell_premium},
+            {"side": "BUY",  "option_type": "PE", "strike": lower_put - wing_width,  "premium": put_buy_premium},
+            {"side": "SELL", "option_type": "CE", "strike": upper_call,              "premium": call_sell_premium},
+            {"side": "BUY",  "option_type": "CE", "strike": upper_call + wing_width, "premium": call_buy_premium},
+        ]
+        return self._package("iron_condor", "neutral", legs)
+
+    def construct_iron_butterfly(self, atm_strike: float, wing_width: float,
+                                 atm_call_premium: float, atm_put_premium: float,
+                                 wing_call_premium: float, wing_put_premium: float) -> dict:
+        """Credit range-bound 4-leg: sell the ATM call AND put (the body),
+        buy protective wings `wing_width` out on each side. STRICTLY
+        blocked when VIX > VIX_BLOCK_ABOVE."""
+        allowed, reason = self.validate_regime("iron_butterfly")
+        if not allowed:
+            print(f"Strategy: iron butterfly BLOCKED — {reason}")
+            return None
+        if wing_width <= 0:
+            return None
+        legs = [
+            {"side": "SELL", "option_type": "CE", "strike": atm_strike,              "premium": atm_call_premium},
+            {"side": "SELL", "option_type": "PE", "strike": atm_strike,              "premium": atm_put_premium},
+            {"side": "BUY",  "option_type": "CE", "strike": atm_strike + wing_width, "premium": wing_call_premium},
+            {"side": "BUY",  "option_type": "PE", "strike": atm_strike - wing_width, "premium": wing_put_premium},
+        ]
+        return self._package("iron_butterfly", "neutral", legs)
+
+    # ----------------------------------------------------------- sizing
+
+    def size_lots(self, spread: dict, portfolio: dict, prices: dict,
+                  risk_pct: float = None) -> int:
+        """Lots such that the spread's ABSOLUTE MAX LOSS fits the per-trade
+        risk budget (`risk_pct` of portfolio value; defaults to the equity
+        RISK_PER_TRADE_PCT — the proposer passes the dedicated
+        OPTIONS_RISK_PER_TRADE_PCT) — the options override of equity
+        stop-distance sizing. Also capped so the SPAN margin (with
+        offsets) never exceeds available cash: margin is what actually
+        gets blocked, NOT the naked-equivalent capital."""
+        if not spread or spread["max_loss"] <= 0:
+            return 0
+        if risk_pct is None:
+            risk_pct = RISK_PER_TRADE_PCT
+        risk_budget = total_value(portfolio, prices) * risk_pct / 100
+        by_risk = int(risk_budget // spread["max_loss"])
+        margin_per_lot = spread["margin"]["total_margin"]
+        by_margin = (int(portfolio["cash"] // margin_per_lot)
+                     if margin_per_lot > 0 else by_risk)
+        return max(0, min(by_risk, by_margin))

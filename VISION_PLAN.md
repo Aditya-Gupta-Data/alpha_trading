@@ -146,3 +146,36 @@ Analyst. We are still exclusively paper trading.*
    (Step 1)**.
 5. Test the Discord bot on your phone. Chat with it. Make sure it responds.
 6. Only once Phase 5 is working perfectly, move to Step 2.
+
+---
+
+## ⚠️ 2026-07-06 renumbering note
+
+Phases 5-8 above are the **original** blueprint (saved 2026-07-05) and are
+largely **done**: Discord Analyst (Phase 5 above) is live, the Brain Map
+(Phase 6 above, all steps) is complete and wired into `forecast.py`, and
+data ingestion moved to the DhanHQ Data API instead of scraping (superseding
+Phase 8 above's NSE-scraping approach — see `DECISIONS.md` decision #22).
+Phase 7 above (the Time-Travel Simulator) is the one piece from this
+original blueprint still **not started**, and it is carried forward under
+the same name in HANDOVER's Master Execution Plan — note its "fetch from
+yfinance" instruction is stale and must use `src/dhan_client.py` when built.
+
+The **current, active roadmap lives in one place: `HANDOVER.md` → "🚀 The
+Master Execution Plan", "📋 Pending Phases", and "🔮 The Long-Term Vision
+(Phases 9–13)"**. That is the single authoritative copy carrying live
+build-status/checkmarks — it is deliberately NOT duplicated here, because a
+second copy drifts out of sync (it already had, on the Sleep Phase and
+Phase 10B status). This file (`VISION_PLAN.md`) keeps the *narrative* vision —
+the original blueprint above and the "why" behind each phase — while
+`HANDOVER.md` owns the checklist and what is / isn't built.
+
+**Newer phases added since the original blueprint** (full status in HANDOVER):
+- **Phase 6C — Knowledge Graph Reasoning Layer** (2026-07-07): a read-only
+  `networkx` reasoning layer (`src/graph_engine.py`) over an additive
+  `graph_edges` table in the same `data/brain_map.db`. It walks 2-hop causal
+  links and surfaces historically-linked patterns as advisory context in the
+  Discord trade proposal — never a rule change (decision #33). Reader + proposer
+  wiring are built; the Sleep Phase edge-writer is the open follow-up.
+
+**Do not execute any roadmap item until explicitly prompted by the user.**

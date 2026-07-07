@@ -20,9 +20,152 @@ for anything more recent than what's written here.
 - **The backend is deployed to a fresh GCP VM (2026-07-06)** running the
   DhanHQ-backed FastAPI server continuously as a systemd service — see
   "GCP VM (cloud hosting)" below. The old cron VM is superseded.
-- **Known gap**: the scheduled email jobs (`src.main` alerts, `src.suggest`
-  suggestions) that the *old* VM ran via cron are NOT yet set up on the new
-  VM — only the API server runs there. See the VM section for how to add them.
+- **Phase Operational — DONE (2026-07-06):** `scripts/setup_cron.sh` deploys
+  the token-renewal (`src.renew_token`, 07:00 IST) and email-digest
+  (`src.main` 15:35 IST, `src.suggest` 08:00 IST) cron schedules on the VM,
+  closing the "known gap" that used to be documented here. `src/api.py`
+  also now runs a `_poll_watchlist_loop` background task (60s cadence,
+  `asyncio.to_thread` for the blocking DhanHQ/analysis calls) that
+  deduplicates rule breaches per-day and fires `src.notifier.send_digest`
+  email alerts directly from the live server, independent of the hourly
+  auto-sync loop.
+- **Phase 5 (Options) — COMPLETE (2026-07-06), both parts.**
+  *Part A (frictions)*: `src/portfolio.py` applies the full 2026 cost
+  stack per executed leg — STT 0.15% (sell side ONLY), Stamp Duty 0.003%
+  (buy side only), flat ₹20 brokerage, NSE exchange charges (0.00345%),
+  SEBI turnover fees (0.0001%), and 18% GST on the service charges — plus
+  `calculate_span_margin()`, a SPAN simulation with hedge offsets (a
+  defined-risk spread blocks only its net risk, a naked short gets the
+  punitive treatment). `src/plan_tracker.py` applies dynamic bid-ask
+  slippage on resolution (0.05% index; 0.1%-0.5% options by liquidity;
+  0% stocks).
+  *Part B (spreads)*: `strategy.StrategyConstructor` builds defined-risk
+  structures ONLY (bull call / bear put verticals, iron condor / iron
+  butterfly — zero naked legs by construction), gated by India VIX
+  (range-bound strategies strictly blocked when VIX > 16 *or* VIX is
+  unavailable) and sized by ABSOLUTE MAX LOSS, capped by SPAN margin vs
+  cash. India VIX lives in `dhan_client` (`get_india_vix()`, security id
+  21 verified against Dhan's scrip master). The tracker resolves spreads
+  as ATOMIC BASKETS (no per-leg exit path exists — the SPAN-spike
+  sequencing bug is structurally impossible) with auto-exit at 65% of max
+  profit or strictly 2 days before expiry (gamma rule), modeled P&L
+  clamped to the structure's defined-risk bounds, and net-of-frictions
+  journaling. The proposal wiring is `src/options_proposer.py`
+  (`python3 -m src.options_proposer`, terminal, human-in-the-loop):
+  trend read via suggestions.analyze -> India VIX + real Dhan option
+  chain -> regime-matched spread (bullish: bull call; bearish: bear put;
+  neutral: iron condor, VIX-gated) -> sized by the dedicated
+  `options_risk_per_trade_pct` budget (config.json, 10% — decision #28)
+  -> approve/reject + why -> journal entry the tracker resolves.
+  **Discord-surfaced (2026-07-06)**: the moment a proposal is built, a
+  rich 🚨 PROPOSAL ALERT (regime/VIX, legs in a code block, economics
+  incl. max loss + SPAN margin, action-required note) fires to Discord
+  BEFORE the terminal pauses for y/n, and a short ✅/❌ decision
+  follow-up after — both fail-safe, an unreachable Discord never blocks
+  the session. Dashboard surfacing still open.
+- **Discord connectivity dry run**: `python3 -m src.plan_tracker
+  --mock-trade-strategy IRON_BUTTERFLY` pushes a synthetic [MOCK] Trade
+  Episode through the real notifier path (nothing journaled; exit code 0
+  only if Discord actually accepted it). Needs `DISCORD_WEBHOOK_URL` in
+  `.env`. The options proposer also pushes a "Spread proposed" message on
+  every journaled decision.
+- **Phase 10B extractor BUILT (2026-07-06)**: `src/local_parser.py` —
+  `LocalExtractor` (OpenAI-compat calls to local Ollama only,
+  `OLLAMA_BASE_URL`/`OLLAMA_MODEL` in `.env`, defaults
+  `http://localhost:11434/v1` / `llama3`), `extract_event_json()` (strict
+  EEF JSON with schema coercion), and `process_unstructured_input(conn,
+  text)` writing idempotently into the Brain Map `events` table
+  (`brain_map.py` itself untouched and still network-free). Fully
+  fail-safe; guardrail test enforces zero market-data imports (decision
+  #30). **Ollama IS installed on the host with `llama3` pulled
+  (confirmed 2026-07-06)** — the parser is live-capable; offline tests
+  stay mocked regardless.
+- **Phase 10B "Sleep Phase" BUILT (2026-07-06)** — `src/sleep_phase.py`
+  (`python3 -m src.sleep_phase`, run off-market hours / cron it): three
+  sequential fail-safe tasks against `data/brain_map.db`. (A) *Ingestion*:
+  journal free text (signal + "why") -> EEF events via the local parser,
+  hash-deduped in a new `ingest_log` table holding provenance pointers
+  (journal_ref) back to the source rows; failures aren't logged so they
+  retry when Ollama is back. (B) *Consolidation*: last-24h events -> ONE
+  Ollama call clustering themes into `semantic_nodes` (confidence 1.0)
+  with `semantic_event_link` graph edges; re-observed themes are
+  reinforced (confidence reset, reactivated) instead of duplicated.
+  (C) *Decay*: `score_new = score * e^(-λ·Δt)` anchored on
+  last-reinforced/last-decayed so repeat runs never double-count days;
+  below 0.20 the node is flagged `active=0` (never deleted). Knobs are
+  optional `config.json` keys (`sleep_decay_lambda` 0.05,
+  `sleep_prune_threshold` 0.20, `sleep_consolidation_hours` 24). The three
+  new tables are created and owned by `sleep_phase.py` — `brain_map.py`'s
+  core schema stays untouched. Decision #30 holds: no market data, no
+  trading, local Ollama only. **Cron automation DONE (2026-07-06)**:
+  `scripts/setup_cron.sh` entry #4 schedules it daily at 20:00 IST
+  (`CRON_TZ=Asia/Kolkata` pins IST on Linux), logging to
+  `logs/sleep_phase.log`. ⚠️ Placement note: the sleep phase only does
+  real work on the machine holding `data/journal.jsonl`,
+  `data/brain_map.db` AND Ollama (currently the Mac — the VM deploy
+  excludes `data/` and can't run llama3 on an e2-micro); elsewhere it
+  degrades to a harmless decay-only pass.
+- **Market loop + headless proposals BUILT (2026-07-06)**:
+  `src/market_loop.py` (`python3 -m src.market_loop`) is an async daemon
+  that polls NIFTY 50 / NIFTY BANK every 15 min during NSE hours
+  (Mon-Fri 09:15-15:30 IST; sleeps otherwise) via the abstract
+  `fetch_market_state()` seam (pure-Python indicators + VIX — the exact
+  injection point for the Phase 7 simulator), and on a favorable setup
+  triggers `options_proposer.run_headless()`: 🚨 Discord alert + journal
+  entry with decision `pending_approval`, NO terminal pause. Per-index
+  2h cool-down stops Discord spam; blocked/no-signal cycles don't burn
+  it. Pending entries are tracked hypothetically like rejected ones
+  (user's call — see decision #31); decide them any time with
+  `python3 -m src.options_proposer --review-pending` (reads the stored
+  spread payload from the journal, NO market data fetched: y -> approved
+  on paper, tracker takes over; n -> rejected + why; entries the tracker
+  already resolved hypothetically are left alone — no hindsight
+  approvals). One bad cycle never kills the loop.
+- **Full offline test suite: 199/199 passing** (`python3 -m pytest tests/`;
+  the `for f in tests/test_*.py; do python3 "$f"; done` __main__ loop runs
+  all 18 files clean too), including `tests/test_options_spreads.py`
+  (condor max-loss math, STT sell-side-only, VIX gate, atomic tracker
+  resolution), `tests/test_options_proposer.py` (regime mapping,
+  strike selection off a fake chain, budget sizing, journal contract),
+  `tests/test_api_server.py` (Phase 9 gateway auth + Discord bridge), and
+  `tests/test_graph_engine.py` (Phase 6C 2-hop BFS + confidence sorting).
+- **Discord episodic encoder — DONE (2026-07-06):** `src/discord_client.py`
+  (async `httpx` webhook client, `DISCORD_WEBHOOK_URL` in `.env`, optional
+  `thread_id` grouping, fully fail-safe) + `notifier.send_discord_message()`.
+  The API's poll loop pushes watchlist alerts to Discord alongside email,
+  and the hourly auto-sync loop pushes a structured "Trade Episode"
+  (market sentiment + prices + rule that fired) for every resolution —
+  built by the pure `brain_map.build_episode_snapshot()` and handed out of
+  the sync tracker via `run_tracker(on_episode=...)`, so the Brain Map
+  itself still does zero network I/O (decision #25's additive rule holds).
+- **Discord delivery VERIFIED LIVE end-to-end (2026-07-06)**: a real
+  webhook was created on the "Alpha Trading" Discord server (#general),
+  `DISCORD_WEBHOOK_URL` set in `.env` both locally and on the VM (via the
+  base64-paste method below), and confirmed working by two live sends —
+  a plain connectivity ping and the `--mock-trade-strategy` dry run — both
+  landing in #general with `Discord delivery: OK`. The VM's systemd
+  service was restarted afterward and came up clean
+  (`systemctl status alpha-trading` → `active (running)`, both background
+  loops armed), so live watchlist alerts and real resolved-trade episodes
+  now push to Discord in production, not just locally.
+- **Phase 9 Public API Gateway & Discord Bridge — DONE (2026-07-07):** `src/api_server.py` implements a strict fail-closed API-key gateway (requiring `X-API-Key` or `Authorization: Bearer` token) that wraps the `src.api` FastAPI app. It also hosts the two-way Discord bridge endpoint `POST /api/discord/action` to securely decide pending approvals directly from phone notifications/Discord webhook callbacks. Tested and verified offline via `tests/test_api_server.py`.
+- **Phase 6C Knowledge Graph Reasoning Layer — DONE (reader; 2026-07-07):**
+  `src/graph_engine.py` — a `GraphEngine` that loads the additive
+  `graph_edges` table (`source_node, relation, target_node,
+  confidence_score`) from `data/brain_map.db` into a `networkx.DiGraph`
+  once at construction, then answers `get_relevant_context(node,
+  max_hops=2)` — a BFS to depth 2 returning linked edges sorted by
+  confidence — purely from memory. Strictly READ-ONLY, never writes during
+  inference (decision #33). Wired into `src/options_proposer.py`: each
+  proposal runs a fail-safe "Memory Query" on its ticker and appends a 🧠
+  Memory block to the Discord PROPOSAL ALERT rationale (advisory only —
+  no rule/score change, decision #26 philosophy). Additive: `brain_map.py`
+  untouched; SQLite stays the only persistent store, `networkx` is just the
+  in-memory reasoning layer (no new DB). Tests: `tests/test_graph_engine.py`
+  (+ proposer memory-block tests). **Open follow-up**: the `graph_edges`
+  table is created but empty — the Sleep Phase (`src/sleep_phase.py`) does
+  not yet WRITE causal edges, so the Memory block stays empty until that
+  writer lands. `networkx` was added to `requirements.txt`.
 
 ## Credentials & environment variables
 
@@ -37,6 +180,7 @@ reader in each entry point (`_load_env()`), not a shared library, by design
 | `DHAN_ACCESS_TOKEN` | DhanHQ Data API token | **Short-lived (~24h)**. `python3 -m src.renew_token` renews it in place via Dhan's `/v2/RenewToken` (rewrites the .env line, keeps `.env.bak`) — but it can only renew a still-valid token, so it must run at least daily (cron it). If it prints CRITICAL (token already expired, e.g. DH-906), do one manual refresh from the Dhan dashboard and the automation takes over again. |
 | `GEMINI_API_KEY` | Google Gemini (news sentiment + chat) | Get from Google AI Studio, create the key against the *existing billed* `alpha-trading-app-2026` GCP project (a key from AI Studio's "new project" flow gets zero free-tier quota — see `DECISIONS.md`). |
 | `DISCORD_BOT_TOKEN` | Discord bot login | From the Discord Developer Portal, needs "Message Content Intent" enabled. |
+| `DISCORD_WEBHOOK_URL` | Discord channel webhook (alerts + trade episodes push) | **Set and verified live 2026-07-06**, both locally and on the VM. Different thing from the bot token above — a channel gear icon → Integrations → Webhooks → New Webhook → Copy Webhook URL. Pushes to the "Alpha Trading" server's #general channel. Verify anytime with `python3 -m src.plan_tracker --mock-trade-strategy IRON_BUTTERFLY` (prints `Discord delivery: OK`/`FAILED`, journals nothing). |
 | `ALERT_EMAIL_FROM` / `ALERT_EMAIL_APP_PASSWORD` / `ALERT_EMAIL_TO` | Gmail SMTP for alert/suggestion/session digests | App Password (16-char), not the normal Gmail password. |
 
 `lovable-frontend/.env` (separate, its own git-ignore inside that folder)
@@ -50,7 +194,10 @@ needs only `VITE_API_BASE_URL="http://localhost:8000"` — no Supabase keys
 python3 -m pip install -r requirements.txt
 
 # 2. The unified local API (serves the dashboard + all /api/* routes)
+# Run the raw server (no key required, localhost dev):
 uvicorn src.api:app --reload --port 8000
+# Or run the strict API-key gateway (Phase 9 public exposure mode):
+uvicorn src.api_server:app --reload --port 8000
 
 # 3. The React dashboard (separate terminal)
 cd lovable-frontend && npm install && npm run dev   # localhost:8080 (falls back :8081)
@@ -61,8 +208,25 @@ python3 -m src.discord_bot
 # 5. Interactive paper-trading session (terminal, when you want to trade)
 python3 -m src.trade
 
+# 5b. Options spread proposer (terminal; needs a valid Dhan token for the
+#     live chain/VIX — proposes ONE defined-risk spread, you approve/reject)
+python3 -m src.options_proposer            # NIFTY 50
+python3 -m src.options_proposer "NIFTY BANK"
+python3 -m src.options_proposer --review-pending   # decide market-loop
+                                                   # PENDING_APPROVAL entries
+                                                   # (offline, no market data)
+
 # 6. Offline test suite (no internet/API calls needed)
-for f in tests/test_*.py; do python3 "$f"; done   # expect 30/30 passing
+python3 -m pytest tests/                          # expect 199 passing
+
+# 7. Market loop daemon (market hours only; headless proposals to Discord)
+python3 -m src.market_loop
+
+# 8. Discord connectivity check (needs DISCORD_WEBHOOK_URL set; journals nothing)
+python3 -m src.plan_tracker --mock-trade-strategy IRON_BUTTERFLY
+
+# 9. Public gateway (Phase 9 exposure mode — strict x-api-key, wraps src.api)
+uvicorn src.api_server:app --host 127.0.0.1 --port 8000
 ```
 
 Manual/on-demand engine scripts (not on a schedule locally — only via VM cron
@@ -128,17 +292,25 @@ created and now runs the current DhanHQ FastAPI backend.
   src.renew_token >> logs/renew_token.log 2>&1`). The manual base64 paste
   above is then only needed if a renewal window is missed and the token
   dies (script prints CRITICAL).
-- **Not exposed to the internet**: port 8000 is reachable only on the VM
-  itself (no firewall rule opened). To connect a deployed frontend, the
-  recommended path is a **Cloudflare Tunnel** (free HTTPS, nothing exposed,
-  survives IP changes) plus an API-key check in `src.api` — deferred, not yet
-  done.
-- **⚠️ Scheduled email jobs not migrated**: the old VM ran `src.main`
-  (alerts, `35 15 * * 1-5`) and `src.suggest` (suggestions, `0 8 * * 1-5`)
-  via cron. The new VM runs *only* the API server. To restore the daily
-  cloud emails, add those two cron entries on the new VM (`crontab -e`, using
-  `~/alpha_trading/venv/bin/python -m src.main`, logging to
-  `~/alpha_trading/logs/`).
+- **No firewall port is ever opened — inbound goes through a Cloudflare
+  Tunnel only** (Phase 9, decision #32): port 8000 stays reachable only on
+  the VM itself; `cloudflared` dials out and forwards public HTTPS traffic
+  to `localhost:8000`. The process on that port for public exposure is the
+  strict gateway `uvicorn src.api_server:app --host 127.0.0.1 --port 8000`
+  (it wraps the full `src.api` app and adds the two-way Discord bridge
+  `POST /api/discord/action`). The gateway is fail-closed: every request
+  needs an `x-api-key` header matching `.env`'s `API_KEY` (401 otherwise),
+  and it refuses everything with 503 if `API_KEY` is unset — only
+  `GET /api/health` stays public. Running `cloudflared` itself on the VM
+  is the remaining setup step (not yet installed).
+- **Scheduled jobs**: `scripts/setup_cron.sh` (idempotent, safe to re-run
+  after every `git pull`) installs the full cron block — `src.renew_token`
+  07:00 IST daily, `src.main` 15:35 IST Mon-Fri, `src.suggest` 08:00 IST
+  Mon-Fri, and `src.sleep_phase` 20:00 IST daily — each logging to
+  `logs/<name>.log`, pinned to IST via `CRON_TZ=Asia/Kolkata`. Run it on
+  the VM with `bash ~/alpha_trading/scripts/setup_cron.sh`; note the sleep
+  phase only does real work where `data/` + Ollama live (see the Phase 10B
+  bullet above).
 - `data/`, `tests/`, `logs/` are not part of the deploy (paper-trading state
   stays local only; see `OVERVIEW.md`). `config.json` and `.env` are required
   — `src/config.py` fails loudly at import without `config.json`, and
@@ -214,14 +386,18 @@ remains available as a backfill/repair sweep (it won't have post-mortems,
 which only generate at live resolution). `memory_context` lines appear in
 forecasts once the first trades resolve.
 
-**Next up (nothing started)**: the other open items below — restore the
-VM's scheduled email jobs, Cloudflare Tunnel for the API, Phase 7
-historical simulator (see `DECISIONS.md` → "Still open").
+**Phase 9 backend half landed 2026-07-07**: `src/api_server.py` is the
+strict public gateway (fail-closed API-key auth on every route, wraps the
+full `src.api` app) with the two-way Discord bridge
+`POST /api/discord/action` — approve/reject a `pending_approval` journal
+entry by its `short_id`, exactly the `--review-pending` semantics
+(`options_proposer.decide_pending`). Tests: `tests/test_api_server.py`.
 
-Other open items (not next, but tracked): restore the cloud-scheduled email
-jobs on the new VM, expose the VM API via a Cloudflare Tunnel for a deployed
-frontend, and (Phase 7) the historical simulator — see `DECISIONS.md` →
-"Still open".
+**Next up (nothing started)**: installing `cloudflared` on the VM (the
+gateway is ready for it), the Phase 7 historical simulator, and analyst
+procedural evolution (see `DECISIONS.md` → "Still open"). The VM's
+scheduled jobs are handled by `scripts/setup_cron.sh` (see the GCP VM
+section).
 
 ## Where to look for more detail
 
@@ -234,3 +410,90 @@ frontend, and (Phase 7) the historical simulator — see `DECISIONS.md` →
 - **The Phase 5+ vision** (Discord, Brain Map, simulator, event ingestion):
   `VISION_PLAN.md`.
 - **Frontend JSON contracts**: `DATA_CONTRACT.md`.
+
+---
+## 🚀 The Master Execution Plan (Current Targets)
+(Note: Do not execute these until explicitly prompted by the user)
+
+### Phase Operational: Fix VM Gaps & Token Automation — ✅ DONE (2026-07-06)
+* ~~Create `scripts/setup_cron.sh` to schedule `src.renew_token` at 07:00 AM IST.~~
+* ~~Add cron schedules for `src.main` (15:35 IST) and `src.suggest` (08:00 AM IST).~~
+* ~~Add a fast background asyncio loop to `src/api.py` to poll prices via DhanHQ and trigger workflows only on watchlist breaches.~~
+
+### Phase 5: Options Trading & Frictions — ✅ DONE (2026-07-06)
+* **Part A (Frictions) — ✅ DONE:** ~~Update `src/portfolio.py` with 2026 STT (0.15%), SPAN margin simulation, and bid-ask slippage.~~ Full 2026 stack (STT sell-only, Stamp Duty buy-only, brokerage, NSE exchange charges, SEBI fees, GST on service charges) + `calculate_span_margin()` hedge-offset simulation in `src/portfolio.py`; dynamic bid-ask slippage in `src/plan_tracker.py`.
+* **Part B (Strategy) — ✅ DONE:** ~~Update `src/strategy.py` to propose defined-risk spreads ONLY (Bull Call/Bear Put/Iron Condors). Integrate India VIX filtering (Block Iron Condors if VIX > 16). Update tracker for early exits at 60-70% max profit to kill Gamma risk.~~ `StrategyConstructor` + VIX gate (via `dhan_client.get_india_vix()`) + max-loss sizing; tracker resolves spreads as atomic baskets with 65%-of-max-profit / 2-days-before-expiry auto-exits. Proposal wiring also DONE: `src/options_proposer.py` (`python3 -m src.options_proposer`) fetches the real chain + VIX, builds the regime-matched spread, sizes it via `options_risk_per_trade_pct` (decision #28), and journals your approve/reject. Dashboard/Discord surfacing still open.
+
+### Phase 6 (Advanced): Memory Consolidation & Evolution
+* ~~Update Brain Map schema for `confidence_score` and temporal decay.~~ ✅ DONE 2026-07-06 — landed as the `semantic_nodes` table (confidence_score, last_reinforced/last_decayed, active flag) owned by `src/sleep_phase.py`, additive to brain_map's core schema.
+* ~~Create a "Sleep Phase" background task to process memory off-market hours.~~ ✅ DONE 2026-07-06 — built as a standalone cron job (`src/sleep_phase.py`, 20:00 IST via `scripts/setup_cron.sh`) rather than inside `src/api.py`, so local LLM inference never shares a process with the live server.
+* Add procedural evolution to `src/analyst.py` (proposing new trading rules to a `/candidates` folder based on loss clusters). — NOT STARTED.
+
+### Phase 6C: Knowledge Graph Reasoning Layer — 🟡 READER DONE (2026-07-07)
+* ~~Build `src/graph_engine.py`: a read-only `GraphEngine` loading the additive `graph_edges` table from `data/brain_map.db` into a `networkx.DiGraph`, with `get_relevant_context(node, max_hops=2)` (2-hop BFS, confidence-sorted).~~ ✅ DONE — memory-resident, never writes during inference (decision #33); `tests/test_graph_engine.py`.
+* ~~Wire the Memory Query into the proposal path so linked historical patterns ride along in the Discord PROPOSAL ALERT rationale.~~ ✅ DONE in `src/options_proposer.py` (fail-safe 🧠 Memory block; advisory only, decision #26 philosophy).
+* **Open**: teach `src/sleep_phase.py` to WRITE causal edges into `graph_edges` (needs its own LLM extraction prompt) — until then the Memory block is empty. `networkx` added to `requirements.txt`.
+
+### Phase 7: The Time-Travel Simulator
+* Build `src/simulator.py` to override `datetime.now()` and loop over historical DhanHQ data.
+* Instantly fast-forward plans to resolution to populate the Brain Map without waiting months in real-time. Use a simulated portfolio to protect the live paper state.
+
+---
+## 📋 Pending Phases
+Estimated Sequencing: **Cross-Asset Integration (Asset Expansion) ➔ Dual-Horizon Sentiment (Dual Sentiments) ➔ ATR-Based Trailing Stoplosses (Trailing Stoploss)**
+
+These upcoming features are officially added to the roadmap:
+
+### 1. Cross-Asset Integration (Asset Expansion)
+* **Objective:** Expand the data layer and ingestion pipeline to fully support MCX Commodities (Gold, Crude Oil) and Global Indices.
+* **Details:** Leverages the DhanHQ API migration to fetch real-time and historical data for these instruments, enabling diversified multi-asset paper trading without additional third-party data feeds.
+
+### 2. Dual-Horizon Sentiment (Dual Sentiments)
+* **Objective:** Upgrade `news_processor.py` to support dual-horizon JSON outputs.
+* **Details:** Separates news sentiment analysis into `short_term_catalyst_score` and `long_term_macro_score`, feeding distinct granular durations into the Brain Map.
+
+### 3. ATR-Based Trailing Stoplosses (Trailing Stoploss)
+* **Objective:** Upgrade the `plan_tracker` to implement dynamic, volatility-adjusted trailing stops.
+* **Details:** Replaces rigid bracket orders with dynamic, ATR-buffered trailing stops to protect capital while letting profitable swing trends run.
+
+### 4. Regime-Aware Memory
+* **Objective:** Add regime tags to the Brain Map's event-outcome links.
+* **Details:** Captures and links current market regimes (e.g., trend, volatility, regime type) to trades so the learning loop can query patterns specifically under matching market conditions.
+
+### 5. Procedural Evolution
+* **Objective:** Support human-in-the-loop candidate generation for rule changes.
+* **Details:** Evaluates post-mortem clusters of losses in `src/analyst.py` and proposes rule adjustments to a `/candidates` folder for user review, driving iterative rule enhancement.
+
+---
+## 🔮 The Long-Term Vision (Phases 9 - 13)
+(To be executed only after Phase 7 Simulator proves statistical Alpha)
+
+### Phase 9: Secure Web Exposure & UI Deployment
+* ~~Expose GCP VM API to the internet securely via Cloudflare Tunnel with API-key middleware to connect the React dashboard and Discord bot.~~ **Backend half DONE 2026-07-07**: `src/api_server.py` (strict fail-closed `x-api-key` gateway wrapping the full `src.api` app) + two-way Discord bridge `POST /api/discord/action` (approve/reject pending journal entries by `short_id`, `--review-pending` semantics). Still open: install/configure `cloudflared` on the VM (tunnel → `localhost:8000`), point the deployed React dashboard + Discord bot at the tunnel URL.
+
+### Phase 10: Local LLM "Maker/Checker" (Hallucination Guardrails)
+* Run a local open-source model (Llama 3 / Phi-3) on the local Mac as a strict auditor.
+* Validate Gemini's cloud-generated plans against raw data to catch logical contradictions before Brain Map logging.
+
+### Phase 10B: Local LLM Episodic Event Extractor (NOT the same as Phase 10 above — FULLY BUILT + CRON'D 2026-07-06)
+A separate use of a local LLM from Phase 10's "maker/checker" auditor — this one is a text-to-structured-data parser feeding the Brain Map, not a plan validator. **All four steps below are built** (`src/local_parser.py`, `src/sleep_phase.py`, tests), Ollama + `llama3` are installed on the host, and the Sleep Phase is scheduled via `scripts/setup_cron.sh` (20:00 IST daily → `logs/sleep_phase.log`).
+
+**Architectural rule this phase is built on:** an LLM (local or cloud) must NEVER be used for continuous 24/7 market monitoring — checking whether a price crossed a level or a moving average is pure math and belongs in `src/rules.py` / `src/dhan_client.py` on the VM, exactly as today. Using an LLM for constant price polling would be a massive, pointless compute cost. A local LLM's only job here is the "light work" of turning unstructured text (news, Discord chat, journal summaries) into structured JSON for the Brain Map — never live price decisions.
+
+Planned build (when explicitly greenlit, one file at a time, offline-first, native `sqlite3` only — same discipline as every other phase):
+1. **Ollama on the Mac** — install it as a free local model server (e.g. Llama 3 8B or Phi-3). Add `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) to the env-loading logic (`src/config.py` or equivalent), OpenAI-compatible API.
+2. **`src/local_parser.py`** — an "Episodic Event Frame (EEF) Extractor": one function that takes raw text (e.g. a news headline) and returns strict JSON `{"event_type": str, "tag": str, "sentiment": int, "entities": list}` — no conversational output, a narrow structured-extraction task only.
+3. **Wire into `src/brain_map.py`** — feed that JSON into the `events` table via the existing `record_event()`/`_get_or_create_event()` helpers, additive only (decision #25's rule still applies — no execution or portfolio access).
+4. **Async "Sleep Phase" loop** — runs off-market hours only, so local LLM inference never competes with the live trading loop; distills the day's raw text into Brain Map events in the background.
+
+### Phase 11: The "Skeptic Agent" (Multi-Agent Debate)
+* Introduce a dedicated Skeptic Agent to counter the primary Analyst's long-directional bias.
+* Enforce structural debate to penalize uncontested ideas and tighten risk management prior to human approval.
+
+### Phase 12: The Intraday Trading Loop
+* Transition from hourly/daily OHLC swing-trading to a real-time streaming websocket architecture for rapid same-day fetch-decide-execute loops.
+
+### Phase 13: Live Broker Execution
+* Remove the strict "Paper-Trading Only" guardrail.
+* Connect DhanHQ /v2/orders execution endpoints to route real capital to the NSE.
+---

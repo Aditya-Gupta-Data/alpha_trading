@@ -8,3 +8,4 @@ ruamel.yaml
 google-genai
 dhanhq
 networkx
+scikit-learn

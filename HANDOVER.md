@@ -134,9 +134,24 @@ for anything more recent than what's written here.
   gateway, which also makes the quick-tunnel URL irrelevant for approvals).
   Tests: `tests/test_discord_buttons.py` + pending-list tests in
   `tests/test_api_server.py`.
-- **Full offline test suite: 219/219 passing** (`python3 -m pytest tests/`;
+- **Phase 11 scaffolding: Random Forest Skeptic Agent — BUILT (2026-07-07),
+  model untrained by design:** `src/skeptic_agent.py` (`RandomForestAuditor`)
+  merges the knowledge graph's 2-hop evidence (edge count, cumulative/avg
+  confidence, Brain-Map avg R for the active tags) with the proposal's
+  market numbers (VIX, signed net premium, spread width, days to expiry,
+  max loss/lot, lots) into the frozen `FEATURE_NAMES` vector, and — once
+  the Phase 7 simulator trains and saves `data/skeptic_model.pkl` — scores
+  P(win) with a Random Forest. Wired into `options_proposer` right before
+  the alert is formatted: below 0.40 a strictly formatted "⚠️ Skeptic
+  Agent Warning" rides in the Discord PROPOSAL ALERT. Until a trained
+  model exists it ABSTAINS silently (decision #35 — no fake warnings from
+  an untrained forest), sklearn loads lazily only when a model file is
+  present, and every failure abstains rather than blocking a proposal.
+  Advisory only, never gates. `scikit-learn` added to `requirements.txt`.
+  Tests: `tests/test_skeptic_agent.py` + proposer integration tests.
+- **Full offline test suite: 233/233 passing** (`python3 -m pytest tests/`;
   the `for f in tests/test_*.py; do python3 "$f"; done` __main__ loop runs
-  all 21 files clean too), including `tests/test_options_spreads.py`
+  all 22 files clean too), including `tests/test_options_spreads.py`
   (condor max-loss math, STT sell-side-only, VIX gate, atomic tracker
   resolution), `tests/test_options_proposer.py` (regime mapping,
   strike selection off a fake chain, budget sizing, journal contract),
@@ -245,7 +260,7 @@ python3 -m src.options_proposer --review-pending   # decide market-loop
                                                    # (offline, no market data)
 
 # 6. Offline test suite (no internet/API calls needed)
-python3 -m pytest tests/                          # expect 219 passing
+python3 -m pytest tests/                          # expect 233 passing
 
 # 7. Market loop daemon (market hours only; headless proposals to Discord)
 python3 -m src.market_loop
@@ -545,9 +560,9 @@ Planned build (when explicitly greenlit, one file at a time, offline-first, nati
 3. **Wire into `src/brain_map.py`** — feed that JSON into the `events` table via the existing `record_event()`/`_get_or_create_event()` helpers, additive only (decision #25's rule still applies — no execution or portfolio access).
 4. **Async "Sleep Phase" loop** — runs off-market hours only, so local LLM inference never competes with the live trading loop; distills the day's raw text into Brain Map events in the background.
 
-### Phase 11: The "Skeptic Agent" (Multi-Agent Debate)
-* Introduce a dedicated Skeptic Agent to counter the primary Analyst's long-directional bias.
-* Enforce structural debate to penalize uncontested ideas and tighten risk management prior to human approval.
+### Phase 11: The "Skeptic Agent" (Multi-Agent Debate) — 🟡 SCAFFOLDING BUILT (2026-07-07)
+* ~~Introduce a dedicated Skeptic Agent to counter the primary Analyst's long-directional bias.~~ **Quantitative half scaffolded**: `src/skeptic_agent.py` (`RandomForestAuditor`) — frozen 10-feature vector merging knowledge-graph evidence + the proposal's market numbers, wired into the proposer so a low modeled P(win) appends a "⚠️ Skeptic Agent Warning" to the Discord alert. **ABSTAINS until the Phase 7 simulator trains `data/skeptic_model.pkl`** (decision #35 — no fake warnings from an untrained forest); advisory only, never gates.
+* Still open: training the model (blocked on Phase 7), and the original multi-agent structural-debate idea (an LLM skeptic arguing the counter-case) if still wanted once the numerical auditor is live.
 
 ### Phase 12: The Intraday Trading Loop
 * Transition from hourly/daily OHLC swing-trading to a real-time streaming websocket architecture for rapid same-day fetch-decide-execute loops.

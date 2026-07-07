@@ -212,6 +212,89 @@ def test_memory_context_for_is_failsafe():
     assert op._memory_context_for("NIFTY 50", engine=BoomEngine()) == ""
 
 
+def test_skeptic_warning_rendered_in_alert_when_present():
+    r = build(make_analysis(uptrend=True, rsi=55), vix=13.0)
+    p = dict(r["proposal"],
+             skeptic_note="⚠️ **Skeptic Agent Warning**: modeled win "
+                          "probability 20% — advisory only.")
+    text = op._format_proposal_alert(p)
+    assert "⚠️ **Skeptic Agent Warning**" in text
+    assert "20%" in text
+    # ...and absent by default:
+    assert "Skeptic" not in op._format_proposal_alert(r["proposal"])
+
+
+def test_skeptic_note_merges_graph_and_market_data():
+    """The Step 3 plumbing, fully offline: a real in-memory GraphEngine
+    seeded with edges for the proposal's seeds (ticker + strategy), a spy
+    auditor capturing what the proposer hands over — proving graph edges
+    AND the proposal's numbers arrive merged, with no network anywhere."""
+    from src import brain_map
+    from src.graph_engine import GraphEngine, add_edge, ensure_schema
+
+    conn = brain_map.connect(":memory:")
+    ensure_schema(conn)
+    add_edge(conn, "NIFTY 50", "PRECEDES", "it_strength", 0.8)
+    add_edge(conn, "iron_condor", "RESULTS_IN", "loss", 0.9, context="VIX > 20")
+    engine = GraphEngine(conn=conn)
+
+    captured = {}
+
+    class SpyAuditor:
+        def audit(self, proposal, graph_context=None, memory_stats=None):
+            captured["proposal"] = proposal
+            captured["edges"] = graph_context
+            return {"probability": 0.2, "warn": True, "features": []}
+
+    r = build(make_analysis(uptrend=True, rsi=55), vix=13.0)  # iron condor
+    note = op._skeptic_note_for(r["proposal"], auditor=SpyAuditor(),
+                                engine=engine)
+    assert "⚠️ **Skeptic Agent Warning**" in note and "20%" in note
+    # Both seed families reached the auditor: the ticker edge AND the
+    # strategy-keyed causal edge, de-duplicated.
+    sources = {e["source"] for e in captured["edges"]}
+    assert sources == {"NIFTY 50", "iron_condor"}
+    # The proposal's market numbers rode along untouched.
+    assert captured["proposal"]["vix"] == 13.0
+    assert captured["proposal"]["spread"]["strategy"] == "iron_condor"
+
+
+def test_skeptic_note_empty_on_abstain_and_failsafe_on_crash():
+    r = build(make_analysis(uptrend=True, rsi=55), vix=13.0)
+
+    class AbstainingAuditor:
+        def audit(self, proposal, graph_context=None, memory_stats=None):
+            return {"probability": None, "warn": False, "features": []}
+
+    class BoomAuditor:
+        def audit(self, proposal, graph_context=None, memory_stats=None):
+            raise RuntimeError("model exploded")
+
+    class EmptyEngine:
+        def get_relevant_context(self, node, max_hops=2):
+            return []
+
+    assert op._skeptic_note_for(r["proposal"], auditor=AbstainingAuditor(),
+                                engine=EmptyEngine()) == ""
+    assert op._skeptic_note_for(r["proposal"], auditor=BoomAuditor(),
+                                engine=EmptyEngine()) == ""
+
+
+def test_untrained_real_auditor_stays_silent_end_to_end():
+    """The scaffolding default with the REAL auditor class: no trained
+    model file -> abstain -> no warning text, no exception."""
+    from src.skeptic_agent import RandomForestAuditor
+
+    class EmptyEngine:
+        def get_relevant_context(self, node, max_hops=2):
+            return []
+
+    r = build(make_analysis(uptrend=True, rsi=55), vix=13.0)
+    auditor = RandomForestAuditor(model_path="/nonexistent/skeptic.pkl")
+    assert op._skeptic_note_for(r["proposal"], auditor=auditor,
+                                engine=EmptyEngine()) == ""
+
+
 def test_session_sends_alert_before_prompt_and_survives_discord_down():
     from unittest import mock
     r = build(make_analysis(uptrend=True, rsi=55), vix=13.0)

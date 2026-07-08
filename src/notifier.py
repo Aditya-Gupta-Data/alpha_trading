@@ -47,6 +47,37 @@ EMAIL_APP_PASSWORD = os.environ.get("ALERT_EMAIL_APP_PASSWORD")
 EMAIL_TO = os.environ.get("ALERT_EMAIL_TO") or EMAIL_FROM
 
 
+# ---- test-environment webhook muzzle (Phase 6J) --------------------------
+# Discord webhook HTTP requests must only ever leave this process from a
+# TRUE live run. Test suites and backtest loops are muzzled: the send is
+# logged locally and reported as not-delivered (False). The Phase 7
+# simulator needs no check here — it is source-guarded against importing
+# this module at all.
+#
+# Tests that exercise the dispatch machinery itself set
+# WEBHOOK_MUZZLE_OVERRIDE = False (see tests/test_notifier.py's autouse
+# fixture); everything else running under pytest is muzzled automatically.
+WEBHOOK_MUZZLE_OVERRIDE = None   # None = decide from the environment
+
+
+def webhooks_muzzled() -> bool:
+    """True when webhook traffic must not leave this process: the
+    IS_TEST_ENV env flag is set truthy, or a pytest run is in progress
+    (PYTEST_CURRENT_TEST is set). Checked per call — env changes and the
+    module override both take effect immediately."""
+    if WEBHOOK_MUZZLE_OVERRIDE is not None:
+        return bool(WEBHOOK_MUZZLE_OVERRIDE)
+    if os.environ.get("IS_TEST_ENV", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _muzzle_log(kind: str, detail: str) -> bool:
+    print(f"  (webhook muzzled [test env] — {kind} logged locally, "
+          f"not sent: {detail})")
+    return False
+
+
 def _send_email(subject: str, body: str) -> None:
     if not EMAIL_FROM or not EMAIL_APP_PASSWORD:
         return
@@ -74,6 +105,8 @@ async def send_discord_message(message: str, thread_id: str = None) -> bool:
     the network call is httpx-async (the API's event loop awaits it
     directly). Returns False instead of raising when Discord is
     unconfigured or unreachable."""
+    if webhooks_muzzled():
+        return _muzzle_log("discord message", repr(message[:120]))
     try:
         from src.discord_client import send_webhook_message
     except Exception as e:
@@ -198,6 +231,10 @@ async def broadcast_alert(payload: dict) -> bool:
     the {"content": "..."} text-webhook path (send_webhook_message). Always
     returns False instead of raising on misconfiguration / network failure.
     """
+    if webhooks_muzzled():
+        return _muzzle_log(
+            "embed broadcast",
+            f"{payload.get('event', '?')} {payload.get('ticker', '?')}")
     try:
         from src.discord_client import _webhook_url, REQUEST_TIMEOUT_SECONDS
     except Exception as exc:

@@ -23,6 +23,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src import notifier
 from src.notifier import (
     _COLOUR,
     _COLOUR_LOSS,
@@ -34,6 +35,15 @@ from src.notifier import (
 )
 
 FAKE_URL = "https://discord.com/api/webhooks/123/abc"
+
+
+@pytest.fixture(autouse=True)
+def _unmuzzled_webhooks(monkeypatch):
+    """These tests exercise the dispatch machinery itself, so the Phase 6J
+    test-environment muzzle is explicitly disabled (every network call is
+    mocked anyway). The muzzle's own behavior is tested separately below —
+    those tests re-enable it locally."""
+    monkeypatch.setattr(notifier, "WEBHOOK_MUZZLE_OVERRIDE", False)
 
 # ---------------------------------------------------------------------------
 # Shared test payloads
@@ -570,6 +580,78 @@ def test_eod_build_card_idle_description_when_no_positions(mocker):
     mocker.patch("src.eod_summary.query_todays_resolutions", return_value=[])
     card = build_eod_card()
     assert "idle" in card.get("description", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6J: the test-environment webhook muzzle
+# ---------------------------------------------------------------------------
+
+def _re_arm_muzzle(monkeypatch):
+    """Undo this file's autouse unmuzzle so the real env checks run."""
+    monkeypatch.setattr(notifier, "WEBHOOK_MUZZLE_OVERRIDE", None)
+
+
+def test_muzzle_engages_on_the_is_test_env_flag(monkeypatch):
+    _re_arm_muzzle(monkeypatch)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    for truthy in ("True", "true", "1", "yes"):
+        monkeypatch.setenv("IS_TEST_ENV", truthy)
+        assert notifier.webhooks_muzzled() is True
+    monkeypatch.setenv("IS_TEST_ENV", "False")
+    assert notifier.webhooks_muzzled() is False
+    monkeypatch.delenv("IS_TEST_ENV")
+    assert notifier.webhooks_muzzled() is False
+
+
+def test_muzzle_auto_detects_a_pytest_run(monkeypatch):
+    _re_arm_muzzle(monkeypatch)
+    monkeypatch.delenv("IS_TEST_ENV", raising=False)
+    # pytest sets PYTEST_CURRENT_TEST for the duration of every test —
+    # the muzzle must engage on that alone, with no flag configured
+    assert os.environ.get("PYTEST_CURRENT_TEST")
+    assert notifier.webhooks_muzzled() is True
+
+
+def test_muzzled_broadcast_never_touches_the_network(monkeypatch, mocker):
+    _re_arm_muzzle(monkeypatch)
+    monkeypatch.setenv("IS_TEST_ENV", "True")
+    tripwire = mocker.patch("httpx.AsyncClient",
+                            side_effect=AssertionError("HTTP escaped the muzzle!"))
+    mocker.patch("src.discord_client._webhook_url", return_value=FAKE_URL)
+    result = asyncio.run(broadcast_alert(dict(OPENED_PAYLOAD)))
+    assert result is False          # reported as not-delivered
+    tripwire.assert_not_called()    # no client was ever constructed
+
+
+def test_muzzled_discord_message_never_reaches_the_webhook_client(
+        monkeypatch, mocker):
+    _re_arm_muzzle(monkeypatch)
+    monkeypatch.setenv("IS_TEST_ENV", "True")
+    tripwire = mocker.patch("src.discord_client.send_webhook_message",
+                            side_effect=AssertionError("HTTP escaped the muzzle!"))
+    result = asyncio.run(notifier.send_discord_message("live alert text"))
+    assert result is False
+    tripwire.assert_not_called()
+
+
+def test_muzzled_send_logs_locally(monkeypatch, capsys):
+    _re_arm_muzzle(monkeypatch)
+    monkeypatch.setenv("IS_TEST_ENV", "True")
+    asyncio.run(notifier.send_discord_message("hello from the sandbox"))
+    out = capsys.readouterr().out
+    assert "muzzled" in out and "hello from the sandbox" in out
+
+
+def test_unmuzzled_dispatch_still_works(mocker):
+    # the autouse fixture has WEBHOOK_MUZZLE_OVERRIDE = False here — a
+    # true live run must be able to deliver exactly as before
+    mocker.patch("src.discord_client._webhook_url", return_value=FAKE_URL)
+    fake_resp = mock.Mock(status_code=204)
+    fake_client = mock.AsyncMock()
+    fake_client.__aenter__.return_value.post = mock.AsyncMock(
+        return_value=fake_resp)
+    mocker.patch("httpx.AsyncClient", return_value=fake_client)
+    assert asyncio.run(broadcast_alert(dict(OPENED_PAYLOAD))) is True
 
 
 if __name__ == "__main__":

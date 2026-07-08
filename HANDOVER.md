@@ -6,6 +6,36 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Phase 6H: Live Market-Hour Data Adapter (live_bridge) — BUILT AND TESTED (2026-07-08)
+
+`src/live_bridge.py` decouples the pipeline from daily-close replay during
+NSE market hours (Mon-Fri 09:15-15:30 IST), via the verified DhanHQ V2
+token framework. Two real-time jobs:
+
+- **Entry** — `fetch_live_market_state(underlying)` is a drop-in for
+  `market_loop.fetch_market_state` (the loop's documented `fetch_fn=`
+  injection seam): it appends the live spot as today's provisional close
+  before the same SMA/RSI read the simulator replays
+  (`simulator.analysis_from_closes`), so the trend read reacts intraday.
+  Same contract: `{"analysis", "vix"}` (+ `"vol_overrides"` from the Phase
+  6F bridge), None outside market hours / dead quote / thin history.
+- **Exit** — `evaluate_open_positions()` marks every ACTIVE approved open
+  spread in the journal against live spots using `plan_tracker`'s own pure
+  helpers (`_spread_mark`, the no-arbitrage clamp, the 65% profit take, the
+  pre-expiry gamma rule) and returns advisory exit signals hours before the
+  tracker's end-of-day sweep. `live_cycle()` snapshots each underlying,
+  folds packets into 15-minute `CandleAggregator` OHLC buckets, and fires
+  ONE de-duplicated Discord note per (position, signal) via `AlertRegistry`.
+
+Hard sandbox rule (decision #41): the module is READ-ONLY on all trade
+state — it never writes journal.jsonl, never settles cash
+(`_settle_spread_cash` stays the tracker's exclusive job), never touches
+portfolio.json; a live exit signal is an alert to the human, not an
+execution (runtime-spy tested). Daemon: `python3 -m src.live_bridge`
+(60s cycles, fail-safe — a dead quote feed or Discord outage never kills
+the loop). Tests: `tests/test_live_bridge.py` (19 offline packet-playback
+tests; suite 405 green).
+
 ## ✅ Phase 6G: Capital & Margin Allocation Layer — BUILT AND TESTED (2026-07-08)
 
 `src/portfolio_manager.py` gives the automated options pipeline a dedicated

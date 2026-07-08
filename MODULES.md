@@ -10,6 +10,7 @@ system flow between these, see `ARCHITECTURE.md`.
 |---|---|
 | `src/dhan_client.py` | THE market-data source. DhanHQ SDK wrapper: `SECURITY_ID_MAP` (verified against Dhan's scrip master), `get_daily_ohlc`, `get_ohlc_since`, `get_live_price`, `get_quote`, `get_daily_closes`, `get_option_chain`/`get_expiry_list`. Data-only — no order methods. |
 | `src/data_fetcher.py` | Thin re-export of `dhan_client.get_quote` — kept for the original `get_quote(ticker)` contract older callers use. |
+| `src/live_bridge.py` | Phase 6H live market-hour adapter: `fetch_live_market_state` (drop-in `fetch_fn=` for `run_market_loop` — live spot appended to the daily-close trend read), `parse_packet`/`CandleAggregator` (quote snapshots → 15-min OHLC), `evaluate_open_positions`/`live_cycle` (real-time advisory exit signals on open spreads via `plan_tracker`'s pure helpers, de-duped Discord alerts). READ-ONLY on all trade state (decision #41). Daemon: `python3 -m src.live_bridge`. |
 | `src/indicators.py` | Pure-Python SMA and Wilder's RSI, no dependencies. |
 
 ## Knowledge graph
@@ -80,6 +81,7 @@ system flow between these, see `ARCHITECTURE.md`.
 |---|---|
 | `tests/test_notifier.py` | `broadcast_alert` embed dispatch, `fire_broadcast` sync bridge, EOD card builder, `query_todays_resolutions`, `compute_net_delta_exposure` — 53 tests, offline, pytest-mock. |
 | `tests/test_vol_bridge.py` | Phase 6F vol bridge: polarity classification, net-signal arithmetic, regime boundary precision, macro shock scenarios, scale_risk/widen_wings parameter scaling, run_headless integration — 31 tests, offline. |
+| `tests/test_live_bridge.py` | Phase 6H live bridge: packet parsing, candle-bucket playback, live fetch_market_state contract (hours gate, dead quote, vol_overrides), intraday profit-take/pre-expiry/clamp arithmetic, alert de-dup, read-only sandbox spy — 19 tests, offline. |
 | `tests/test_rules.py` | Alert rule logic, offline. |
 | `tests/test_portfolio.py` | Portfolio math + strategy proposals, plus the Phase 6G capital layer (margin lock/exhaustion boundaries, consecutive-loss drawdown scenarios, 10% risk-of-ruin halt, `run_headless` gate integration — in-memory DB). Offline. |
 | `tests/test_forecast.py` | Forecast checklist scoring, offline (monkeypatches `suggestions.analyze`). |

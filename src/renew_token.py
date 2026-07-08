@@ -3,22 +3,29 @@ Alpha Trading -- DhanHQ access-token auto-renewal
 ==================================================
 
 The DhanHQ Data API token (`DHAN_ACCESS_TOKEN` in .env) expires roughly
-every 24 hours, and refreshing it has been a manual dashboard chore since
-the DhanHQ migration. This standalone script automates it:
+every 24 hours. This standalone script keeps it alive, V2-FIRST:
 
-  1. reads DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN straight from the repo's
-     .env (stripping any surrounding quotes/whitespace),
-  2. calls GET https://api.dhan.co/v2/RenewToken with the `access-token`
-     and `dhanClientId` headers,
-  3. on success, rewrites ONLY the DHAN_ACCESS_TOKEN line in .env with
-     the fresh token (a .env.bak copy of the old file is written first)
-     and prints the new expiry timestamp.
+  V2 (preferred, post 2025-10 auth overhaul): when .env carries
+     DHAN_CLIENT_ID + DHAN_PIN + DHAN_TOTP_SECRET (optionally
+     DHAN_API_KEY / DHAN_API_SECRET app headers), it computes the current
+     TOTP code via pyotp and POSTs auth.dhan.co/app/generateAccessToken —
+     minting a BRAND-NEW 24h token headlessly. Works even when the old
+     token is already dead: no manual dashboard trips, ever.
 
-If Dhan answers HTTP 400/401 or "Invalid Token", the current token is
-already dead/corrupted and can't renew itself -- the script prints a
-CRITICAL message telling you to paste a fresh token from the Dhan
-dashboard (remember the base64 trick from HANDOVER.md when doing that on
-the VM). .env is NEVER touched unless a plausible new token came back.
+  Legacy (fallback only): without the V2 keys it calls the old
+     api.dhan.co/v2/RenewToken — DEPRECATED by Dhan; answers DH-905 for
+     tokens generated after the overhaul, and can only renew a token
+     that's still alive. Kept so an un-migrated .env degrades loudly
+     instead of breaking silently.
+
+Either way, on success it rewrites ONLY the DHAN_ACCESS_TOKEN line in
+.env (a .env.bak copy of the old file is written first) and prints the
+new expiry. .env is NEVER touched unless a plausible new token came back.
+
+V2 setup (one-time, on Dhan web): My Profile -> Access DhanHQ APIs ->
+generate the API key + secret; enable TOTP 2FA on the account (profile ->
+security) and copy the base32 authenticator secret -> put all of it plus
+your login PIN into .env (see .env.example).
 
 Like the other entry points, .env is resolved at the repo root, so the
 same script works on the Mac (project folder) and the VM
@@ -118,17 +125,131 @@ def token_expiry(token: str) -> str:
         return None
 
 
-def renew() -> int:
-    """Full renewal flow. Returns a process exit code (0 ok, 1 failed)."""
-    if not ENV_PATH.exists():
-        print(f"Token renewal failed: {ENV_PATH} does not exist.")
+# ------------------------------------------------- V2 auth (2026-07-08)
+#
+# DhanHQ overhauled authentication effective 2025-10-01: the legacy
+# /v2/RenewToken call above now answers DH-905 ("Renewal of token not
+# allowed for this token type") for freshly dashboard-generated tokens.
+# The replacement is the fully headless generateAccessToken flow — Dhan
+# client id + login PIN + a TOTP code (from the authenticator secret you
+# get when enabling TOTP 2FA on Dhan web) mint a brand-new 24h token every
+# run, no still-valid old token required, no browser step.
+
+V2_TOKEN_URL = "https://auth.dhan.co/app/generateAccessToken"
+
+V2_ENV_KEYS = ("DHAN_CLIENT_ID", "DHAN_PIN", "DHAN_TOTP_SECRET",
+               "DHAN_API_KEY", "DHAN_API_SECRET")
+
+
+def read_env_values(env_text: str, keys=V2_ENV_KEYS) -> dict:
+    """{key: stripped-value-or-None} for every requested .env key."""
+    values = {}
+    for line in env_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = _strip(value)
+    return {k: (values.get(k) or None) for k in keys}
+
+
+def v2_ready(creds: dict) -> bool:
+    """True when the headless V2 flow can run: client id + PIN + TOTP
+    secret. (API key/secret headers ride along when present.)"""
+    return bool(creds.get("DHAN_CLIENT_ID") and creds.get("DHAN_PIN")
+                and creds.get("DHAN_TOTP_SECRET"))
+
+
+def generate_totp(secret: str) -> str | None:
+    """The current 6-digit TOTP code for `secret`, or None (pyotp missing
+    or an unusable secret — both reported by the caller, never raised)."""
+    try:
+        import pyotp
+        return pyotp.TOTP(secret.replace(" ", "").upper()).now()
+    except ImportError:
+        print("Token renewal failed: pyotp is not installed — run "
+              "`python3 -m pip install pyotp` (it's in requirements.txt).")
+        return None
+    except Exception as e:
+        print(f"Token renewal failed: could not compute TOTP ({e}) — check "
+              "DHAN_TOTP_SECRET in .env (the base32 authenticator secret).")
+        return None
+
+
+def request_v2_token(creds: dict, totp_code: str) -> dict | None:
+    """One generateAccessToken call -> parsed JSON body, or None on any
+    transport/HTTP failure (already printed). Never raises."""
+    from urllib.parse import urlencode
+    params = urlencode({"dhanClientId": creds["DHAN_CLIENT_ID"],
+                        "pin": creds["DHAN_PIN"], "totp": totp_code})
+    headers = {"Accept": "application/json"}
+    # The API key/secret pair (12-month validity, from the "Access DhanHQ
+    # APIs" dashboard page) authenticates the *app*; send when configured.
+    if creds.get("DHAN_API_KEY"):
+        headers["app_id"] = creds["DHAN_API_KEY"]
+    if creds.get("DHAN_API_SECRET"):
+        headers["app_secret"] = creds["DHAN_API_SECRET"]
+    req = urllib.request.Request(f"{V2_TOKEN_URL}?{params}",
+                                 headers=headers, method="POST", data=b"")
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT, context=_SSL_CTX) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        print(f"Token renewal failed: Dhan V2 auth answered HTTP {e.code} "
+              "— .env left untouched.")
+        print(f"  (HTTP {e.code}: {detail[:300]})")
+        print("  Check DHAN_PIN / DHAN_TOTP_SECRET / DHAN_API_KEY+SECRET in "
+              ".env (see HANDOVER.md -> credentials).")
+        return None
+    except Exception as e:
+        print(f"Token renewal failed: {e} — .env left untouched.")
+        return None
+
+
+def _write_new_token(env_text: str, new_token: str, expiry) -> None:
+    BACKUP_PATH.write_text(env_text)  # old .env preserved as .env.bak
+    ENV_PATH.write_text(replace_token(env_text, new_token))
+    expiry = expiry or token_expiry(new_token) or "unknown"
+    print(f"Token renewed successfully. New expiry: {expiry}")
+    print(f"  (.env updated; previous version saved to {BACKUP_PATH.name})")
+
+
+def renew_v2(env_text: str) -> int:
+    """The headless V2 flow: PIN + TOTP -> a brand-new 24h access token.
+    Unlike the legacy renewal, this works even when the old token is
+    already dead — there is no manual-dashboard fallback ever needed as
+    long as the V2 credentials in .env stay valid."""
+    creds = read_env_values(env_text)
+    totp_code = generate_totp(creds["DHAN_TOTP_SECRET"])
+    if totp_code is None:
         return 1
-    env_text = ENV_PATH.read_text()
+    body = request_v2_token(creds, totp_code)
+    if body is None:
+        return 1
+    new_token = extract_new_token(body)
+    if new_token is None:
+        body_text = json.dumps(body) if not isinstance(body, str) else body
+        print("Token renewal failed: no token in Dhan's V2 reply — .env "
+              "left untouched.")
+        print(f"  (response: {body_text[:300]})")
+        return 1
+    _write_new_token(env_text, new_token, body.get("expiryTime"))
+    return 0
+
+
+def renew_legacy(env_text: str) -> int:
+    """The pre-2025-10 /v2/RenewToken flow — kept only as a fallback for
+    .env files that don't carry the V2 credentials yet. Expect DH-905 for
+    tokens generated after Dhan's auth overhaul."""
     client_id, token = read_credentials(env_text)
     if not client_id or not token:
         print("Token renewal failed: DHAN_CLIENT_ID and/or DHAN_ACCESS_TOKEN "
               "missing from .env.")
         return 1
+    print("note: using the DEPRECATED legacy renewal (no DHAN_PIN + "
+          "DHAN_TOTP_SECRET in .env) — set them up to stop the daily "
+          "manual-paste cycle (HANDOVER.md -> credentials).")
 
     req = urllib.request.Request(
         RENEW_URL,
@@ -161,12 +282,20 @@ def renew() -> int:
         print(f"  (response: {body_text[:300]})")
         return 1
 
-    BACKUP_PATH.write_text(env_text)  # old .env preserved as .env.bak
-    ENV_PATH.write_text(replace_token(env_text, new_token))
-    expiry = body.get("expiryTime") or token_expiry(new_token) or "unknown"
-    print(f"Token renewed successfully. New expiry: {expiry}")
-    print(f"  (.env updated; previous version saved to {BACKUP_PATH.name})")
+    _write_new_token(env_text, new_token, body.get("expiryTime"))
     return 0
+
+
+def renew() -> int:
+    """Full renewal flow (V2-first). Returns a process exit code (0 ok,
+    1 failed) — cron/systemd friendly, same contract as always."""
+    if not ENV_PATH.exists():
+        print(f"Token renewal failed: {ENV_PATH} does not exist.")
+        return 1
+    env_text = ENV_PATH.read_text()
+    if v2_ready(read_env_values(env_text)):
+        return renew_v2(env_text)
+    return renew_legacy(env_text)
 
 
 if __name__ == "__main__":

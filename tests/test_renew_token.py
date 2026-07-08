@@ -1,8 +1,8 @@
 """
 Tests for the DhanHQ token auto-renewal script (src/renew_token.py) --
-the .env parsing/rewriting logic and the handling of Dhan's renewal JSON
-keys. Pure functions only: no network call, and the real .env is never
-read or written.
+the .env parsing/rewriting logic, the handling of Dhan's renewal JSON
+keys, and the V2 (PIN + TOTP) headless flow. Offline: every network call
+is mocked, and the real .env is never read or written (temp files only).
 
 Run either of these from the project folder:
     python tests/test_renew_token.py       (simple, no extra installs)
@@ -12,12 +12,16 @@ Run either of these from the project folder:
 import base64
 import json
 import sys
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.renew_token import (extract_new_token, read_credentials,
-                             replace_token, token_expiry)
+from src import renew_token as rt
+from src.renew_token import (extract_new_token, generate_totp,
+                             read_credentials, read_env_values,
+                             replace_token, token_expiry, v2_ready)
 
 
 SAMPLE_ENV = (
@@ -89,6 +93,122 @@ def test_token_expiry_is_none_for_garbage():
     assert token_expiry("not-a-jwt") is None
     assert token_expiry("a.!!!notbase64!!!.c") is None
     assert token_expiry("") is None
+
+
+# ------------------------------------------------------------ V2 flow
+
+V2_ENV = (
+    'DHAN_CLIENT_ID="1109738713"\n'
+    "DHAN_ACCESS_TOKEN=eyJold.token.here\n"
+    "DHAN_PIN=123456\n"
+    "DHAN_TOTP_SECRET=JBSWY3DPEHPK3PXP\n"
+    "DHAN_API_KEY=my-app-key\n"
+    "DHAN_API_SECRET=my-app-secret\n"
+)
+
+
+def test_read_env_values_and_v2_ready():
+    creds = read_env_values(V2_ENV)
+    assert creds["DHAN_PIN"] == "123456"
+    assert creds["DHAN_TOTP_SECRET"] == "JBSWY3DPEHPK3PXP"
+    assert v2_ready(creds)
+    # Missing any of the three required keys -> not ready (legacy path):
+    assert not v2_ready(read_env_values(SAMPLE_ENV))
+    assert not v2_ready(read_env_values(V2_ENV.replace("DHAN_PIN", "X_PIN")))
+
+
+def test_generate_totp_produces_six_digits():
+    code = generate_totp("JBSWY3DPEHPK3PXP")   # RFC test secret
+    assert code is not None and len(code) == 6 and code.isdigit()
+    # lowercase/spaced secrets are normalized rather than rejected:
+    assert generate_totp("jbsw y3dp ehpk 3pxp") is not None
+
+
+def test_generate_totp_failsafe_on_garbage_secret():
+    assert generate_totp("!!!not-base32!!!") is None
+
+
+def test_request_v2_token_sends_pin_totp_and_app_headers():
+    captured = {}
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps({"accessToken": "eyJnew.v2.token",
+                               "expiryTime": "2026-07-09T07:00:00"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None, context=None):
+        captured["url"] = req.full_url
+        captured["method"] = req.get_method()
+        captured["app_id"] = req.get_header("App_id")
+        captured["app_secret"] = req.get_header("App_secret")
+        return FakeResponse()
+
+    with mock.patch.object(rt.urllib.request, "urlopen", fake_urlopen):
+        body = rt.request_v2_token(read_env_values(V2_ENV), "654321")
+    assert body["accessToken"] == "eyJnew.v2.token"
+    assert captured["method"] == "POST"
+    assert "dhanClientId=1109738713" in captured["url"]
+    assert "pin=123456" in captured["url"] and "totp=654321" in captured["url"]
+    assert captured["app_id"] == "my-app-key"
+    assert captured["app_secret"] == "my-app-secret"
+
+
+def test_renew_v2_end_to_end_rewrites_env(tmp_path=None):
+    """Full V2 renewal against temp .env files — the real .env is never
+    involved (module paths are patched for the duration)."""
+    tmp = Path(tempfile.mkdtemp())
+    env_file, bak_file = tmp / ".env", tmp / ".env.bak"
+    env_file.write_text(V2_ENV)
+
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "BACKUP_PATH", bak_file), \
+         mock.patch.object(rt, "request_v2_token",
+                           return_value={"accessToken": "eyJfresh.v2",
+                                         "expiryTime": "2026-07-09T07:00:00"}):
+        assert rt.renew() == 0
+
+    updated = env_file.read_text()
+    assert "DHAN_ACCESS_TOKEN=eyJfresh.v2\n" in updated
+    assert "eyJold.token.here" not in updated
+    assert "DHAN_PIN=123456" in updated            # other lines untouched
+    assert bak_file.read_text() == V2_ENV          # backup preserved
+
+
+def test_renew_dispatches_v2_when_creds_present_else_legacy():
+    tmp = Path(tempfile.mkdtemp())
+    env_file = tmp / ".env"
+
+    env_file.write_text(V2_ENV)
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "renew_v2", return_value=0) as v2, \
+         mock.patch.object(rt, "renew_legacy", return_value=0) as legacy:
+        rt.renew()
+    assert v2.called and not legacy.called
+
+    env_file.write_text(SAMPLE_ENV)  # no V2 keys -> legacy fallback
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "renew_v2", return_value=0) as v2, \
+         mock.patch.object(rt, "renew_legacy", return_value=0) as legacy:
+        rt.renew()
+    assert legacy.called and not v2.called
+
+
+def test_renew_v2_fails_cleanly_without_touching_env():
+    tmp = Path(tempfile.mkdtemp())
+    env_file, bak_file = tmp / ".env", tmp / ".env.bak"
+    env_file.write_text(V2_ENV)
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "BACKUP_PATH", bak_file), \
+         mock.patch.object(rt, "request_v2_token", return_value=None):
+        assert rt.renew() == 1
+    assert env_file.read_text() == V2_ENV   # untouched on failure
+    assert not bak_file.exists()
 
 
 if __name__ == "__main__":

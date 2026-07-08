@@ -202,6 +202,68 @@ def test_trades_and_edges_both_present():
 
 
 # ---------------------------------------------------------------------------
+# Phase 6J: the "@ADiTrader portfolio" snapshot command (no LLM involved)
+# ---------------------------------------------------------------------------
+
+from src.chat_agent import build_portfolio_snapshot, is_portfolio_command
+
+
+def test_portfolio_command_detection_is_exact():
+    assert is_portfolio_command("portfolio")
+    assert is_portfolio_command("  Portfolio  ")       # whitespace/case only
+    assert not is_portfolio_command("portfolio please")
+    assert not is_portfolio_command("show my portfolio")
+    assert not is_portfolio_command("")
+
+
+def test_snapshot_formats_the_injected_summary_verbatim():
+    text = build_portfolio_snapshot(summary={
+        "starting_capital": 1_000_000.0, "available_cash": 715_500.5,
+        "locked_margin": 284_499.5, "open_locks": 3, "realized_pnl": 0.0,
+    })
+    assert "Starting Capital: Rs.1,000,000.00" in text
+    assert "Free Cash: Rs.715,500.50" in text
+    assert "Locked Margin: Rs.284,499.50" in text
+    assert "Active Trades: 3" in text
+    assert "Net PnL: Rs.0.00" in text
+
+
+def test_snapshot_reads_the_capital_layer_end_to_end():
+    from src import portfolio_manager as pm
+    conn = brain_map.connect(":memory:")
+    pm.request_entry(conn, "t1", 250_000.0)
+    pm.request_entry(conn, "t2", 100_000.0)
+    pm.request_entry(conn, "closed", 50_000.0)
+    pm.release_margin(conn, "closed", pnl_net=12_000.0)
+    text = build_portfolio_snapshot(conn=conn)
+    assert "Starting Capital: Rs.1,000,000.00" in text
+    assert "Locked Margin: Rs.350,000.00" in text       # two active locks
+    assert "Free Cash: Rs.662,000.00" in text           # 10L + 12k - 3.5L
+    assert "Active Trades: 2" in text                   # closed lock released
+    assert "Net PnL: Rs.12,000.00" in text
+
+
+def test_snapshot_command_never_calls_ollama():
+    """The routing contract: a portfolio query resolves without the LLM —
+    the snapshot builder works with Ollama booby-trapped."""
+    from src import chat_agent as ca
+    saved = ca._call_ollama
+
+    async def forbidden(*a, **k):
+        raise AssertionError("portfolio command reached Ollama!")
+
+    try:
+        ca._call_ollama = forbidden
+        assert is_portfolio_command("portfolio")
+        text = build_portfolio_snapshot(summary={
+            "starting_capital": 1_000_000.0, "available_cash": 1_000_000.0,
+            "locked_margin": 0.0, "open_locks": 0, "realized_pnl": 0.0})
+        assert text.startswith("**ADiTrader Portfolio Snapshot**")
+    finally:
+        ca._call_ollama = saved
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 

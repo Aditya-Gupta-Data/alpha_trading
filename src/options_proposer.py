@@ -570,6 +570,22 @@ def decide_pending(trade_id: str, approve: bool, why: str = "") -> dict:
     if target.get("outcome"):
         return {"status": "already_resolved", "entry": target}
 
+    if approve:
+        # Phase 6J: approval is the moment a trade is ACCEPTED, so the
+        # capital layer must grant its margin first (idempotent no-op when
+        # the headless gate already locked it at proposal time). A
+        # margin-blocked approval leaves the entry pending — nothing is
+        # journaled, broadcast, or settled.
+        spread = target.get("spread") or {}
+        per_lot = (spread.get("margin") or {}).get("total_margin")
+        if per_lot is not None:
+            from src import portfolio_manager as pm
+            required = float(per_lot) * int(spread.get("lots", 1))
+            allowed, gate_reason = pm.gate_headless_entry(trade_id, required)
+            if not allowed:
+                return {"status": "margin_blocked", "entry": target,
+                        "reason": gate_reason}
+
     decision = "approved" if approve else "rejected"
     target["decision"] = decision
     target["why"] = (why or "").strip() or "(no reason given)"

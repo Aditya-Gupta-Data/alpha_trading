@@ -374,6 +374,58 @@ def test_pm_run_headless_silently_rejects_when_the_gate_says_no():
          pm.gate_headless_entry) = saved
 
 
+def test_pm_decide_pending_approval_is_margin_gated():
+    from src import options_proposer as op
+    from src import journal as journal_mod
+    from src import notifier as notifier_mod
+
+    def pending_entry():
+        return {"short_id": "gate0001", "decision": "pending_approval",
+                "ticker": "NIFTY BANK", "signal": "test", "outcome": None,
+                "spread": {"strategy": "iron_condor", "lot_size": 35,
+                           "lots": 3, "expiry": "2026-07-16",
+                           "max_loss": 2_800.0, "max_profit": 4_200.0,
+                           "margin": {"total_margin": 2_800.0}}}
+
+    entries = [pending_entry()]
+    rewrites, gate_calls = [], []
+    saved = (journal_mod.read_all, journal_mod.rewrite_all,
+             op._notify_discord, notifier_mod.fire_broadcast,
+             pm.gate_headless_entry)
+    try:
+        journal_mod.read_all = lambda: entries
+        journal_mod.rewrite_all = lambda e: rewrites.append(e)
+        op._notify_discord = lambda text: True
+        notifier_mod.fire_broadcast = lambda payload: None
+
+        # margin refused -> the approval is blocked, nothing is written
+        pm.gate_headless_entry = lambda ref, margin, conn=None: (
+            gate_calls.append((ref, margin)) or (False, "margin exhaustion"))
+        result = op.decide_pending("gate0001", approve=True, why="go")
+        assert result["status"] == "margin_blocked"
+        assert entries[0]["decision"] == "pending_approval"  # untouched
+        assert rewrites == []
+        assert gate_calls == [("gate0001", 8_400.0)]  # 2,800/lot x 3 lots
+
+        # margin granted -> the normal approval flow resumes
+        pm.gate_headless_entry = lambda ref, margin, conn=None: (True, "locked")
+        result = op.decide_pending("gate0001", approve=True, why="go")
+        assert result["status"] == "approved"
+        assert entries[0]["decision"] == "approved"
+        assert len(rewrites) == 1
+
+        # rejections need no margin and must never consult the gate
+        entries[0].update(decision="pending_approval")
+        pm.gate_headless_entry = lambda ref, margin, conn=None: (
+            (_ for _ in ()).throw(AssertionError("gate consulted on reject")))
+        result = op.decide_pending("gate0001", approve=False, why="no")
+        assert result["status"] == "rejected"
+    finally:
+        (journal_mod.read_all, journal_mod.rewrite_all,
+         op._notify_discord, notifier_mod.fire_broadcast,
+         pm.gate_headless_entry) = saved
+
+
 if __name__ == "__main__":
     # Simple runner so you don't even need pytest installed.
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

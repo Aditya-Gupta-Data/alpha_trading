@@ -45,7 +45,7 @@ headless pipeline would build.
 """
 
 from src.options_proposer import LOT_SIZES, SHORT_STRIKE_OTM_PCT, WING_STEPS
-from src.simulator import STRIKE_STEPS
+from src.simulator import STRIKE_STEPS, build_synthetic_chain
 from src.strategy import VIX_BLOCK_ABOVE
 
 # IV regime boundaries. Below IV_LOW_BELOW premium is too thin to sell;
@@ -138,6 +138,86 @@ def _leg(side: str, option_type: str, strike: float, atm: float,
             "offset_from_atm": round(strike - atm, 2), "role": role}
 
 
+# --- theoretical economics (the anti-Rs.0 rule) ---------------------------
+
+DEFAULT_DAYS_TO_EXPIRY = 7   # same floor the proposer's expiry picker uses
+
+
+def _fallback_premium(spot: float, strike: float, option_type: str) -> float:
+    """For a strike outside the synthetic chain's span (only reachable via
+    an extreme support/resistance override): intrinsic + the chain's own
+    0.5 minimum time value — never zero, never None."""
+    intrinsic = (max(0.0, spot - strike) if option_type == "CE"
+                 else max(0.0, strike - spot))
+    return round(intrinsic + 0.5, 2)
+
+
+def estimate_plan_economics(plan: dict, vix=None,
+                            days_to_expiry: int = DEFAULT_DAYS_TO_EXPIRY) -> dict:
+    """Price a tradeable plan's legs theoretically and derive its
+    defined-risk economics, so nothing downstream ever broadcasts a Rs.0
+    placeholder. Premiums come from the SAME modeled world everything
+    else prices in — the simulator's synthetic chain (intrinsic + ATM
+    time value ~0.4·S·σ·√T decaying with strike distance, decision #36)
+    — so a planned condor's numbers agree with what the replay/tracker
+    would compute for it.
+
+    Returns a NEW plan dict (input untouched, purity holds): each leg
+    gains "premium"; the plan gains net_credit/net_debit, spread_width,
+    max_profit, max_loss (rupees per lot: credit structures make the
+    credit and lose width−credit; debit structures lose the debit and
+    make width−debit), and a "pricing" block recording the model inputs.
+    No-trade plans pass through unchanged."""
+    if not plan.get("tradeable") or not plan.get("legs"):
+        return dict(plan)
+    spot, step, lot = plan["spot"], plan["strike_step"], plan["lot_size"]
+    dte = max(1, int(days_to_expiry or DEFAULT_DAYS_TO_EXPIRY))
+    chain = build_synthetic_chain(spot, vix, dte, step)["oc"]
+
+    legs = []
+    for leg in plan["legs"]:
+        quote = chain.get(f"{leg['strike']:.6f}")
+        kind = "ce" if leg["option_type"] == "CE" else "pe"
+        premium = (float(quote[kind]["last_price"]) if quote is not None
+                   else _fallback_premium(spot, leg["strike"],
+                                          leg["option_type"]))
+        legs.append(dict(leg, premium=premium))
+
+    credit = sum(l["premium"] for l in legs if l["side"] == "SELL")
+    debit = sum(l["premium"] for l in legs if l["side"] == "BUY")
+    net = round(credit - debit, 2)
+    # worst-case width per option type (a condor can only lose one side)
+    widths = []
+    for kind in ("CE", "PE"):
+        strikes = sorted(l["strike"] for l in legs if l["option_type"] == kind)
+        if len(strikes) == 2:
+            widths.append(strikes[1] - strikes[0])
+    width = max(widths) if widths else 0.0
+
+    if net >= 0:   # credit structure (condor, bear call spread)
+        max_profit = net * lot
+        max_loss = max(0.0, width - net) * lot
+    else:          # debit structure (bull call / bear put spread)
+        max_loss = -net * lot
+        max_profit = max(0.0, width + net) * lot
+
+    return dict(plan, legs=legs,
+                net_credit=net if net >= 0 else None,
+                net_debit=round(-net, 2) if net < 0 else None,
+                spread_width=width,
+                max_profit=round(max_profit, 2),
+                max_loss=round(max_loss, 2),
+                pricing={"model": "synthetic_chain", "vix_used": vix,
+                         "days_to_expiry": dte})
+
+
+def _tradeable(base: dict, state: dict, **kw) -> dict:
+    """Every tradeable plan leaves the matrix WITH economics attached."""
+    return estimate_plan_economics(
+        dict(base, tradeable=True, **kw), vix=state.get("vix"),
+        days_to_expiry=state.get("days_to_expiry", DEFAULT_DAYS_TO_EXPIRY))
+
+
 # --- the evaluation matrix ------------------------------------------------
 
 def map_technical_to_strategy(technical_state: dict) -> dict:
@@ -181,14 +261,14 @@ def map_technical_to_strategy(technical_state: dict) -> dict:
     iv = state.get("iv_regime") or classify_iv(state.get("vix"))
 
     base = {"view": trend, "iv_regime": iv, "underlying": underlying,
-            "lot_size": lot, "strike_step": step, "atm": atm}
+            "lot_size": lot, "strike_step": step, "atm": atm, "spot": spot}
 
     # -- range-bound rows ---------------------------------------------
     if trend == "neutral":
         if iv == "high":
             put_short = _short_put_strike(spot, step, state.get("support"))
             call_short = _short_call_strike(spot, step, state.get("resistance"))
-            return dict(base, strategy="iron_condor", tradeable=True, legs=[
+            return _tradeable(base, state, strategy="iron_condor", legs=[
                 _leg("SELL", "PE", put_short, atm, "short put (range floor)"),
                 _leg("BUY", "PE", put_short - wing, atm, "put wing"),
                 _leg("SELL", "CE", call_short, atm, "short call (range cap)"),
@@ -209,8 +289,8 @@ def map_technical_to_strategy(technical_state: dict) -> dict:
     # -- directional rows -----------------------------------------------
     if trend == "strong_bullish":
         if iv == "low":
-            return dict(base, strategy="bull_call_spread", tradeable=True,
-                        legs=[
+            return _tradeable(base, state, strategy="bull_call_spread",
+                              legs=[
                             _leg("BUY", "CE", atm, atm, "long call (ATM)"),
                             _leg("SELL", "CE", atm + wing, atm,
                                  "short call (target cap)"),
@@ -226,8 +306,8 @@ def map_technical_to_strategy(technical_state: dict) -> dict:
         if iv == "high":
             call_short = _short_call_strike(spot, step,
                                             state.get("resistance"))
-            return dict(base, strategy="bear_call_spread", tradeable=True,
-                        legs=[
+            return _tradeable(base, state, strategy="bear_call_spread",
+                              legs=[
                             _leg("SELL", "CE", call_short, atm,
                                  "short call (above resistance)"),
                             _leg("BUY", "CE", call_short + wing, atm,
@@ -238,8 +318,8 @@ def map_technical_to_strategy(technical_state: dict) -> dict:
                             "higher caps the surprise — credit collected "
                             "up front"))
         if iv == "low":
-            return dict(base, strategy="bear_put_spread", tradeable=True,
-                        legs=[
+            return _tradeable(base, state, strategy="bear_put_spread",
+                              legs=[
                             _leg("BUY", "PE", atm, atm, "long put (ATM)"),
                             _leg("SELL", "PE", atm - wing, atm,
                                  "short put (target floor)"),

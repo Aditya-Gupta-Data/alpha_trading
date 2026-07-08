@@ -38,7 +38,7 @@ system flow between these, see `ARCHITECTURE.md`.
 | `src/strategy.py` | Turns signals into full trade PLANS: entry rule, stop-loss, target, risk:reward, rationale, risk-based position sizing. `propose_plans()` / `propose()`. |
 | `src/portfolio.py` | Paper portfolio math: `data/portfolio.json`, buy/sell, cash + 25%-per-stock rails. |
 | `src/portfolio_manager.py` | Phase 6G capital & margin allocation layer: Rs.10,00,000 simulated account pool in `brain_map.db` (additive tables `account_state`/`margin_locks`/`equity_curve`/`account_events`). `request_entry` locks SPAN margin per entry (silent reject on margin exhaustion), `release_margin` settles realized P&L + ratchets peak equity, hard 10% trailing-drawdown halt (`MAX_DRAWDOWN_PCT`). Gates `run_headless` only when trading the real paper book (injected books bypass — decision #40); fail-open seams `gate_headless_entry`/`release_entry`. Inspect: `python3 -m src.portfolio_manager`. |
-| `src/trade_planner.py` | Phase 6I technical-to-options planner: `map_technical_to_strategy(technical_state)` — pure evaluation matrix (trend × IV regime → iron_condor / bull_call_spread / bear_call_spread / bear_put_spread / no_trade) with structural leg specs (side, CE/PE, strike + offset from ATM, Bank Nifty grid). Support/resistance override the 2%-OTM shorts; never contradicts the VIX-16 regime gate (decision #42). Zero side effects. |
+| `src/trade_planner.py` | Phase 6I technical-to-options planner: `map_technical_to_strategy(technical_state)` — pure evaluation matrix (trend × IV regime → iron_condor / bull_call_spread / bear_call_spread / bear_put_spread / no_trade) with structural leg specs (side, CE/PE, strike + offset from ATM, Bank Nifty grid). Support/resistance override the 2%-OTM shorts; never contradicts the VIX-16 regime gate (decision #42). Phase 6J: every tradeable plan carries theoretical economics (`estimate_plan_economics` — leg premiums from the simulator's synthetic-chain model, net credit/debit, max profit/loss per lot — never Rs.0 placeholders). Zero side effects. |
 | `src/journal.py` | Appends every approved/rejected decision to `data/journal.jsonl` with signal, risk levers, pattern tags, plan block, outcome. |
 | `src/plan_tracker.py` | Resolves OPEN plan-carrying trades against real daily OHLC high/low (stop/target/time-stop) — NOT a naive last-price check. Closes paper positions on resolution (bracket-order semantics). |
 | `src/review.py` | Legacy 7-day price-drift scorecard for pre-plan (non-4B) journal entries. |
@@ -50,7 +50,7 @@ system flow between these, see `ARCHITECTURE.md`.
 | File | Purpose |
 |---|---|
 | `src/main.py` | Alert entry point (`python -m src.main`) — watchlist -> rule check -> email digest. |
-| `src/notifier.py` | Gmail SMTP (`send_digest`), async Discord text push (`send_discord_message`), structured embed broadcaster (`broadcast_alert` async / `fire_broadcast` sync bridge — colour-coded embeds for trade lifecycle events). |
+| `src/notifier.py` | Gmail SMTP (`send_digest`), async Discord text push (`send_discord_message`), structured embed broadcaster (`broadcast_alert` async / `fire_broadcast` sync bridge — colour-coded embeds for trade lifecycle events). Phase 6J test-env muzzle: `webhooks_muzzled()` blocks ALL webhook HTTP when `IS_TEST_ENV` is truthy or a pytest run is detected — muzzled sends are logged locally and report False. |
 | `src/eod_summary.py` | Daily EOD broadcaster (`python3 -m src.eod_summary`, 15:30 IST): queries journal + brain_map.db for today's MTM P&L, active positions count, and net delta exposure; posts a terse embed card via `broadcast_alert`. |
 | `src/config.py` | Loads + validates `config.json` at import time (fails loudly on missing/bad keys) — RSI thresholds, SMA windows, risk levers, tuner params. |
 
@@ -60,6 +60,7 @@ system flow between these, see `ARCHITECTURE.md`.
 |---|---|
 | `src/api.py` | Unified local FastAPI backend — the ONLY thing the React dashboard talks to. All `/api/*` routes (see `ARCHITECTURE.md`). Runs the hourly auto-sync background loop. |
 | `src/discord_bot.py` | Discord analyst bot: `/analyze` slash command (forecast), chat replies via Gemini. Read-only on the engine (imports only `forecast.py`). |
+| `src/chat_agent.py` | ADiTrader reasoning mirror: local Discord bot (@mention-gated, single authorized user) routing stateless queries to local Ollama with a terse DB context (`fetch_agent_context`). `@ADiTrader portfolio` bypasses the LLM entirely — `build_portfolio_snapshot` formats the Phase 6G account (starting capital, free cash, locked margin, active trades, net P&L) as hard numbers (Phase 6J). Read-only, no execution pathways. |
 | `src/web/watchlist_store.py` | Reads/writes `config/watchlist.yaml` (ruamel round-trip, preserves comments); ticker validation goes through `dhan_client`. |
 | `src/web/static/index.html` | Legacy static dashboard HTML, served by `src/api.py`'s `GET /`. Superseded by `lovable-frontend/` for active development. |
 | `lovable-frontend/` | React (TanStack Start + Vite) dashboard. **Gitignored on `main`** — lives only on the `lovable-ui` branch. See `DATA_CONTRACT.md`. |

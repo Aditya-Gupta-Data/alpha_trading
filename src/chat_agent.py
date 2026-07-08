@@ -154,6 +154,39 @@ def fetch_agent_context(query: str, db_path=None) -> str:
 # Ollama inference — stateless, one HTTP round-trip per call, no history
 # ---------------------------------------------------------------------------
 
+def is_portfolio_command(query: str) -> bool:
+    """True when the mention-stripped query is exactly the portfolio
+    snapshot command ("@ADiTrader portfolio")."""
+    return query.strip().lower() == "portfolio"
+
+
+def build_portfolio_snapshot(summary: dict = None, conn=None) -> str:
+    """Phase 6J: the deterministic account card — a hard-coded formatted
+    string straight from portfolio_manager's Rs.10L capital layer. NO LLM
+    anywhere near this path: numbers about money must never be
+    paraphrased by a model. Active trade count = active margin locks
+    (every accepted live trade holds exactly one). Injectable `summary`
+    or `conn` for offline tests; defaults to the real brain_map.db."""
+    if summary is None:
+        from src import portfolio_manager as pm
+        owns = conn is None
+        if conn is None:
+            conn = brain_map.connect()
+        try:
+            summary = pm.account_summary(conn)
+        finally:
+            if owns:
+                conn.close()
+    return (
+        "**ADiTrader Portfolio Snapshot**\n"
+        f"Starting Capital: Rs.{summary['starting_capital']:,.2f}\n"
+        f"Free Cash: Rs.{summary['available_cash']:,.2f}\n"
+        f"Locked Margin: Rs.{summary['locked_margin']:,.2f}\n"
+        f"Active Trades: {int(summary['open_locks'])}\n"
+        f"Net PnL: Rs.{summary['realized_pnl']:,.2f}"
+    )
+
+
 async def _call_ollama(prompt: str, context: str) -> str:
     system = _SYSTEM_PROMPT.format(context=context)
     payload = {
@@ -188,6 +221,12 @@ class ChatAgent(discord.Client):
 
         query = message.content.replace(f"<@{self.user.id}>", "").strip()
         if not query:
+            return
+
+        if is_portfolio_command(query):
+            # Phase 6J: "@ADiTrader portfolio" bypasses Ollama entirely —
+            # the account snapshot is a formatted read of hard numbers.
+            await message.reply(build_portfolio_snapshot()[:2000])
             return
 
         async with message.channel.typing():

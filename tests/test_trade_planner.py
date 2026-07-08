@@ -192,6 +192,73 @@ def test_nifty_50_gets_its_own_grid_and_lot():
         assert leg["strike"] % 50.0 == 0
 
 
+# --- theoretical economics (the anti-Rs.0 rule) ----------------------------
+
+def test_every_tradeable_plan_carries_nonzero_economics():
+    plans = [
+        tp.map_technical_to_strategy(make_state()),                        # condor
+        tp.map_technical_to_strategy(make_state(                           # bull call
+            sma_fast_distance_pct=1.2, sma_slow_distance_pct=3.5, vix=11.0)),
+        tp.map_technical_to_strategy(make_state(                           # bear call
+            sma_fast_distance_pct=-0.8, sma_slow_distance_pct=-1.2, vix=15.0)),
+        tp.map_technical_to_strategy(make_state(                           # bear put
+            sma_fast_distance_pct=-0.8, sma_slow_distance_pct=-1.2, vix=11.0)),
+    ]
+    for plan in plans:
+        assert plan["tradeable"], plan["strategy"]
+        assert plan["max_profit"] > 0, f"{plan['strategy']} broadcast Rs.0 max profit"
+        assert plan["max_loss"] > 0, f"{plan['strategy']} broadcast Rs.0 max loss"
+        for leg in plan["legs"]:
+            assert leg["premium"] > 0, f"{plan['strategy']} has an unpriced leg"
+        # exactly one of credit/debit is set, and it matches the leg math
+        credit = sum(l["premium"] for l in plan["legs"] if l["side"] == "SELL")
+        debit = sum(l["premium"] for l in plan["legs"] if l["side"] == "BUY")
+        net = round(credit - debit, 2)
+        if net >= 0:
+            assert plan["net_credit"] == net and plan["net_debit"] is None
+        else:
+            assert plan["net_debit"] == round(-net, 2) and plan["net_credit"] is None
+
+
+def test_credit_structure_economics_obey_the_defined_risk_identity():
+    plan = tp.map_technical_to_strategy(make_state())     # iron condor
+    lot = plan["lot_size"]
+    # max_profit = credit x lot; max_loss = (width - credit) x lot;
+    # together they must sum to width x lot — the defined-risk identity
+    assert plan["spread_width"] == 400.0                  # WING_STEPS x 100
+    assert plan["max_profit"] == round(plan["net_credit"] * lot, 2)
+    assert plan["max_loss"] == round((plan["spread_width"] - plan["net_credit"]) * lot, 2)
+    assert round(plan["max_profit"] + plan["max_loss"], 2) == plan["spread_width"] * lot
+
+
+def test_debit_structure_economics_obey_the_defined_risk_identity():
+    plan = tp.map_technical_to_strategy(make_state(
+        sma_fast_distance_pct=1.2, sma_slow_distance_pct=3.5, vix=11.0))
+    lot = plan["lot_size"]
+    assert plan["max_loss"] == round(plan["net_debit"] * lot, 2)
+    assert plan["max_profit"] == round((plan["spread_width"] - plan["net_debit"]) * lot, 2)
+
+
+def test_richer_iv_prices_a_richer_condor_credit():
+    calm = tp.map_technical_to_strategy(make_state(vix=13.5))
+    rich = tp.map_technical_to_strategy(make_state(vix=15.9))
+    assert rich["net_credit"] > calm["net_credit"]        # premium scales with σ
+    assert rich["pricing"]["vix_used"] == 15.9
+
+
+def test_no_trade_plans_carry_no_economics():
+    plan = tp.map_technical_to_strategy(make_state(vix=11.0))
+    assert plan["strategy"] == "no_trade"
+    assert "max_profit" not in plan and "max_loss" not in plan
+
+
+def test_economics_respect_days_to_expiry():
+    near = tp.map_technical_to_strategy(make_state(days_to_expiry=2))
+    far = tp.map_technical_to_strategy(make_state(days_to_expiry=14))
+    assert far["net_credit"] > near["net_credit"]         # more time value
+    assert near["pricing"]["days_to_expiry"] == 2
+
+
 # --- purity ---------------------------------------------------------------
 
 def test_planner_is_pure_deterministic_and_never_mutates_its_input():

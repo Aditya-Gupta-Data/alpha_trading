@@ -6,6 +6,47 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Phase 6J: Strict Portfolio Realism — BUILT AND TESTED (2026-07-08)
+
+A four-part hardening pass tying the 6G–6I layers into enforced real-world
+boundaries (committed as one unit; the user's spec called it "Phase 6H" but
+that letter was already the live bridge):
+
+1. **Test-environment webhook muzzle** (`src/notifier.py`) —
+   `webhooks_muzzled()` blocks EVERY Discord webhook HTTP request (text path
+   `send_discord_message` AND embed path `broadcast_alert`) when
+   `IS_TEST_ENV` is truthy or a pytest run is detected
+   (`PYTEST_CURRENT_TEST`); muzzled sends are logged locally and report
+   False. Webhooks only fire from true live runs. Tests that exercise the
+   dispatch machinery itself set `notifier.WEBHOOK_MUZZLE_OVERRIDE = False`
+   (autouse fixture in `tests/test_notifier.py`). The simulator needs no
+   muzzle — it is source-guarded against importing notifier at all.
+2. **Margin gate at trade ACCEPTANCE** (`options_proposer.decide_pending`) —
+   approving a pending entry now requests its margin
+   (`spread.margin.total_margin × lots`) from the Phase 6G capital layer
+   first (idempotent when the headless gate already locked it at proposal
+   time). A margin-blocked approval returns a new
+   `{"status": "margin_blocked"}` and leaves the entry pending — nothing
+   journaled, broadcast, or settled. With the existing run_headless gate,
+   every acceptance path now bounds concurrent trades by the Rs.10L pool.
+3. **Theoretical plan economics** (`trade_planner.estimate_plan_economics`)
+   — every tradeable plan now carries leg premiums (modeled via the
+   simulator's synthetic chain — same world the tracker/replay price in),
+   `net_credit`/`net_debit`, `spread_width`, and per-lot `max_profit`/
+   `max_loss`, so no broadcast can ever show Rs.0 placeholders. Credit
+   structures: profit = credit, loss = width − credit; debit structures
+   mirror it; identities are test-asserted.
+4. **Portfolio snapshot command** (`src/chat_agent.py`) — `@ADiTrader
+   portfolio` (exact match after mention-strip) bypasses Ollama entirely:
+   `build_portfolio_snapshot()` formats the live Phase 6G account as hard
+   numbers — Starting Capital, Free Cash, Locked Margin, Active Trades
+   (= active margin locks), Net PnL. Money numbers are never paraphrased
+   by an LLM.
+
+Tests: +6 muzzle tests (network-tripwired), +1 decide_pending gate test,
++6 planner economics tests, +4 chat-agent snapshot tests. Suite 443 green.
+Decision #43 in `DECISIONS.md`.
+
 ## ✅ Phase 6I: Technical-to-Options Strategy Planner (trade_planner) — BUILT AND TESTED (2026-07-08)
 
 `src/trade_planner.py` is a PURE evaluation matrix from a technical market

@@ -102,9 +102,16 @@ def test_send_swallows_network_exception():
 
 
 def test_notifier_delegates_to_webhook_client():
-    with mock.patch("src.discord_client.send_webhook_message",
-                    new_callable=mock.AsyncMock, return_value=True) as mock_send:
-        ok = asyncio.run(notifier.send_discord_message("episode text", thread_id="42"))
+    # this test exercises the dispatch path itself, so the Phase 6J
+    # test-env muzzle is explicitly lifted (the client is mocked anyway)
+    saved_override = notifier.WEBHOOK_MUZZLE_OVERRIDE
+    notifier.WEBHOOK_MUZZLE_OVERRIDE = False
+    try:
+        with mock.patch("src.discord_client.send_webhook_message",
+                        new_callable=mock.AsyncMock, return_value=True) as mock_send:
+            ok = asyncio.run(notifier.send_discord_message("episode text", thread_id="42"))
+    finally:
+        notifier.WEBHOOK_MUZZLE_OVERRIDE = saved_override
     assert ok is True
     mock_send.assert_awaited_once_with("episode text", thread_id="42")
 

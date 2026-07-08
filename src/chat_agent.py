@@ -62,6 +62,9 @@ def _load_env() -> None:
 _load_env()
 
 _OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+# Same env knob local_parser honors — one .env line retargets BOTH LLM
+# consumers (8GB-Mac reality: llama3.2:3b at ~2GB loaded, not 8B at ~5GB).
+_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 
 _raw_uid = os.environ.get("AUTHORIZED_DISCORD_USER_ID", "")
 if not _raw_uid.strip().isdigit():
@@ -190,8 +193,12 @@ def build_portfolio_snapshot(summary: dict = None, conn=None) -> str:
 async def _call_ollama(prompt: str, context: str) -> str:
     system = _SYSTEM_PROMPT.format(context=context)
     payload = {
-        "model": "llama3",
+        "model": _OLLAMA_MODEL,
         "stream": False,
+        # unload the model the moment the reply is generated — on an 8GB
+        # Mac a lingering multi-GB model is the difference between a
+        # responsive machine and a swapping one
+        "keep_alive": 0,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},

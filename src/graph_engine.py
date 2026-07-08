@@ -14,15 +14,22 @@ additive table in data/brain_map.db, `graph_edges`:
     source_node       TEXT   e.g. a ticker ("NIFTY 50"), a regime/theme tag
     relation          TEXT   the predicate ("led_to", "co_occurred_with", …)
     target_node       TEXT
-    confidence_score  REAL   0..1 edge weight
+    confidence_score  REAL   0..1 edge weight — decays over time
+    context           TEXT   optional qualifying condition ("VIX > 20")
+    valid_from        TEXT   ISO datetime this edge was created/last reinforced
+    invalid_at        TEXT   ISO datetime decay expired this edge (NULL = active)
+    decay_lambda      REAL   per-edge exponential decay rate (days⁻¹, default 0.05)
 
 The edges are written by the off-market Sleep Phase (src/sleep_phase.py)
-as it distils causal links out of the day's episodic events. This module
-only READS them: at construction it loads every edge once into a
-networkx.DiGraph and answers queries purely from memory — no DB access
-during inference, no writes anywhere, ever (decision #33). networkx is the
-in-memory reasoning layer; SQLite remains the only persistent store (no new
-database — the Phase 6C strict constraint).
+as it distils causal links out of the day's episodic events. src/decay_engine.py
+applies the daily exponential decay sweep: w(t) = w₀·exp(−λ·t). Edges
+below confidence 0.1 are marked via invalid_at and excluded from inference.
+
+This module only READS active edges: at construction it loads every row
+where invalid_at IS NULL into a networkx.DiGraph and answers queries purely
+from memory — no DB access during inference, no writes anywhere, ever
+(decision #33). networkx is the in-memory reasoning layer; SQLite remains
+the only persistent store (no new database — the Phase 6C strict constraint).
 
 STRICTLY ADDITIVE, same discipline as brain_map/sleep_phase: `brain_map.py`
 is untouched, and an empty/missing `graph_edges` table degrades to an empty
@@ -34,7 +41,12 @@ working with no behavior change until edges exist.
     ctx = eng.get_relevant_context("NIFTY 50")
 """
 
+from datetime import datetime, timezone
+
 from src import brain_map
+
+# Default decay rate matching sleep_phase.DEFAULT_DECAY_LAMBDA.
+_DEFAULT_DECAY_LAMBDA = 0.05
 
 # Owned by this module — additive to brain_map's core tables, same .db file.
 # `context` (nullable) preserves a causal link's qualifying condition, e.g.
@@ -56,12 +68,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_edges_triple
 
 def ensure_schema(conn) -> None:
     """Create the graph_edges table/indexes if absent (idempotent), and
-    upgrade a pre-Phase-6D table in place by adding the `context` column
-    (CREATE TABLE IF NOT EXISTS can't add a column to an existing table)."""
+    upgrade existing tables in place by adding any missing columns.
+    Handles the pre-Phase-6D `context` column and the Phase 6E temporal
+    decay columns (valid_from, invalid_at, decay_lambda)."""
     conn.executescript(_SCHEMA)
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(graph_edges)")}
     if "context" not in cols:
         conn.execute("ALTER TABLE graph_edges ADD COLUMN context TEXT")
+    if "valid_from" not in cols:
+        conn.execute("ALTER TABLE graph_edges ADD COLUMN valid_from TEXT")
+    if "invalid_at" not in cols:
+        conn.execute("ALTER TABLE graph_edges ADD COLUMN invalid_at TEXT")
+    if "decay_lambda" not in cols:
+        conn.execute("ALTER TABLE graph_edges ADD COLUMN decay_lambda REAL")
     conn.commit()
 
 
@@ -70,16 +89,25 @@ def add_edge(conn, source_node, relation, target_node,
     """Write (or reinforce) one causal link. Idempotent on the
     (source, relation, target) triple: re-writing the same edge UPDATES its
     confidence/context instead of duplicating, so repeated Sleep-Phase runs
-    never grow the graph unbounded. Not called during inference — this is
-    the writer seam, kept next to the schema it targets."""
+    never grow the graph unbounded.
+
+    On every write — new or reinforce — valid_from is reset to now so the
+    decay clock restarts (a re-observed pattern is fresh again), and
+    invalid_at is cleared so a previously-expired edge reactivates.
+    Not called during inference — this is the writer seam."""
     ensure_schema(conn)
+    now_str = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO graph_edges (source_node, relation, target_node, "
-        "confidence_score, context) VALUES (?, ?, ?, ?, ?) "
+        "confidence_score, context, valid_from, decay_lambda) VALUES (?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (source_node, relation, target_node) DO UPDATE SET "
         "confidence_score = excluded.confidence_score, "
-        "context = COALESCE(excluded.context, graph_edges.context)",
-        (source_node, relation, target_node, confidence_score, context),
+        "context = COALESCE(excluded.context, graph_edges.context), "
+        "valid_from = excluded.valid_from, "
+        "decay_lambda = COALESCE(graph_edges.decay_lambda, excluded.decay_lambda), "
+        "invalid_at = NULL",
+        (source_node, relation, target_node, confidence_score, context,
+         now_str, _DEFAULT_DECAY_LAMBDA),
     )
     conn.commit()
 
@@ -103,7 +131,7 @@ class GraphEngine:
             ensure_schema(conn)
             for row in conn.execute(
                 "SELECT source_node, relation, target_node, confidence_score, "
-                "context FROM graph_edges"
+                "context FROM graph_edges WHERE invalid_at IS NULL"
             ):
                 src, relation, tgt, score, context = (
                     row["source_node"], row["relation"], row["target_node"],

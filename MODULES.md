@@ -12,6 +12,13 @@ system flow between these, see `ARCHITECTURE.md`.
 | `src/data_fetcher.py` | Thin re-export of `dhan_client.get_quote` — kept for the original `get_quote(ticker)` contract older callers use. |
 | `src/indicators.py` | Pure-Python SMA and Wilder's RSI, no dependencies. |
 
+## Knowledge graph
+
+| File | Purpose |
+|---|---|
+| `src/graph_engine.py` | Phase 6C reasoning layer: `ensure_schema` (creates `graph_edges` table + temporal columns), `add_edge` (idempotent writer — stamps `valid_from`, clears `invalid_at` on reinforce), `GraphEngine` (loads ACTIVE edges only — `WHERE invalid_at IS NULL` — into a `networkx.DiGraph` for 2-hop BFS context queries). |
+| `src/decay_engine.py` | Phase 6E temporal decay sweep: `migrate_schema` (adds `valid_from`/`invalid_at`/`decay_lambda` to `graph_edges`), `apply_decay_sweep` (daily `w(t) = w₀·exp(−λ·t)` pass — reduces `confidence_score`, stamps `invalid_at` when weight < 0.1). Run via `python3 -m src.decay_engine` or after the Sleep Phase cron. |
+
 ## Signal & suggestion engine
 
 | File | Purpose |

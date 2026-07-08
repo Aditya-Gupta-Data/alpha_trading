@@ -38,6 +38,24 @@ same base64 `.env` transfer trick since these values would otherwise
 mangle in the browser SSH terminal) so its 07:00 IST cron renewal also
 uses V2 instead of the legacy fallback.
 
+## ✅ Phase 6E: Temporal Signal Decay — BUILT AND TESTED (2026-07-08)
+
+`src/decay_engine.py` is a standalone daily sweep that applies exponential
+decay to every active `graph_edges` row: `w(t) = w₀·exp(−λ·t)` where `t` is
+days since the edge was last written or swept, and `λ` is the per-edge
+`decay_lambda` (default 0.05 — matching the Sleep Phase's semantic-node
+decay rate). When a decayed weight falls below 0.1 the edge is soft-expired
+(`invalid_at` stamped) so `GraphEngine` excludes it from inference; it is
+never deleted, so a re-observed pattern (same triple via `add_edge`) reactivates
+it automatically (decision #37). Three additive columns were added to
+`graph_edges`: `valid_from` (creation/last-sweep timestamp), `invalid_at`
+(expiry marker, NULL = active), `decay_lambda` (per-edge rate). `add_edge`
+now stamps `valid_from = now` and clears `invalid_at` on both first write and
+reinforce. `GraphEngine.__init__` loads only `WHERE invalid_at IS NULL`.
+Migration is idempotent — existing DBs are upgraded in place on next connect.
+Run manually: `python3 -m src.decay_engine`. Tests: `tests/test_decay.py`
+(22 tests, all offline). **No network I/O, no market data** (decision #30 holds).
+
 ## Current production state (as of 2026-07-06)
 
 - **Phases 1-4 (alerting, suggestions, paper trading, journal/plans/tracking/

@@ -6,6 +6,37 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Phase 6I: Technical-to-Options Strategy Planner (trade_planner) — BUILT AND TESTED (2026-07-08)
+
+`src/trade_planner.py` is a PURE evaluation matrix from a technical market
+read to the appropriate defined-risk options structure — zero side effects
+(no market data, DB, journal, or network; import-guard tested), fully
+deterministic. `map_technical_to_strategy(technical_state)` ingests trend
+(explicit, or classified from spot's % distance to the fast/slow SMAs — ±2%
+on the slow SMA marks "strong", the fast SMA must agree in sign), IV regime
+(explicit, or from VIX: <13 low, 13–16 high, >16 extreme), and optional
+support/resistance boundaries. The routing matrix:
+
+- **Range-Bound + High IV → Iron Condor** — shorts at 2% OTM (or tucked
+  under support / over resistance when boundaries are supplied), wings
+  `WING_STEPS × step` further out. "High" means rich-but-tradeable: above
+  VIX 16 the planner returns no_trade, NEVER contradicting the existing
+  `strategy.validate_regime` hard gate.
+- **Strong Bullish + Low IV → Bull Call Spread** (ATM + wing; rich IV is a
+  deliberate no_trade — debit structures want cheap options).
+- **Bearish + High IV → Bear Call Spread** (credit sold above resistance);
+  **Bearish + Low IV → Bear Put Spread** (the proposer's own structure).
+- Everything else (weak bullish, unknowns, panic VIX) → no_trade with a
+  rationale.
+
+Output legs are structural specs — side, CE/PE, concrete strike AND offset
+from ATM, snapped to the underlying's grid, optimized for Bank Nifty (step
+100, lot 35; NIFTY 50 gets 50/75) — consistent with options_proposer's own
+geometry so a planned condor is the same condor the headless pipeline
+builds. Tests: `tests/test_trade_planner.py` (21 offline tests: full matrix,
+classifier boundaries, strike snapping, S/R overrides, purity + import
+guard; suite 426 green).
+
 ## ✅ Phase 6H: Live Market-Hour Data Adapter (live_bridge) — BUILT AND TESTED (2026-07-08)
 
 `src/live_bridge.py` decouples the pipeline from daily-close replay during

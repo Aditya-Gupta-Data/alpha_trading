@@ -411,8 +411,11 @@ def test_eod_query_returns_empty_for_missing_db():
 
 
 def test_eod_query_returns_todays_rows():
+    from datetime import date
     from src.eod_summary import query_todays_resolutions
-    today = "2026-07-08"
+    # the REAL current date — a hardcoded literal here broke the suite the
+    # first midnight after it was written (query filters on date.today())
+    today = date.today().isoformat()
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
     try:

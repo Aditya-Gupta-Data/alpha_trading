@@ -119,12 +119,20 @@ def test_full_cycle_pull_mine_apply_refresh():
         assert state.exists()                       # success recorded
         # the pre-existing local file was archived exactly once
         assert (data_dir / "archive" / "brain_map.db").exists()
-        # command sequence: pull scp, ship-edges scp, remote apply ssh,
-        # refresh scp
+        # command sequence: pull scp, ship-edges+applier scp, remote
+        # apply ssh, refresh scp
         kinds = ["ssh" if "ssh" in c else "scp" for c in calls]
         assert kinds == ["scp", "scp", "ssh", "scp"]
+        ship_cmd = calls[1]
+        # BOTH files travel in one scp: the payload AND the applier
+        # script (multi-line python via ssh --command gets newline-
+        # mangled by the remote shell — the applier must be a file)
+        assert any("new_edges.json" in c for c in ship_cmd)
+        assert any("apply_edges.py" in c for c in ship_cmd)
         apply_cmd = calls[2][-1]
-        assert "add_edge" in apply_cmd and "new_edges.json" in apply_cmd
+        assert "/tmp/apply_edges.py" in apply_cmd
+        assert "/tmp/new_edges.json" in apply_cmd
+        assert "-c" not in calls[2]        # never inline python over ssh
 
 
 def test_no_new_edges_means_no_apply_call():

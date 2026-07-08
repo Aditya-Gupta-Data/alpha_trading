@@ -6,6 +6,45 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Procedural Evolution — BUILT AND TESTED; NOT YET SCHEDULED (2026-07-09)
+
+`src/evolution.py` closes roadmap item #5: the system studies its own loss
+clusters and proposes rule mutations for HUMAN review — it can never apply
+anything itself. Pipeline per cluster: mine losses by (underlying ×
+strategy × VIX band) with journal_ref provenance → deterministic HER-style
+hindsight buckets (bad_risk_parameters / bad_timing / ambiguous) →
+counterfactual contrast against the same setup's wins → an Analyst→Critic
+→resolution dialectic on LOCAL Ollama (every reply strict-JSON-gated;
+unresolved critic BLOCK kills the candidate) → the proposal must come from
+the whitelisted `EVOLVABLE_PARAMETERS` registry (VIX gate, risk %, OTM %,
+profit-take fraction, pre-expiry days; bounds-checked — the 3B model never
+writes code; diffs are generated deterministically) → double backtest via
+the Phase 7 simulator (baseline vs `override_parameters`, in-memory DBs,
+cached bars) with **RevertOnRegression**: a cluster-fix that degrades
+global Sharpe/max-drawdown is discarded. Survivors:
+`candidates/evolution_<ts>.md` (4 sections: cluster, dialectic summary,
+simulator proof table, unified diff) + a version-tree entry in
+`data/evolution_lineage.json` (v1→v2 per parameter; failed attempts are
+remembered so future runs know what was tried).
+
+Runs Mac-side only (Ollama; zero API spend — user rule). Backtest bars
+come from `data/bars_cache.json`, refreshed THROUGH the VM
+(`python3 -m src.evolution --refresh-bars-cache`) since the Mac holds no
+live token (decision #48). Wired as sleep-phase Task E with the standard
+graceful skip (the VM skips it silently). **Deliberately NOT on any
+schedule until the observation-week triage clears it** — run manually.
+
+First live run (2026-07-09): mined 10 real clusters; the worst (13
+Bank-Nifty condor losses in the mid-VIX band, Rs.-8.1L) produced an
+Analyst proposal that the Critic BLOCKED at the consensus gate — the
+adversarial design doing its job. Bug found & fixed during the build:
+multi-line python shipped via ssh `--command` gets newline-mangled — both
+evolution's bars dump AND the edge miner's apply step now travel as scp'd
+FILES (the miner's flaw had never fired: its only prior run had 0 new
+edges). Also fixed: a queue-built notifier test hardcoding "today" broke
+the suite at midnight. Tests: `tests/test_evolution.py` (14, offline,
+scripted fake LLM); suite 500 green.
+
 ## ⚠️ Correction (2026-07-09, just after midnight): Mac renew/push crons REMOVED — they raced the VM's token
 
 Discovered by accident: DhanHQ allows only ONE active access token per

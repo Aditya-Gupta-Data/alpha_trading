@@ -66,7 +66,8 @@ VM_REPO = "~/alpha_trading"
 # The remote applier: replays mined triples through the VM's own
 # idempotent writer. Runs with cwd=~/alpha_trading under venv python.
 _REMOTE_APPLY = r"""
-import json, sys
+import json, os, sys
+sys.path.insert(0, os.getcwd())   # run by path from /tmp; repo is the cwd
 from src import brain_map
 from src.graph_engine import add_edge
 triples = json.load(open(sys.argv[1]))
@@ -188,19 +189,25 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
         # 3. MINE locally with Ollama
         stats, new_triples = mine_new_triples(pulled, extractor=extractor)
 
-        # 4. APPLY the new triples on the VM (idempotent add_edge)
+        # 4. APPLY the new triples on the VM (idempotent add_edge). The
+        # applier travels as a FILE — multi-line python through ssh
+        # --command gets newline-mangled by the remote shell (bug found
+        # live in evolution.refresh_bars_cache, 2026-07-09; this path had
+        # the same flaw but had never fired with >0 triples).
         applied = 0
         if new_triples:
             payload = tmp / "new_edges.json"
             payload.write_text(json.dumps(new_triples))
-            res = runner(scp_base + [str(payload),
-                                     f"{VM}:/tmp/new_edges.json"])
+            applier = tmp / "apply_edges.py"
+            applier.write_text(_REMOTE_APPLY)
+            res = runner(scp_base + [str(payload), str(applier),
+                                     f"{VM}:/tmp/"])
             if res.returncode != 0:
                 return {"status": "failed", "reason": "could not ship edges",
                         "detail": (res.stderr or "")[-300:]}
-            apply_cmd = (f"cd {VM_REPO} && venv/bin/python3 -c "
-                         f"{json.dumps(_REMOTE_APPLY)} /tmp/new_edges.json "
-                         "&& rm -f /tmp/new_edges.json")
+            apply_cmd = (f"cd {VM_REPO} && venv/bin/python3 "
+                         "/tmp/apply_edges.py /tmp/new_edges.json; "
+                         "rm -f /tmp/apply_edges.py /tmp/new_edges.json")
             res = runner(ssh_base + [apply_cmd])
             if res.returncode != 0:
                 return {"status": "failed", "reason": "remote apply failed",

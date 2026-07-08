@@ -417,6 +417,18 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  D. causal links failed: {e}")
         results["causal"] = None
+    try:
+        # Task E — Procedural Evolution: mine loss clusters and propose
+        # gated rule mutations to candidates/ (human gatekeeping — nothing
+        # auto-applies). Degrades to a silent skip wherever Ollama or the
+        # bars cache is absent, i.e. it only truly runs on the Mac.
+        from src.evolution import run_from_sleep_phase
+        results["evolution"] = run_from_sleep_phase(conn, extractor,
+                                                    today=today)
+        print(f"  E. evolution:     {results['evolution']}")
+    except Exception as e:
+        print(f"  E. evolution failed: {e}")
+        results["evolution"] = None
 
     conn.close()
     return results

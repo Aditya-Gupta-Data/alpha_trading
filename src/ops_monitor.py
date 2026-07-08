@@ -51,6 +51,7 @@ PROBLEM_PATTERNS = re.compile(
 # What should have written its log today (name -> weekdays-only flag).
 EXPECTED_JOBS = {
     "renew_token.log": False,        # daily 07:00 IST
+    "push_token_to_vm.log": False,   # daily 07:10 IST
     "sleep_phase.log": False,        # daily 20:00 IST
     "suggest.log": True,             # Mon-Fri 08:00 IST
     "main.log": True,                # Mon-Fri 15:35 IST

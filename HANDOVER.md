@@ -6,6 +6,33 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Phase 7A: Master Scheduler & Live Execution Loop — BUILT AND TESTED (2026-07-08)
+
+`src/master_scheduler.py` (`python3 -m src.master_scheduler`) is the
+one-command entry point for a fully automated live paper-trading day.
+**Deliberately NOT `src/main.py`** — that name is the Phase 1 alert job the
+VM cron runs at 15:35 IST; clobbering it would have silently killed the
+alert pipeline.
+
+`run_trading_session()` runs strictly Mon-Fri 09:15–15:30 IST: launched
+early it sleeps until the open; launched after the close it exits
+immediately (cron-misfire safe); at 15:30 it shuts itself down. During the
+window it supervises the two existing live loops as asyncio tasks — ENTRY
+(`market_loop.run_market_loop` fed by the Phase 6H live adapter → margin-
+gated, PENDING_APPROVAL proposals; decision #11's human-in-the-loop stands,
+nothing is auto-approved) and EXIT (`live_bridge.run_live_loop` advisory
+profit-take/pre-expiry alerts). Session bookends go to Discord: the 🟢 OPEN
+card carries the Phase 6G account snapshot + the Phase 6I planner's
+advisory playbook per underlying; the 🔴 CLOSE card the end-of-day account.
+Graceful shutdown: SIGINT/SIGTERM set an asyncio.Event, both loops are
+cancelled and awaited; state cannot corrupt because every httpx client and
+SQLite touch in this codebase is per-call scoped (open-commit-close) — no
+long-lived handles exist to strand mid-write. A dying loop brings the
+session down safely (never a zombie). `CRON_SETUP.md` (project root)
+documents the exact Mac crontab line (09:10 Mon-Fri + Full-Disk-Access and
+wake-schedule caveats). Tests: `tests/test_master_scheduler.py` (8 offline
+tests with a hand-wound IST clock; suite 463 green). Decision #45.
+
 ## 🟡 Phase 7b: Skeptic Trainer — BUILT AND TESTED; MODEL DELIBERATELY NOT SHIPPED (2026-07-08)
 
 `src/train_skeptic.py` (`python3 -m src.train_skeptic [--dry-run|--force]`)

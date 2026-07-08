@@ -160,6 +160,62 @@ def v2_ready(creds: dict) -> bool:
                 and creds.get("DHAN_TOTP_SECRET"))
 
 
+# --- GCP Secret Manager: the VM-side credential source (decision #47) -----
+# The V2 keys (PIN / TOTP secret / API key+secret) are account-control
+# credentials and never sit in the VM's .env. On a GCP VM they live in
+# Secret Manager, granted per-secret to the instance's service account,
+# and are fetched here at renewal time via the metadata-server OAuth
+# token — pure stdlib, no google-cloud SDK dependency. On any non-GCP
+# machine (the Mac) the metadata server doesn't exist and this whole
+# layer silently no-ops, so .env keys keep working exactly as before.
+
+GCP_METADATA_BASE = "http://metadata.google.internal/computeMetadata/v1"
+SECRET_NAME_MAP = {
+    "DHAN_PIN": "dhan-pin",
+    "DHAN_TOTP_SECRET": "dhan-totp-secret",
+    "DHAN_API_KEY": "dhan-api-key",
+    "DHAN_API_SECRET": "dhan-api-secret",
+}
+
+
+def _metadata_get(path: str, timeout: float = 5) -> str:
+    req = urllib.request.Request(f"{GCP_METADATA_BASE}/{path}",
+                                 headers={"Metadata-Flavor": "Google"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode()
+
+
+def fetch_gcp_secrets(keys) -> dict:
+    """{env_key: value} for the requested V2 keys, from Secret Manager.
+    Fail-safe by contract: not on GCP / API disabled / access denied /
+    a missing secret — each degrades to that key simply being absent,
+    and completely off-GCP returns {} with no noise at all."""
+    try:
+        token = json.loads(_metadata_get(
+            "instance/service-accounts/default/token"))["access_token"]
+        project = _metadata_get("project/project-id").strip()
+    except Exception:
+        return {}  # not a GCP VM (e.g. the Mac) — silently skip
+    fetched = {}
+    for env_key in keys:
+        secret = SECRET_NAME_MAP.get(env_key)
+        if secret is None:
+            continue
+        url = (f"https://secretmanager.googleapis.com/v1/projects/{project}"
+               f"/secrets/{secret}/versions/latest:access")
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT,
+                                        context=_SSL_CTX) as resp:
+                payload = json.loads(resp.read())
+            fetched[env_key] = base64.b64decode(
+                payload["payload"]["data"]).decode().strip()
+        except Exception as e:
+            print(f"  (Secret Manager: {secret} unavailable: {e})")
+    return fetched
+
+
 def generate_totp(secret: str) -> str | None:
     """The current 6-digit TOTP code for `secret`, or None (pyotp missing
     or an unusable secret — both reported by the caller, never raised)."""
@@ -215,12 +271,14 @@ def _write_new_token(env_text: str, new_token: str, expiry) -> None:
     print(f"  (.env updated; previous version saved to {BACKUP_PATH.name})")
 
 
-def renew_v2(env_text: str) -> int:
+def renew_v2(env_text: str, creds: dict = None) -> int:
     """The headless V2 flow: PIN + TOTP -> a brand-new 24h access token.
     Unlike the legacy renewal, this works even when the old token is
     already dead — there is no manual-dashboard fallback ever needed as
-    long as the V2 credentials in .env stay valid."""
-    creds = read_env_values(env_text)
+    long as the V2 credentials (in .env, or Secret-Manager-fetched by
+    the caller) stay valid."""
+    if creds is None:
+        creds = read_env_values(env_text)
     totp_code = generate_totp(creds["DHAN_TOTP_SECRET"])
     if totp_code is None:
         return 1
@@ -293,8 +351,18 @@ def renew() -> int:
         print(f"Token renewal failed: {ENV_PATH} does not exist.")
         return 1
     env_text = ENV_PATH.read_text()
-    if v2_ready(read_env_values(env_text)):
-        return renew_v2(env_text)
+    creds = read_env_values(env_text)
+    if not v2_ready(creds):
+        # VM path (decision #47): fill only the MISSING keys from GCP
+        # Secret Manager — .env values always win when present.
+        fetched = fetch_gcp_secrets(
+            [k for k in V2_ENV_KEYS if not creds.get(k)])
+        if fetched:
+            print("  (V2 credentials from GCP Secret Manager: "
+                  f"{', '.join(sorted(fetched))})")
+            creds.update(fetched)
+    if v2_ready(creds):
+        return renew_v2(env_text, creds)
     return renew_legacy(env_text)
 
 

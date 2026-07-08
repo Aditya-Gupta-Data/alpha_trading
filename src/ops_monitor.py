@@ -31,6 +31,7 @@ injectable, so the whole surface tests offline.
 """
 
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -49,14 +50,32 @@ PROBLEM_PATTERNS = re.compile(
     r"muzzled \[test env\]|risk-of-ruin|margin exhaustion)\b")
 
 # What should have written its log today (name -> weekdays-only flag).
+# This default is the VM's schedule (the engine machine). Any deployment
+# can override per-machine via OPS_EXPECTED_JOBS, a comma list of
+# "name.log:flag" where flag 1/true = weekdays-only, 0 = daily — e.g.
+#   OPS_EXPECTED_JOBS="renew_token.log:0,master_scheduler.log:1"
 EXPECTED_JOBS = {
     "renew_token.log": False,        # daily 07:00 IST
-    "push_token_to_vm.log": False,   # daily 07:10 IST
-    "sleep_phase.log": False,        # daily 20:00 IST
+    "sleep_phase.log": False,        # daily 20:00 IST (decay-only w/o Ollama)
     "suggest.log": True,             # Mon-Fri 08:00 IST
     "main.log": True,                # Mon-Fri 15:35 IST
     "master_scheduler.log": True,    # Mon-Fri 09:10 IST
 }
+
+
+def _expected_jobs_from_env() -> dict | None:
+    """Parse OPS_EXPECTED_JOBS, or None when unset/empty (use default)."""
+    raw = os.environ.get("OPS_EXPECTED_JOBS", "").strip()
+    if not raw:
+        return None
+    jobs = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name, _, flag = item.partition(":")
+        jobs[name.strip()] = flag.strip().lower() in ("1", "true", "yes")
+    return jobs or None
 
 MAX_CARD_PROBLEMS = 12               # Discord card stays readable
 MAX_LINE_CHARS = 180
@@ -122,7 +141,8 @@ def check_heartbeats(logs_dir: Path = LOGS_DIR, now: datetime = None,
     now = now or datetime.now()
     today = now.date()
     missing = []
-    for name, weekdays_only in (expected or EXPECTED_JOBS).items():
+    for name, weekdays_only in (expected or _expected_jobs_from_env()
+                                or EXPECTED_JOBS).items():
         if weekdays_only and today.weekday() >= 5:
             continue
         path = Path(logs_dir) / name

@@ -58,7 +58,16 @@ CRON_TZ=Asia/Kolkata
 
 # 4. Sleep Phase — off-market Brain Map memory pass (Daily at 20:00 IST)
 #    Ingests journal text via local Ollama, consolidates themes, applies decay.
+#    On the VM (no Ollama) this gracefully degrades to the decay-only pass;
+#    causal-edge mining happens opportunistically from the Mac (src/edge_miner.py).
 0 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.sleep_phase >> "$REPO_ROOT/logs/sleep_phase.log" 2>&1
+
+# 5. Phase 7A master scheduler — full automated paper-trading session
+#    (Mon-Fri, fires 09:10 IST, waits for the 09:15 open, self-terminates 15:30)
+10 9 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.master_scheduler >> "$REPO_ROOT/logs/master_scheduler.log" 2>&1
+
+# 6. Nightly ops sweep — log problems + job heartbeats -> Discord health card
+30 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ops_monitor >> "$REPO_ROOT/logs/ops_monitor.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

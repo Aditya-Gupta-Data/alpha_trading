@@ -97,6 +97,30 @@ def test_heartbeats_flag_silent_jobs_weekday_aware():
         assert all("master_scheduler" not in m for m in missing)
 
 
+def test_expected_jobs_env_override(monkeypatch=None):
+    import os
+    saved = os.environ.get("OPS_EXPECTED_JOBS")
+    try:
+        os.environ["OPS_EXPECTED_JOBS"] = "only_this.log:0, weekday_job.log:1"
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = make_logs(tmp, {"only_this.log": "ok\n"})  # fresh today
+            # freshness is mtime-vs-today, so the clock must be real "now";
+            # use a weekday-only flag that is checked on any weekday run
+            now = datetime.now()
+            missing = om.check_heartbeats(logs, now=now)
+            expected_missing = ([] if now.weekday() >= 5
+                                else ["weekday_job.log — did not run today"])
+            # default EXPECTED_JOBS is fully replaced by the env list
+            assert missing == expected_missing
+        os.environ["OPS_EXPECTED_JOBS"] = ""
+        assert om._expected_jobs_from_env() is None   # empty -> default
+    finally:
+        if saved is None:
+            os.environ.pop("OPS_EXPECTED_JOBS", None)
+        else:
+            os.environ["OPS_EXPECTED_JOBS"] = saved
+
+
 def test_problems_land_in_the_jsonl_ledger():
     with tempfile.TemporaryDirectory() as tmp:
         ledger = Path(tmp) / "problems.jsonl"

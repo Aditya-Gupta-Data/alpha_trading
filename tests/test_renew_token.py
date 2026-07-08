@@ -193,10 +193,105 @@ def test_renew_dispatches_v2_when_creds_present_else_legacy():
 
     env_file.write_text(SAMPLE_ENV)  # no V2 keys -> legacy fallback
     with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "fetch_gcp_secrets", return_value={}), \
          mock.patch.object(rt, "renew_v2", return_value=0) as v2, \
          mock.patch.object(rt, "renew_legacy", return_value=0) as legacy:
         rt.renew()
     assert legacy.called and not v2.called
+
+
+# --- GCP Secret Manager layer (decision #47: VM-side credentials) ----------
+
+def _sm_payload(value: str) -> bytes:
+    return json.dumps({"payload": {
+        "data": base64.b64encode(value.encode()).decode()}}).encode()
+
+
+def test_fetch_gcp_secrets_is_silent_off_gcp():
+    # no metadata server (the Mac case) -> {} with no secret fetch attempted
+    with mock.patch.object(rt, "_metadata_get",
+                           side_effect=OSError("no metadata server")):
+        assert rt.fetch_gcp_secrets(["DHAN_PIN", "DHAN_TOTP_SECRET"]) == {}
+
+
+def test_fetch_gcp_secrets_decodes_only_mapped_keys():
+    def fake_metadata(path, timeout=5):
+        if "token" in path:
+            return json.dumps({"access_token": "oauth-tok"})
+        return "proj-id\n"
+
+    class FakeResp:
+        def __init__(self, body): self.body = body
+        def read(self): return self.body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    seen_urls = []
+
+    def fake_urlopen(req, timeout=None, context=None):
+        seen_urls.append(req.full_url)
+        assert req.get_header("Authorization") == "Bearer oauth-tok"
+        value = "pin-1234" if "dhan-pin" in req.full_url else "totp-abc"
+        return FakeResp(_sm_payload(value))
+
+    with mock.patch.object(rt, "_metadata_get", fake_metadata), \
+         mock.patch.object(rt.urllib.request, "urlopen", fake_urlopen):
+        out = rt.fetch_gcp_secrets(
+            ["DHAN_PIN", "DHAN_TOTP_SECRET", "NOT_A_MAPPED_KEY"])
+    assert out == {"DHAN_PIN": "pin-1234", "DHAN_TOTP_SECRET": "totp-abc"}
+    assert all("projects/proj-id/secrets/dhan-" in u for u in seen_urls)
+    assert len(seen_urls) == 2  # the unmapped key never hit the network
+
+
+def test_fetch_gcp_secrets_partial_failure_degrades_per_key():
+    def fake_metadata(path, timeout=5):
+        return (json.dumps({"access_token": "t"}) if "token" in path
+                else "proj-id")
+
+    class FakeResp:
+        def __init__(self, body): self.body = body
+        def read(self): return self.body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None, context=None):
+        if "dhan-pin" in req.full_url:
+            raise OSError("403 access denied")
+        return FakeResp(_sm_payload("totp-abc"))
+
+    with mock.patch.object(rt, "_metadata_get", fake_metadata), \
+         mock.patch.object(rt.urllib.request, "urlopen", fake_urlopen):
+        out = rt.fetch_gcp_secrets(["DHAN_PIN", "DHAN_TOTP_SECRET"])
+    assert out == {"DHAN_TOTP_SECRET": "totp-abc"}  # the rest still arrive
+
+
+def test_renew_never_consults_secret_manager_when_env_is_complete():
+    tmp = Path(tempfile.mkdtemp())
+    env_file = tmp / ".env"
+    env_file.write_text(V2_ENV)
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "fetch_gcp_secrets",
+                           side_effect=AssertionError("SM consulted!")), \
+         mock.patch.object(rt, "renew_v2", return_value=0) as v2:
+        assert rt.renew() == 0
+    assert v2.called  # .env keys always win — vault untouched
+
+
+def test_renew_fills_missing_v2_keys_from_secret_manager():
+    tmp = Path(tempfile.mkdtemp())
+    env_file = tmp / ".env"
+    env_file.write_text(SAMPLE_ENV)  # client id + token only, no V2 keys
+    fetched = {"DHAN_PIN": "1234", "DHAN_TOTP_SECRET": "BASE32SECRET",
+               "DHAN_API_KEY": "app-id", "DHAN_API_SECRET": "app-sec"}
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "fetch_gcp_secrets", return_value=fetched), \
+         mock.patch.object(rt, "renew_v2", return_value=0) as v2, \
+         mock.patch.object(rt, "renew_legacy", return_value=0) as legacy:
+        assert rt.renew() == 0
+    assert v2.called and not legacy.called
+    creds = v2.call_args.args[1]           # merged creds handed to the V2 flow
+    assert creds["DHAN_PIN"] == "1234"
+    assert creds["DHAN_CLIENT_ID"] == "1109738713"   # .env value retained
 
 
 def test_renew_v2_fails_cleanly_without_touching_env():

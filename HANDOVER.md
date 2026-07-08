@@ -628,4 +628,10 @@ Planned build (when explicitly greenlit, one file at a time, offline-first, nati
 ### Phase 13: Live Broker Execution
 * Remove the strict "Paper-Trading Only" guardrail.
 * Connect DhanHQ /v2/orders execution endpoints to route real capital to the NSE.
+
+---
+## 🌐 Future Frontiers
+(Architecture documented ahead of the build — not started, not scheduled)
+
+* Phase 8: Semantic News Ingestion (Spec fully defined in docs/PHASE_8_NEWS_INGESTION_SPEC.md).
 ---

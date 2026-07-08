@@ -18,6 +18,7 @@ system flow between these, see `ARCHITECTURE.md`.
 |---|---|
 | `src/graph_engine.py` | Phase 6C reasoning layer: `ensure_schema` (creates `graph_edges` table + temporal columns), `add_edge` (idempotent writer — stamps `valid_from`, clears `invalid_at` on reinforce), `GraphEngine` (loads ACTIVE edges only — `WHERE invalid_at IS NULL` — into a `networkx.DiGraph` for 2-hop BFS context queries). |
 | `src/decay_engine.py` | Phase 6E temporal decay sweep: `migrate_schema` (adds `valid_from`/`invalid_at`/`decay_lambda` to `graph_edges`), `apply_decay_sweep` (daily `w(t) = w₀·exp(−λ·t)` pass — reduces `confidence_score`, stamps `invalid_at` when weight < 0.1). Run via `python3 -m src.decay_engine` or after the Sleep Phase cron. |
+| `src/vol_bridge.py` | Phase 6F quantitative execution bridge: `classify_regime(edges)` classifies "Expansion"/"Contraction"/"Neutral" from aggregate signed edge weights; `compute_regime_overrides(conn, mode)` queries the live graph and returns `build_proposal` kwargs — under Expansion either `risk_pct` (×0.70, scale_risk mode) or `short_strike_otm_pct` (×1.50, widen_wings mode). Stateless, no writes, fail-safe. Wired into `market_loop.fetch_market_state` + `options_proposer.run_headless`. |
 
 ## Signal & suggestion engine
 
@@ -75,6 +76,7 @@ system flow between these, see `ARCHITECTURE.md`.
 
 | File | Purpose |
 |---|---|
+| `tests/test_vol_bridge.py` | Phase 6F vol bridge: polarity classification, net-signal arithmetic, regime boundary precision, macro shock scenarios, scale_risk/widen_wings parameter scaling, run_headless integration — 31 tests, offline. |
 | `tests/test_rules.py` | Alert rule logic, offline. |
 | `tests/test_portfolio.py` | Portfolio math + strategy proposals, offline. |
 | `tests/test_forecast.py` | Forecast checklist scoring, offline (monkeypatches `suggestions.analyze`). |

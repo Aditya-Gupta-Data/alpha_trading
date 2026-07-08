@@ -38,6 +38,41 @@ same base64 `.env` transfer trick since these values would otherwise
 mangle in the browser SSH terminal) so its 07:00 IST cron renewal also
 uses V2 instead of the legacy fallback.
 
+## ✅ Phase 6F: Quantitative Execution Bridge (vol_bridge) — BUILT AND TESTED (2026-07-08)
+
+`src/vol_bridge.py` is a stateless routing module that reads the active
+`graph_edges` from `brain_map.db`, computes a signed net-weight signal
+(`_net_signal` = Σ polarity × confidence_score over active edges where
+polarity is −1/+1/0 from the target node's keywords), and classifies the
+macro regime:
+
+- **Expansion** (`net_signal < -0.5`): negative-node weight dominates — the
+  knowledge graph's evidence tilts toward losses/bearish outcomes.
+- **Contraction** (`net_signal > +0.5`): positive-node weight dominates.
+- **Neutral**: neither threshold reached.
+
+Under **Expansion** two defensive modes translate the regime to iron condor
+parameters (caller selects via `mode=`):
+- `"scale_risk"` (default) — `risk_pct = base × 0.70` (30 % fewer contracts,
+  lower max loss per cycle)
+- `"widen_wings"` — `short_strike_otm_pct = base × 1.50` (short put moves
+  50 % further OTM, widening the tail-risk buffer)
+
+Wired end-to-end:
+- `market_loop.fetch_market_state` calls `compute_regime_overrides()` and
+  stashes the result as `state["vol_overrides"]`.
+- `options_proposer.run_headless` strips `vol_overrides` from state before
+  unpacking into `build_proposal`, forwarding `risk_pct` / `short_strike_otm_pct`
+  as explicit kwargs.
+- `build_proposal` gained two optional kwargs (`risk_pct`, `short_strike_otm_pct`)
+  that fall back to the module constants — fully backward-compatible.
+
+Fail-safe throughout: missing DB / empty graph / any exception returns `{}`
+so the proposer runs unchanged. Tests: `tests/test_vol_bridge.py` (31 tests,
+offline in-memory SQLite, covering polarity classification, net-signal
+arithmetic, boundary precision, macro shock scenarios, and the
+`run_headless` integration). Decision #38 in `DECISIONS.md`.
+
 ## ✅ Phase 6E: Temporal Signal Decay — BUILT AND TESTED (2026-07-08)
 
 `src/decay_engine.py` is a standalone daily sweep that applies exponential

@@ -108,10 +108,22 @@ def _step(strikes: list) -> float:
 
 def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                    vix: float = None, expiry: str = None, chain: dict = None,
-                   book: dict = None, prices: dict = None) -> dict:
+                   book: dict = None, prices: dict = None,
+                   risk_pct: float = None,
+                   short_strike_otm_pct: float = None) -> dict:
     """The full pipeline, every input injectable for offline tests.
+
+    `risk_pct` overrides OPTIONS_RISK_PER_TRADE_PCT (e.g. vol_bridge may
+    scale it down 30 % under an Expansion regime).  `short_strike_otm_pct`
+    overrides SHORT_STRIKE_OTM_PCT for the iron condor's put short strike
+    (vol_bridge widen_wings mode widens it to buffer tail risk).  Both fall
+    back to their module constants when None.
+
     Returns {"proposal": dict-or-None, "reason": str, "view": str-or-None,
     "vix": float-or-None} — `reason` always explains a None proposal."""
+    _risk_pct = risk_pct if risk_pct is not None else OPTIONS_RISK_PER_TRADE_PCT
+    _otm_pct = (short_strike_otm_pct if short_strike_otm_pct is not None
+                else SHORT_STRIKE_OTM_PCT)
     if analysis is None:
         analysis = analyze(underlying)
     if analysis is None:
@@ -172,8 +184,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         if not allowed:
             return {"proposal": None, "view": view, "vix": vix,
                     "reason": f"range-bound structure blocked: {why_regime}"}
-        put_short = _nearest_strike(strikes, spot * (1 - SHORT_STRIKE_OTM_PCT / 100))
-        call_short = _nearest_strike(strikes, spot * (1 + SHORT_STRIKE_OTM_PCT / 100))
+        put_short = _nearest_strike(strikes, spot * (1 - _otm_pct / 100))
+        call_short = _nearest_strike(strikes, spot * (1 + _otm_pct / 100))
         wing = WING_STEPS * step
         prems = leg_premiums([(put_short, "pe"), (put_short - wing, "pe"),
                               (call_short, "ce"), (call_short + wing, "ce")])
@@ -194,11 +206,11 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         book = pf.load()
     if prices is None:
         prices = {}
-    lots = sc.size_lots(spread, book, prices, risk_pct=OPTIONS_RISK_PER_TRADE_PCT)
+    lots = sc.size_lots(spread, book, prices, risk_pct=_risk_pct)
     if lots <= 0:
         return {"proposal": None, "view": view, "vix": vix,
                 "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot doesn't fit "
-                           f"the {OPTIONS_RISK_PER_TRADE_PCT:g}% options risk "
+                           f"the {_risk_pct:g}% options risk "
                            f"budget (or SPAN margin exceeds cash)")}
 
     net = spread["net_credit"] if spread["net_credit"] is not None else -spread["net_debit"]
@@ -410,7 +422,12 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     call): if nobody ever decides, the tracker still scores what the
     setup would have done. Returns {"proposed": bool, "reason": str,
     "entry": dict-or-None}."""
-    result = build_proposal(underlying, **(state or {}))
+    state = dict(state or {})
+    vol_overrides = state.pop("vol_overrides", {})
+    bp_extras = {k: vol_overrides[k]
+                 for k in ("risk_pct", "short_strike_otm_pct")
+                 if k in vol_overrides}
+    result = build_proposal(underlying, **state, **bp_extras)
     if result["proposal"] is None:
         return {"proposed": False, "reason": result["reason"], "entry": None}
     p = result["proposal"]

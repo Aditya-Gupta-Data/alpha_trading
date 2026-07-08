@@ -73,7 +73,15 @@ def fetch_market_state(underlying: str) -> dict | None:
     analysis = analyze(underlying)
     if analysis is None:
         return None
-    return {"analysis": analysis, "vix": get_india_vix()}
+    state: dict = {"analysis": analysis, "vix": get_india_vix()}
+    try:
+        from src.vol_bridge import compute_regime_overrides
+        vol_overrides = compute_regime_overrides()
+        if vol_overrides:
+            state["vol_overrides"] = vol_overrides
+    except Exception:
+        pass  # bridge unavailable — run with default params
+    return state
 
 
 class CooldownRegistry:

@@ -6,34 +6,37 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
-## ✅ RESOLVED (2026-07-08): DhanHQ V2 auth refactor — Phase 7b unblocked in code
+## ✅ RESOLVED AND VERIFIED LIVE (2026-07-08): DhanHQ V2 auth refactor
 
-**The 2026-07-07 blocker is fixed.** `src/renew_token.py` is now V2-FIRST:
-when `.env` carries `DHAN_CLIENT_ID` + `DHAN_PIN` + `DHAN_TOTP_SECRET`
-(plus optional `DHAN_API_KEY`/`DHAN_API_SECRET` app headers), it computes
-the current TOTP code via `pyotp` and POSTs
+**Fully closed, not just fixed-in-code — confirmed against Dhan's live
+API on the Mac.** `src/renew_token.py` is V2-FIRST: with `DHAN_CLIENT_ID`
++ `DHAN_PIN` + `DHAN_TOTP_SECRET` (+ `DHAN_API_KEY`/`DHAN_API_SECRET` app
+headers) in `.env`, it computes the current TOTP via `pyotp` and POSTs
 `auth.dhan.co/app/generateAccessToken` — minting a **brand-new 24h token
-headlessly**, even when the old token is already dead (the failure mode
-that used to force a manual dashboard paste). Without the V2 keys it
-falls back to the DEPRECATED legacy `/v2/RenewToken` with a loud
-migration nudge — that path is what broke on 2026-07-07 with `DH-905`
-("Renewal of token not allowed for this token type") after DhanHQ's
-2025-10-01 auth overhaul. Sources:
+headlessly**, even from a fully dead old token (the exact failure that
+forced a manual dashboard paste on 2026-07-07). Without those keys it
+falls back to the DEPRECATED legacy `/v2/RenewToken` — that path is what
+broke with `DH-905` after DhanHQ's 2025-10-01 auth overhaul. Sources:
 [the change notice](https://github.com/marketcalls/openalgo/issues/488),
 [DhanHQ v2 auth docs](https://dhanhq.co/docs/v2/authentication/).
 `pyotp` added to `requirements.txt`; offline tests in
-`tests/test_renew_token.py` (TOTP generation, request shape, .env
-rewrite + backup, V2-vs-legacy dispatch, fail-clean-without-touching-.env).
+`tests/test_renew_token.py`.
 
-**⚠️ One-time HUMAN setup still required before this is live** (on Dhan
-web, then add to `.env` on BOTH the Mac and the VM — see `.env.example`):
-My Profile → Access DhanHQ APIs → generate the **API key + secret**;
-enable **TOTP 2FA** on the account (profile → security) and copy the
-base32 authenticator secret it shows; then set `DHAN_PIN` (the login
-PIN), `DHAN_TOTP_SECRET`, `DHAN_API_KEY`, `DHAN_API_SECRET`. Until those
-keys are set, renewal keeps using the legacy path and the ~24h
-manual-paste cycle continues. Verify with `python3 -m src.renew_token` —
-success prints "Token renewed successfully" with NO deprecation note.
+**Live verification (2026-07-08, Mac)**: after the one-time Dhan-web setup
+(API key + secret via the developer console's "API Key" tab; TOTP 2FA
+enabled with the plain-text secret captured during enrollment — NOT the
+account's general login settings, and NOT re-viewable after the fact, so
+disable/re-enable was needed once to see it) and populating `.env`,
+`python3 -m src.renew_token` printed **"Token renewed successfully. New
+expiry: 2026-07-09T12:24:11"** — a genuine fresh token from Dhan's live
+API, headlessly, with no deprecation note. **Phase 7b is now unblocked
+for real**: large simulator runs no longer risk the token dying mid-run.
+
+**Still to do**: replicate the same four `.env` keys on the **VM**
+(`git pull` + `pip install -r requirements.txt` for `pyotp`, then the
+same base64 `.env` transfer trick since these values would otherwise
+mangle in the browser SSH terminal) so its 07:00 IST cron renewal also
+uses V2 instead of the legacy fallback.
 
 ## Current production state (as of 2026-07-06)
 
@@ -277,7 +280,7 @@ reader in each entry point (`_load_env()`), not a shared library, by design
 |---|---|---|
 | `DHAN_CLIENT_ID` | DhanHQ account id | `1109738713` as of this writing |
 | `DHAN_ACCESS_TOKEN` | DhanHQ Data API token | **Short-lived (~24h)**, auto-minted daily by `python3 -m src.renew_token`. V2 flow (post Oct-2025 overhaul) needs `DHAN_PIN` + `DHAN_TOTP_SECRET` (+ `DHAN_API_KEY`/`DHAN_API_SECRET`) in `.env` — see the "✅ RESOLVED" block at the top of this file for the one-time Dhan-web setup. Without those keys it falls back to the deprecated legacy renewal (expect `DH-905` + manual pastes). |
-| `DHAN_PIN` / `DHAN_TOTP_SECRET` / `DHAN_API_KEY` / `DHAN_API_SECRET` | DhanHQ V2 headless auth (daily token minting) | PIN = the Dhan login PIN; TOTP secret = the base32 authenticator key from enabling TOTP 2FA (Dhan web → profile → security); API key + secret (12-month validity) from My Profile → Access DhanHQ APIs. Needed on BOTH the Mac and the VM. |
+| `DHAN_PIN` / `DHAN_TOTP_SECRET` / `DHAN_API_KEY` / `DHAN_API_SECRET` | DhanHQ V2 headless auth (daily token minting) | PIN = the Dhan login PIN. API key + secret: `developer.dhanhq.co/live-environment` → "API Key" tab (not "Access Token") → name an app, any placeholder `https://` URL works for Redirection (never actually used by our headless flow) → Generate. TOTP secret: **on that same "API Key" tab**, enable TOTP — the plain-text secret is shown only once at enrollment, so copy it immediately; if missed, Disable then re-enable to see a fresh one (confirm the re-enrollment code with `python3 -c "import pyotp; print(pyotp.TOTP('SECRET').now())"`, no phone app needed). Needed on BOTH the Mac and the VM. |
 | `GEMINI_API_KEY` | Google Gemini (news sentiment + chat) | Get from Google AI Studio, create the key against the *existing billed* `alpha-trading-app-2026` GCP project (a key from AI Studio's "new project" flow gets zero free-tier quota — see `DECISIONS.md`). |
 | `DISCORD_BOT_TOKEN` | Discord bot login | From the Discord Developer Portal, needs "Message Content Intent" enabled. |
 | `DISCORD_WEBHOOK_URL` | Discord channel webhook (alerts + trade episodes push) | **Set and verified live 2026-07-06**, both locally and on the VM. Different thing from the bot token above — a channel gear icon → Integrations → Webhooks → New Webhook → Copy Webhook URL. Pushes to the "Alpha Trading" server's #general channel. Verify anytime with `python3 -m src.plan_tracker --mock-trade-strategy IRON_BUTTERFLY` (prints `Discord delivery: OK`/`FAILED`, journals nothing). |
@@ -525,12 +528,13 @@ entries then live in the VM's own `data/journal.jsonl`, a separate file
 from the Mac's local journal.
 
 **Next up, in priority order**: (1) ~~the DhanHQ V2 auth refactor~~ ✅
-DONE in code 2026-07-08 — see the "✅ RESOLVED" block at the top; only the
-one-time human setup (Dhan-web API key/TOTP + `.env` keys on Mac + VM)
-remains; (2) training the skeptic model on simulated trades (Phase 7b);
-(3) upgrading to a named Cloudflare tunnel for a permanent URL (needs a
-domain); (4) analyst procedural evolution (see `DECISIONS.md` → "Still
-open"). The VM's scheduled jobs are handled by `scripts/setup_cron.sh`
+DONE AND VERIFIED LIVE on the Mac 2026-07-08 — see the "✅ RESOLVED" block
+at the top; only replicating the same `.env` keys on the **VM** remains
+(so its cron renewal also uses V2); (2) training the skeptic model on
+simulated trades (Phase 7b, now genuinely unblocked); (3) upgrading to a
+named Cloudflare tunnel for a permanent URL (needs a domain); (4) analyst
+procedural evolution (see `DECISIONS.md` → "Still open"). The VM's
+scheduled jobs are handled by `scripts/setup_cron.sh`
 (see the GCP VM section).
 
 ## Where to look for more detail

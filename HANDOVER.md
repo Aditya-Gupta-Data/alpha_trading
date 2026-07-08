@@ -6,6 +6,40 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Phase 6G: Capital & Margin Allocation Layer — BUILT AND TESTED (2026-07-08)
+
+`src/portfolio_manager.py` gives the automated options pipeline a dedicated
+account profile: a simulated pool of Rs.10,00,000 starting capital living in
+`brain_map.db` (four additive tables owned by the module: `account_state`,
+`margin_locks`, `equity_curve`, `account_events` — core tables untouched,
+same pattern as the simulator's `simulated_trades`). Three strict guards:
+
+- **Margin locking** — when the headless proposer fires an entry signal, the
+  structure's SPAN margin (`portfolio.calculate_span_margin` total × lots) is
+  digitally locked under the entry's journal `short_id` BEFORE the proposal
+  goes out. Locks release when the tracker resolves the trade (realized P&L
+  settles into the account) or the human rejects it (zero P&L).
+- **Margin exhaustion** — an entry needing more margin than the available
+  liquid cash (equity − active locks) is SILENTLY rejected: no journal line,
+  no Discord alert, just a `margin_exhaustion` row in `account_events`.
+- **Risk of ruin** — the account tracks its equity curve and trailing
+  drawdown from a ratcheting peak; once drawdown ≥ the hard-coded 10%
+  (`MAX_DRAWDOWN_PCT`), ALL entries are blocked (`risk_of_ruin_halt` logged),
+  however affordable, until equity recovers above the line.
+
+Scope rule (decision #40): the gate applies ONLY when `run_headless` trades
+the real paper book — a caller-injected `book` (the Phase 7 simulator, every
+test, any what-if run) is its own capital world and neither consults nor
+touches the real account. The paper cash flow itself is unchanged
+(`plan_tracker._settle_spread_cash` still net-settles `portfolio.json`);
+margin here is *virtually* blocked, like a real clearing house blocks SPAN.
+Fail-safe at the seams: the proposer/tracker call `gate_headless_entry` /
+`release_entry`, which never raise — a dead DB prints a note and fails OPEN.
+Inspect the account: `python3 -m src.portfolio_manager`. Tests:
+`tests/test_portfolio.py` (Phase 6G section — 16 new tests, in-memory DB,
+margin boundaries, consecutive-loss drawdown scenarios, halt behavior,
+`run_headless` gate integration; suite 386 green).
+
 ## ✅ Broadcast Alert Engine + EOD Summary — BUILT AND TESTED (2026-07-08)
 
 `src/notifier.py` gains two new exports:

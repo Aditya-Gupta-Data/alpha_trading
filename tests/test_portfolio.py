@@ -135,6 +135,245 @@ def test_calculate_trade_frictions_and_slippage():
     assert apply_slippage(200.0, "OPTION") == 0.20
 
 
+# --- Phase 6G: the capital & margin allocation layer --------------------
+# All against an in-memory brain_map DB — no file, no network, instant.
+
+from src import brain_map
+from src import portfolio_manager as pm
+
+
+def pm_conn():
+    return brain_map.connect(":memory:")
+
+
+def test_pm_account_initializes_with_ten_lakh():
+    conn = pm_conn()
+    acct = pm.get_account(conn)
+    assert acct["starting_capital"] == 1_000_000.0
+    assert acct["realized_pnl"] == 0
+    assert pm.equity(conn) == 1_000_000.0
+    assert pm.available_cash(conn) == 1_000_000.0
+    assert pm.drawdown_pct(conn) == 0.0
+    assert not pm.trading_halted(conn)
+
+
+def test_pm_entry_locks_margin_and_reduces_available_cash():
+    conn = pm_conn()
+    verdict = pm.request_entry(conn, "trade001", 250_000.0)
+    assert verdict["approved"]
+    assert pm.locked_margin(conn) == 250_000.0
+    assert pm.available_cash(conn) == 750_000.0
+    # equity is untouched by a lock — margin is blocked, not spent
+    assert pm.equity(conn) == 1_000_000.0
+
+
+def test_pm_relock_same_ref_is_idempotent():
+    conn = pm_conn()
+    pm.request_entry(conn, "trade001", 250_000.0)
+    verdict = pm.request_entry(conn, "trade001", 250_000.0)
+    assert verdict["approved"]
+    assert pm.locked_margin(conn) == 250_000.0  # not double-locked
+
+
+def test_pm_margin_exhaustion_rejects_and_logs_event():
+    conn = pm_conn()
+    assert pm.request_entry(conn, "t1", 600_000.0)["approved"]
+    verdict = pm.request_entry(conn, "t2", 500_000.0)  # only 4L liquid left
+    assert not verdict["approved"]
+    assert "margin exhaustion" in verdict["reason"]
+    assert pm.locked_margin(conn) == 600_000.0  # nothing new locked
+    events = conn.execute("SELECT event_type FROM account_events").fetchall()
+    assert [e[0] for e in events] == ["margin_exhaustion"]
+
+
+def test_pm_margin_exactly_equal_to_cash_is_allowed():
+    conn = pm_conn()
+    assert pm.request_entry(conn, "t1", 1_000_000.0)["approved"]
+    assert pm.available_cash(conn) == 0.0
+    # and now literally any further entry is margin-exhausted
+    assert not pm.request_entry(conn, "t2", 0.01)["approved"]
+
+
+def test_pm_release_settles_pnl_and_frees_margin():
+    conn = pm_conn()
+    pm.request_entry(conn, "t1", 300_000.0)
+    result = pm.release_margin(conn, "t1", pnl_net=42_000.0)
+    assert result["released"]
+    assert pm.locked_margin(conn) == 0.0
+    assert pm.equity(conn) == 1_042_000.0
+    assert pm.available_cash(conn) == 1_042_000.0
+
+
+def test_pm_release_unknown_ref_is_safe_noop():
+    conn = pm_conn()
+    result = pm.release_margin(conn, "never-locked", pnl_net=99_999.0)
+    assert not result["released"]
+    assert pm.equity(conn) == 1_000_000.0  # P&L NOT applied
+
+
+def test_pm_equity_curve_records_every_settlement():
+    conn = pm_conn()
+    for i, pnl in enumerate((10_000.0, -5_000.0, 2_500.0)):
+        ref = f"t{i}"
+        pm.request_entry(conn, ref, 100_000.0)
+        pm.release_margin(conn, ref, pnl)
+    rows = conn.execute("SELECT equity, peak_equity, drawdown_pct "
+                        "FROM equity_curve ORDER BY rowid").fetchall()
+    assert len(rows) == 3
+    assert rows[0][0] == 1_010_000.0 and rows[0][1] == 1_010_000.0
+    assert rows[1][0] == 1_005_000.0 and rows[1][1] == 1_010_000.0  # peak holds
+    assert rows[1][2] > 0                                            # in drawdown
+    assert rows[2][0] == 1_007_500.0
+
+
+def test_pm_peak_ratchets_and_drawdown_trails_from_it():
+    conn = pm_conn()
+    pm.request_entry(conn, "win", 100_000.0)
+    pm.release_margin(conn, "win", 50_000.0)          # equity 10.5L, peak 10.5L
+    pm.request_entry(conn, "loss", 100_000.0)
+    pm.release_margin(conn, "loss", -100_000.0)       # equity 9.5L
+    # drawdown measured from the RATCHETED 10.5L peak, not the 10L start
+    assert pm.drawdown_pct(conn) == round((1_050_000 - 950_000) / 1_050_000 * 100, 4)
+    assert not pm.trading_halted(conn)                # 9.52% < 10%
+
+
+def test_pm_consecutive_losses_trip_the_risk_of_ruin_halt():
+    conn = pm_conn()
+    # three consecutive Rs.40,000 losses: the third one carries the
+    # account through the 10% line (Rs.1.2L down = 12% drawdown).
+    for i, pnl in enumerate((-40_000.0, -40_000.0, -40_000.0)):
+        ref = f"loss{i}"
+        assert pm.request_entry(conn, ref, 50_000.0)["approved"], \
+            f"entry {i} should still be allowed"
+        pm.release_margin(conn, ref, pnl)
+    assert pm.drawdown_pct(conn) == 12.0
+    assert pm.trading_halted(conn)
+    # the halt was logged the moment the breach happened
+    events = [e[0] for e in conn.execute(
+        "SELECT event_type FROM account_events").fetchall()]
+    assert "risk_of_ruin_halt" in events
+
+
+def test_pm_halt_blocks_even_easily_affordable_entries():
+    conn = pm_conn()
+    pm.request_entry(conn, "big", 100_000.0)
+    pm.release_margin(conn, "big", -150_000.0)        # 15% drawdown — halted
+    verdict = pm.request_entry(conn, "tiny", 1_000.0)  # trivially affordable
+    assert not verdict["approved"]
+    assert "risk-of-ruin" in verdict["reason"]
+
+
+def test_pm_drawdown_boundary_is_inclusive_at_ten_percent():
+    conn = pm_conn()
+    pm.request_entry(conn, "a", 200_000.0)
+    pm.release_margin(conn, "a", -99_900.0)           # 9.99% — still trading
+    assert not pm.trading_halted(conn)
+    assert pm.request_entry(conn, "b", 1_000.0)["approved"]
+    pm.release_margin(conn, "b", -100.0)              # exactly 10.00% — halted
+    assert pm.drawdown_pct(conn) == 10.0
+    assert pm.trading_halted(conn)
+
+
+def test_pm_extreme_loss_streak_never_allows_overlocking():
+    conn = pm_conn()
+    # grind the account down with losses while margin stays locked: at no
+    # point may active locks exceed what the shrinking equity can cover.
+    for i in range(20):
+        ref = f"grind{i}"
+        verdict = pm.request_entry(conn, ref, 400_000.0)
+        if not verdict["approved"]:
+            break
+        assert pm.locked_margin(conn) <= pm.equity(conn) + 1e-9
+        pm.release_margin(conn, ref, -30_000.0)
+    assert pm.trading_halted(conn) or not verdict["approved"]
+
+
+def test_pm_required_margin_scales_by_lots():
+    proposal = {"spread": {"margin": {"total_margin": 2_800.0}, "lots": 3},
+                "lots": 3}
+    assert pm.required_margin_for(proposal) == 8_400.0
+
+
+def test_pm_gate_and_release_fail_open_on_a_dead_db():
+    class Boom:
+        def execute(self, *a, **k):
+            raise RuntimeError("db down")
+        def executescript(self, *a, **k):
+            raise RuntimeError("db down")
+
+    allowed, reason = pm.gate_headless_entry("x", 100.0, conn=Boom())
+    assert allowed is True                 # fail OPEN — never stall the loop
+    assert "unavailable" in reason
+    result = pm.release_entry("x", 5_000.0, conn=Boom())
+    assert not result["released"]
+
+
+def test_pm_run_headless_silently_rejects_when_the_gate_says_no():
+    from src import options_proposer as op
+    from src import journal as journal_mod
+
+    spread = {"strategy": "iron_condor", "lot_size": 35, "lots": 2,
+              "expiry": "2026-07-16", "entry_spot": 52_000.0,
+              "net_credit": 120.0, "net_debit": None, "spread_width": 200.0,
+              "max_loss": 2_800.0, "max_profit": 4_200.0,
+              "margin": {"total_margin": 2_800.0, "naked_margin": 90_000.0,
+                         "offset_savings": 87_200.0},
+              "legs": [
+                  {"side": "SELL", "option_type": "PE", "strike": 51_000.0, "premium": 90.0},
+                  {"side": "BUY", "option_type": "PE", "strike": 50_800.0, "premium": 55.0},
+                  {"side": "SELL", "option_type": "CE", "strike": 53_000.0, "premium": 95.0},
+                  {"side": "BUY", "option_type": "CE", "strike": 53_200.0, "premium": 60.0}]}
+    canned = {"proposal": {"action": "SPREAD", "ticker": "NIFTY BANK",
+                           "shares": 70, "price": 120.0, "signal": "test",
+                           "spread": spread, "view": "neutral", "vix": 14.0,
+                           "lots": 2},
+              "view": "neutral", "vix": 14.0, "reason": "ok"}
+
+    logged, notified = [], []
+    saved = (op.build_proposal, journal_mod.log, op._notify_discord,
+             op._memory_context_for, op._skeptic_note_for,
+             pm.gate_headless_entry)
+    try:
+        op.build_proposal = lambda *a, **k: canned
+        journal_mod.log = lambda e: logged.append(e)
+        op._notify_discord = lambda text: notified.append(text) or True
+        op._memory_context_for = lambda *a, **k: ""
+        op._skeptic_note_for = lambda *a, **k: ""
+
+        # gate says NO -> silent rejection: no journal line, no Discord
+        pm.gate_headless_entry = lambda ref, margin, conn=None: (
+            False, "margin exhaustion: test")
+        result = op.run_headless("NIFTY BANK", {})
+        assert result["proposed"] is False
+        assert "margin exhaustion" in result["reason"]
+        assert logged == [] and notified == []
+
+        # gate says YES -> the normal flow resumes untouched
+        seen = {}
+        pm.gate_headless_entry = lambda ref, margin, conn=None: (
+            seen.update(ref=ref, margin=margin) or True, "margin locked")
+        result = op.run_headless("NIFTY BANK", {})
+        assert result["proposed"] is True
+        assert len(logged) == 1 and len(notified) == 1
+        assert seen["margin"] == 5_600.0   # 2,800/lot SPAN x 2 lots
+        assert seen["ref"] == logged[0]["short_id"]
+
+        # an injected book is its own capital world — the account gate
+        # must NOT be consulted (this is what keeps every other test and
+        # the simulator from ever touching the real brain_map account)
+        calls = []
+        pm.gate_headless_entry = lambda ref, margin, conn=None: (
+            calls.append(ref) or (False, "should never be called"))
+        result = op.run_headless("NIFTY BANK",
+                                 {"book": {"cash": 1.0, "holdings": {}}})
+        assert result["proposed"] is True
+        assert calls == []
+    finally:
+        (op.build_proposal, journal_mod.log, op._notify_discord,
+         op._memory_context_for, op._skeptic_note_for,
+         pm.gate_headless_entry) = saved
+
+
 if __name__ == "__main__":
     # Simple runner so you don't even need pytest installed.
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

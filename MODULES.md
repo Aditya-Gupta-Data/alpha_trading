@@ -36,6 +36,7 @@ system flow between these, see `ARCHITECTURE.md`.
 |---|---|
 | `src/strategy.py` | Turns signals into full trade PLANS: entry rule, stop-loss, target, risk:reward, rationale, risk-based position sizing. `propose_plans()` / `propose()`. |
 | `src/portfolio.py` | Paper portfolio math: `data/portfolio.json`, buy/sell, cash + 25%-per-stock rails. |
+| `src/portfolio_manager.py` | Phase 6G capital & margin allocation layer: Rs.10,00,000 simulated account pool in `brain_map.db` (additive tables `account_state`/`margin_locks`/`equity_curve`/`account_events`). `request_entry` locks SPAN margin per entry (silent reject on margin exhaustion), `release_margin` settles realized P&L + ratchets peak equity, hard 10% trailing-drawdown halt (`MAX_DRAWDOWN_PCT`). Gates `run_headless` only when trading the real paper book (injected books bypass — decision #40); fail-open seams `gate_headless_entry`/`release_entry`. Inspect: `python3 -m src.portfolio_manager`. |
 | `src/journal.py` | Appends every approved/rejected decision to `data/journal.jsonl` with signal, risk levers, pattern tags, plan block, outcome. |
 | `src/plan_tracker.py` | Resolves OPEN plan-carrying trades against real daily OHLC high/low (stop/target/time-stop) — NOT a naive last-price check. Closes paper positions on resolution (bracket-order semantics). |
 | `src/review.py` | Legacy 7-day price-drift scorecard for pre-plan (non-4B) journal entries. |
@@ -80,7 +81,7 @@ system flow between these, see `ARCHITECTURE.md`.
 | `tests/test_notifier.py` | `broadcast_alert` embed dispatch, `fire_broadcast` sync bridge, EOD card builder, `query_todays_resolutions`, `compute_net_delta_exposure` — 53 tests, offline, pytest-mock. |
 | `tests/test_vol_bridge.py` | Phase 6F vol bridge: polarity classification, net-signal arithmetic, regime boundary precision, macro shock scenarios, scale_risk/widen_wings parameter scaling, run_headless integration — 31 tests, offline. |
 | `tests/test_rules.py` | Alert rule logic, offline. |
-| `tests/test_portfolio.py` | Portfolio math + strategy proposals, offline. |
+| `tests/test_portfolio.py` | Portfolio math + strategy proposals, plus the Phase 6G capital layer (margin lock/exhaustion boundaries, consecutive-loss drawdown scenarios, 10% risk-of-ruin halt, `run_headless` gate integration — in-memory DB). Offline. |
 | `tests/test_forecast.py` | Forecast checklist scoring, offline (monkeypatches `suggestions.analyze`). |
 | `tests/test_tuner.py` | Tuner weight learning, offline (fake journal entries). |
 

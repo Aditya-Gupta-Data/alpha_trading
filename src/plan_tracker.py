@@ -521,6 +521,12 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         capture_pct = (gross_pnl / max_profit_total * 100) if max_profit_total > 0 else 0.0
 
         settled = _settle_spread_cash(pnl_net) if approved else False
+        # Phase 6G: release the capital layer's margin lock (safe no-op if
+        # this entry never passed through the gate). Hypothetical trades
+        # never consumed real capital, so they settle at zero P&L.
+        from src import portfolio_manager as pm
+        pm.release_entry(entry.get("short_id", ""),
+                         pnl_net if approved else 0.0)
 
         entry["outcome"] = {
             "checked": date.today().isoformat(),

@@ -46,12 +46,13 @@ Reinstall if ever needed:
 launchctl load ~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist
 ```
 
-**Crontab** (deliberate redundancy — optional):
-
-| IST | Job | Notes |
-|---|---|---|
-| 07:00 daily | `src.renew_token` | when the Mac is awake, it renews from local `.env` keys |
-| 07:10 daily | `scripts/push_token_to_vm.sh` | …and pushes that token to the VM. When the Mac is asleep, the VM's own 07:00 renewal covers everything — these two are pure backup and can be removed with `crontab -e` any time |
+**Crontab:** none, by design (as of 2026-07-09). The Mac used to run its
+own 07:00 renewal + 07:10 push as "redundancy" — removed after discovering
+DhanHQ allows only one active token per account, so the Mac's unattended
+renewal could invalidate and overwrite the VM's currently-valid token
+(decision #48). The VM's Secret-Manager renewal needs no backup.
+`scripts/push_token_to_vm.sh` still exists for manual troubleshooting —
+just never schedule it again.
 
 ## Watching it work
 

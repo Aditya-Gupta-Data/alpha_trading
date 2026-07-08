@@ -6,6 +6,22 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ⚠️ Correction (2026-07-09, just after midnight): Mac renew/push crons REMOVED — they raced the VM's token
+
+Discovered by accident: DhanHQ allows only ONE active access token per
+client ID — minting a new one silently invalidates the previous token,
+even one whose own expiry claim is hours from now. The Mac's 07:00
+renewal + 07:10 push (added a few hours earlier the same night as
+"deliberate redundancy") meant that on ANY morning where the VM's own
+07:00 Secret-Manager renewal happened to land a moment before the Mac's,
+the Mac's 07:10 push would overwrite the VM's fresh, valid token with
+the Mac's own (now-invalidated-by-the-VM) token — breaking the live
+engine's market data for the whole day. **Fixed**: both Mac cron entries
+removed. The VM's Secret-Manager renewal is proven reliable on its own
+(verified twice); it needs no backup, and the "backup" was actually the
+risk. `scripts/push_token_to_vm.sh` stays in the repo as a manual/dev
+tool only — never on an automatic schedule again. Decision #48.
+
 ## ✅ THE VM IS THE ENGINE — full migration, LIVE AND VERIFIED (2026-07-08 night)
 
 The Mac is no longer required for anything market-hours. Topology

@@ -349,6 +349,18 @@ def _fetch_bars(underlying: str, start: str) -> list:
             for b in get_ohlc_since(underlying, warmup_start)]
 
 
+def _fetch_vix_series(start: str) -> dict:
+    """CLI-only India VIX history: date_iso -> close. Gives every
+    simulated day the SAME VIX gate a live proposal faces (and stores the
+    true reading on each simulated_trades row — a NULL-VIX row starves the
+    Phase 7b skeptic of its most informative feature). Fail-safe: no
+    creds / no data just returns {} — the gate then blocks range-bound
+    structures, exactly like a live outage."""
+    from src.dhan_client import get_ohlc_since
+    return {b["date"]: float(b["close"])
+            for b in get_ohlc_since("INDIA VIX", start)}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 7 time-travel simulator")
     parser.add_argument("--start", required=True, help="YYYY-MM-DD")
@@ -357,13 +369,20 @@ if __name__ == "__main__":
                         help="repeatable; default NIFTY 50")
     parser.add_argument("--skip-causal", action="store_true",
                         help="skip the Sleep-Phase causal encoding step")
+    parser.add_argument("--no-vix", action="store_true",
+                        help="skip the India VIX history fetch (range-bound "
+                             "structures will then be gate-blocked)")
     args = parser.parse_args()
     underlyings = tuple(args.underlying or ["NIFTY 50"])
 
     connection = brain_map.connect()
     print(f"Simulator: replaying {', '.join(underlyings)} "
           f"{args.start} -> {args.end} (paper/simulated only)")
-    summary = run_simulation(args.start, args.end, underlyings, conn=connection)
+    vix_series = {} if args.no_vix else _fetch_vix_series(args.start)
+    if not args.no_vix:
+        print(f"  India VIX history: {len(vix_series)} sessions loaded")
+    summary = run_simulation(args.start, args.end, underlyings,
+                             conn=connection, vix_by_date=vix_series)
     print(f"  {json.dumps(summary)}")
     if not args.skip_causal:
         causal = encode_causal_links(connection, args.start)

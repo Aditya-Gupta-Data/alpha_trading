@@ -6,6 +6,30 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## 🟡 Phase 7b: Skeptic Trainer — BUILT AND TESTED; MODEL DELIBERATELY NOT SHIPPED (2026-07-08)
+
+`src/train_skeptic.py` (`python3 -m src.train_skeptic [--dry-run|--force]`)
+fits the Phase 11 skeptic's Random Forest on `simulated_trades` in the
+frozen `FEATURE_NAMES` order (graph slots honestly zero for simulated rows
+— the simulator never consults the graph, so backfilling them would be
+look-ahead leakage), evaluates on a stratified 25% holdout, and persists
+`data/skeptic_model.pkl` + `skeptic_model_meta.json` ONLY above a
+`MIN_BALANCED_ACCURACY = 0.60` ship gate (decision #44).
+
+**The honest outcome so far**: the training corpus was grown from 82
+VIX-less rows to **366 resolved simulated trades with true VIX** (290 wins
+/ 76 losses; NIFTY 50 + NIFTY BANK, 2023-01 → 2026-06) — the simulator CLI
+now fetches India VIX history natively (`_fetch_vix_series`, `--no-vix` to
+skip) and the 82 legacy NULL-VIX rows were backfilled from real history.
+Even so, the forest scores **~0.55 five-fold balanced accuracy — a coin
+flip**: the 10 frozen features don't separate wins from losses for
+structures that already passed the pipeline's own gates. So the trainer
+correctly REFUSES to persist, and the skeptic keeps abstaining (its
+designed no-noise behavior). To go live the model needs richer signal:
+regime-aware features (pending "Regime-Aware Memory" phase), real graph
+context at simulation time, or a feature-contract revision (which means
+retraining by design).
+
 ## ✅ Phase 6J: Strict Portfolio Realism — BUILT AND TESTED (2026-07-08)
 
 A four-part hardening pass tying the 6G–6I layers into enforced real-world

@@ -44,6 +44,9 @@ system flow between these, see `ARCHITECTURE.md`.
 | `src/review.py` | Legacy 7-day price-drift scorecard for pre-plan (non-4B) journal entries. |
 | `src/tuner.py` | Learning loop: scores resolved BUY archetypes (fresh-cross vs RSI-oversold), writes `data/brain_weights.json`, which `forecast.py` consumes. |
 | `src/trade.py` | Interactive terminal paper-trading session (`python -m src.trade`) — the original human-in-the-loop flow. |
+| `src/simulator.py` | Phase 7 time-travel simulator: replays history through the REAL proposal+resolution pipeline via as-of-date injection (decision #36); results land idempotently in `simulated_trades` + outcomes/events/links. CLI fetches daily bars AND India VIX history (`_fetch_vix_series` — so the VIX gate and stored rows see true readings; `--no-vix` to skip). Run: `python3 -m src.simulator --start … --end …`. |
+| `src/skeptic_agent.py` | Phase 11 Random Forest Skeptic: `RandomForestAuditor` builds the frozen `FEATURE_NAMES` vector (graph context + market numbers) and, once `data/skeptic_model.pkl` exists, emits P(win) with a ⚠️ warning below 0.40. ABSTAINS (None, no warning) without a trained model. Advisory only, fail-safe, no market-data imports. |
+| `src/train_skeptic.py` | Phase 7b trainer: fits the skeptic's forest on `simulated_trades` (frozen feature order, scratch dropped, class-balanced), evaluates on a stratified holdout, and persists `data/skeptic_model.pkl` + meta sidecar ONLY above the `MIN_BALANCED_ACCURACY` 0.60 ship gate (decision #44 — a noise model must never ship; `--force` for experiments). Run: `python3 -m src.train_skeptic [--dry-run]`. |
 
 ## Alerting & notifications
 
@@ -85,6 +88,7 @@ system flow between these, see `ARCHITECTURE.md`.
 | `tests/test_vol_bridge.py` | Phase 6F vol bridge: polarity classification, net-signal arithmetic, regime boundary precision, macro shock scenarios, scale_risk/widen_wings parameter scaling, run_headless integration — 31 tests, offline. |
 | `tests/test_live_bridge.py` | Phase 6H live bridge: packet parsing, candle-bucket playback, live fetch_market_state contract (hours gate, dead quote, vol_overrides), intraday profit-take/pre-expiry/clamp arithmetic, alert de-dup, read-only sandbox spy — 19 tests, offline. |
 | `tests/test_trade_planner.py` | Phase 6I planner: routing matrix, trend/IV classifier boundaries, Bank Nifty strike snapping, support/resistance overrides, VIX-gate consistency, purity + import guard — 21 tests, offline. |
+| `tests/test_train_skeptic.py` | Phase 7b trainer: frozen feature-order contract, scratch dropping, thin-data refusals, separable-pattern learning, ship-gate refusal of coin-flip models + `--force` override, trained pickle waking the skeptic from abstain — 12 tests, offline (temp-dir model files only). |
 | `tests/test_rules.py` | Alert rule logic, offline. |
 | `tests/test_portfolio.py` | Portfolio math + strategy proposals, plus the Phase 6G capital layer (margin lock/exhaustion boundaries, consecutive-loss drawdown scenarios, 10% risk-of-ruin halt, `run_headless` gate integration — in-memory DB). Offline. |
 | `tests/test_forecast.py` | Forecast checklist scoring, offline (monkeypatches `suggestions.analyze`). |

@@ -454,6 +454,25 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         resolved_lines.append(_outcome_line(entry))
         print(f"Plan tracker: resolved {entry['ticker']} — {entry['outcome']['verdict']}")
 
+        # Broadcast embed alert for this resolution (fail-safe — journal
+        # outcome is already written above; Discord outage cannot block it).
+        try:
+            from src.notifier import fire_broadcast
+            fire_broadcast({
+                "event": "stop_loss" if resolution == "stop_hit" else "closed",
+                "ticker": entry["ticker"],
+                "date": exit_day,
+                "short_id": entry.get("short_id"),
+                "resolution": resolution,
+                "pnl_rs": net_pnl_rs,
+                "r_multiple": entry["outcome"]["r_multiple"],
+                "verdict": entry["outcome"]["verdict"],
+                "days_in_trade": entry["outcome"]["days_in_trade"],
+                "frictions_rs": round(total_frictions, 2),
+            })
+        except Exception as _bcast_err:
+            print(f"  (plan_tracker: broadcast alert skipped: {_bcast_err})")
+
         # Phase 6 core loop: post-mortem + Brain Map write. Fail-safe —
         # the journal outcome above is already set and never blocked.
         if brain is not None:
@@ -524,6 +543,25 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         resolved_lines.append(_spread_outcome_line(entry))
         print(f"Plan tracker: resolved {spread['strategy']} on {entry['ticker']} "
               f"— {entry['outcome']['verdict']}")
+
+        # Broadcast embed alert for this spread resolution (fail-safe).
+        try:
+            from src.notifier import fire_broadcast
+            fire_broadcast({
+                "event": "closed",
+                "ticker": entry["ticker"],
+                "date": exit_day,
+                "strategy": spread.get("strategy"),
+                "short_id": entry.get("short_id"),
+                "resolution": resolution,
+                "pnl_rs": pnl_net,
+                "r_multiple": entry["outcome"]["r_multiple"],
+                "verdict": entry["outcome"]["verdict"],
+                "days_in_trade": entry["outcome"]["days_in_trade"],
+                "frictions_rs": round(total_frictions, 2),
+            })
+        except Exception as _bcast_err:
+            print(f"  (plan_tracker: broadcast alert skipped: {_bcast_err})")
 
         if brain is not None:
             try:

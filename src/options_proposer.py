@@ -471,7 +471,8 @@ def run_session(underlying: str = "NIFTY 50") -> None:
     answer = input("\nTake this spread on paper? [y/N] ").strip().lower()
     decision = "approved" if answer == "y" else "rejected"
     why = input("Why? (one line) ").strip() or "(no reason given)"
-    journal.log(to_journal_entry(p, decision, why))
+    _journal_entry = to_journal_entry(p, decision, why)
+    journal.log(_journal_entry)
     # Short follow-up with the outcome (the alert above already carried
     # the full detail); the resolution side is pushed by the API loop
     # when the tracker closes the basket.
@@ -483,6 +484,24 @@ def run_session(underlying: str = "NIFTY 50") -> None:
         print("\nJournaled as approved — the plan tracker manages the exit "
               "from here (65% profit take / pre-expiry rule). Cash settles "
               "net at the exit.")
+        try:
+            from src.notifier import fire_broadcast
+            s = p["spread"]
+            fire_broadcast({
+                "event": "opened",
+                "ticker": p["ticker"],
+                "date": _journal_entry["date"],
+                "strategy": s.get("strategy"),
+                "short_id": _journal_entry.get("short_id"),
+                "lots": p["lots"],
+                "lot_size": s.get("lot_size", 75),
+                "max_loss": float(s.get("max_loss", 0)) * p["lots"],
+                "max_profit": float(s.get("max_profit", 0)) * p["lots"],
+                "expiry": s.get("expiry", ""),
+                "signal": p.get("signal", ""),
+            })
+        except Exception as _bcast_err:
+            print(f"  (broadcast alert skipped: {_bcast_err})")
     else:
         print("\nJournaled as skipped — the tracker will score the skip.")
 
@@ -548,6 +567,26 @@ def decide_pending(trade_id: str, approve: bool, why: str = "") -> dict:
     _notify_discord(f"{marker} **Pending decision on {target['ticker']} "
                     f"{strategy.replace('_', ' ')}: {decision.upper()}**\n"
                     f"Why: {target['why']}")
+    if approve:
+        try:
+            from src.notifier import fire_broadcast
+            spread = target.get("spread") or {}
+            lots = int(spread.get("lots", 1))
+            fire_broadcast({
+                "event": "opened",
+                "ticker": target.get("ticker", "?"),
+                "date": date.today().isoformat(),
+                "strategy": spread.get("strategy"),
+                "short_id": target.get("short_id"),
+                "lots": lots,
+                "lot_size": int(spread.get("lot_size", 75)),
+                "max_loss": float(spread.get("max_loss", 0)) * lots,
+                "max_profit": float(spread.get("max_profit", 0)) * lots,
+                "expiry": spread.get("expiry", "?"),
+                "signal": target.get("signal", ""),
+            })
+        except Exception as _bcast_err:
+            print(f"  (broadcast alert skipped: {_bcast_err})")
     return {"status": decision, "entry": target}
 
 

@@ -6,6 +6,48 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Broadcast Alert Engine + EOD Summary — BUILT AND TESTED (2026-07-08)
+
+`src/notifier.py` gains two new exports:
+
+* **`broadcast_alert(payload: dict)` (async)** — posts a colour-coded Discord
+  embed card directly to `DISCORD_WEBHOOK_URL` via httpx using Discord's
+  `{"embeds": [...]}` API (not the existing `{"content": "..."}` text path).
+  Colour scheme: green = opened/win, orange = closed-neutral, red = stop_loss/loss,
+  blue = EOD. Fail-safe: missing webhook, any network error, or httpx absent all
+  return False without raising.
+
+* **`fire_broadcast(payload: dict)` (sync bridge)** — dispatches
+  `broadcast_alert` from sync calling contexts. Detects whether an event loop is
+  running (`asyncio.get_running_loop()`): if yes, schedules a fire-and-forget
+  `Task`; if no, calls `asyncio.run()`. Never raises — the trade journal is never
+  blocked by a Discord outage.
+
+**Wired into the execution loop at three points:**
+- `plan_tracker.run_tracker()` — embed on every equity and spread resolution
+  (`"closed"` event for profit-take/pre-expiry/target/time-stop; `"stop_loss"`
+  for stop_hit). All inside try/except — existing journal write never blocked.
+- `options_proposer.run_session()` — embed when the user types `y` in the
+  terminal session (the `"opened"` event fires after `journal.log`).
+- `options_proposer.decide_pending()` — embed when the Discord/API bridge or
+  `--review-pending` approves a pending entry (same `"opened"` event).
+
+**`src/eod_summary.py`** — new standalone daily broadcaster (run at 15:30 IST /
+10:00 UTC): queries `data/journal.jsonl` (today's resolved P&L, active approved
+positions) and `data/brain_map.db` (outcomes win/loss count), computes
+strategy-level net delta exposure across open spreads, and posts a terse embed
+status card via `broadcast_alert`. Run manually: `python3 -m src.eod_summary`.
+
+Cron schedule on VM:
+```
+0 10 * * 1-5  cd /home/aditya/alpha_trading && \
+              ./venv/bin/python3 -m src.eod_summary
+```
+
+**Tests**: `tests/test_notifier.py` — 53 new offline tests (pytest-mock
+`mocker` fixture, no network). Suite: 317 → 370 tests, all green.
+`pytest-mock` added to `requirements.txt`. Decision #39 in `DECISIONS.md`.
+
 ## ✅ RESOLVED AND VERIFIED LIVE (2026-07-08): DhanHQ V2 auth refactor
 
 **Fully closed, not just fixed-in-code — confirmed against Dhan's live

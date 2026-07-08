@@ -9,6 +9,16 @@ a Discord channel via src/discord_client.py when DISCORD_WEBHOOK_URL is set
 in .env — used by the API's background loops for watchlist alerts and
 resolved-trade Episodes. Fail-safe like email: unconfigured or failing
 Discord never raises, it just returns False.
+
+broadcast_alert(payload) (async) dispatches structured Discord embed cards
+for trade lifecycle events (opened / closed / stop_loss / eod). Embeds are
+colour-coded, field-gridded, and posted directly to DISCORD_WEBHOOK_URL via
+httpx — the {"embeds": [...]} API, not the {"content": "..."} text path.
+
+fire_broadcast(payload) is the sync bridge for contexts that cannot await
+(plan_tracker CLI, options_proposer terminal): it detects whether an event
+loop is already running and either schedules a Task (API async context) or
+calls asyncio.run() (CLI). Never raises — trade journal is never blocked.
 """
 
 import os
@@ -70,6 +80,177 @@ async def send_discord_message(message: str, thread_id: str = None) -> bool:
         print(f"  (discord client unavailable: {e})")
         return False
     return await send_webhook_message(message, thread_id=thread_id)
+
+
+# ---- broadcast_alert: structured Discord embed notifications -------------
+# Colour palette for trade lifecycle events (Discord uses RGB as a decimal int).
+_COLOUR = {
+    "opened":    0x2ECC71,   # green  — new approved position
+    "closed":    0xE67E22,   # orange — default for closed (before verdict check)
+    "stop_loss": 0xE74C3C,   # red    — stop hit
+    "eod":       0x3498DB,   # blue   — end-of-day summary card
+}
+_COLOUR_WIN  = 0x2ECC71   # green override: winning closed trade
+_COLOUR_LOSS = 0xE74C3C   # red override:   losing closed trade
+
+
+def _embed_colour(payload: dict) -> int:
+    """Pick embed colour from event type; for 'closed' events refine by
+    verdict so wins are green and losses are red."""
+    event = payload.get("event", "")
+    if event == "closed":
+        verdict = (payload.get("verdict") or "").lower()
+        if "win" in verdict:
+            return _COLOUR_WIN
+        if "loss" in verdict or "stop" in verdict:
+            return _COLOUR_LOSS
+        return _COLOUR["closed"]
+    return _COLOUR.get(event, 0x95A5A6)   # grey fallback for unknown events
+
+
+def _build_embed(payload: dict) -> dict:
+    """payload dict → one Discord embed object.
+
+    Recognised event types and their required payload keys:
+      opened:    ticker, date, strategy, lots, lot_size, max_loss, max_profit,
+                 expiry, signal, [short_id]
+      closed:    ticker, date, resolution, pnl_rs, r_multiple, verdict,
+                 days_in_trade, [frictions_rs], [strategy], [short_id]
+      stop_loss: same as closed
+      eod:       date, description, fields (pre-built list of Discord field dicts)
+    """
+    event  = payload.get("event", "event")
+    ticker = payload.get("ticker", "?")
+    today  = payload.get("date", "")
+
+    titles = {
+        "opened":    f"🟢 Trade Opened — {ticker}",
+        "closed":    f"📊 Trade Closed — {ticker}",
+        "stop_loss": f"🔴 Stop-Loss Hit — {ticker}",
+        "eod":       f"📋 End-of-Day Summary — {today}",
+    }
+    title = titles.get(event, f"📌 {event.title()} — {ticker}")
+
+    fields: list = []
+
+    if event == "opened":
+        strategy = (payload.get("strategy") or "spread").replace("_", " ").title()
+        fields += [
+            {"name": "Strategy",   "value": strategy,                                     "inline": True},
+            {"name": "Lots",       "value": str(payload.get("lots", "?")),                "inline": True},
+            {"name": "Max Loss",   "value": f"Rs.{payload.get('max_loss', 0):,.0f}",      "inline": True},
+            {"name": "Max Profit", "value": f"Rs.{payload.get('max_profit', 0):,.0f}",    "inline": True},
+            {"name": "Expiry",     "value": payload.get("expiry", "?"),                   "inline": True},
+        ]
+        if payload.get("signal"):
+            fields.append({"name": "Signal", "value": payload["signal"], "inline": False})
+        if payload.get("short_id"):
+            fields.append({"name": "Trade ID", "value": f"`{payload['short_id']}`", "inline": True})
+
+    elif event in ("closed", "stop_loss"):
+        resolution = (payload.get("resolution") or event).replace("_", " ").title()
+        pnl        = payload.get("pnl_rs")
+        r_val      = payload.get("r_multiple")
+        days       = payload.get("days_in_trade")
+        frictions  = payload.get("frictions_rs")
+        fields += [
+            {"name": "Resolution",
+             "value": resolution, "inline": True},
+            {"name": "P&L",
+             "value": f"Rs.{pnl:+,.2f}" if pnl is not None else "?", "inline": True},
+            {"name": "R-Multiple",
+             "value": f"{r_val:+.2f}R" if r_val is not None else "?", "inline": True},
+            {"name": "Days in Trade",
+             "value": str(days) if days is not None else "?", "inline": True},
+        ]
+        if frictions is not None:
+            fields.append({"name": "Frictions", "value": f"Rs.{frictions:,.2f}", "inline": True})
+        if payload.get("verdict"):
+            fields.append({"name": "Verdict", "value": payload["verdict"], "inline": False})
+        if payload.get("short_id"):
+            fields.append({"name": "Trade ID", "value": f"`{payload['short_id']}`", "inline": True})
+
+    elif event == "eod":
+        # EOD fields are pre-built by eod_summary.py and passed directly.
+        fields = list(payload.get("fields") or [])
+
+    footer_parts = ["Alpha Trading Paper", today]
+    if payload.get("strategy") and event != "eod":
+        footer_parts.append(payload["strategy"].replace("_", " "))
+    embed: dict = {
+        "title":  title,
+        "color":  _embed_colour(payload),
+        "fields": fields,
+        "footer": {"text": "  •  ".join(p for p in footer_parts if p)},
+    }
+    if payload.get("description"):
+        embed["description"] = payload["description"]
+    return embed
+
+
+async def broadcast_alert(payload: dict) -> bool:
+    """Dispatch one structured embed card to DISCORD_WEBHOOK_URL via httpx.
+
+    payload must contain at minimum: event, ticker, date.
+    See _build_embed() for the full per-event key reference.
+
+    Posts {"embeds": [embed]} — the Discord rich-embed format; distinct from
+    the {"content": "..."} text-webhook path (send_webhook_message). Always
+    returns False instead of raising on misconfiguration / network failure.
+    """
+    try:
+        from src.discord_client import _webhook_url, REQUEST_TIMEOUT_SECONDS
+    except Exception as exc:
+        print(f"  (broadcast_alert: discord client unavailable: {exc})")
+        return False
+
+    url = _webhook_url()
+    if not url:
+        return False
+
+    try:
+        import httpx
+    except ImportError:
+        print("  (broadcast_alert: httpx not installed)")
+        return False
+
+    body = {"embeds": [_build_embed(payload)]}
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            resp = await client.post(url, json=body)
+        if resp.status_code >= 300:
+            print(f"  (broadcast_alert: HTTP {resp.status_code})")
+            return False
+        return True
+    except Exception as exc:
+        print(f"  (broadcast_alert: network error: {exc})")
+        return False
+
+
+def fire_broadcast(payload: dict) -> None:
+    """Sync bridge: dispatch broadcast_alert from any calling context.
+
+    Two cases:
+      * running event loop (FastAPI async context): schedules a Task
+        (fire-and-forget — caller does not await the result).
+      * no running loop (CLI, plan_tracker direct): asyncio.run().
+
+    Never raises; any Discord/network failure is printed and swallowed so
+    the trade journal is never blocked by a Discord outage.
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        # We're in the event loop thread — create_task is safe here.
+        loop.create_task(broadcast_alert(payload))
+    except RuntimeError:
+        # No running loop: CLI or asyncio.to_thread context.
+        try:
+            asyncio.run(broadcast_alert(payload))
+        except Exception as exc:
+            print(f"  (fire_broadcast: asyncio.run failed: {exc})")
+    except Exception as exc:
+        print(f"  (fire_broadcast failed: {exc})")
 
 
 def format_episode(episode: dict) -> str:

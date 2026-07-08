@@ -47,7 +47,8 @@ system flow between these, see `ARCHITECTURE.md`.
 | File | Purpose |
 |---|---|
 | `src/main.py` | Alert entry point (`python -m src.main`) — watchlist -> rule check -> email digest. |
-| `src/notifier.py` | Gmail SMTP sender (`send_digest`), self-contained `.env` reader. |
+| `src/notifier.py` | Gmail SMTP (`send_digest`), async Discord text push (`send_discord_message`), structured embed broadcaster (`broadcast_alert` async / `fire_broadcast` sync bridge — colour-coded embeds for trade lifecycle events). |
+| `src/eod_summary.py` | Daily EOD broadcaster (`python3 -m src.eod_summary`, 15:30 IST): queries journal + brain_map.db for today's MTM P&L, active positions count, and net delta exposure; posts a terse embed card via `broadcast_alert`. |
 | `src/config.py` | Loads + validates `config.json` at import time (fails loudly on missing/bad keys) — RSI thresholds, SMA windows, risk levers, tuner params. |
 
 ## Interfaces (front doors)
@@ -76,6 +77,7 @@ system flow between these, see `ARCHITECTURE.md`.
 
 | File | Purpose |
 |---|---|
+| `tests/test_notifier.py` | `broadcast_alert` embed dispatch, `fire_broadcast` sync bridge, EOD card builder, `query_todays_resolutions`, `compute_net_delta_exposure` — 53 tests, offline, pytest-mock. |
 | `tests/test_vol_bridge.py` | Phase 6F vol bridge: polarity classification, net-signal arithmetic, regime boundary precision, macro shock scenarios, scale_risk/widen_wings parameter scaling, run_headless integration — 31 tests, offline. |
 | `tests/test_rules.py` | Alert rule logic, offline. |
 | `tests/test_portfolio.py` | Portfolio math + strategy proposals, offline. |

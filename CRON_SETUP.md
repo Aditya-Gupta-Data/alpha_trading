@@ -1,97 +1,69 @@
-# CRON_SETUP.md — Automating the Live Paper-Trading Session (Mac)
+# CRON_SETUP.md — Who Runs What, Where (post VM migration, 2026-07-08)
 
-How to make the Phase 7A master scheduler (`src/master_scheduler.py`)
-start itself every weekday morning on this Mac. The scheduler is
-self-terminating: it waits for the 09:15 IST open if launched early,
-supervises the entry + exit loops through the day, and shuts down
-cleanly at the 15:30 IST close — so one cron entry per day is all it
-needs (no daemon management).
+Since decision #47 the **VM is the trading engine** — the Mac is not
+required for anything market-hours. This file documents both machines'
+schedules and how to (re)install them.
 
-> **Which machine?** The scheduler belongs on the machine that holds the
-> live paper state (`data/journal.jsonl`, `data/brain_map.db`) and the
-> Dhan `.env` credentials — currently **this Mac**. The GCP VM's own jobs
-> (token renewal, alerts, suggestions, sleep phase) are separate and
-> already handled by `scripts/setup_cron.sh` — do not duplicate them here.
+## The VM (the engine — always on)
 
-## 1. One-time checks
+All six jobs are installed by the idempotent script (safe to re-run after
+every `git pull`):
 
 ```bash
-# from the project folder — confirm the module runs by hand first:
-cd /Users/adityagupta/Documents/Claude/alpha_trading
-python3 -m src.master_scheduler
-# (outside market hours it prints "market day over" and exits — that's correct)
-
-# make sure the logs folder exists:
-mkdir -p logs
+# on the VM (SSH from the Mac: gcloud compute ssh adigupta1998@alpha-trading-vm \
+#   --project=project-37632031-10d0-47dd-b6f --zone=us-central1-a)
+cd ~/alpha_trading && bash scripts/setup_cron.sh
 ```
 
-**Timezone caveat (important):** macOS `cron` ignores `CRON_TZ` and fires
-in the Mac's **system timezone**. The schedule below assumes this Mac is
-set to IST (Asia/Kolkata). If the Mac ever moves timezone, adjust the
-hour/minute to whatever local time corresponds to 09:10 IST — the
-scheduler itself always trades on IST regardless (it carries its own IST
-clock), so a wrong cron time only delays/skips the launch, never trades
-at wrong hours.
+| IST | Job | Notes |
+|---|---|---|
+| 07:00 daily | `src.renew_token` | mints the day's Dhan token — V2 creds fetched from **GCP Secret Manager** at runtime (never on disk) |
+| 08:00 Mon-Fri | `src.suggest` | daily suggestions digest |
+| 09:10 Mon-Fri | `src.master_scheduler` | the full trading session; waits for 09:15, self-terminates 15:30 |
+| 15:35 Mon-Fri | `src.main` | watchlist alert checks |
+| 20:00 daily | `src.sleep_phase` | Brain Map pass — decay-only on the VM (no Ollama there; edge mining happens from the Mac) |
+| 20:30 daily | `src.ops_monitor` | log sweep + job heartbeats → Discord health card |
 
-## 2. Install the crontab entry
+Also on the VM (systemd, `Restart=always`, enabled on boot): the API
+gateway (`alpha-trading`), the Discord bot (`alpha-discord-bot`), and the
+Cloudflare tunnel (`cloudflared-tunnel`). The old `alpha-market-loop`
+service is **disabled — do not re-enable** (superseded by the scheduler).
 
-Open the crontab editor:
+Requirements baked into the VM already: `cloud-platform` OAuth scope
+(needed for Secret Manager; changing scopes requires a stop/start) and
+per-secret IAM grants for `dhan-pin` / `dhan-totp-secret` /
+`dhan-api-key` / `dhan-api-secret`.
+
+## The Mac (development + chat agent + opportunistic miner)
+
+**LaunchAgent** (installed at `~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist`):
+runs `scripts/mine_edges.sh` at every login and daily at 21:00. The miner
+itself decides whether it's due (>20h since last success, Ollama up) and
+skips silently otherwise — so the Mac being open more often costs nothing.
+Reinstall if ever needed:
 
 ```bash
-crontab -e
+launchctl load ~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist
 ```
 
-Add this single line (all one line), then save and quit:
+**Crontab** (deliberate redundancy — optional):
 
-```cron
-10 9 * * 1-5 cd /Users/adityagupta/Documents/Claude/alpha_trading && /usr/bin/env python3 -m src.master_scheduler >> logs/master_scheduler.log 2>&1
-```
+| IST | Job | Notes |
+|---|---|---|
+| 07:00 daily | `src.renew_token` | when the Mac is awake, it renews from local `.env` keys |
+| 07:10 daily | `scripts/push_token_to_vm.sh` | …and pushes that token to the VM. When the Mac is asleep, the VM's own 07:00 renewal covers everything — these two are pure backup and can be removed with `crontab -e` any time |
 
-What it means:
-- `10 9 * * 1-5` — 09:10 local time, Monday through Friday. Five minutes
-  early on purpose: the scheduler sleeps until 09:15 IST itself, so the
-  session starts exactly at the open even if cron fires a bit late.
-- `cd … &&` — cron starts in your home folder; the project's relative
-  paths (`data/`, `.env`, `logs/`) need the project root.
-- `>> logs/master_scheduler.log 2>&1` — everything the session prints
-  (proposals, exit signals, shutdown notes) appends to one log file.
-
-Verify it took:
+## Watching it work
 
 ```bash
-crontab -l
+# VM session log (live), from the Mac:
+gcloud compute ssh adigupta1998@alpha-trading-vm --project=project-37632031-10d0-47dd-b6f \
+  --zone=us-central1-a --command='tail -20 ~/alpha_trading/logs/master_scheduler.log'
+
+# Mac miner log:
+tail -20 logs/edge_miner.log
 ```
 
-## 3. macOS permissions (first run only)
-
-The first time cron runs anything that touches your files, macOS may
-block it silently. Grant **Full Disk Access** to `cron`:
-
-1. System Settings → Privacy & Security → Full Disk Access
-2. Click **+**, press `Cmd+Shift+G`, enter `/usr/sbin/cron`, add it,
-   toggle it on.
-
-Also note: the Mac must be **awake** at 09:10 — a sleeping Mac runs no
-cron jobs. Either keep it plugged in with sleep disabled during market
-hours (System Settings → Displays/Energy), or schedule a wake:
-`sudo pmset repeat wakeorpoweron MTWRF 09:05:00`.
-
-## 4. Watching it work
-
-```bash
-# live tail of today's session:
-tail -f logs/master_scheduler.log
-
-# stop a running session cleanly (it also stops itself at 15:30):
-pkill -INT -f "src.master_scheduler"
-```
-
-A healthy day looks like: a 🟢 session-OPEN card in Discord at 09:15
-(account snapshot + the planner's playbook), proposal / exit-signal
-alerts during the day, and a 🔴 session-CLOSED card just after 15:30.
-
-## 5. Removing / changing the schedule
-
-```bash
-crontab -e    # edit or delete the line, save, done
-```
+A healthy day: 🟢 session-open card at 09:15 and 🔴 close card at 15:30
+(both from the VM), the 20:30 ops health card, and — whenever the Mac was
+on that day — an edge-miner line in its log around login/21:00.

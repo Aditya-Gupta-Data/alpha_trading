@@ -6,6 +6,39 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ THE VM IS THE ENGINE — full migration, LIVE AND VERIFIED (2026-07-08 night)
+
+The Mac is no longer required for anything market-hours. Topology
+(decision #47):
+
+| Concern | Where | How |
+|---|---|---|
+| Live session 09:15–15:30 | VM | `src.master_scheduler`, cron 09:10 Mon-Fri |
+| Token renewal | VM, 07:00 | `src.renew_token` — V2 creds fetched at runtime from **GCP Secret Manager** (verified live: mints with ZERO V2 keys on VM disk) |
+| Paper state (journal/portfolio/brain_map) | VM `data/` | Mac's live state migrated 2026-07-08; VM authoritative |
+| Alerts 15:35 / suggestions 08:00 / sleep-phase decay 20:00 / ops sweep 20:30 | VM cron | `scripts/setup_cron.sh` (6 jobs, CRON_TZ=Asia/Kolkata) |
+| API gateway + Discord bot + tunnel | VM (unchanged) | systemd, all `Restart=always` |
+| Causal edge mining (Ollama, no API spend) | **Mac, opportunistic** | `src/edge_miner.py` via LaunchAgent (login + 21:00): pull VM brain_map → mine locally → apply idempotent edges back → refresh Mac's read copies |
+| chat_agent, development | Mac | reads the miner-refreshed local copies |
+
+Key facts for a cold pickup:
+- The VM's OAuth **scopes** were upgraded to `cloud-platform` (required a
+  stop/start 2026-07-08) — without that, Secret Manager answers 403 even
+  with correct IAM. Secrets `dhan-pin`/`dhan-totp-secret`/`dhan-api-key`/
+  `dhan-api-secret` live in Secret Manager, granted per-secret to the VM's
+  default service account.
+- The old `alpha-market-loop.service` is **disabled** (stale pre-6E code);
+  the scheduler cron replaced it. Do not re-enable.
+- The Mac's crontab retains renew_token 07:00 + push_token_to_vm 07:10 as
+  DELIBERATE redundancy: when the Mac is awake it refreshes the VM's token
+  too (harmless either order); when asleep, the VM self-renews. Remove any
+  time with `crontab -e` if unwanted.
+- The Mac's pre-migration state is archived at `data/mac-archive-pre-vm/`
+  (created by the miner's first run) and the VM had NO prior data (its
+  market loop never journaled — dead token since creation).
+- If the Mac stays closed for a week: everything runs except NEW causal
+  edges (graph still decays nightly on the VM). Nothing breaks.
+
 ## ✅ Phase 7A: Master Scheduler & Live Execution Loop — BUILT AND TESTED (2026-07-08)
 
 `src/master_scheduler.py` (`python3 -m src.master_scheduler`) is the

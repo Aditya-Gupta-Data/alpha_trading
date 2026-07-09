@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS simulated_trades (
 
 def ensure_schema(conn) -> None:
     conn.executescript(_SCHEMA)
+    # Regime-Aware Memory: idempotent additive columns (same pattern as
+    # graph_engine's temporal columns) — what the market was at proposal.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(simulated_trades)")}
+    for col in ("regime_trend", "regime_vix"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE simulated_trades ADD COLUMN {col} TEXT")
     conn.commit()
 
 
@@ -168,8 +174,10 @@ def build_synthetic_chain(spot: float, vix: float, days_to_expiry: int,
 def _entry_for(proposal: dict, day: str, ref: str) -> dict:
     """A journal-entry-shaped dict for the resolution helpers and the Brain
     Map — auto-approved, clearly marked simulated, NEVER journaled."""
+    from src.regime import regime_for
     spread = proposal["spread"]
-    return {
+    regime = regime_for(proposal.get("view"), proposal.get("vix"))
+    return dict(regime=regime, **{
         "short_id": ref,
         "date": day,
         "action": "SPREAD",
@@ -182,7 +190,7 @@ def _entry_for(proposal: dict, day: str, ref: str) -> dict:
         "pattern_tags": [spread["strategy"], proposal["view"]],
         "spread": spread,
         "outcome": None,
-    }
+    })
 
 
 def _resolve_and_score(entry: dict, bars: list) -> dict | None:
@@ -234,20 +242,22 @@ def _record(conn, entry: dict, vix) -> None:
     s, o = entry["spread"], entry["outcome"]
     result = ("win" if o["pnl_rs"] > 0 else
               "loss" if o["pnl_rs"] < 0 else "scratch")
+    regime = entry.get("regime") or {}
     conn.execute(
         "INSERT OR IGNORE INTO simulated_trades (journal_ref, underlying, "
         "strategy, view, proposed_on, expiry, vix, net_credit, net_debit, "
         "spread_width, max_loss, max_profit, lots, lot_size, resolution, "
         "exit_date, pnl_net, frictions_rs, slippage_rs, capture_pct, "
-        "r_multiple, result, verdict) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "r_multiple, result, verdict, regime_trend, regime_vix) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (entry["short_id"], entry["ticker"], s["strategy"],
          entry["pattern_tags"][1] if len(entry["pattern_tags"]) > 1 else None,
          entry["date"], s["expiry"], vix, s.get("net_credit"),
          s.get("net_debit"), s.get("spread_width"), s.get("max_loss"),
          s.get("max_profit"), int(s.get("lots", 1)), int(s["lot_size"]),
          o["resolution"], o["exit_date"], o["pnl_rs"], o["frictions_rs"],
-         o["slippage_rs"], o["pct"], o["r_multiple"], result, o["verdict"]))
+         o["slippage_rs"], o["pct"], o["r_multiple"], result, o["verdict"],
+         regime.get("trend"), regime.get("vix_band")))
     conn.commit()
     brain_map.record_resolved_entry(conn, entry)
 

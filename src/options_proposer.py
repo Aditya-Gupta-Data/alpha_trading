@@ -232,10 +232,15 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
 
 def to_journal_entry(proposal: dict, decision: str, why: str) -> dict:
     """A tracker-resolvable journal record: the standard new_entry()
-    fields (short_id, date, decision, why, ...) plus the spread payload."""
+    fields (short_id, date, decision, why, ...) plus the spread payload.
+    Regime-Aware Memory: the market conditions the proposal was born
+    under (trend view + VIX band) ride along, so the Brain Map can later
+    answer "how does this setup do in conditions like these?"."""
+    from src.regime import regime_for
     entry = journal.new_entry(proposal, decision, why,
                               pattern_tags=[proposal["spread"]["strategy"]])
     entry["spread"] = proposal["spread"]
+    entry["regime"] = regime_for(proposal.get("view"), proposal.get("vix"))
     return entry
 
 

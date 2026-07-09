@@ -43,6 +43,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL_PATH = ROOT / "data" / "skeptic_model.pkl"
 
 # The frozen feature contract (see module docstring). One float per name.
+# v2 (2026-07-09, Regime-Aware Memory): +regime_trend/+regime_vix_band —
+# a contract change is a mandatory retrain by design (decision #44); no
+# model had ever shipped under v1, so nothing was invalidated.
 FEATURE_NAMES = (
     "graph_edge_count",        # how many linked edges the 2-hop BFS found
     "graph_cum_confidence",    # sum of edge confidence scores
@@ -54,6 +57,8 @@ FEATURE_NAMES = (
     "days_to_expiry",          # calendar days from today to expiry
     "max_loss_per_lot",        # defined-risk max loss, rupees per lot
     "lots",                    # position size
+    "regime_trend",            # proposal-time view: bullish +1 / neutral 0 / bearish -1
+    "regime_vix_band",         # VIX band: low 0 / mid 1 / high 2 / unknown -1
 )
 
 # Below this predicted win probability the proposer appends the ⚠️ Skeptic
@@ -113,6 +118,9 @@ class RandomForestAuditor:
         except (TypeError, ValueError):
             dte = 0.0
 
+        from src.regime import encode_for_model, vix_band
+        trend_code, band_code = encode_for_model(
+            proposal.get("view"), vix_band(proposal.get("vix")))
         features = [
             edge_count,
             round(cum_conf, 6),
@@ -124,6 +132,8 @@ class RandomForestAuditor:
             dte,
             _num(spread.get("max_loss")),
             _num(proposal.get("lots"), 1.0),
+            trend_code,
+            band_code,
         ]
         assert len(features) == len(FEATURE_NAMES)
         return features

@@ -58,14 +58,22 @@ META_PATH = DEFAULT_MODEL_PATH.with_name("skeptic_model_meta.json")
 
 
 def load_training_rows(conn) -> list:
-    """Every resolved simulated trade, as plain dicts."""
+    """Every resolved simulated trade, as plain dicts. The regime columns
+    may be absent on a pre-regime DB — fall back to the regime-less
+    SELECT so old scratch copies still train (features degrade to the
+    row's own `view`, see row_features)."""
+    base = ("SELECT underlying, strategy, proposed_on, expiry, vix, "
+            "net_credit, net_debit, spread_width, max_loss, lots, result, "
+            "view")
     try:
         rows = conn.execute(
-            "SELECT underlying, strategy, proposed_on, expiry, vix, "
-            "net_credit, net_debit, spread_width, max_loss, lots, result "
-            "FROM simulated_trades").fetchall()
+            base + ", regime_trend, regime_vix FROM simulated_trades"
+        ).fetchall()
     except Exception:
-        return []
+        try:
+            rows = conn.execute(base + " FROM simulated_trades").fetchall()
+        except Exception:
+            return []
     return [dict(r) for r in rows]
 
 
@@ -81,6 +89,14 @@ def row_features(row: dict) -> list:
                      - date.fromisoformat(row["proposed_on"])).days)
     except (TypeError, ValueError):
         dte = 0.0
+    # Regime features (Regime-Aware Memory): prefer the stored tags
+    # (backfilled or captured at simulation time); fall back to the row's
+    # own `view` column + a band derived from its stored vix — honest
+    # proxies from data the row itself carries, never today's market.
+    from src.regime import encode_for_model, vix_band
+    trend = row.get("regime_trend") or row.get("view")
+    band = row.get("regime_vix") or vix_band(row.get("vix"))
+    trend_code, band_code = encode_for_model(trend, band)
     features = [
         0.0,                                   # graph_edge_count
         0.0,                                   # graph_cum_confidence
@@ -92,6 +108,8 @@ def row_features(row: dict) -> list:
         dte,                                   # days_to_expiry
         float(row.get("max_loss") or 0.0),     # max_loss_per_lot
         float(row.get("lots") or 1.0),         # lots
+        trend_code,                            # regime_trend
+        band_code,                             # regime_vix_band
     ]
     assert len(features) == len(FEATURE_NAMES)
     return features

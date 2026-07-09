@@ -112,6 +112,12 @@ def connect(db_path=None) -> sqlite3.Connection:
     outcome_cols = {row["name"] for row in conn.execute("PRAGMA table_info(outcomes)")}
     if "post_mortem" not in outcome_cols:
         conn.execute("ALTER TABLE outcomes ADD COLUMN post_mortem TEXT")
+    # Regime-Aware Memory: what the market WAS when the trade was
+    # conceived (trend view + VIX band, see src/regime.py). Same in-place
+    # additive migration pattern as post_mortem; NULL on pre-feature rows.
+    for col in ("regime_trend", "regime_vix"):
+        if col not in outcome_cols:
+            conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} TEXT")
     conn.commit()
     return conn
 
@@ -133,7 +139,8 @@ def record_event(conn, date, ticker, event_type, tag,
 
 
 def record_outcome(conn, journal_ref, date, ticker, archetype=None,
-                   r_multiple=None, result=None, post_mortem=None) -> int:
+                   r_multiple=None, result=None, post_mortem=None,
+                   regime_trend=None, regime_vix=None) -> int:
     """Insert one resolved trade and return its outcome id. `journal_ref`
     is the stable key back to the journal entry; re-recording the same ref
     is a no-op that returns the existing row's id, so future backfills can
@@ -149,10 +156,11 @@ def record_outcome(conn, journal_ref, date, ticker, archetype=None,
     if post_mortem is not None and not isinstance(post_mortem, str):
         post_mortem = json.dumps(post_mortem)
     cur = conn.execute(
-        "INSERT INTO outcomes (journal_ref, date, ticker, archetype, r_multiple, result, post_mortem) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO outcomes (journal_ref, date, ticker, archetype, r_multiple, result, post_mortem, regime_trend, regime_vix) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (journal_ref) DO NOTHING",
-        (journal_ref, date, ticker, archetype, r_multiple, result, post_mortem),
+        (journal_ref, date, ticker, archetype, r_multiple, result,
+         post_mortem, regime_trend, regime_vix),
     )
     conn.commit()
     if cur.lastrowid and cur.rowcount:
@@ -177,7 +185,7 @@ def link_event_outcome(conn, event_id, outcome_id) -> None:
     conn.commit()
 
 
-def query_similar_events(conn, tags) -> dict:
+def query_similar_events(conn, tags, regime=None) -> dict:
     """The core question-answerer: across every outcome linked to an event
     carrying any of `tags`, how often did the trade pay?
 
@@ -189,7 +197,15 @@ def query_similar_events(conn, tags) -> dict:
       avg_r_multiple  mean R over outcomes that carry an r_multiple
       examples        up to MAX_EXAMPLES most recent outcomes, each with
                       the matched tags for context
-    win_rate / avg_r_multiple are None when there's no history yet."""
+    win_rate / avg_r_multiple are None when there's no history yet.
+
+    Regime-Aware Memory: pass `regime` ({"trend", "vix_band"} — a journal
+    entry's regime dict works directly) to ALSO get the same stats
+    restricted to outcomes tagged with matching market conditions, under
+    an additive "in_regime" key (with its own count/win_rate/avg_r and
+    the human-readable "tag"). The overall stats stay untouched so every
+    existing caller keeps working; pre-regime rows (NULL tags) simply
+    never match a filter — honest, not assumed."""
     if isinstance(tags, str):
         tags = [tags]
     tags = list(tags)
@@ -200,6 +216,7 @@ def query_similar_events(conn, tags) -> dict:
     rows = conn.execute(
         f"""
         SELECT o.id, o.journal_ref, o.date, o.ticker, o.archetype, o.r_multiple, o.result,
+               o.regime_trend, o.regime_vix,
                GROUP_CONCAT(DISTINCT e.tag) AS matched_tags
         FROM outcomes o
         JOIN event_outcome_link l ON l.outcome_id = o.id
@@ -211,28 +228,41 @@ def query_similar_events(conn, tags) -> dict:
         tags,
     ).fetchall()
 
+    def _stats(subset):
+        n = len(subset)
+        if n == 0:
+            return {"count": 0, "win_rate": None, "avg_r_multiple": None}
+        wins = sum(1 for r in subset if r["result"] == "win")
+        r_values = [r["r_multiple"] for r in subset if r["r_multiple"] is not None]
+        return {"count": n, "win_rate": round(wins / n, 2),
+                "avg_r_multiple": round(sum(r_values) / len(r_values), 2)
+                                  if r_values else None}
+
     count = len(rows)
     if count == 0:
         return {"count": 0, "win_rate": None, "avg_r_multiple": None, "examples": []}
 
-    wins = sum(1 for r in rows if r["result"] == "win")
-    r_values = [r["r_multiple"] for r in rows if r["r_multiple"] is not None]
-    return {
-        "count": count,
-        "win_rate": round(wins / count, 2),
-        "avg_r_multiple": round(sum(r_values) / len(r_values), 2) if r_values else None,
-        "examples": [
-            {
-                "date": r["date"],
-                "ticker": r["ticker"],
-                "archetype": r["archetype"],
-                "r_multiple": r["r_multiple"],
-                "result": r["result"],
-                "matched_tags": sorted((r["matched_tags"] or "").split(",")),
-            }
-            for r in rows[:MAX_EXAMPLES]
-        ],
-    }
+    result = dict(_stats(rows), examples=[
+        {
+            "date": r["date"],
+            "ticker": r["ticker"],
+            "archetype": r["archetype"],
+            "r_multiple": r["r_multiple"],
+            "result": r["result"],
+            "matched_tags": sorted((r["matched_tags"] or "").split(",")),
+        }
+        for r in rows[:MAX_EXAMPLES]
+    ])
+
+    if regime and (regime.get("trend") or regime.get("vix_band")):
+        matching = [r for r in rows
+                    if (not regime.get("trend")
+                        or r["regime_trend"] == regime["trend"])
+                    and (not regime.get("vix_band")
+                         or r["regime_vix"] == regime["vix_band"])]
+        from src.regime import regime_tag
+        result["in_regime"] = dict(_stats(matching), tag=regime_tag(regime))
+    return result
 
 
 def journal_ref_for(entry: dict) -> str:
@@ -313,6 +343,7 @@ def record_resolved_entry(conn, entry, post_mortem=None):
     # this is what the Sleep Phase's causal summaries name the trade by.
     archetype = ((entry.get("spread") or {}).get("strategy")
                  or _archetype_for(signal))
+    regime = entry.get("regime") or {}
     outcome_id = record_outcome(
         conn,
         journal_ref=journal_ref_for(entry),
@@ -321,6 +352,8 @@ def record_resolved_entry(conn, entry, post_mortem=None):
         archetype=archetype,
         r_multiple=outcome["r_multiple"],
         post_mortem=post_mortem,
+        regime_trend=regime.get("trend"),
+        regime_vix=regime.get("vix_band"),
     )
     # One event for the strategy signal (tagged by archetype when it's a
     # known one, else by the normalized signal text) + one per user-chosen

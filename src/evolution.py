@@ -74,7 +74,9 @@ MIN_CLUSTER_SIZE = 3          # fewer losses than this is noise, not a cluster
 MAX_CANDIDATES_PER_RUN = 2    # keep nightly output reviewable by a human
 SHARPE_TOLERANCE = 0.98       # mutated Sharpe must be >= 98% of baseline
 DRAWDOWN_TOLERANCE = 1.10     # mutated max drawdown must be <= 110% of baseline
-VIX_BANDS = ((0, 13, "low"), (13, 16, "mid"), (16, 99, "high"))
+
+# Single source of band truth since Regime-Aware Memory: src/regime.py.
+from src.regime import VIX_BANDS, vix_band  # noqa: F401 (re-exported)
 
 # --- the whitelisted mutation surface --------------------------------------
 # The ONLY things evolution may touch. Each entry knows where the live
@@ -140,15 +142,6 @@ def override_parameters(overrides: dict):
 
 
 # --- 1. loss-cluster mining -------------------------------------------------
-
-def vix_band(vix) -> str:
-    if vix is None:
-        return "unknown"
-    for lo, hi, name in VIX_BANDS:
-        if lo <= float(vix) < hi:
-            return name
-    return "unknown"
-
 
 def find_loss_clusters(conn, min_size: int = MIN_CLUSTER_SIZE) -> list:
     """Losing simulated trades grouped by (underlying, strategy, VIX

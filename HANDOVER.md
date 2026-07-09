@@ -6,6 +6,49 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ✅ Regime-Aware Memory — BUILT AND TESTED; skeptic hypothesis honestly NOT confirmed (2026-07-09)
+
+Roadmap item #4. Every trade the learning stack remembers now carries the
+market conditions it was born under — `src/regime.py` is the vocabulary
+(trend = the proposer's own market_view read; vix_band = low <13 / mid
+13–16 / high >16, now the SINGLE source the planner's IV matrix and the
+evolution miner share):
+
+- **Capture:** `to_journal_entry` and the simulator's `_entry_for` attach
+  `entry["regime"]` at creation (additive key; old entries tolerate).
+- **Storage:** `outcomes.regime_trend/regime_vix` (in-place ALTER on
+  connect, post_mortem pattern) + the same columns on `simulated_trades`
+  (idempotent ALTER in ensure_schema). NULL on pre-feature rows — never
+  guessed.
+- **Backfill:** `python3 -m src.regime backfill --db <path>` recomputes
+  trend AS-OF each historical trade's proposal date from the bars cache
+  (the simulator's own no-future-data discipline); vix_band from the
+  row's stored vix.
+- **Query:** `brain_map.query_similar_events(tags, regime=...)` adds an
+  `in_regime` stats block (count/win_rate/avg_r + tag) alongside the
+  untouched overall stats — fully backward compatible.
+- **Skeptic contract v2:** FEATURE_NAMES += regime_trend/regime_vix_band
+  (contract change = retrain by design, decision #44; no model had ever
+  shipped, so nothing was invalidated).
+
+**The experiment (the reason this was prioritized):** backfilled all
+1,008 scratch trades (2015–2026, zero unknown trends) and retrained.
+Result: 5-fold balanced accuracy **0.578 vs 0.594 pre-regime — no
+improvement, within noise**. Why, per feature importances: raw `vix`
+(0.26) already contains the band (a coarsening of it, 0.027), and the
+simulator proposes structures MATCHED to the trend, so trend is nearly
+constant within a strategy (0.027). The "regime tags will ship the
+skeptic" hypothesis is NOT confirmed for these coarse tags. Gate stays
+closed; skeptic keeps abstaining. Next candidates for the 0.60 gate:
+features orthogonal to the entry gates (realized vol vs implied,
+distance-to-support, day-of-week/expiry-proximity) rather than
+re-encodings of inputs the pipeline already filters on.
+
+NOT deployed to the VM yet (observation week): migrations are additive
+and auto-apply on the next `git pull` + restart; the production DB's 366
+rows backfill with the same CLI when that happens. Tests:
+`tests/test_regime.py` (11, offline); suite 521 green.
+
 ## ✅ Procedural Evolution — BUILT AND TESTED; NOT YET SCHEDULED (2026-07-09)
 
 `src/evolution.py` closes roadmap item #5: the system studies its own loss

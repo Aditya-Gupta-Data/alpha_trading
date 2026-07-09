@@ -142,3 +142,102 @@ Within the playbooks work itself, the natural order is: resolve the
 transcript-source open question → build Trigger B (pure extension of
 existing TA, low risk) → build Trigger A → the AND gate → staged
 execution → the generalization/registry layer last.
+
+---
+
+## 5. Hypothesis-Driven Autonomous Simulation (advanced pipeline)
+
+The playbook framework above assumes a human hand-writes each playbook's
+config (keyword sets, sector pair, structure ladder). This pipeline is
+the ambitious extension: the human supplies only a **raw macro thesis**
+("Seed"), and the system autonomously structures it, validates it
+against history, generalizes it across sectors, and installs permanent
+sensors to catch the cycle early wherever it next appears.
+
+This is the most speculative part of the whole design. It is documented
+here as the target vision; every step below carries a hard reality-check
+(§5.5) that must be answered before it can be trusted with even paper
+capital. Nothing here weakens the non-negotiables: still paper-only,
+still human-gated at the point of any actual proposal, still zero-API
+LLM spend (local Ollama).
+
+### 5.1 Seed Ingestion & Structuring
+- The user inputs a raw, unstructured macro thesis — via a Discord
+  command (extending the existing `chat_agent` / bot surface) or a text
+  file dropped in a watched location.
+- Local Ollama parses the natural language into a **structured economic
+  cycle**: an ordered sequence of phases with entry/exit signatures,
+  e.g. `CapEx Boom → Margin Compression → Value Rebound`.
+- Output is strict-JSON, schema-gated exactly like Procedural Evolution's
+  proposals (decision #49): a malformed parse is rejected, never
+  half-interpreted. The structured cycle is a *hypothesis object*, not
+  yet a playbook — it has earned nothing until §5.2.
+
+### 5.2 Historical Validation via the Phase 7 Simulator
+- The parsed cycle is routed to the **Time-Travel Simulator**
+  (`src/simulator.py`) — the same real-pipeline, as-of-date replay engine
+  every other strategy change already has to clear (decision #36).
+- The simulator backtests the cycle's **structural footprint** against
+  historical data to (a) confirm the phases actually occurred in the
+  claimed order with tradeable separation, and (b) **parameterize** the
+  cycle's empirical shape: typical **duration** per phase, **depth**
+  (drawdown/rotation magnitude), and **volatility** regime at each turn.
+- A Seed that cannot be reproduced in history — the phases never line up,
+  or the "signal" is indistinguishable from noise — is **rejected here**,
+  the same RevertOnRegression discipline that kills unprovable rule
+  mutations. Validation is a gate, not a formality.
+
+### 5.3 Autonomous Generalization
+- A cycle validated on its origin sector is then replayed by the
+  simulator against **other asset classes and indices** (Auto, Metals,
+  Pharma, …) to discover whether any are **currently trapped in a
+  parallel cycle** at an earlier phase — i.e. the same structural
+  footprint, shifted in time.
+- This is pattern-transfer, and it is where false positives breed: a
+  footprint that "fits" three unrelated sectors is more likely
+  overfitting than a universal law. Generalization results are therefore
+  **ranked candidates for human review**, not auto-activated playbooks —
+  each carries its own §5.2 validation score on the new sector, and a
+  weak fit is surfaced as weak, not laundered into confidence.
+
+### 5.4 Brain Map Anchoring
+- A parameterized, generalized cycle that survives the above is written
+  to a **new additive `cyclical_models` table** in `brain_map.db`
+  (same additive-migration discipline as the regime columns and
+  `simulated_trades` — core tables untouched, NULL-safe, idempotent).
+- Each row anchors: the structured phase sequence, its empirical
+  parameters (duration/depth/volatility per phase), the sectors it
+  validated on with their scores, and full provenance back to the
+  originating Seed text and the simulator runs that validated it.
+- The system then installs **permanent sensor triggers**: standing
+  Trigger-A (narrative) and Trigger-B (technical) watchers derived from
+  the model, so that when **Phase 1** of this cycle's footprint begins to
+  form in *any* tracked industry, the dual-gate arms and the staged
+  execution playbook (§3) is proposed **early** — the whole point being
+  to catch the turn as it starts, not after it's obvious.
+
+### 5.5 Reality checks (must be answered before this is trusted)
+- **Overfitting is the default failure mode, not the exception.** A cycle
+  parameterized on one historical rotation and then "found" in three
+  other sectors is exactly the shape of a spurious pattern. The pipeline
+  needs an out-of-sample discipline (validate on one date range, confirm
+  the sensor fires correctly on a *held-out* later range) or it will
+  manufacture confident nonsense. This is the single biggest risk.
+- **A 3B local model structuring macro theses is weak.** Ollama-parsing
+  a nuanced thesis into a clean phase sequence will be the noisiest link;
+  the schema gate catches malformed JSON but not *plausible-but-wrong*
+  structuring. Human review of the parsed cycle (§5.1) before it consumes
+  simulator time is likely mandatory, not optional.
+- **"Structural footprint" needs a concrete definition.** Steps 5.2–5.3
+  hinge on a computable footprint (which measurable series, over what
+  window, matched by what metric). Undefined, this is hand-waving. This
+  must be pinned down first — it is the technical crux of the whole
+  pipeline.
+- **Sensor drift.** Permanent triggers installed today are calibrated to
+  today's regime; a cycle's footprint may itself evolve. Sensors need the
+  same decay/re-validation the knowledge graph already applies to edges,
+  or they slowly become stale false-alarm generators.
+- **Human gate is preserved end-to-end.** Even a fully autonomous
+  Seed→sensor pipeline still only ever *proposes* — every trade the
+  staged execution emits remains pending-approval (decision #11). "Deploy
+  early" means "propose early," never "trade autonomously."

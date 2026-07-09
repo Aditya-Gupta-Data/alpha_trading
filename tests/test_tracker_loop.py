@@ -190,6 +190,35 @@ def test_coerce_post_mortem_enforces_the_schema():
     assert analyst._coerce_post_mortem({"variance_analysis": ""}) is None
 
 
+def test_outcome_lines_survive_none_r_multiple_and_pct():
+    """Regression (found live 2026-07-09): a hypothetical resolution with
+    r_multiple=None crashed the digest formatting mid-sweep BEFORE the
+    journal rewrite, so the same resolutions re-broadcast to Discord
+    every hour. The digest lines must be total functions."""
+    entry = {"decision": "rejected", "ticker": "MARUTI",
+             "date": "2026-07-07", "price": 12000.0,
+             "signal": "test", "why": "test",
+             "outcome": {"resolution": "target_hit", "price": 12500.0,
+                         "exit_date": "2026-07-08", "pnl_rs": 500.0,
+                         "pct": None, "r_multiple": None,
+                         "days_in_trade": 1, "position_closed": False,
+                         "verdict": "MISSED GAIN"}}
+    line = plan_tracker._outcome_line(entry)
+    assert "n/a" in line and "MISSED GAIN" in line   # no raise, honest text
+
+    spread_entry = {"decision": "approved", "ticker": "NIFTY BANK",
+                    "date": "2026-07-07", "signal": "s", "why": "w",
+                    "spread": {"strategy": "iron_condor",
+                               "legs": [1, 2, 3, 4]},
+                    "outcome": {"resolution": "profit_take",
+                                "exit_date": "2026-07-08",
+                                "pnl_rs": 900.0, "r_multiple": None,
+                                "days_in_trade": 1, "frictions_rs": 10.0,
+                                "slippage_rs": 5.0, "verdict": "WIN"}}
+    line = plan_tracker._spread_outcome_line(spread_entry)
+    assert "n/a" in line and "WIN" in line
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

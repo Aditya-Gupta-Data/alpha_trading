@@ -337,6 +337,15 @@ def record_post_mortem(entry: dict, brain) -> None:
     brain_map.record_resolved_entry(brain, entry, post_mortem=post_mortem)
 
 
+def _fmt_signed(value, spec: str = "+.1f", suffix: str = "") -> str:
+    """None-safe numeric formatting for digest lines. A hypothetical
+    (rejected/pending) resolution can legitimately carry r_multiple=None;
+    formatting None with +.1f raises — and a digest-line crash used to
+    abort the WHOLE sweep before outcomes were persisted, replaying the
+    same resolutions (and Discord cards) every hour. Found live 2026-07-09."""
+    return f"{value:{spec}}{suffix}" if isinstance(value, (int, float)) else "n/a"
+
+
 def _outcome_line(entry: dict) -> str:
     o = entry["outcome"]
     label = {"stop_hit": "STOPPED OUT", "target_hit": "TARGET HIT",
@@ -345,14 +354,16 @@ def _outcome_line(entry: dict) -> str:
         head = (f"{label}: {entry['ticker']} bought {entry['date']} at "
                 f"Rs.{entry['price']:,.2f} exited at Rs.{o['price']:,.2f} "
                 f"on {o['exit_date']} — Rs.{o['pnl_rs']:+,.2f} "
-                f"({o['pct']:+.1f}%, {o['r_multiple']:+.1f}R), "
+                f"({_fmt_signed(o['pct'], '+.1f', '%')}, "
+                f"{_fmt_signed(o['r_multiple'], '+.1f', 'R')}), "
                 f"{o['days_in_trade']} day(s) in trade.")
         if not o["position_closed"]:
             head += " (Position was already closed earlier — outcome recorded for scoring only.)"
     else:
         head = (f"{label} (you skipped this one): {entry['ticker']} plan from "
                 f"{entry['date']} would have exited at Rs.{o['price']:,.2f} "
-                f"on {o['exit_date']} ({o['pct']:+.1f}%, {o['r_multiple']:+.1f}R).")
+                f"on {o['exit_date']} ({_fmt_signed(o['pct'], '+.1f', '%')}, "
+                f"{_fmt_signed(o['r_multiple'], '+.1f', 'R')}).")
     return (f"{head}\n   Verdict: {o['verdict']}\n"
             f"   Engine's reason at the time: {entry['signal']}\n"
             f"   Your reason at the time: {entry['why']}")
@@ -366,7 +377,7 @@ def _spread_outcome_line(entry: dict) -> str:
     head = (f"{label}: {s['strategy']} on {entry['ticker']} from {entry['date']} "
             f"closed atomically (all {len(s['legs'])} legs together) on "
             f"{o['exit_date']} — net Rs.{o['pnl_rs']:+,.2f} "
-            f"({o['r_multiple']:+.2f}R vs max loss), "
+            f"({_fmt_signed(o['r_multiple'], '+.2f', 'R')} vs max loss), "
             f"{o['days_in_trade']} day(s) in trade.")
     if entry["decision"] != "approved":
         head = f"{label} (you skipped this one): " + head.split(": ", 1)[1]
@@ -450,6 +461,11 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             "position_closed": closed,
             "verdict": _verdict(entry, resolution, pct),
         }
+        # Persist THIS resolution immediately — a crash anywhere later in
+        # the sweep (digest formatting, another entry, email) must never
+        # un-resolve it. Before this line existed, one such crash replayed
+        # every resolution (and its Discord card) hourly (2026-07-09).
+        journal.rewrite_all(entries)
         resolved += 1
         resolved_lines.append(_outcome_line(entry))
         print(f"Plan tracker: resolved {entry['ticker']} — {entry['outcome']['verdict']}")
@@ -545,6 +561,8 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             "position_closed": settled,
             "verdict": _spread_verdict(entry, resolution, pnl_net, capture_pct),
         }
+        # Same immediate-persistence rule as the equity sweep above.
+        journal.rewrite_all(entries)
         resolved += 1
         resolved_lines.append(_spread_outcome_line(entry))
         print(f"Plan tracker: resolved {spread['strategy']} on {entry['ticker']} "

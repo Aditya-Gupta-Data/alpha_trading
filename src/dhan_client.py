@@ -248,6 +248,17 @@ def get_india_vix() -> float | None:
 # ----------------------------------------------------------- option chain
 
 def get_expiry_list(index_ticker: str) -> list:
+    """List of ISO expiry date strings for an index underlying.
+
+    Dhan's SDK wraps the payload in `{"status", "data": ...}` — but the
+    inner `data` value has been observed DOUBLY nested
+    (`{"data": {"data": [...], "status": ...}}`), not the single list the
+    outer shape implies. Found live 2026-07-09: the single-unwrap version
+    silently handed pick_expiry a dict instead of a list, which iterated
+    its KEYS as if they were dates and matched nothing — every proposal
+    cycle failed with "no usable expiry" regardless of real market
+    conditions. Unwrap defensively so either shape (and a plain list, in
+    case Dhan reverts) works, and anything else degrades to []."""
     instr = _resolve(index_ticker)
     client = _get_client()
     if instr is None or client is None:
@@ -257,7 +268,10 @@ def get_expiry_list(index_ticker: str) -> list:
     except Exception as e:
         print(f"  Dhan expiry_list error: {e}")
         return []
-    return (resp or {}).get("data", []) if isinstance(resp, dict) else []
+    data = (resp or {}).get("data", []) if isinstance(resp, dict) else []
+    if isinstance(data, dict):
+        data = data.get("data", [])
+    return data if isinstance(data, list) else []
 
 
 def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:

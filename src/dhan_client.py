@@ -275,7 +275,12 @@ def get_expiry_list(index_ticker: str) -> list:
 
 
 def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:
-    """Option chain for an index underlying at a given expiry (YYYY-MM-DD)."""
+    """Option chain for an index underlying at a given expiry (YYYY-MM-DD).
+
+    Returns the flat {"last_price", "oc": {...}} dict options_proposer
+    expects. Same doubly-nested SDK response as get_expiry_list
+    (`{"data": {"data": {"last_price", "oc"}}}`) — found live 2026-07-09
+    right after fixing that one; unwrap defensively here too."""
     instr = _resolve(index_ticker)
     client = _get_client()
     if instr is None or client is None:
@@ -287,7 +292,10 @@ def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:
         return None
     if not isinstance(resp, dict) or resp.get("status") != "success":
         return None
-    return resp.get("data")
+    data = resp.get("data")
+    if isinstance(data, dict) and "oc" not in data and "data" in data:
+        data = data.get("data")
+    return data if isinstance(data, dict) else None
 
 
 if __name__ == "__main__":

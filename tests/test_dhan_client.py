@@ -71,6 +71,44 @@ def test_get_expiry_list_survives_a_raising_sdk_call():
         assert dc.get_expiry_list("NIFTY 50") == []
 
 
+CHAIN_INNER = {"last_price": 24065.2, "oc": {"24000.000000": {
+    "ce": {"last_price": 120.5}, "pe": {"last_price": 95.0}}}}
+
+
+def test_get_option_chain_unwraps_the_doubly_nested_shape():
+    """Regression (found live 2026-07-09, right after the identical
+    get_expiry_list bug): Dhan's option_chain response is ALSO doubly
+    nested — {"data": {"data": {"last_price", "oc"}}} — the single
+    unwrap handed options_proposer a dict with no "oc" key, so every
+    chain read failed with 'option chain unavailable'."""
+    resp = {"status": "success", "remarks": "",
+            "data": {"data": CHAIN_INNER}}
+    p1, p2 = _with_client()
+    with p1, p2 as get_client:
+        get_client.return_value.option_chain.return_value = resp
+        chain = dc.get_option_chain("NIFTY 50", "2026-07-14")
+        assert chain == CHAIN_INNER
+        assert chain["oc"]
+
+
+def test_get_option_chain_still_handles_a_single_nested_shape():
+    resp = {"status": "success", "data": CHAIN_INNER}
+    p1, p2 = _with_client()
+    with p1, p2 as get_client:
+        get_client.return_value.option_chain.return_value = resp
+        assert dc.get_option_chain("NIFTY 50", "2026-07-14") == CHAIN_INNER
+
+
+def test_get_option_chain_none_on_failure_status_or_garbage():
+    for resp in ({"status": "failure", "data": CHAIN_INNER}, None,
+                 {"status": "success", "data": None},
+                 {"status": "success", "data": {"data": "not-a-dict"}}):
+        p1, p2 = _with_client()
+        with p1, p2 as get_client:
+            get_client.return_value.option_chain.return_value = resp
+            assert dc.get_option_chain("NIFTY 50", "2026-07-14") is None
+
+
 def test_pick_expiry_actually_picks_from_a_realistic_expiry_list():
     """End-to-end proof the fix restores real proposal flow: with the
     unwrapped list, pick_expiry finds the first date >= MIN_DAYS_TO_EXPIRY

@@ -139,7 +139,46 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   aren't re-triaged. (A quieter log message on the VM is a triage-week
   candidate if the noise annoys.)
 
+### Issue 7 — Analyst "/analyze" reports missing history for TCS.NS (message blames Yahoo; it's actually Dhan)
+- **Symptom (user-reported):** Discord `/analyze` returned "TCS.NS: not
+  enough price history to forecast (needs 200+ trading days on Yahoo
+  Finance)" for a mega-cap with decades of history.
+- **User's proposed root cause:** Yahoo Finance rate-limiting/blocking the
+  GCP VM IP, returning empty dataframes (cf. the earlier TATAMOTORS
+  "possibly delisted" Yahoo error in run.log).
+- **VERIFIED root cause — DIFFERENT from the proposal (flagged to user
+  2026-07-09):** the "on Yahoo Finance" text is a STALE HARDCODED STRING
+  in `src/discord_bot.py:111`, never updated during the 2026-07-06
+  yfinance→DhanHQ migration. The real data path for `/analyze` is
+  `forecast() → suggestions.analyze() → dhan_client.get_daily_closes()`
+  — pure DhanHQ (confirmed by reading the source; `suggestions.py:13`
+  imports `get_daily_closes`, no yfinance). So this failure is a **DhanHQ
+  fetch returning <200 closes for TCS.NS**, NOT Yahoo blocking. Consistent
+  with today's confirmed Dhan trouble (the DH-906 token deaths, Issues 5
+  & the suggest.log connection-reset flood) rather than a Yahoo issue.
+  The precise reason Dhan returned short history for TCS.NS specifically
+  (rate-limit vs. a SECURITY_ID_MAP gap for `TCS.NS` vs. a token blip at
+  that moment) was NOT chased — requires a VM log check, deferred to
+  triage to honor the standby directive.
+- **NOTE on the TATAMOTORS "delisted" error:** that one came from a
+  DIFFERENT, still-yfinance code path (real Yahoo error text in run.log),
+  so a residual yfinance dependency DOES appear to exist somewhere — but
+  it is NOT the source of this TCS.NS `/analyze` error. Don't conflate
+  them at triage.
+- **Proposed triage fix (revised):** (a) fix the lying error string in
+  `discord_bot.py` first — it actively misdirected diagnosis; (b) then
+  investigate why Dhan returned short history for TCS.NS (check
+  SECURITY_ID_MAP coverage + the rate-limit retry in `get_daily_closes`);
+  (c) SEPARATELY, hunt down and migrate the residual yfinance path that
+  produced the genuine TATAMOTORS Yahoo error. The user's "migrate off
+  Yahoo" instinct is right for (c) but moot for this specific issue,
+  which is already on Dhan.
+- **DO NOT FIX THIS WEEK** — logged for triage only (user directive).
+
 ### Context for triage (not an issue)
 - The ops sweep's "silent job" heartbeats from the 02:00 IST card
   (renew/suggest/main/master_scheduler "did not run today") were all
   downstream of Issue 1's timezone shift, not independent failures.
+- Issue numbering here is chronological-append, not the sequence the
+  user quotes in chat — this "Issue 7" is what the user called the
+  forecast/"Issue #3" report on 2026-07-09.

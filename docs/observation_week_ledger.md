@@ -13,6 +13,62 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
 
 ## Date: 2026-07-09
 
+### Issue 5 — Mid-session token death (DH-906 again) after the timezone fix
+- **Symptom:** ~1h after the manually-launched 11:00 IST session started
+  successfully, `master_scheduler.log` began repeating "no market state
+  this cycle" with `DH-906 Invalid Token` underneath, at ~12:08 IST.
+- **Root cause:** confirmed the token ON DISK was actually valid the
+  whole time (a fresh process using it worked immediately) — the
+  RUNNING session process had simply loaded an older, since-superseded
+  token into memory at its 11:00 IST startup and never re-reads `.env`.
+  **What superseded it remains unidentified**: `renew_token.log` was
+  empty (cron never fired), no code path in this repo auto-calls
+  `renew_token`, and the Mac's own token was untouched — so some
+  renewal outside our tracked automation happened around 12:00 IST.
+  Given decision #48 (Dhan allows one active token per account), any
+  external renewal — a Dhan mobile/web app login, for instance — would
+  produce exactly this symptom.
+- **Resolution:** killed and relaunched `master_scheduler` so it picked
+  up the current valid token. (Process-management note: `pkill -f
+  master_scheduler` / `kill $(pgrep -f master_scheduler)` twice killed
+  the SSH shell itself, since the remote command's own text contains
+  that string and `-f` matches full command lines — use `ps -eo
+  pid,comm,args | awk '$2=="python3"'` to target only the real process
+  next time.) One genuine bright spot: the scheduler's SIGTERM handler
+  fired exactly as designed both times — clean "session stopped" log
+  line, no corrupted state.
+- **Follow-up:** if this recurs, it's worth adding a periodic re-read of
+  `DHAN_ACCESS_TOKEN` from `.env` inside the long-running session
+  instead of loading it once at startup — would make the process
+  self-healing against any future external-renewal race.
+
+### Issue 6 — `get_expiry_list` double-nesting silently blocked EVERY proposal
+- **Symptom:** even once Issue 5's fresh token was flowing, the loop
+  logged "no proposal (no usable expiry (need >= 7 days out))" every
+  cycle, for both underlyings, despite NIFTY 50 having 18 listed
+  expiries and the nearest qualifying one (`2026-07-21`) being 12 days
+  out — well past the 7-day minimum.
+- **Root cause:** Dhan's actual SDK response for `expiry_list` is
+  doubly nested — `{"data": {"data": [...dates...], "status": ...}}` —
+  but `dhan_client.get_expiry_list` only unwrapped one layer, handing
+  `pick_expiry` a dict instead of a list. Iterating a dict yields its
+  KEYS ("data", "status"), neither of which parses as a date, so
+  `pick_expiry` silently matched nothing and returned `None` on every
+  call. This looked exactly like "the market's just quiet" but was
+  actually blocking every proposal outright, all day, regardless of
+  setup quality — likely broken since whenever Dhan's API took on this
+  shape, not just today.
+- **Resolution:** commit `5fe5647` — unwrap defensively (handles the
+  current double-nested shape, a plain single-nested shape in case Dhan
+  reverts, and degrades to `[]` on anything else). New test file
+  `tests/test_dhan_client.py` (6 tests; no dhan_client tests existed
+  before this). Deployed to the VM mid-session; verified live —
+  `get_expiry_list("NIFTY 50")` now returns 18 real dates and
+  `pick_expiry` correctly selects `2026-07-21`.
+- **Follow-up:** watch today's remaining cycles for a real proposal
+  firing now that both blockers (token + expiry parsing) are cleared —
+  a quiet rest-of-day is now genuinely "no qualifying setup," not a bug.
+
 ### Issue 1 — No trading session / no Approve-Reject cards this morning
 - **Symptom:** No 🟢 session-open card at 09:15 IST and no proposal cards.
   The overnight ops card arrived at 02:00 IST labeled "20:30". The 07:00

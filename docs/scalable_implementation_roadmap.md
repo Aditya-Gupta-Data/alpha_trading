@@ -174,7 +174,123 @@ implementation shape as `MAX_DRAWDOWN_PCT` (hard-coded constant,
 checked pre-entry, zero ML involvement) — small, additive, no scaling
 overhead either phase.
 
-## 5. Cross-document consistency summary
+## 5. Wealth-Locking Flywheel & Capital Allocation
+
+**Goal:** protect trading gains from drawdown compounding by mechanically
+sweeping a portion of winning-trade profit into a hard, non-correlated
+asset (Gold ETF) instead of letting it sit at risk in the active pool.
+
+### 5.1 The ₹1 Lakh active trading pool
+
+> **⚠️ Design fork that needs resolving before build, not glossed over:**
+> `portfolio_manager.py`'s Phase 6G account is a **singleton** —
+> `account_state` has a hard `CHECK (id = 1)` constraint; there is
+> exactly one pool, one `MAX_DRAWDOWN_PCT`, one peak-equity curve, today.
+> "Cap this strategy at ₹1L, isolated from the broader ₹10L portfolio"
+> can be built two genuinely different ways:
+> - **(a) Virtual sub-cap (recommended Phase 1):** keep the single real
+>   account, but enforce a strategy-scoped ₹1L ceiling on locked margin
+>   at the `gate_headless_entry` call site — cheap, no schema change,
+>   but the existing `MAX_DRAWDOWN_PCT` still evaluates against the
+>   *whole* ₹10L account's peak equity, not this strategy's ₹1L slice.
+>   A strategy that loses its entire ₹1L sub-pool would barely move the
+>   10%-of-₹10L halt — **the drawdown halt needs its own ₹1L-scoped
+>   tracking to mean anything for this strategy specifically**, which is
+>   genuinely new work, not a config flag.
+> - **(b) True sub-account:** extend `account_state` to multiple named
+>   rows (drop the singleton CHECK, key by strategy), each with its own
+>   equity curve and drawdown halt. Real isolation, but a schema/
+>   migration change to code every other part of the system already
+>   depends on being a singleton — larger, and should only be done if
+>   (a) proves insufficient.
+>
+> Recommend **(a) for the initial build**, with **its own scoped
+> drawdown halt** built alongside it (not deferred) — a sub-pool cap
+> without a sub-pool-scoped drawdown halt doesn't actually protect
+> anything, it just limits how much margin one strategy can lock while
+> the account-wide halt stays oblivious to it.
+
+Risk parameters (max loss per trade) are computed strictly against
+whichever ₹1L basis is chosen — same `size_lots(risk_pct=...)` mechanism
+already in `options_proposer.py`, just parameterized to the sub-pool's
+equity instead of the account's.
+
+### 5.2 The 50% Gold ETF profit sweep
+
+**The rule as specified:** on a winning trade's settlement, exactly 50%
+of **net** profit (post-friction — the existing full 2026 friction stack
+`portfolio.py` already computes: STT, stamp duty, brokerage, exchange/
+SEBI fees, GST; `pnl_net` already IS this number, nothing new to
+compute there) is swept out of the active pool toward Gold ETF (e.g.
+`GOLDBEES`); the remaining 50% stays in the pool to compound.
+
+> **⚠️ The load-bearing question this document will NOT silently
+> resolve — it needs an explicit answer from you before this is built:**
+> **this system is paper-only, end to end** (decision #11 — DhanHQ has
+> no order-placement capability anywhere in this codebase; every P&L
+> number everywhere in this repo is simulated). The directive's own
+> wording — *"generate a highly visible Discord webhook alert (e.g.
+> 'SWEEP REQUIRED: Buy ₹X of GOLDBEES')"* — is an instruction for the
+> human to take a **real financial action with real money**. That makes
+> this the **first alert type in the entire system that asks for
+> anything other than approving a paper position.** Two real-money
+> Gold ETF purchases triggered a week apart by the exact same paper
+> P&L number would be indistinguishable in the ledger from two
+> completely different real outcomes — because none of it is real yet.
+> Using **simulated P&L, from a strategy still mid-observation-week,
+> whose skeptic model still can't beat a coin flip (decisions #44/#50)**,
+> to trigger **real** capital deployment conflates two risk domains that
+> the entire rest of this architecture goes out of its way to keep
+> separate. Two honest paths forward — pick one explicitly, don't let it
+> default silently:
+> 1. **The flywheel activates only once/if this strategy is actually
+>    trading real capital** — i.e., this section describes the endgame
+>    behavior for a strategy that has *earned* real deployment, and
+>    stays dormant (documented, not built-and-armed) until that's true.
+> 2. **The sweep itself stays fully paper**, simulating a `GOLDBEES`
+>    sub-position mark-to-market against real Gold ETF price data (which
+>    also needs adding to `SECURITY_ID_MAP` — see 5.4) — the Discord
+>    message becomes informational ("the system paper-allocated ₹X to
+>    simulated GOLDBEES today") rather than an action request, and stays
+>    consistent with every other alert in this system being about paper
+>    state, not a request to move real money.
+>
+> This document assumes **option 2 is the safer default** for anything
+> built before this system has a real-capital track record, and
+> documents the mechanics accordingly below — but this is explicitly
+> **your call to make, not mine to assume**, since it's a real-money
+> decision, not a technical one.
+
+### 5.3 Implementation mechanics (post-triage — documented, not built)
+
+- **`wealth_lock_ledger` table** in `brain_map.db` — additive, same
+  idempotent-migration discipline as every other table this series has
+  specified (`cyclical_models`, `account_events`, etc.). Records: swept
+  amount, source trade's `journal_ref`, target asset, timestamp, and —
+  genuinely new requirement, not in the original ask — a **status
+  field** (`alert_sent` → `confirmed` / `declined`). Without an
+  acknowledgment step the ledger only ever proves "the system asked,"
+  never "the sweep actually happened" — for a mechanism whose entire
+  point is real wealth protection (under option 1) that gap defeats the
+  purpose. Confirmation can be as simple as a Discord button reply or a
+  manual `python3 -m src.wealth_lock confirm <id>` command, mirroring
+  the existing pending-approval button pattern.
+- **Portfolio hook** in `portfolio_manager.py` — a new post-resolution
+  hook (alongside `release_margin`) computes the 50/50 split off
+  `pnl_net` and either fires the Discord alert (option 1) or books the
+  paper `GOLDBEES` sub-position (option 2), per whichever path §5.2
+  resolves to.
+
+### 5.4 Open verification item
+
+**`GOLDBEES` (or any Gold ETF) is currently ABSENT from
+`dhan_client.SECURITY_ID_MAP`** — checked directly, zero matches. Before
+either §5.2 path can be built, the ETF needs a verified security ID
+added the same careful way every other instrument in this map was
+(decision-logged gotcha: Dhan's own docs have mismatched IDs before —
+verify against the official scrip master, never hand-type it).
+
+## 6. Cross-document consistency summary
 
 | This roadmap's phase | Governed by / must stay consistent with |
 |---|---|
@@ -182,7 +298,13 @@ overhead either phase.
 | §2 FBST / 0.70 gate | `train_skeptic.py`'s existing 0.60 gate (decision #44); needs its own decision-log entry when tested, following decision #50's experimental discipline |
 | §3 Tip verifier queue | `commercial_tip_verifier.md` §1 (regulatory gate — unresolved, this doc does not change that) |
 | §4 Safety envelope | Mostly already shipped — `portfolio_manager.py` (6G), `strategy.py`'s VIX gate; only the per-day loss breaker is net-new |
+| §5 Wealth-locking flywheel | `portfolio_manager.py`'s singleton account (decision needed: virtual sub-cap vs. true sub-account); decision #11 (paper-only) — real-vs-paper sweep semantics is an explicit open call, not resolved by this doc |
 
-**The one load-bearing open item in this entire document:** §2.2's FBST
-hypothesis needs to be tested, not assumed, before "0.70" appears in any
-future document as an achieved result rather than a target.
+**The two load-bearing open items in this entire document:**
+1. §2.2's FBST hypothesis needs to be tested, not assumed, before "0.70"
+   appears in any future document as an achieved result rather than a
+   target.
+2. §5.2's real-vs-paper sweep semantics needs an explicit answer from
+   the user before any code exists — it is the first mechanism in this
+   whole system that could ask for a real-money action, and that
+   decision should never be made by default.

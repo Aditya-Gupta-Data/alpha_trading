@@ -476,3 +476,75 @@ architecture, not a footnote.
   optimize→store pipeline still only ever produces a *stored model that
   proposes when triggered*. Nothing here trades; the human still approves
   every position (decision #11).
+
+---
+
+## 8. Infrastructure Mapping
+
+The entire autonomous research-and-execution loop runs on the existing
+**zero-cost dual-node architecture** (decisions #47/#48) — no new
+servers, no new paid services. Each node keeps the role it already has;
+this section just maps the playbook workload onto them.
+
+> **Two corrections from the drafting notes, made deliberately so the
+> permanent blueprint stays true to what the system actually is:**
+> (a) the VM does **not** "execute live trades" — DhanHQ is data-only,
+> everything is paper, and every position is human-approved (decision
+> #11); (b) research runs on the Mac because it is a normal client that
+> retrieves **lawfully** (§7.5), not to "bypass" anything.
+
+### 8.1 The MacBook Pro — the Research Desk
+- **Role:** all heavy, continuous, autonomous compute, at zero API cost.
+- **Tasks:** runs the local 3B LLM (Ollama) for the daily sector
+  heat-map (§6.1); runs the autonomous literature retrieval (§7.1) as a
+  normal residential client that **respects robots.txt, ToS, and rate
+  limits and escalates rather than circumvents** (§7.2/§7.5 — this is why
+  retrieval lives here, not an evasion rationale); and powers the Phase 7
+  Time-Travel Simulator for the weekend optimization loops (§6.2/§7.3).
+- **Why the Mac:** it is where Ollama and the CPU headroom live (the VM's
+  1GB cannot host either), and where the heavy compute belongs so it
+  never competes with the live session. It holds **no Dhan token**
+  (decision #48), so it touches market data only through the VM-refreshed
+  bars cache — never directly.
+
+### 8.2 The GCP VM — the Execution Engine
+- **Role:** a lean, low-latency, insulated **paper-execution** environment
+  — deliberately kept apart from the research/retrieval churn.
+- **Tasks:** during market hours it queries the finalized, optimized
+  `cyclical_models` parameters, monitors for live triggers, and — when a
+  trigger fires — **proposes** the staged campaign's paper trades
+  (PENDING_APPROVAL journal entries + Discord alerts), exactly as the
+  existing `master_scheduler` / `market_loop` pipeline does today.
+- **What it does NOT do:** place real orders. DhanHQ is a **data-only**
+  source in this project (no order methods; decision #11) — the VM reads
+  prices/chains and proposes; it never executes a broker trade. "Live"
+  here means live *market data driving paper proposals*, not live money.
+  The human's Discord Approve/Reject is the only path from a trigger to
+  an (paper) position, and margin is virtually gated by the 6G layer.
+
+### 8.3 The SQLite Database (`brain_map.db`) — the asynchronous bridge
+- **Role:** the decoupled hand-off between the Research Desk and the
+  Execution Engine — no live network coupling between the two nodes, just
+  a shared, versioned data store.
+- **Tasks:** the Mac WRITES newly discovered/optimized playbooks to the
+  `cyclical_models` table (and the heat-map / lineage tables); the VM
+  READS that table during its 15-minute evaluation cycles to monitor for
+  live triggers. Additive, NULL-safe migrations (the pattern already used
+  for regime columns, `simulated_trades`, `graph_edges`) mean the two
+  nodes can run different code versions transiently without breaking.
+- **Sync reality (open item):** today `brain_map.db` is physically
+  authoritative on the VM, and the Mac works against pulled copies
+  (`edge_miner` / `evolution --refresh-bars-cache` patterns). A
+  continuous Mac→VM playbook flow needs that sync path made routine and
+  idempotent — likely the same "apply only the new rows via idempotent
+  writes, never file-clobber" discipline `edge_miner` already uses for
+  graph edges (never overwrite the VM's DB, since the VM writes outcomes
+  concurrently). This is the concrete first thing to build when the
+  playbook work starts.
+
+### 8.4 One-line summary
+Mac **discovers and optimizes** (autonomous, zero-cost, lawful); the VM
+**proposes** (lean, paper-only, human-gated); `brain_map.db` **carries
+the wisdom between them** (async, additive, idempotent). No node ever
+trades real money — the whole edifice terminates in a human tapping
+Approve.

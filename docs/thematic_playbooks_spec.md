@@ -241,3 +241,123 @@ LLM spend (local Ollama).
   Seed→sensor pipeline still only ever *proposes* — every trade the
   staged execution emits remains pending-approval (decision #11). "Deploy
   early" means "propose early," never "trade autonomously."
+
+---
+
+## 6. Continuous Learning & Execution Loop
+
+§5 turns one human Seed into an installed cyclical model. This section
+closes the loop: how the system **autonomously hunts** for cycle turns
+over time — and generates entirely new Seeds — without constant manual
+input. It maps directly onto the existing two-machine cadence (Mac
+nightly / VM live / weekend downtime) so it adds rhythm, not a new
+daemon.
+
+Same non-negotiables carry through: paper-only, human-gated at every
+actual proposal, zero-API LLM spend (local Ollama), and — critically for
+an *autonomous* loop — nothing it discovers auto-activates; discoveries
+become **ranked review items**, not live playbooks (see §6.4).
+
+### 6.1 The Daily Heat-Map (light compute — Mac, `sleep_phase.py`)
+- A new nightly task alongside the existing sleep-phase passes (A–E).
+  Local Ollama scores that day's macro news + earnings text against
+  **every known cycle** in the `cyclical_models` table (§5.4).
+- Maintains a dynamic **Heat Map**: per (sector × known-cycle), a rolling
+  score of how strongly today's evidence matches each cycle phase's
+  entry signature — i.e. "which sectors are entering which phase, how
+  warm." Stored as an additive table (`cycle_heatmap`, dated rows so the
+  trajectory is auditable, decay-weighted like everything else).
+- Light by construction: it *scores against existing models*, it does not
+  simulate or fetch price data. This is what makes it safe to run every
+  night on an 8GB Mac with a 3B model.
+- Output states per cell: `cold` / `warming` / `hot`. `warming` is the
+  handoff signal to §6.2.
+
+### 6.2 The Weekend Simulator (heavy compute — weekend downtime)
+- Markets are closed; the Phase 7 simulator can run long without
+  competing with the live session. A new scheduled weekend pass takes
+  every sector the week's Heat Map flagged **`warming`** and runs the
+  Time-Travel Simulator on it to seek **technical price confirmation** of
+  the suspected cycle (Trigger B's logic, applied retroactively + to
+  recent bars).
+- This is the deliberate coupling of the two triggers across time: the
+  daily heat-map is the cheap fundamental primer (Trigger A at scale);
+  the weekend sim is the expensive technical confirmation (Trigger B).
+  A sector only escalates to a proposable campaign when BOTH agree — the
+  §2 AND gate, now driven continuously instead of per-hand-written-
+  playbook.
+- Where it runs is an open question (§6.5): the 1GB VM cannot host heavy
+  simulator sweeps, and the Mac holds no live token — most likely the Mac
+  runs it against the VM-refreshed bars cache (the same pattern
+  `evolution.py --refresh-bars-cache` already uses), on a weekend
+  LaunchAgent.
+
+### 6.3 Autonomous Self-Seeding (anomaly detection)
+- The above hunts for *known* cycles. This finds *new* ones. The system
+  monitors **unmapped** sectors for extreme fundamental↔technical
+  **divergences** — the raw material of a hype→reality turn — e.g. peak
+  hype sentiment (Trigger-A narrative maxed) co-occurring with breaking
+  price momentum (Trigger-B rolling over): the market still talking the
+  story while the tape stops paying for it.
+- On such a divergence, the system **generates its own Seed thesis**
+  (local Ollama, describing the divergence as a candidate cycle), and
+  runs it through the entire §5 validation pipeline — structure →
+  historical validation → generalization. If the math holds (survives
+  §5.2's reproducibility gate and §5.5's out-of-sample discipline), a new
+  `cyclical_models` row is proposed.
+- This is the system writing its own homework — and therefore the
+  highest-risk mechanic in the whole spec (§6.5).
+
+### 6.4 The full loop
+```
+daily heat-map (Mac, nightly)            — score today vs known cycles
+   │  sectors flagged "warming"
+   ▼
+weekend simulator (weekend downtime)     — technical confirmation
+   │  AND-gate opens
+   ▼
+staged execution playbook (§3)           — PROPOSES campaign, human approves
+   ╲
+    ╲  in parallel, always-on:
+     ▼
+anomaly self-seeding (§6.3)  ──►  §5 validation  ──►  new cyclical_models row
+                                                       (feeds back into the
+                                                        daily heat-map)
+```
+Each turn of the loop enriches `cyclical_models`, which sharpens the next
+day's heat-map — the compounding-knowledge property the Brain Map was
+built for, now applied to macro cycles.
+
+### 6.5 Reality checks (must be answered before this runs unattended)
+- **Autonomous self-seeding is the sharpest double-edge in the system.**
+  A machine that invents its own theses, validates them against its own
+  simulator, and installs its own sensors can compound a single flawed
+  assumption into a self-reinforcing delusion. The §5.5 out-of-sample
+  discipline is not optional here — it is the only thing standing between
+  "discovery" and "confident garbage." Self-seeded models should arguably
+  require explicit human promotion before they ever arm a live sensor,
+  even though everything downstream is already paper + human-gated.
+- **Multiple-comparisons / data-dredging.** Scanning every sector every
+  night against every known cycle, plus hunting anomalies, is thousands
+  of implicit hypotheses tested continuously. Some WILL cross any fixed
+  threshold by chance. The heat-map needs a false-discovery-rate
+  correction or it becomes a permanent low-grade false-alarm generator.
+- **Compute honesty on the Mac.** "Light" nightly scoring is only light
+  if it stays scoring-against-existing-models; if it drifts into
+  re-embedding or re-simulating nightly it will crush the 8GB machine
+  (the constraint that already forced the 3B model + keep_alive=0). The
+  light/heavy split (§6.1 vs §6.2) is a hard boundary, not a guideline.
+- **Weekend-run placement + token cost.** The weekend sweep needs a fresh
+  bars cache (VM-side token) but heavy CPU (Mac-side) — the split must be
+  designed so it never re-introduces the single-token race (decision #48)
+  or blocks the Monday session.
+- **The loop must be interruptible and observable.** An always-on
+  autonomous discovery loop needs the same ops-monitor heartbeat +
+  problem-ledger treatment as every scheduled job, plus a kill switch —
+  an autonomous system you cannot cheaply stop is a liability regardless
+  of how good its ideas are.
+- **Human gate, restated because autonomy invites forgetting it.** Every
+  escalation in this loop terminates in a *proposal*, never a trade. The
+  loop can discover, validate, generalize, and arm sensors entirely on
+  its own — and still, the only thing that opens a position is the human
+  tapping Approve (decision #11).

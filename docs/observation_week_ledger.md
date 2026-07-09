@@ -224,6 +224,43 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   the Issue-5 mystery renewal to ~12:00 IST today — consistent with the
   12:35 IST residential-IP SSH login; still unattributed, still open.)
 
+### Issue 9 — Edge miner's first "successful" run was a silent no-op (third unpinned-interpreter incident this week)
+- **Symptom:** after the user granted `/bin/bash` Full Disk Access (fixing
+  Issue "edge miner TCC block" from 2026-07-08), the LaunchAgent run
+  completed with `status: ok` — but line 1 of its output was
+  `(local parser skipped: httpx not installed)` and it extracted
+  **0 patterns from 10 outcomes**.
+- **Root cause:** `scripts/mine_edges.sh` resolved `python3` from PATH,
+  and its own PATH export puts `/opt/homebrew/bin` (which contains a
+  bare, package-less Homebrew python3) ahead of the Framework python.
+  **Third variant of the same disease in 48 hours:** Mac cron resolved
+  CommandLineTools python (2026-07-08), VM cron needed the venv path,
+  now the LaunchAgent resolved Homebrew python. Manual terminal runs
+  always worked because interactive shells order PATH differently —
+  which is exactly why this class of bug survives testing.
+- **Secondary finding (honesty gap, triage item):** the miner reported
+  `"status": "ok"` while its LLM extractor was completely
+  non-functional. Its guard checks the Ollama *server* (stdlib urllib —
+  passed) but not whether the extractor itself can make calls (httpx —
+  absent). An "ok" that silently did nothing defeats the ops-monitor
+  heartbeat model. Triage fix: the miner should verify the extractor
+  end-to-end in its guard and report `skipped: extractor unavailable`.
+- **Resolution:** interpreter PINNED in `mine_edges.sh` (absolute
+  Framework-python path, never `python3`-from-PATH) with an in-file
+  comment naming all three incidents. Verified with a forced full run:
+  **10 outcomes considered → 12 triples mined → 5 new edges applied to
+  the VM's live graph (3 → 8)** — the first genuinely end-to-end
+  learning cycle in the system's history, and also the first live
+  exercise of the ship-as-file remote-apply path (fixed 2026-07-09
+  early hours) with a non-zero payload. Cross-checked on the VM: all 8
+  edges present, including newly mined semantic links
+  (`fresh_cross CONTRADICTS bullish_thesis` from the TCS stop-loss
+  post-mortem).
+- **Standing lesson for triage:** every scheduled/agent-launched entry
+  point in this system must invoke its interpreter by ABSOLUTE PATH.
+  A sweep of all remaining launchers for bare `python3` is a cheap,
+  high-value triage-week item.
+
 ### Context for triage (not an issue)
 - The ops sweep's "silent job" heartbeats from the 02:00 IST card
   (renew/suggest/main/master_scheduler "did not run today") were all

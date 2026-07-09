@@ -7,4 +7,9 @@
 export PATH="/opt/homebrew/share/google-cloud-sdk/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:$PATH"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mkdir -p logs
-exec python3 -m src.edge_miner >> logs/edge_miner.log 2>&1
+# Interpreter PINNED, never resolved from PATH: /opt/homebrew/bin/python3
+# (bare, no packages) precedes the Framework python in the PATH above and
+# silently neutered the miner's LLM calls on 2026-07-09 — the third
+# unpinned-interpreter incident this week (Mac cron: CommandLineTools
+# python; VM cron: bare python3; LaunchAgent: Homebrew python).
+exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.edge_miner >> logs/edge_miner.log 2>&1

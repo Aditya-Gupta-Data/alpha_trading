@@ -175,6 +175,55 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   which is already on Dhan.
 - **DO NOT FIX THIS WEEK** — logged for triage only (user directive).
 
+### Issue 8 — Session restart resets the in-memory cool-down → duplicate proposals (positions doubled)
+- **Symptom:** four approved positions at day's end instead of two — the
+  12:16 IST session proposed NIFTY 50 + NIFTY BANK spreads (`25da25ec`,
+  `7b84bd44`, user approved), then after the 12:34 restart (deployed the
+  expiry-parser hotfix) the NEW session immediately re-proposed both
+  indices (`1d796dd6`, `af18c8cf`, also approved).
+- **Root cause:** `market_loop.CooldownRegistry` is **in-memory only** —
+  a restarted session has no memory of proposals the previous process
+  made minutes earlier, so the 2h-per-index cool-down silently resets.
+  Any mid-session restart (crash, deploy, token refresh) can double
+  positions.
+- **Impact:** contained by design — the 6G margin gate priced and locked
+  all four honestly (₹79,942.75 total, ~8% of pool), and the user did
+  explicitly approve all four cards. But the doubling was unintended
+  and would scale badly with more restarts.
+- **Resolution:** none this week (no-build boundary). **Triage fix
+  candidate:** persist the cool-down (e.g. derive it from the journal —
+  "was a proposal for this underlying journaled in the last 2h?" — which
+  survives restarts with no new state file).
+- **Follow-up:** queued for triage; positions themselves are fine.
+
+### Day-1 wrap — 20:30 IST ops sweep triage (all 10 lines accounted for)
+- ⏰ renew_token / suggest "did not run today" → **Issue 1** (the
+  timezone fix landed at 11:00 IST, after both jobs' 07:00/08:00 IST
+  slots had already passed). One-time; both fire correctly tomorrow.
+- `master_scheduler.log` DH-906 ×2 → **Issue 5** (the morning token
+  death, pre-fix lines; first VM sweep since 02:00 IST reports the whole
+  day). No DH-906 after the 12:34 restart.
+- "option chain unavailable" ×2 → **Issue 6** (pre-hotfix lines, same
+  recap effect).
+- `sleep_phase.log` Ollama refused ×5 + `failed: 4` → **Issue 4**
+  (expected VM degradation, no Ollama there). The 4 "failed" ingestions
+  are today's new journal entries awaiting LLM ingestion — which
+  currently happens NOWHERE, because the Mac-side edge miner is still
+  blocked on the Full Disk Access grant (see 2026-07-08 note). The
+  system trades fine; it just isn't learning until that one-click grant
+  happens.
+- **Afternoon health confirmed independently:** session self-completed
+  cleanly at 15:30 IST (first full graceful close on the VM), proposals
+  fired normally post-fix, and the live bridge fired its **first-ever
+  real-time exit advisory** — NIFTY 50 spread at 93% of max profit
+  intraday. Positions stay open per design (spreads resolve on daily
+  bars, never same-day); the tracker acts on tomorrow's data.
+- **Token runway verified for tomorrow:** on-disk token expires 12:00
+  IST 2026-07-10; the (now correctly-timed) 07:00 IST renewal precedes
+  both the expiry and the 09:15 open. (That expiry timestamp also dates
+  the Issue-5 mystery renewal to ~12:00 IST today — consistent with the
+  12:35 IST residential-IP SSH login; still unattributed, still open.)
+
 ### Context for triage (not an issue)
 - The ops sweep's "silent job" heartbeats from the 02:00 IST card
   (renew/suggest/main/master_scheduler "did not run today") were all

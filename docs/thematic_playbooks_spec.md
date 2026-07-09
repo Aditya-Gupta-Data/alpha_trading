@@ -361,3 +361,118 @@ built for, now applied to macro cycles.
   loop can discover, validate, generalize, and arm sensors entirely on
   its own — and still, the only thing that opens a position is the human
   tapping Approve (decision #11).
+
+---
+
+## 7. Wisdom Extraction & Optimization Pipeline
+
+Where §5–§6 discover cycles from the system's own data, this pipeline
+imports **external investing wisdom** — the qualitative cycle theories of
+legendary investors (Buffett, Dalio, Marks, …) — and turns them into
+tested, optimized, quantitative playbooks. It is a reinforcement-style
+loop: read a theory, translate it to parameters, backtest it, optimize
+it, store the refined version.
+
+The key design choice (revised from an earlier manual-upload draft):
+literature is **autonomously retrieved**, with human escalation only when
+a source is genuinely unreachable. That autonomy makes the legal/ethical
+guardrails in §7.5 load-bearing, not optional — read them as part of the
+architecture, not a footnote.
+
+### 7.1 Autonomous Knowledge Hunting
+- Triggered when the system identifies a cyclical anomaly (§6.3) but has
+  no optimized playbook for it — a *known gap*, not a fishing expedition.
+- The local LLM generates targeted **search queries** for relevant
+  literature on that specific macro theory, and the retrieval layer
+  fetches **genuinely public documents** — shareholder letters, published
+  investor memos (e.g. Oaktree/Marks memos, Berkshire letters), public
+  transcripts — parsing PDFs/HTML/text into plain text.
+- The LLM then extracts the qualitative cycle definition and **translates
+  it into quantitative, testable parameters**: specific VIX thresholds,
+  moving-average deviation bands, sentiment extremes, phase-duration
+  priors — the same structured-cycle object shape as a §5 Seed, now
+  sourced from literature instead of a human thesis.
+- **Hard constraint (see §7.5):** the retrieval layer respects
+  robots.txt, site ToS, rate limits, and access controls. It fetches only
+  what is freely and lawfully accessible; it never attempts to defeat a
+  paywall or anti-bot measure. When it hits one, that is not a failure to
+  route around — it is the trigger for §7.2.
+
+### 7.2 Human-in-the-Loop Escalation
+- The system halts a given hunt **only** on an unpassable, lawful barrier:
+  a strict paywall, an anti-bot block, or simply no reliable public
+  source it can identify for a specific theory.
+- On such a barrier it sends a **targeted Discord alert** requesting
+  human help — e.g. *"Unable to source literature on the 1980s inflation
+  cycle. Please provide a URL or a document path."* The human drops a
+  link or a file; the pipeline resumes at §7.1's parse step.
+- This reframes the paywall/anti-bot case correctly: the system does not
+  try to get past the barrier — it **asks the human to supply the
+  document they have lawful access to**. Escalation *is* the
+  circumvention-avoidance mechanism, not a fallback after failed
+  circumvention.
+
+### 7.3 Baseline Simulation & Optimization Loop
+- The extracted **"Version 1"** trading plan is run through the Phase 7
+  Time-Travel Simulator against historical cycles to **baseline** its
+  performance (win rate, per-trade Sharpe, max drawdown — the same
+  metrics `train_skeptic` / `evolution` already compute).
+- An automated **optimization loop** then perturbs entry/exit variables —
+  delaying entries until volatility crests, staggering position sizing,
+  shifting profit-take/stop parameters (drawing on the same
+  `EVOLVABLE_PARAMETERS` whitelist discipline as Procedural Evolution,
+  so the search space is bounded and every knob is one the engine can
+  actually act on) — searching for a mathematically superior execution
+  path: comparable or better return at **lower drawdown**.
+- **This optimizer is a curve-fitting engine by nature** (§7.5): left
+  unchecked it will always "find" a superior historical path, because it
+  is fitting to history. The RevertOnRegression + out-of-sample
+  discipline from §5.5 applies with full force here — the refined plan
+  must beat V1 on a **held-out** date range, not just the one it was
+  tuned on, or it is overfit and discarded.
+
+### 7.4 Brain Map Integration
+- A refined plan that survives out-of-sample validation is stored in the
+  `cyclical_models` table (§5.4) as the optimized playbook for that
+  cycle — ready for the §6 continuous loop to arm automatically when live
+  conditions match, still proposing (never auto-trading) per the human
+  gate.
+- Provenance is mandatory and specific: the row records the source
+  document(s), the extracted V1 parameters, the optimization delta, and
+  the out-of-sample scores — so a human reviewing a proposal can trace it
+  back to "Marks' memo on X, translated to these params, optimized this
+  way, validated on this held-out range."
+
+### 7.5 Reality checks (must be answered before this runs unattended)
+- **Lawful retrieval is a hard architectural boundary, not a preference.**
+  The retrieval layer must respect robots.txt, site Terms of Service,
+  rate limits, and all access controls. It fetches only freely and
+  lawfully accessible material. It must never be built to bypass
+  paywalls, anti-bot systems, or authentication — the moment it hits any
+  such barrier it escalates to the human (§7.2). This is what keeps an
+  "autonomous scraper" on the right side of the line; without it, the
+  feature should not be built at all.
+- **Copyright: store derived parameters, not republished prose.** The
+  value extracted is the *quantitative translation* (VIX levels, MA
+  bands, phase priors) — numbers and rules, not the author's copyrighted
+  text. The pipeline stores the derived parameters + a citation/provenance
+  pointer to the source, not wholesale copies of memos or transcripts.
+- **The optimizer overfits by construction — this is the central risk.**
+  An automated loop tweaking entry/exit variables against historical
+  cycles is, definitionally, curve-fitting; it will report a "superior"
+  path that is often just memorized history. Out-of-sample validation on
+  a held-out range is the only thing that separates genuine improvement
+  from overfitting, and it must gate every promotion to §7.4.
+- **Garbage-in from weak translation.** A 3B local model translating
+  nuanced investing prose into precise parameters is a lossy, error-prone
+  step; a confidently-wrong translation produces a confidently-wrong
+  playbook. Human review of the extracted V1 parameters — before they
+  consume optimizer/simulator time — is likely required, mirroring §5.5.
+- **Attribution honesty.** A playbook derived from an investor's public
+  writing should carry that attribution in its provenance, both for the
+  human's benefit and to avoid presenting borrowed reasoning as the
+  system's own discovery.
+- **Human gate, once more.** Even a fully autonomous read→translate→
+  optimize→store pipeline still only ever produces a *stored model that
+  proposes when triggered*. Nothing here trades; the human still approves
+  every position (decision #11).

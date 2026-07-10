@@ -1,0 +1,3 @@
+{
+  "_note": "Verified Dhan instrument ids for the Phase 7 macro tracker's live path. Fill each entry ONLY with ids verified against Dhan's api-scrip-master-detailed.csv (project rule: a wrong id silently prices the wrong instrument — never guess). Shape per metric: {\"id\": \"...\", \"seg\": \"MCX_COMM\" | \"NSE_CURRENCY\", \"inst\": \"FUTCOM\" | \"FUTCUR\"}. A metric left out simply skips the live path and falls open to data/macro_snapshot.json."
+}

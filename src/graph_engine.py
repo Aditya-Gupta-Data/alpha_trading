@@ -85,14 +85,15 @@ def ensure_schema(conn) -> None:
 
 
 def add_edge(conn, source_node, relation, target_node,
-             confidence_score=None, context=None, decay_lambda=None) -> None:
+             confidence_score=None, context=None, decay_lambda=None,
+             valid_from=None) -> None:
     """Write (or reinforce) one causal link. Idempotent on the
     (source, relation, target) triple: re-writing the same edge UPDATES its
     confidence/context instead of duplicating, so repeated Sleep-Phase runs
     never grow the graph unbounded.
 
-    On every write — new or reinforce — valid_from is reset to now so the
-    decay clock restarts (a re-observed pattern is fresh again), and
+    On every write — new or reinforce — valid_from is reset (default: now)
+    so the decay clock restarts (a re-observed pattern is fresh again), and
     invalid_at is cleared so a previously-expired edge reactivates.
 
     `decay_lambda` overrides the edge's decay rate when given: 0.0 makes
@@ -100,10 +101,17 @@ def add_edge(conn, source_node, relation, target_node,
     must not fade out of the active graph just because it isn't re-observed;
     winners re-reinforce themselves, losses don't). An explicit value wins
     over whatever the edge had; None keeps the existing rate (or the
-    default on first write). Not called during inference — this is the
-    writer seam."""
+    default on first write).
+
+    `valid_from` (ISO date/datetime string) stamps the decay clock's anchor
+    explicitly — the HISTORICAL-BACKFILL seam: a 2023 deal replayed today
+    must age from 2023, not read as born-today (else decay_engine treats a
+    long-dead affinity as maximally fresh). Forward/live writes leave it
+    None and get now. Not called during inference — this is the writer
+    seam."""
     ensure_schema(conn)
-    now_str = datetime.now(timezone.utc).isoformat()
+    now_str = (str(valid_from) if valid_from
+               else datetime.now(timezone.utc).isoformat())
     if decay_lambda is None:
         # Preserve any existing per-edge rate; default only on first write.
         lambda_sql = "COALESCE(graph_edges.decay_lambda, excluded.decay_lambda)"

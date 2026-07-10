@@ -591,6 +591,186 @@ def run(output_path=None, snapshot_path=None, watchlist_path=None,
     return matrix
 
 
+# ------------------------------------------------------------- backfill
+
+# NSE's historical large-deal reports (public archives, same disclosure
+# stream as the daily snapshot — the decision-#60 escape hatch's own data,
+# reached at depth). One JSON endpoint per deal type, windowed by from/to.
+_NSE_HISTORICAL_APIS = {
+    "bulk": "https://www.nseindia.com/api/historical/bulk-deals",
+    "block": "https://www.nseindia.com/api/historical/block-deals",
+}
+# NSE rejects windows much over a year; stay far under it so each request
+# is small and a mid-crawl failure loses little.
+_BACKFILL_WINDOW_DAYS = 60
+_BACKFILL_THROTTLE_SECONDS = 2.0
+
+# Per-row report-date spellings seen across NSE eras.
+_DATE_FIELDS = ("BD_DT_DATE", "date", "Date", "DATE", "mTIMESTAMP",
+                "TIMESTAMP", "dealDate")
+
+
+def parse_report_date(value) -> str | None:
+    """An NSE report date in any era's spelling -> ISO YYYY-MM-DD, or None.
+    Handles '14-Jul-2023', '14-07-2023' (day-first — NSE is Indian),
+    '2023-07-14', and datetime-ish strings. Never raises."""
+    if value is None:
+        return None
+    from datetime import datetime as _dt
+    s = str(value).strip()
+    # Try the string whole, date-prefix slices (datetime-ish tails), and
+    # the first three space-tokens ('05 Aug 2024 10:00' era).
+    variants = [s, s[:11].strip(), s[:10].strip(), " ".join(s.split()[:3])]
+    for v in variants:
+        if not v:
+            continue
+        for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y"):
+            try:
+                return _dt.strptime(v, fmt).date().isoformat()
+            except ValueError:
+                continue
+    return None
+
+
+def _backfill_windows(start: date, end: date,
+                      window_days: int = _BACKFILL_WINDOW_DAYS) -> list:
+    """[start..end] inclusive -> [(from_date, to_date), ...] chunks."""
+    from datetime import timedelta as _td
+    windows, cursor = [], start
+    while cursor <= end:
+        stop = min(cursor + _td(days=window_days - 1), end)
+        windows.append((cursor, stop))
+        cursor = stop + _td(days=1)
+    return windows
+
+
+def _fetch_nse_historical(deal_type: str, frm: date, to: date, opener=None,
+                          timeout: int = HTTP_TIMEOUT):
+    """One historical window for one deal type -> (rows, raw_bytes) with
+    rows tagged {"deal_type": ...}, or None on any failure. Never raises."""
+    opener = opener or _nse_opener()
+    url = (f"{_NSE_HISTORICAL_APIS[deal_type]}?from="
+           f"{frm.strftime('%d-%m-%Y')}&to={to.strftime('%d-%m-%Y')}")
+    try:
+        req = urllib.request.Request(url, headers=_NSE_HEADERS)
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+        payload = json.loads(raw.decode("utf-8"))
+    except (urllib.error.URLError, ValueError, OSError, TimeoutError) as exc:
+        print(f"  (backfill: {deal_type} {frm}..{to} failed [{exc}])")
+        return None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return None
+    rows = []
+    for row in data:
+        if isinstance(row, dict):
+            tagged = dict(row)
+            tagged.setdefault("deal_type", deal_type)
+            rows.append(tagged)
+    return rows, raw
+
+
+def backfill(start: date, end: date = None, history_path=None,
+             watchlist_path=None, lake_root=None, fetch_fn=None,
+             sleep_fn=None, throttle: float = _BACKFILL_THROTTLE_SECONDS,
+             warm: bool = True) -> dict:
+    """Replay NSE's historical bulk+block archives into the raw-deal ledger
+    (Phase 1 of docs/HOLY_GRAIL_PLAN.md — seeds the entity-affinity layer
+    with years of history instead of waiting months).
+
+    Run from the MAC (residential IP — NSE blocks datacenter ranges), one
+    time, throttled: every raw window payload is hashed into the lake first
+    (deals_raw_backfill), so a re-run needs no re-fetch of NSE's goodwill
+    and a format drift is diagnosable from the archived bytes. Rows are
+    normalized with the SAME normalize_deal the daily pull uses, grouped by
+    their own per-row report date, and appended per-day via
+    append_raw_deals — idempotent per day, so days already in the ledger
+    (e.g. from the daily 19:30 pull) are never double-counted.
+
+    Returns {"windows", "fetched_rows", "days_appended", "rows_appended",
+    "failed_windows"}. Never raises."""
+    import time as _time
+    end = end or date.today()
+    sleep_fn = sleep_fn or _time.sleep
+    wl = load_watchlist(watchlist_path)
+    opener = None
+    if fetch_fn is None:
+        opener = _nse_opener()
+        if warm:
+            try:   # one homepage warm-up mints the session cookies
+                opener.open(urllib.request.Request(_NSE_HOME,
+                                                   headers=_NSE_HEADERS),
+                            timeout=HTTP_TIMEOUT).read()
+            except Exception as exc:
+                print(f"  (backfill: NSE warm-up failed [{exc}] — "
+                      "continuing; windows may 401)")
+
+        def fetch_fn(deal_type, frm, to):
+            return _fetch_nse_historical(deal_type, frm, to, opener=opener)
+
+    windows = _backfill_windows(start, end)
+    stats = {"windows": len(windows) * 2, "fetched_rows": 0,
+             "days_appended": 0, "rows_appended": 0, "failed_windows": 0}
+    by_day = {}
+    first = True
+    for frm, to in windows:
+        for deal_type in ("bulk", "block"):
+            if not first:
+                sleep_fn(throttle)
+            first = False
+            fetched = fetch_fn(deal_type, frm, to)
+            if fetched is None:
+                stats["failed_windows"] += 1
+                continue
+            rows, raw = fetched
+            stats["fetched_rows"] += len(rows)
+            if raw:
+                try:
+                    from src import lake
+                    lake.archive_blob(
+                        "deals_raw_backfill", frm.isoformat(),
+                        f"{deal_type}-{frm.isoformat()}-{to.isoformat()}",
+                        raw, ext="json", root=lake_root)
+                except Exception:
+                    pass
+            for row in rows:
+                day = parse_report_date(_first_field(row, _DATE_FIELDS))
+                deal = normalize_deal(row, wl["aliases"])
+                if day and deal:
+                    by_day.setdefault(day, []).append(deal)
+            print(f"  (backfill: {deal_type} {frm}..{to} — "
+                  f"{len(rows)} row(s))")
+
+    for day in sorted(by_day):
+        written = append_raw_deals(by_day[day], day, path=history_path)
+        if written:
+            stats["days_appended"] += 1
+            stats["rows_appended"] += written
+    print(f"(backfill: {stats['rows_appended']} deal(s) across "
+          f"{stats['days_appended']} day(s) appended; "
+          f"{stats['failed_windows']} window(s) failed)")
+    return stats
+
+
 if __name__ == "__main__":
-    # Manual smoke test: python3 -m src.ingestion.deals_tracker
-    print(json.dumps(run(), indent=2))
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="EOD bulk/block deals tracker (daily pull by default)")
+    parser.add_argument("--backfill", metavar="YYYY-MM-DD",
+                        help="crawl NSE's historical archives from this "
+                             "date (run from the Mac, one time)")
+    parser.add_argument("--end", metavar="YYYY-MM-DD", default=None,
+                        help="backfill end date (default: today)")
+    parser.add_argument("--throttle", type=float,
+                        default=_BACKFILL_THROTTLE_SECONDS,
+                        help="seconds between NSE requests (default 2)")
+    args = parser.parse_args()
+    if args.backfill:
+        start_day = date.fromisoformat(args.backfill)
+        end_day = date.fromisoformat(args.end) if args.end else None
+        print(json.dumps(backfill(start_day, end_day,
+                                  throttle=args.throttle), indent=2))
+    else:
+        # Manual smoke test / the daily cron entry point.
+        print(json.dumps(run(), indent=2))

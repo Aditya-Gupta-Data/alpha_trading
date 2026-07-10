@@ -266,7 +266,7 @@ def accumulate_entity_affinity(conn, history: list = None, groups: dict = None,
     if not new_rows:
         return {"folded": 0, "new_days": 0, "edges": 0}
 
-    touched, folded, days = set(), 0, set()
+    touched, folded, days = {}, 0, set()
     for r in new_rows:
         client = canonicalize_client(r.get("client"), aliases)
         side = r.get("side")
@@ -277,7 +277,12 @@ def accumulate_entity_affinity(conn, history: list = None, groups: dict = None,
         value = r.get("value_rs") or 0.0
         _fold_row(conn, client, grp, side, int(qty), float(value), r["as_of"])
         if grp != UNGROUPED:
-            touched.add((client, grp))
+            # Remember the LATEST deal date per touched pair: the honest
+            # decay anchor for the projected edge (backfill seam — a 2023
+            # link must age from 2023, not read as born-today).
+            prev = touched.get((client, grp))
+            if prev is None or r["as_of"] > prev:
+                touched[(client, grp)] = r["as_of"]
         folded += 1
         days.add(r["as_of"])
 
@@ -290,14 +295,15 @@ def accumulate_entity_affinity(conn, history: list = None, groups: dict = None,
 
     edges = 0
     if project_edges:
-        for client, grp in sorted(touched):
+        for (client, grp), last_seen in sorted(touched.items()):
             top_group, concentration, group_deals = _client_concentration(conn, client)
             if (top_group == grp and group_deals >= MIN_GROUP_DEALS
                     and concentration >= MIN_CONCENTRATION):
                 graph_engine.add_edge(
                     conn, client, "concentrates_in", grp,
                     confidence_score=concentration,
-                    context=f"{group_deals} deals; {int(concentration*100)}% concentration")
+                    context=f"{group_deals} deals; {int(concentration*100)}% concentration",
+                    valid_from=last_seen)
                 edges += 1
         conn.commit()
 

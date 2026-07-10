@@ -362,15 +362,27 @@ def write_causal_links(conn, extractor=None, window_days: int = None,
         return stats  # nothing reviewed to learn from — no LLM call at all
 
     extractor = extractor or LocalExtractor()
-    triples = extractor.extract_causal_triples(_outcome_summary_text(rows))
-    for t in triples or []:
-        try:
-            graph_engine.add_edge(
-                conn, t["subject"], t["predicate"], t["object"],
-                confidence_score=default_confidence, context=t.get("condition"))
-            stats["triples_written"] += 1
-        except Exception:
-            stats["triples_skipped"] += 1
+    # Loss-permanence: extract win- and loss-derived triples SEPARATELY so
+    # loss lessons can be written decay-exempt (lambda 0). Winners re-earn
+    # their place in the active graph by being re-observed; a lesson paid
+    # for with a real loss must never fade out just because the losing
+    # setup (correctly) stopped being traded. Losses are written LAST so a
+    # triple appearing in both buckets ends up exempt.
+    win_rows = [r for r in rows if r["result"] != "loss"]
+    loss_rows = [r for r in rows if r["result"] == "loss"]
+    for bucket, decay_lambda in ((win_rows, None), (loss_rows, 0.0)):
+        if not bucket:
+            continue
+        triples = extractor.extract_causal_triples(_outcome_summary_text(bucket))
+        for t in triples or []:
+            try:
+                graph_engine.add_edge(
+                    conn, t["subject"], t["predicate"], t["object"],
+                    confidence_score=default_confidence,
+                    context=t.get("condition"), decay_lambda=decay_lambda)
+                stats["triples_written"] += 1
+            except Exception:
+                stats["triples_skipped"] += 1
     return stats
 
 
@@ -429,6 +441,19 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  E. evolution failed: {e}")
         results["evolution"] = None
+    try:
+        # Task F — Entity-Affinity accumulation (Phase 8): fold the raw
+        # bulk/block-deal history into the entity↔group affinity graph and
+        # refresh the advisory read-model. Pure DB + arithmetic, no LLM and
+        # no network, so it runs fully on the VM (like decay). Advisory
+        # only — writes to brain_map affinity tables + data/entity_affinity.json,
+        # never to portfolio/journal, and proposes no trades.
+        from src.knowledge_graph import entity_affinity
+        results["affinity"] = entity_affinity.run(conn=conn, today=today)
+        print(f"  F. entity affinity: {results['affinity']}")
+    except Exception as e:
+        print(f"  F. entity affinity failed: {e}")
+        results["affinity"] = None
 
     conn.close()
     return results

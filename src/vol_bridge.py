@@ -105,9 +105,23 @@ def _load_active_edges(conn: sqlite3.Connection) -> list[dict]:
         )}
         if "graph_edges" not in tables:
             return []
+        # AUTHORITY CAP (provenance firewall): net_signal ALTERS SIZING
+        # (decision #38), so only outcome-derived causal edges may feed it.
+        # Affinity projections ('concentrates_in': entity/group names) and
+        # any future miner edges are context for humans, never risk inputs
+        # — one polarity-word-bearing fund name must never move a position
+        # size. On a pre-provenance DB (no `source` column yet) fall back
+        # to excluding the one known non-causal relation.
+        cols = {row["name"] for row in conn.execute(
+            "PRAGMA table_info(graph_edges)")}
+        if "source" in cols:
+            where = ("invalid_at IS NULL AND (source = 'outcome_derived' "
+                     "OR (source IS NULL AND relation != 'concentrates_in'))")
+        else:
+            where = "invalid_at IS NULL AND relation != 'concentrates_in'"
         rows = conn.execute(
             "SELECT source_node, relation, target_node, confidence_score "
-            "FROM graph_edges WHERE invalid_at IS NULL"
+            f"FROM graph_edges WHERE {where}"
         ).fetchall()
         return [
             {

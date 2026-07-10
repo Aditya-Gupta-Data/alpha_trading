@@ -21,6 +21,7 @@ cd ~/alpha_trading && bash scripts/setup_cron.sh
 | 08:00 Mon-Fri | `src.suggest` | daily suggestions digest |
 | 09:10 Mon-Fri | `src.master_scheduler` | the full trading session; waits for 09:15, self-terminates 15:30 |
 | 15:35 Mon-Fri | `src.main` | watchlist alert checks |
+| 19:30 daily | `src.ingestion.deals_tracker` | EOD bulk & block deals footprint → `data/bulk_deals.json` — NSE publishes ~19:00, so this lands after it; advisory-only (decision #60), fails open |
 | 20:00 daily | `src.sleep_phase` | Brain Map pass — decay-only on the VM (no Ollama there; edge mining happens from the Mac) |
 | 20:30 daily | `src.ops_monitor` | log sweep + job heartbeats → Discord health card |
 

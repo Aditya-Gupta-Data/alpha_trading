@@ -75,7 +75,8 @@ conn = brain_map.connect()
 for t in triples:
     add_edge(conn, t["source"], t["relation"], t["target"],
              confidence_score=t.get("confidence"),
-             context=t.get("context"))
+             context=t.get("context"),
+             decay_lambda=t.get("decay_lambda"))
 conn.close()
 print(f"applied {len(triples)} edge(s)")
 """
@@ -170,11 +171,13 @@ def mine_new_triples(db_path: Path, extractor=None,
         new = []
         for r in conn.execute(
                 "SELECT source_node, relation, target_node, "
-                "confidence_score, context FROM graph_edges"):
+                "confidence_score, context, decay_lambda FROM graph_edges"):
             if (r[0], r[1], r[2]) not in before:
+                # decay_lambda rides along so a loss-derived DECAY-EXEMPT
+                # edge (lambda 0, loss-permanence) stays exempt on the VM.
                 new.append({"source": r[0], "relation": r[1],
                             "target": r[2], "confidence": r[3],
-                            "context": r[4]})
+                            "context": r[4], "decay_lambda": r[5]})
         return stats, new
     finally:
         conn.close()

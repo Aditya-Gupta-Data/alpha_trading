@@ -81,33 +81,73 @@ def ensure_schema(conn) -> None:
         conn.execute("ALTER TABLE graph_edges ADD COLUMN invalid_at TEXT")
     if "decay_lambda" not in cols:
         conn.execute("ALTER TABLE graph_edges ADD COLUMN decay_lambda REAL")
+    if "source" not in cols:
+        # Provenance firewall (holy-grail plan §5.6): WHO wrote an edge
+        # decides what it may DO — only outcome_derived edges may ever feed
+        # vol_bridge's sizing signal; affinity projections and future miner
+        # edges are context, never risk. Backfill is deterministic: the
+        # only non-causal writer to date is entity_affinity's
+        # concentrates_in relation; everything else came from the Task-D
+        # causal writer / edge_miner (reviewed outcomes, decision #34).
+        conn.execute("ALTER TABLE graph_edges ADD COLUMN source TEXT")
+        conn.execute("UPDATE graph_edges SET source = 'affinity_projected' "
+                     "WHERE relation = 'concentrates_in' AND source IS NULL")
+        conn.execute("UPDATE graph_edges SET source = 'outcome_derived' "
+                     "WHERE source IS NULL")
     conn.commit()
 
 
 def add_edge(conn, source_node, relation, target_node,
-             confidence_score=None, context=None) -> None:
+             confidence_score=None, context=None, decay_lambda=None,
+             valid_from=None, source: str = "outcome_derived") -> None:
     """Write (or reinforce) one causal link. Idempotent on the
     (source, relation, target) triple: re-writing the same edge UPDATES its
     confidence/context instead of duplicating, so repeated Sleep-Phase runs
     never grow the graph unbounded.
 
-    On every write — new or reinforce — valid_from is reset to now so the
-    decay clock restarts (a re-observed pattern is fresh again), and
+    On every write — new or reinforce — valid_from is reset (default: now)
+    so the decay clock restarts (a re-observed pattern is fresh again), and
     invalid_at is cleared so a previously-expired edge reactivates.
-    Not called during inference — this is the writer seam."""
+
+    `decay_lambda` overrides the edge's decay rate when given: 0.0 makes
+    the edge DECAY-EXEMPT (loss-permanence — a lesson paid for with a loss
+    must not fade out of the active graph just because it isn't re-observed;
+    winners re-reinforce themselves, losses don't). An explicit value wins
+    over whatever the edge had; None keeps the existing rate (or the
+    default on first write).
+
+    `valid_from` (ISO date/datetime string) stamps the decay clock's anchor
+    explicitly — the HISTORICAL-BACKFILL seam: a 2023 deal replayed today
+    must age from 2023, not read as born-today (else decay_engine treats a
+    long-dead affinity as maximally fresh). Forward/live writes leave it
+    None and get now. Not called during inference — this is the writer
+    seam."""
     ensure_schema(conn)
-    now_str = datetime.now(timezone.utc).isoformat()
+    now_str = (str(valid_from) if valid_from
+               else datetime.now(timezone.utc).isoformat())
+    if decay_lambda is None:
+        # Preserve any existing per-edge rate; default only on first write.
+        lambda_sql = "COALESCE(graph_edges.decay_lambda, excluded.decay_lambda)"
+        lambda_val = _DEFAULT_DECAY_LAMBDA
+    else:
+        # Explicit rate wins — including 0.0 (decay-exempt). Once an edge
+        # has been marked exempt, a later None-write keeps it exempt via
+        # the COALESCE branch above.
+        lambda_sql = "excluded.decay_lambda"
+        lambda_val = float(decay_lambda)
     conn.execute(
         "INSERT INTO graph_edges (source_node, relation, target_node, "
-        "confidence_score, context, valid_from, decay_lambda) VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "confidence_score, context, valid_from, decay_lambda, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (source_node, relation, target_node) DO UPDATE SET "
         "confidence_score = excluded.confidence_score, "
         "context = COALESCE(excluded.context, graph_edges.context), "
         "valid_from = excluded.valid_from, "
-        "decay_lambda = COALESCE(graph_edges.decay_lambda, excluded.decay_lambda), "
+        f"decay_lambda = {lambda_sql}, "
+        "source = COALESCE(excluded.source, graph_edges.source), "
         "invalid_at = NULL",
         (source_node, relation, target_node, confidence_score, context,
-         now_str, _DEFAULT_DECAY_LAMBDA),
+         now_str, lambda_val, source or "outcome_derived"),
     )
     conn.commit()
 

@@ -266,6 +266,76 @@ context only, never part of `score`.
 }
 ```
 
+### 2.7 Bulk & block deals footprint — `data/bulk_deals.json`
+End-of-day smart-money footprint, written by `src/ingestion/deals_tracker.py`
+(decision #60). NSE bulk/block deals aggregated per ticker; advisory only,
+never part of any trade decision yet.
+```json
+{
+  "as_of": "2026-07-10",                 // IST date of the report
+  "source": "nse",                       // "nse" (live) | "snapshot" (local fallback) | "none"
+  "entries": {
+    "RELIANCE.NS": {
+      "net_qty": 10000,                  // Σ(buy qty − sell qty), signed; the footprint
+      "net_value_rs": 29000000.0,        // signed notional (net_qty-weighted), rupees
+      "buy_deals": 1,                    // disclosed buy-side legs
+      "sell_deals": 1,                   // disclosed sell-side legs
+      "block_deal": true,                // any block-window deal touched the name
+      "marquee_names": ["SBI Mutual Fund A/C X"],  // curated names seen (config/deals_watchlist.json)
+      "marquee_net": "accumulating"      // "accumulating" | "distributing" | "mixed" | "none"
+    }
+  }
+}
+```
+`source: "none"` with empty `entries` is the honest no-data day (no
+network, no snapshot) — never a guess. Consumers read it via
+`deals_tracker.load_deals()`, which degrades to `{}` on any problem. The
+hand-editable fallback input is `data/bulk_deals_snapshot.json` (a bare
+list of raw NSE-shaped deal rows, or `{"deals": [...]}`).
+
+### 2.8 Raw deal history ledger — `data/deals_history.jsonl`
+Append-only, one normalized deal per line, stamped with the report date —
+the permanent substrate the entity-affinity layer accumulates over months
+(the `bulk_deals.json` aggregate above is overwritten daily; this is not).
+Written by `deals_tracker.append_raw_deals` (idempotent per day), read by
+`deals_tracker.read_deal_history`.
+```json
+{"ticker": "ADANIENT.NS", "client": "MISTY SEAS FUND A/C 99", "side": "sell", "qty": 10000, "price": 100.0, "value_rs": 1000000.0, "deal_type": "bulk", "as_of": "2026-07-20"}
+```
+`client` is stored AS DISCLOSED (raw) — canonicalization happens at read
+time, so improving the canonicalizer never needs a re-fetch.
+
+### 2.9 Entity-affinity read-model — `data/entity_affinity.json`
+Per promoter group, which trading entities are structurally linked (all-time
+concentration ≥ threshold) and their recent net direction. Written by
+`src/knowledge_graph/entity_affinity.py` (decision #61). Advisory only —
+public-disclosure inference, never a trade decision or an ownership claim.
+```json
+{
+  "as_of": "2026-08-01",
+  "window_days": 45,                   // recency window for the direction signal
+  "groups": {
+    "ADANI": {
+      "linked_entities": [
+        {
+          "client": "MISTY SEAS FUND",         // canonical entity key
+          "concentration": 1.0,                // group's share of the entity's all-time deals
+          "group_deals": 5,                    // disclosed deals in this group
+          "recent_direction": "distributing",  // "accumulating"|"distributing"|"mixed"|"flat"
+          "recent_net_value_rs": -5000000.0,   // signed, over the window
+          "recent_net_qty": -50000
+        }
+      ],
+      "net_bias": "distribution",        // "distribution"|"accumulation"|"mixed"|"none"
+      "tickers": ["ADANIENT.NS", "..."]  // the group's members (from config/entity_groups.json)
+    }
+  }
+}
+```
+The bearish/bullish advisories derived from this (a linked entity unloading
+its group = DISTRIBUTION) are appended to `logs/affinity_advisories.jsonl`
+— read by humans/dashboards only, never the execution loop.
+
 ### 2.6 Coming later (do not build against yet)
 `data/brain_map.db` (SQLite, Phase 6 macro-event memory) — schema is still
 being designed; it will be exposed only through backend endpoints, never

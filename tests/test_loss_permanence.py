@@ -114,6 +114,72 @@ def test_decay_flags_rather_than_deletes():
     assert n_events == 2
 
 
+def test_loss_derived_edge_is_decay_exempt():
+    """A causal edge written with decay_lambda=0 (the loss-permanence rate)
+    must survive ANY amount of decay at full confidence — a lesson paid for
+    with a loss never fades from the active graph. A normal edge with the
+    same age must expire, proving the exemption is the lambda, not luck."""
+    conn = brain_map.connect(":memory:")
+    graph_engine.add_edge(conn, "chased_breakout_into_resistance", "caused",
+                          "loss", confidence_score=1.0, decay_lambda=0.0)
+    graph_engine.add_edge(conn, "clean_golden_cross", "preceded",
+                          "win", confidence_score=1.0)   # default lambda
+    # Age both edges by six years.
+    conn.execute("UPDATE graph_edges SET valid_from = '2020-01-01T00:00:00+00:00'")
+    conn.commit()
+    decay_engine.apply_decay_sweep(conn)
+
+    loss_edge = conn.execute(
+        "SELECT confidence_score, invalid_at FROM graph_edges "
+        "WHERE source_node = 'chased_breakout_into_resistance'").fetchone()
+    assert loss_edge["invalid_at"] is None            # still active
+    assert loss_edge["confidence_score"] == 1.0       # undecayed
+    win_edge = conn.execute(
+        "SELECT invalid_at FROM graph_edges "
+        "WHERE source_node = 'clean_golden_cross'").fetchone()
+    assert win_edge["invalid_at"] is not None         # normal edge expired
+
+    # And the exemption is STICKY: a later write without an explicit rate
+    # (e.g. the same lesson re-observed via a win-bucket extraction) keeps
+    # lambda 0 rather than silently re-arming decay.
+    graph_engine.add_edge(conn, "chased_breakout_into_resistance", "caused",
+                          "loss", confidence_score=1.0)   # no decay_lambda
+    row = conn.execute(
+        "SELECT decay_lambda FROM graph_edges "
+        "WHERE source_node = 'chased_breakout_into_resistance'").fetchone()
+    assert row["decay_lambda"] == 0.0
+
+
+def test_causal_writer_routes_loss_triples_to_exempt_lambda():
+    """write_causal_links must extract win and loss outcomes in separate
+    buckets and write the loss bucket's triples with decay_lambda=0."""
+    conn = brain_map.connect(":memory:")
+    _seed_win_and_loss(conn)
+
+    class FakeExtractor:
+        """Returns one distinct triple per bucket, keyed off the summary
+        text so the test can tell which bucket each write came from."""
+        def is_reachable(self):
+            return True
+        def extract_causal_triples(self, text):
+            if "earnings_miss" in text:
+                return [{"subject": "earnings_miss", "predicate": "caused",
+                         "object": "loss", "condition": None}]
+            return [{"subject": "golden_cross", "predicate": "preceded",
+                     "object": "win", "condition": None}]
+
+    stats = sleep_phase.write_causal_links(conn, extractor=FakeExtractor(),
+                                           window_days=3650,
+                                           today=date(2026, 8, 1))
+    assert stats["triples_written"] == 2
+    loss = conn.execute("SELECT decay_lambda FROM graph_edges "
+                        "WHERE source_node = 'earnings_miss'").fetchone()
+    win = conn.execute("SELECT decay_lambda FROM graph_edges "
+                       "WHERE source_node = 'golden_cross'").fetchone()
+    assert loss["decay_lambda"] == 0.0            # loss lesson: exempt
+    assert win["decay_lambda"] not in (None, 0.0)  # win edge: decays normally
+
+
 def test_no_delete_statement_touches_the_outcome_ledger():
     """Belt-and-braces source guard: nothing in src/ may DELETE FROM
     outcomes / events / event_outcome_link. If someone adds one, this

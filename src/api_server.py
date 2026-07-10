@@ -167,6 +167,16 @@ def discord_pending():
     return {"ok": True, "pending": pending}
 
 
+@app.get("/api/discord/positions")
+def discord_positions():
+    """Active-trade visibility for the Discord bot's /positions command:
+    every open approved paper position (equity plans + options spreads),
+    from the same journal predicates the plan tracker resolves against.
+    Strictly read-only — a journal file read, no DB, no locks."""
+    from src.positions import active_positions
+    return {"ok": True, "positions": active_positions()}
+
+
 # Everything else — watchlist, chat, decision, scorecard, static dashboard —
 # is the engine app, unchanged, now behind the strict gate. Mounted LAST so
 # the gateway's own routes above win the match first.

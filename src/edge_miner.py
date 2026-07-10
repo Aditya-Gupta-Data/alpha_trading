@@ -99,6 +99,34 @@ def ollama_up(url: str = OLLAMA_URL) -> bool:
         return False
 
 
+# The honesty probe's input: small, unambiguous, and shaped like the real
+# journal text the extractor mines — a valid answer proves the WHOLE chain
+# (httpx installed -> Ollama chat endpoint -> model -> JSON coercion), not
+# just that a server socket answered.
+PROBE_TEXT = ("Health probe: NIFTY 50 closed 1.2 percent higher after "
+              "strong bank earnings; volatility eased.")
+
+
+def extractor_ready(extractor) -> tuple:
+    """(ok, reason) from one fast END-TO-END dummy extraction.
+
+    Ledger Issue 9 (2026-07-09): the miner reported "status": "ok" while
+    extracting NOTHING — its guard pinged the Ollama *server* (stdlib
+    urllib, passed) but the extractor itself needed httpx (absent), so
+    every real call silently returned None. A scheduled job's "ok" is only
+    trustworthy if the job verifies its own dependencies end-to-end; this
+    probe runs the exact code path mining uses and demands a valid event
+    frame back. Never raises."""
+    try:
+        frame = extractor.extract_event_json(PROBE_TEXT)
+    except Exception as e:                # extract_event_json shouldn't
+        return False, f"probe raised: {e}"  # raise, but never trust that
+    if not isinstance(frame, dict) or not frame.get("event_type"):
+        return False, ("dummy extraction returned no valid event frame — "
+                       "httpx missing, model unloaded, or unusable output")
+    return True, "ok"
+
+
 def due(state_path: Path = None, now: float = None,
         min_hours: float = MIN_HOURS_BETWEEN_RUNS) -> bool:
     """True when the last SUCCESSFUL run is old enough (or never ran)."""
@@ -166,6 +194,17 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
                 f"{MIN_HOURS_BETWEEN_RUNS}h"}
     if not ollama_up():
         return {"status": "skipped", "reason": "Ollama not running"}
+    if extractor is None:
+        # The scheduled path (launchd) builds its own extractor — probe it
+        # end-to-end BEFORE claiming anything (Issue 9's honesty gap: a
+        # server ping is not a working extractor). Injected extractors
+        # (tests, callers) are the caller's responsibility.
+        from src.local_parser import LocalExtractor
+        extractor = LocalExtractor()
+        ok, reason = extractor_ready(extractor)
+        if not ok:
+            return {"status": "skipped",
+                    "reason": f"extractor unavailable ({reason})"}
     gcloud = _gcloud()
     if gcloud is None:
         return {"status": "skipped", "reason": "gcloud CLI not found"}

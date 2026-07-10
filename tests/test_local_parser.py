@@ -98,6 +98,56 @@ def test_env_overrides_base_url_and_model():
     assert ex.model == "phi3"
 
 
+# --- quiet offline handling (ledger Issue 4: Errno 111 noise on the VM) ----
+
+def test_connection_refused_logs_one_quiet_line_then_stays_silent(capsys=None):
+    """The VM runs no Ollama by design — dozens of '[Errno 111]' lines per
+    sleep-phase run were pure noise. The first refused call reports one
+    quiet line; every later one is silent. Real errors still print fully."""
+    import io
+    from contextlib import redirect_stdout
+    from src import local_parser as lp
+
+    lp._OLLAMA_OFFLINE_REPORTED = False
+    refused = ConnectionRefusedError(111, "Connection refused")
+    out = io.StringIO()
+    with mock.patch("httpx.post", side_effect=refused), redirect_stdout(out):
+        ex = LocalExtractor()
+        for _ in range(5):
+            assert ex.extract_event_json("text") is None
+    printed = out.getvalue().strip().splitlines()
+    assert len(printed) == 1                       # ONE line for 5 failures
+    assert "Ollama offline" in printed[0]
+    assert "expected on the VM" in printed[0]
+    lp._OLLAMA_OFFLINE_REPORTED = False            # leave global state clean
+
+
+def test_non_offline_errors_still_print_in_full_every_time():
+    import io
+    from contextlib import redirect_stdout
+    from src import local_parser as lp
+
+    lp._OLLAMA_OFFLINE_REPORTED = False
+    out = io.StringIO()
+    with mock.patch("httpx.post", side_effect=ValueError("bad payload")), \
+         redirect_stdout(out):
+        ex = LocalExtractor()
+        assert ex.extract_event_json("text") is None
+        assert ex.extract_event_json("text") is None
+    lines = [l for l in out.getvalue().splitlines() if "call failed" in l]
+    assert len(lines) == 2                         # never muffled
+    lp._OLLAMA_OFFLINE_REPORTED = False
+
+
+def test_offline_error_detection_shapes():
+    from src.local_parser import _is_offline_error
+    assert _is_offline_error(ConnectionRefusedError(111, "Connection refused"))
+    assert _is_offline_error(OSError("[Errno 111] Connection refused"))
+    assert _is_offline_error(RuntimeError("All connection attempts failed"))
+    assert not _is_offline_error(ValueError("model returned garbage"))
+    assert not _is_offline_error(TimeoutError("read timed out"))
+
+
 # -------------------------------------------------------------- coercion
 
 def test_coercion_enforces_the_schema():

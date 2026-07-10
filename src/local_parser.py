@@ -111,6 +111,21 @@ _CAUSAL_PROMPT = (
 )
 
 
+# Once-per-process flag: the first connection-refused failure logs one
+# quiet line; subsequent ones stay silent (see _chat). Tests reset it.
+_OLLAMA_OFFLINE_REPORTED = False
+
+
+def _is_offline_error(exc: Exception) -> bool:
+    """True when the failure means 'no Ollama server here' (connection
+    refused / Errno 111 and httpx's connect-level wrappers) rather than a
+    real protocol/parsing problem worth a full log line."""
+    text = repr(exc).lower()
+    return ("connection refused" in text or "errno 111" in text
+            or "connecterror" in text or "connect call failed" in text
+            or "all connection attempts failed" in text)
+
+
 class LocalExtractor:
     """OpenAI-compatible client for a local Ollama server. Pure
     text-to-JSON — carries no market-data capability whatsoever."""
@@ -134,6 +149,7 @@ class LocalExtractor:
     def _chat(self, text_payload: str, system_prompt: str = None) -> str:
         """One chat-completions call; returns the raw content string, or
         None on any failure (server down, HTTP error, unexpected shape)."""
+        global _OLLAMA_OFFLINE_REPORTED
         try:
             import httpx
         except ImportError as e:
@@ -159,6 +175,19 @@ class LocalExtractor:
                 return None
             return resp.json()["choices"][0]["message"]["content"]
         except Exception as e:
+            # Ollama simply not running (the VM has none BY DESIGN,
+            # decision #47) used to print one "[Errno 111] Connection
+            # refused" line PER CALL — dozens per sleep-phase run, all
+            # noise that kept getting re-triaged (ledger Issue 4). Report
+            # the offline state once per process, quietly, then stay
+            # silent; real failures still print in full every time.
+            if _is_offline_error(e):
+                if not _OLLAMA_OFFLINE_REPORTED:
+                    _OLLAMA_OFFLINE_REPORTED = True
+                    print(f"  (local parser: Ollama offline at "
+                          f"{self.base_url} — LLM extraction skipped; "
+                          "expected on the VM, which runs no Ollama)")
+                return None
             print(f"  (local parser: Ollama call failed: {e})")
             return None
 

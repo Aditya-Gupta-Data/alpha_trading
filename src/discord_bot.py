@@ -24,6 +24,9 @@ Commands:
   /pending              -- list PENDING_APPROVAL proposals with tappable
                            ✅ Approve / ❌ Reject buttons (each opens a
                            one-line "why" prompt, journaled verbatim)
+  /positions            -- open paper positions (entry, target/stop,
+                           time in trade) via the gateway's read-only
+                           /api/discord/positions endpoint
   (reply to any bot message, or @mention it, to chat -- answered by Gemini)
 
 Setup: DISCORD_BOT_TOKEN in .env (from the Discord Developer Portal, with
@@ -107,8 +110,13 @@ def _run_forecasts(tickers: list) -> list:
     for ticker in tickers:
         result = forecast(ticker, news, weights)
         if result is None:
+            # Data path is DhanHQ (get_daily_closes), NOT Yahoo — the old
+            # "on Yahoo Finance" wording here predated the 2026-07-06
+            # migration and actively misdirected diagnosis (ledger Issue 7).
             lines.append(f"{ticker}: not enough price history to forecast "
-                         f"(needs 200+ trading days on Yahoo Finance).")
+                         "(needs 200+ trading days from DhanHQ — likely a "
+                         "token/data outage or a missing SECURITY_ID_MAP "
+                         "entry for this ticker).")
         else:
             lines.append(describe(result))
     return lines
@@ -252,6 +260,49 @@ def _format_pending(p: dict) -> str:
         f"signal: {p.get('signal')}\n"
         f"*(paper only -- approving hands the exit to the plan tracker)*"
     )
+
+
+def _fetch_positions() -> list:
+    """GET /api/discord/positions -> open approved paper positions."""
+    status, body = _bridge_call("GET", "/api/discord/positions")
+    if status != 200 or not isinstance(body, dict):
+        raise RuntimeError(body.get("error") if isinstance(body, dict)
+                           else f"gateway answered HTTP {status}")
+    return body.get("positions") or []
+
+
+def _positions_embed(items: list) -> "discord.Embed":
+    """Open positions -> one embed, a field per position (Discord caps
+    embeds at 25 fields; the overflow is summarized in the footer)."""
+    embed = discord.Embed(
+        title=f"📂 Open Paper Positions ({len(items)})",
+        color=0x3498DB,
+        description="Live from the journal — the plan tracker manages "
+                    "every exit. Paper only.",
+    )
+    shown = items[:25]
+    for p in shown:
+        days = p.get("days_in_trade")
+        in_trade = f"{days}d in trade" if days is not None else "entry date unknown"
+        if p.get("kind") == "spread":
+            bounds = (f"max profit Rs.{p.get('max_profit_rs', 0):,.0f} / "
+                      f"max loss Rs.{p.get('max_loss_rs', 0):,.0f}")
+            entry = (f"entry {p.get('entry_price')} net/share, "
+                     f"{p.get('lots')} lot(s), expiry {p.get('expiry')}")
+        else:
+            bounds = (f"target Rs.{p.get('target')} / "
+                      f"stop Rs.{p.get('stop_loss')}")
+            entry = f"entry Rs.{p.get('entry_price')}"
+        strategy = (p.get("strategy") or p.get("kind") or "?").replace("_", " ")
+        embed.add_field(
+            name=f"{p.get('ticker')} — {strategy}",
+            value=f"{entry}\n{bounds}\n{in_trade}  •  id `{p.get('trade_id')}`",
+            inline=False,
+        )
+    if len(items) > len(shown):
+        embed.set_footer(text=f"+{len(items) - len(shown)} more — Discord "
+                              "caps an embed at 25 fields.")
+    return embed
 
 
 def _custom_id(action: str, trade_id: str) -> str:
@@ -416,6 +467,25 @@ async def pending(interaction: discord.Interaction):
     for p in items:
         await interaction.followup.send(_format_pending(p),
                                         view=_pending_view(p["trade_id"]))
+
+
+@tree.command(name="positions",
+              description="Open paper positions: entry, target/stop, time in trade (read-only)")
+async def positions(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    try:
+        items = await asyncio.to_thread(_fetch_positions)
+    except Exception as e:
+        await interaction.followup.send(
+            f"Can't reach the gateway at {_bridge_base_url()}: {e}\n"
+            "(Is the alpha-trading service running, and API_KEY set in .env "
+            "on this machine?)")
+        return
+    if not items:
+        await interaction.followup.send(
+            "No open paper positions right now — everything is settled.")
+        return
+    await interaction.followup.send(embed=_positions_embed(items))
 
 
 @client.event

@@ -86,7 +86,14 @@ def fetch_market_state(underlying: str) -> dict | None:
 
 class CooldownRegistry:
     """Per-key rate limiter: ready() until arm()ed, then quiet for
-    `seconds`. Pure and clock-injectable for tests."""
+    `seconds`. Pure and clock-injectable for tests.
+
+    Persistence (ledger Issue 8, 2026-07-09): the armed state used to be
+    memory-only, so any mid-session restart (crash, deploy, token refresh)
+    forgot proposals fired minutes earlier and immediately re-proposed —
+    live positions DOUBLED. seed_from_journal() rebuilds the state from
+    the journal itself (entries now carry `created_at`), so the journal is
+    the persistence and no new state file exists to corrupt."""
 
     def __init__(self, seconds: float = COOLDOWN_SECONDS):
         self.seconds = seconds
@@ -100,6 +107,43 @@ class CooldownRegistry:
     def arm(self, key: str, now: datetime = None) -> None:
         self._last[key] = now or ist_now()
 
+    def seed_from_journal(self, underlyings, now: datetime = None,
+                          entries: list = None) -> list:
+        """Re-arm every underlying whose newest journaled proposal is
+        younger than the cooldown window. Any journal line for the
+        underlying counts — pending, approved OR rejected all mean a
+        proposal FIRED, which is what the cooldown rate-limits.
+
+        Returns the keys that were re-armed. Fail-safe: an unreadable
+        journal or unparseable timestamps seed nothing (the loop then
+        behaves exactly as before this fix — never worse). Entries
+        predating the `created_at` field are skipped by construction."""
+        now = now or ist_now()
+        if entries is None:
+            try:
+                from src import journal
+                entries = journal.read_all()
+            except Exception as e:
+                print(f"[Market Loop] cooldown seed skipped — journal "
+                      f"unreadable ({e}).", flush=True)
+                return []
+        wanted = set(underlyings)
+        for e in entries:
+            ticker = e.get("ticker")
+            if ticker not in wanted or not e.get("created_at"):
+                continue
+            try:
+                created = datetime.fromisoformat(e["created_at"])
+            except (ValueError, TypeError):
+                continue
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=IST)
+            if (now - created).total_seconds() < self.seconds:
+                last = self._last.get(ticker)
+                if last is None or created > last:
+                    self._last[ticker] = created
+        return [u for u in underlyings if not self.ready(u, now)]
+
 
 async def run_market_loop(underlyings=UNDERLYINGS,
                           interval: float = POLL_INTERVAL_SECONDS,
@@ -112,7 +156,19 @@ async def run_market_loop(underlyings=UNDERLYINGS,
     headless proposer (Discord alert + PENDING_APPROVAL journal entry).
     Everything is injectable: the simulator swaps fetch_fn/now_fn, tests
     swap all of it."""
-    cooldown = cooldown or CooldownRegistry()
+    if cooldown is None:
+        # Rebuild persisted cooldown state so a mid-session restart cannot
+        # double-enter (Issue 8). Injected registries (tests, simulator)
+        # are the caller's responsibility and are not re-seeded.
+        cooldown = CooldownRegistry()
+        try:
+            armed = cooldown.seed_from_journal(underlyings, now=now_fn())
+            if armed:
+                print(f"[Market Loop] cooldown restored from the journal "
+                      f"for: {', '.join(armed)}.", flush=True)
+        except Exception as e:
+            print(f"[Market Loop] cooldown seed failed open ({e}).",
+                  flush=True)
     propose_fn = propose_fn or proposer.run_headless
     print(f"[Market Loop] armed — {', '.join(underlyings)} every "
           f"{interval:g}s during 09:15-15:30 IST, cool-down "

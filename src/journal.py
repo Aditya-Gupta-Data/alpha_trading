@@ -20,13 +20,15 @@ key (see brain_map.journal_ref_for) rather than crash.
 
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from src.config import DEFAULT_STOP_LOSS_PCT, DEFAULT_INVESTMENT_SIZE
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 JOURNAL_PATH = DATA_DIR / "journal.jsonl"
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # Phase 4B plan fields copied into the journal when the proposal carries them
 # (strategy.propose_plans does; older/simpler callers may not).
@@ -40,6 +42,12 @@ def log(entry: dict) -> None:
     # Safety net for any caller that builds an entry without new_entry():
     # every line that lands in the journal must carry a stable short_id.
     entry.setdefault("short_id", uuid.uuid4().hex[:8])
+    # Additive (2026-07-10, ledger Issue 8): a full IST timestamp alongside
+    # the day-only `date`. The market loop's cooldown registry rebuilds
+    # itself from this across restarts — the journal IS the persistence,
+    # no new state file. Older lines lack it; readers must tolerate that.
+    entry.setdefault("created_at",
+                     datetime.now(IST).isoformat(timespec="seconds"))
     DATA_DIR.mkdir(exist_ok=True)
     with open(JOURNAL_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")

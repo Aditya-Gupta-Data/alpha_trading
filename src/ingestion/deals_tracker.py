@@ -221,17 +221,25 @@ def _load_snapshot(path=None) -> list:
 
 # ------------------------------------------------------------- NSE path
 
-def _fetch_nse_largedeals(timeout: int = HTTP_TIMEOUT) -> list | None:
-    """The live Option-A path: warm NSE's cookie jar on the homepage, then
-    pull the large-deal JSON and flatten its bulk + block sections into
-    tagged raw rows [{..., "deal_type": "bulk"|"block"}]. Returns None on
-    ANY failure (no network, 401, timeout, shape change) so the caller
-    falls open to the snapshot. Never raises."""
+def _nse_opener():
+    """A cookie-jar urllib opener with the browser-ish handshake NSE wants.
+    Shared by the daily pull and the historical backfill."""
     jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(
+    return urllib.request.build_opener(
         urllib.request.HTTPCookieProcessor(jar),
         urllib.request.HTTPSHandler(context=_SSL_CTX),
     )
+
+
+def _fetch_nse_largedeals(timeout: int = HTTP_TIMEOUT):
+    """The live Option-A path: warm NSE's cookie jar on the homepage, then
+    pull the large-deal JSON and flatten its bulk + block sections into
+    tagged raw rows [{..., "deal_type": "bulk"|"block"}]. Returns
+    (rows, raw_bytes) — raw_bytes is the exact payload NSE served, kept so
+    run() can archive it immutably (census doctrine). Returns None on ANY
+    failure (no network, 401, timeout, shape change) so the caller falls
+    open to the snapshot. Never raises."""
+    opener = _nse_opener()
     try:
         # 1. Warm the session — NSE hands out the cookies its API demands.
         warm = urllib.request.Request(_NSE_HOME, headers=_NSE_HEADERS)
@@ -239,7 +247,8 @@ def _fetch_nse_largedeals(timeout: int = HTTP_TIMEOUT) -> list | None:
         # 2. Pull the report.
         api = urllib.request.Request(_NSE_LARGEDEAL_API, headers=_NSE_HEADERS)
         with opener.open(api, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read()
+        payload = json.loads(raw.decode("utf-8"))
     except (urllib.error.URLError, ValueError, OSError, TimeoutError) as exc:
         print(f"  (deals tracker: NSE live fetch failed [{exc}] — "
               "falling open to the local snapshot)")
@@ -255,7 +264,7 @@ def _fetch_nse_largedeals(timeout: int = HTTP_TIMEOUT) -> list | None:
                     tagged = dict(row)
                     tagged.setdefault("deal_type", deal_type)
                     rows.append(tagged)
-    return rows
+    return rows, raw
 
 
 # ------------------------------------------------------------- normalize
@@ -350,17 +359,25 @@ def aggregate_deals(deals: list, marquee: list = None) -> dict:
 
 def _collect_deals(snapshot_path=None, watchlist_path=None,
                    use_live: bool = True) -> tuple:
-    """Fetch + normalize the day's deals once. Returns (deals, wl, source):
-    the list of normalized deal dicts, the loaded watchlist, and the source
-    label. Live NSE first (Option A) when use_live; otherwise / on failure
-    the local snapshot (Option B); otherwise nothing. Shared by
+    """Fetch + normalize the day's deals once. Returns
+    (deals, wl, source, raw_rows, raw_payload): normalized deal dicts, the
+    loaded watchlist, the source label, the pre-normalization rows (census
+    input), and the exact NSE payload bytes when the live path answered
+    (None otherwise). Live NSE first (Option A) when use_live; otherwise /
+    on failure the local snapshot (Option B); otherwise nothing. Shared by
     build_deals_matrix (aggregate view) and run (aggregate + raw history)
     so the fetch happens exactly once. No writes, no raises."""
     wl = load_watchlist(watchlist_path)
-    raw_rows, source = None, "none"
+    raw_rows, raw_payload, source = None, None, "none"
     if use_live:
-        raw_rows = _fetch_nse_largedeals()
-        if raw_rows is not None:
+        fetched = _fetch_nse_largedeals()
+        if fetched is not None:
+            # (rows, raw_bytes) from the live fetcher; a legacy/test fake
+            # returning a bare list still works.
+            if isinstance(fetched, tuple):
+                raw_rows, raw_payload = fetched
+            else:
+                raw_rows = fetched
             source = "nse"
     if raw_rows is None:
         raw_rows = _load_snapshot(snapshot_path)
@@ -369,7 +386,7 @@ def _collect_deals(snapshot_path=None, watchlist_path=None,
     deals = [d for d in deals if d is not None]
     if not deals:
         source = "none"
-    return deals, wl, source
+    return deals, wl, source, raw_rows, raw_payload
 
 
 def build_deals_matrix(snapshot_path=None, watchlist_path=None,
@@ -385,7 +402,8 @@ def build_deals_matrix(snapshot_path=None, watchlist_path=None,
     local snapshot (Option B); otherwise no entries. Pure aside from the
     two reads — no writes, no raises."""
     today = today or date.today()
-    deals, wl, source = _collect_deals(snapshot_path, watchlist_path, use_live)
+    deals, wl, source, _, _ = _collect_deals(snapshot_path, watchlist_path,
+                                             use_live)
     return {
         "as_of": today.isoformat(),
         "source": source,
@@ -466,16 +484,78 @@ def load_deals(path=None) -> dict:
     return entries if isinstance(entries, dict) else {}
 
 
+def _alias_candidates(deals: list, limit: int = 10) -> list:
+    """Near-duplicate client-name candidates for HUMAN review of the alias
+    table (config/entity_groups.json client_aliases). Heuristic: disclosed
+    names sharing their first two tokens but differing overall are probably
+    the same entity spelled two ways ('SBI MUTUAL FUND A/C X' vs 'SBI
+    MUTUAL FUNDS LIMITED'). NOTHING auto-merges — a false merge fakes
+    concentration, the exact failure the affinity thresholds exist to
+    avoid; these only surface on the census/ops card."""
+    by_prefix = {}
+    for d in deals:
+        name = (d.get("client") or "").strip().upper()
+        tokens = name.split()
+        if len(tokens) < 2:
+            continue
+        by_prefix.setdefault(" ".join(tokens[:2]), set()).add(name)
+    out = []
+    for prefix, names in sorted(by_prefix.items()):
+        if len(names) > 1:
+            out.append({"prefix": prefix, "names": sorted(names)})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def build_census(deals: list, raw_rows: list, source: str,
+                 as_of: str) -> dict:
+    """One per-day data-quality row for the census lake dataset: is the
+    disclosure tape thinning, drifting, or fragmenting before it poisons
+    months of affinity accumulation? Pure function, never raises."""
+    tickers = {d["ticker"] for d in deals}
+    clients = {d["client"] for d in deals if d.get("client")}
+    ungrouped = 0
+    try:
+        # Lazy import: entity_affinity imports this module at load time, so
+        # the reverse import must happen at call time, not module level.
+        from src.knowledge_graph.entity_affinity import (
+            group_for_ticker, load_entity_groups, UNGROUPED)
+        ttg = load_entity_groups()["ticker_to_group"]
+        ungrouped = sum(1 for d in deals
+                        if group_for_ticker(d["ticker"], ttg) == UNGROUPED)
+    except Exception:
+        ungrouped = -1   # census must never block the pull; -1 = unknown
+    return {
+        "as_of": as_of,
+        "source": source,
+        "raw_rows": len(raw_rows or []),
+        "normalized": len(deals),
+        "dropped": max(0, len(raw_rows or []) - len(deals)),
+        "distinct_clients": len(clients),
+        "distinct_tickers": len(tickers),
+        "block_legs": sum(1 for d in deals if d["deal_type"] == "block"),
+        "buy_legs": sum(1 for d in deals if d["side"] == "buy"),
+        "sell_legs": sum(1 for d in deals if d["side"] == "sell"),
+        "ungrouped_deals": ungrouped,
+        "alias_candidates": _alias_candidates(deals),
+    }
+
+
 def run(output_path=None, snapshot_path=None, watchlist_path=None,
-        history_path=None, use_live: bool = True, today: date = None) -> dict:
-    """Fetch once, then persist BOTH artifacts: the overwritten daily
-    aggregate data/bulk_deals.json AND an append to the raw history ledger
+        history_path=None, use_live: bool = True, today: date = None,
+        lake_root=None) -> dict:
+    """Fetch once, then persist the full capture set: the overwritten daily
+    aggregate data/bulk_deals.json, an append to the raw history ledger
     data/deals_history.jsonl (the substrate the entity-affinity layer
-    learns from). Both are self-owned advisory files (like
-    data/news_sentiment.json) — never portfolio/journal/brain_map. Returns
-    the matrix. Any write failure is logged, not raised."""
+    learns from), the EXACT raw NSE payload hashed into the lake (a silent
+    upstream revision becomes a visible hash change), and a per-day census
+    row (tape-quality telemetry). All self-owned advisory artifacts — never
+    portfolio/journal/brain_map. Returns the matrix. Any write failure is
+    logged, not raised."""
     today = today or date.today()
-    deals, wl, source = _collect_deals(snapshot_path, watchlist_path, use_live)
+    deals, wl, source, raw_rows, raw_payload = _collect_deals(
+        snapshot_path, watchlist_path, use_live)
     matrix = {
         "as_of": today.isoformat(),
         "source": source,
@@ -493,6 +573,21 @@ def run(output_path=None, snapshot_path=None, watchlist_path=None,
     if written:
         print(f"  (deals tracker: appended {written} raw deal(s) for "
               f"{matrix['as_of']} -> history ledger)")
+    # Census + immutable raw archive (fail-open; the pull never depends on
+    # the lake being writable).
+    try:
+        from src import lake
+        if raw_payload:
+            lake.archive_blob("deals_raw", matrix["as_of"], "largedeal",
+                              raw_payload, ext="json", root=lake_root)
+        census = build_census(deals, raw_rows, source, matrix["as_of"])
+        lake.write_partition("deals_census", matrix["as_of"], [census],
+                             root=lake_root)
+        if census["alias_candidates"]:
+            print(f"  (deals tracker: {len(census['alias_candidates'])} "
+                  "alias candidate group(s) for human review — see census)")
+    except Exception as exc:
+        print(f"  (deals tracker: census/archive skipped [{exc}])")
     return matrix
 
 

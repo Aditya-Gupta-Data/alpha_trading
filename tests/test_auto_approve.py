@@ -48,7 +48,7 @@ def _canned_proposal():
     }
 
 
-def _headless(env: dict, gate=None):
+def _headless(env: dict, gate=None, state=None):
     """Run one run_headless cycle in a temp journal with every seam
     mocked; returns (result, journal_entries, notes) where notes are the
     _notify_discord messages and captured action_notes."""
@@ -75,7 +75,8 @@ def _headless(env: dict, gate=None):
          mock.patch("src.portfolio_manager.release_entry",
                     return_value={"released": False}), \
          mock.patch("src.notifier.fire_broadcast") as broadcast:
-        result = op.run_headless("NIFTY 50", state={})
+        result = op.run_headless("NIFTY 50",
+                                  state=state if state is not None else {})
         entries = journal.read_all()
     notes["broadcast"] = broadcast
     return result, entries, notes
@@ -158,6 +159,24 @@ def test_auto_approve_flows_through_decide_pending_not_a_shortcut():
     assert dp.call_args[0][0] == entries[0]["short_id"]
     assert dp.call_args[1]["approve"] is True
     assert result["auto_approved"] is True
+
+
+# ------------------------------------------- injected book (sandbox) guard
+
+def test_injected_book_is_never_auto_approved():
+    """A sandboxed (simulator / what-if) run is its own capital world:
+    even with the switch ON, its proposals stay PENDING — decide_pending's
+    margin gate only knows the REAL account and must never be reached
+    from a run that was promised isolation."""
+    gate = mock.Mock(return_value=(True, "margin locked"))
+    result, entries, notes = _headless(env={op.AUTO_APPROVE_ENV_KEY: "1"},
+                                       gate=gate,
+                                       state={"book": {"sandbox": True}})
+    assert result["proposed"] is True
+    assert result["auto_approved"] is False
+    assert entries[0].get("decision") != "approved"
+    gate.assert_not_called()                 # the real pool stays untouched
+    assert "PENDING_APPROVAL" in notes["action_notes"][0]
 
 
 if __name__ == "__main__":

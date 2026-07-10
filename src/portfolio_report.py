@@ -39,7 +39,7 @@ from pathlib import Path
 from src import journal
 from src.live_bridge import evaluate_open_positions
 from src.market_loop import is_market_open, ist_now
-from src.plan_tracker import _spread_trackable
+from src.plan_tracker import _spread_trackable, _trackable
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "data" / "brain_map.db"
@@ -58,9 +58,16 @@ def _open_entries(entries: list = None) -> tuple:
             continue
         if e.get("spread") and _spread_trackable(e):
             spreads.append(e)
-        elif (e.get("plan") or {}).get("stop_loss"):
+        elif _trackable(e):
             equities.append(e)
     return spreads, equities
+
+
+def _spread_detail(capture_pct, days_left) -> str:
+    """THE one wording for a spread mark's detail — the dashboard and the
+    report card must read identically for the same position."""
+    return (f"{float(capture_pct or 0):.0f}% of max profit, "
+            f"{days_left}d to expiry")
 
 
 def mark_positions(spread_entries: list, equity_entries: list,
@@ -84,8 +91,8 @@ def mark_positions(spread_entries: list, equity_entries: list,
         marked.append({"short_id": sig["short_id"], "ticker": sig["ticker"],
                        "strategy": sig["strategy"],
                        "live_pnl_rs": sig["live_pnl_rs"],
-                       "detail": f"{sig['capture_pct']:.0f}% of max profit, "
-                                 f"{sig['days_left']}d to expiry"})
+                       "detail": _spread_detail(sig["capture_pct"],
+                                                sig["days_left"])})
     for e in equity_entries:
         spot = spots.get(e.get("ticker"))
         if spot is None or not e.get("price") or not e.get("shares"):
@@ -96,6 +103,66 @@ def mark_positions(spread_entries: list, equity_entries: list,
                        "live_pnl_rs": pnl,
                        "detail": f"entry Rs.{e['price']} → Rs.{spot}"})
     return marked
+
+
+def get_live_marks(entries: list = None, spot_fn=None,
+                   max_age_seconds: float = None) -> tuple:
+    """(marks list, source) — THE mark ladder every consumer shares (the
+    dashboard's /api/web/positions, this report card, anything future):
+
+      1. the engine's published snapshot (src.market_snapshot) first —
+         the live loop already fetched those quotes, so these marks cost
+         zero Dhan calls and never race the loop on the one shared token
+         (decision #48);
+      2. a direct SafeDhanClient fetch ONLY for open positions the
+         snapshot didn't cover: equity swings (the loop marks spreads
+         only) and everything when the snapshot is stale/absent (Mac,
+         engine down — exactly when contention is nil).
+
+    Returns ([{short_id, ticker, strategy, live_pnl_rs, detail}, ...],
+    "engine_snapshot" | "direct_fetch" | "mixed" | None). Fail-safe:
+    a broken snapshot read degrades to the direct path; a broken direct
+    path returns whatever the snapshot gave."""
+    from src import market_snapshot
+    spreads, equities = _open_entries(entries)
+    marks, covered, source = [], set(), None
+    try:
+        snap = market_snapshot.read(
+            max_age_seconds=(market_snapshot.DEFAULT_MAX_AGE_SECONDS
+                             if max_age_seconds is None else max_age_seconds))
+    except Exception as e:
+        print(f"  (marks: snapshot read failed: {e})")
+        snap = None
+    if snap is not None:
+        by_id = market_snapshot.marks_by_id(snap)
+        for e in spreads:
+            m = by_id.get(e.get("short_id"))
+            if m is None:
+                continue
+            marks.append({"short_id": m.get("short_id"),
+                          "ticker": m.get("ticker"),
+                          "strategy": m.get("strategy"),
+                          "live_pnl_rs": m.get("live_pnl_rs"),
+                          "detail": _spread_detail(m.get("capture_pct"),
+                                                   m.get("days_left"))})
+            covered.add(e.get("short_id"))
+        if covered:
+            source = "engine_snapshot"
+    left_spreads = [e for e in spreads if e.get("short_id") not in covered]
+    left_equities = [e for e in equities if e.get("short_id") not in covered]
+    if left_spreads or left_equities:
+        try:
+            if spot_fn is None:
+                from src.dhan_guard import SafeDhanClient
+                spot_fn = SafeDhanClient().get_live_price
+            direct = mark_positions(left_spreads, left_equities, spot_fn)
+        except Exception as e:
+            print(f"  (marks: direct fetch failed: {e})")
+            direct = []
+        if direct:
+            marks.extend(direct)
+            source = "mixed" if source else "direct_fetch"
+    return marks, source
 
 
 # -------------------------------------------------------------- exposure
@@ -185,16 +252,19 @@ def run(entries: list = None, spot_fn=None, db_path: Path = None,
         print(f"[Report Card] {now:%H:%M IST} — market closed, not posting.")
         return {"posted": False, "reason": "market closed", "payload": None}
 
-    if spot_fn is None:
-        from src.dhan_guard import SafeDhanClient
-        spot_fn = SafeDhanClient().get_live_price
     if notify_fn is None:
         from src.notifier import fire_broadcast
         notify_fn = fire_broadcast
 
+    # get_live_marks prefers the engine's published snapshot, so during
+    # market hours this card usually costs ZERO Dhan calls instead of
+    # racing the live loop on the shared token; spot_fn stays injectable
+    # (and lazily defaults inside the ladder only if a direct fetch is
+    # actually needed).
     spreads, equities = _open_entries(entries)
     open_count = len(spreads) + len(equities)
-    marked = mark_positions(spreads, equities, spot_fn)
+    marked, _mark_source = get_live_marks(entries=spreads + equities,
+                                          spot_fn=spot_fn)
     exposure = read_exposure(db_path)
     payload = build_report_payload(marked, open_count,
                                    open_count - len(marked), exposure, now)

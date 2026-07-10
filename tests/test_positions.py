@@ -33,7 +33,14 @@ def _spread_entry(short_id="sprd0001", decision="approved", outcome=None,
         "spread": {"strategy": "bear_put_spread", "lots": 1, "lot_size": 75,
                    "expiry": "2026-07-21", "net_debit": 72.3,
                    "net_credit": None, "max_loss": 5422.5,
-                   "max_profit": 9577.5, "legs": []},
+                   "max_profit": 9577.5,
+                   # real spread blocks always carry legs — active_positions
+                   # now shares the tracker's _spread_trackable predicate,
+                   # which (correctly) refuses a legless spread.
+                   "legs": [{"side": "BUY", "option_type": "PE",
+                             "strike": 24050.0, "premium": 207.75},
+                            {"side": "SELL", "option_type": "PE",
+                             "strike": 23850.0, "premium": 135.45}]},
         "outcome": outcome,
     }
 

@@ -279,21 +279,38 @@ def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None) -> dict:
     GOLDBEES paper sweep — a wealth_lock_ledger row + Discord card,
     advisory only, never a cash movement. Same fail-safe contract as the
     rest of this seam: a broken sweep can never block a settlement."""
+    owns = conn is None
     try:
-        owns = conn is None
         if conn is None:
             conn = brain_map.connect()
         result = release_margin(conn, journal_ref, pnl_net)
-        if result.get("released") and float(pnl_net) > 0:
+    except Exception as e:
+        print(f"  (margin release skipped: {e})")
+        if owns and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return {"released": False, "reason": str(e)}
+    # The release is COMMITTED past this point — nothing that follows may
+    # flip the answer back to released=False, or the caller keeps
+    # accounting a lock the DB has already let go. The sweep is advisory:
+    # its failure is recorded on the result, never propagated.
+    if result.get("released") and float(pnl_net) > 0:
+        try:
             from src import wealth_lock
             result["wealth_sweep"] = wealth_lock.sweep_on_settlement(
                 journal_ref, pnl_net, conn=conn)
-        if owns:
+        except Exception as e:
+            print(f"  (wealth sweep skipped: {e})")
+            result["wealth_sweep"] = None
+            result["wealth_sweep_error"] = str(e)
+    if owns:
+        try:
             conn.close()
-        return result
-    except Exception as e:
-        print(f"  (margin release skipped: {e})")
-        return {"released": False, "reason": str(e)}
+        except Exception:
+            pass
+    return result
 
 
 if __name__ == "__main__":

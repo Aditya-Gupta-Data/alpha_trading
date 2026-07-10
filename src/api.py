@@ -95,7 +95,14 @@ def _read_api_key() -> str | None:
 
 
 def _extract_api_key(request: Request) -> str | None:
-    """Client key from X-API-Key or Authorization: Bearer."""
+    """Client key from X-API-Key, Authorization: Bearer, or — last resort —
+    an `api_key` query parameter. The query form exists for the built-in
+    dashboard: a browser's EventSource cannot attach custom headers, so
+    /dashboard?api_key=... is the only way the SSE stream (and the page's
+    own fetches, which propagate the same param) can authenticate behind
+    the Phase 9 gateway. Headers stay the preferred transport — the query
+    param is equivalent secret material, just visible in URLs/logs, which
+    this single-user paper system accepts."""
     header = request.headers.get("X-API-Key")
     if header and header.strip():
         return header.strip()
@@ -103,6 +110,9 @@ def _extract_api_key(request: Request) -> str | None:
     if auth.lower().startswith("bearer "):
         token = auth[7:].strip()
         return token or None
+    query = request.query_params.get("api_key")
+    if query and query.strip():
+        return query.strip()
     return None
 
 
@@ -276,7 +286,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_EXTRA_CORS_ORIGINS,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
-    allow_credentials=True,
+    # Auth is a header (X-API-Key), not a cookie — no client sends
+    # credentials, so don't advertise support for them.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1111,53 +1123,31 @@ def web_positions():
     tables degrade to nulls, never to an error, and never touch SQLite
     outside a mode=ro connection."""
     from src.positions import active_positions
-    positions = active_positions()
+    # One journal read serves both the position list and the mark ladder
+    # below — the file is append-only and grows for the account's life,
+    # so per-request double parses add up.
+    entries = journal.read_all()
+    positions = active_positions(entries=entries)
 
-    # Live P&L marks, cheapest safe source first:
-    #   1. the engine's PUBLISHED snapshot (src.market_snapshot) — the live
-    #      loop already fetched these quotes, so reading its marks costs zero
-    #      Dhan calls and never races the engine on the shared token
-    #      (decision #48). This is the path that matters on the VM (the
-    #      gateway and the loop share the same file) and on the Mac once the
-    #      snapshot is synced over.
-    #   2. only if there's NO fresh snapshot, fall back to a direct mark.
-    # `mark_source` reports which one answered, so the UI never implies a
-    # freshness it doesn't have.
+    # Live P&L marks via the ONE shared ladder (portfolio_report.
+    # get_live_marks): engine snapshot first (zero Dhan calls, no shared-
+    # token contention — decision #48), direct fetch only for whatever the
+    # snapshot didn't cover (equity swings; everything when it's stale).
+    # `mark_source` reports which source answered so the UI never implies
+    # a freshness it doesn't have.
     marks = {}
     mark_source = None
     try:
-        from src import market_snapshot
-        snap = market_snapshot.read(
-            max_age_seconds=market_snapshot.DEFAULT_MAX_AGE_SECONDS)
-        if snap:
-            for sid, m in market_snapshot.marks_by_id(snap).items():
-                marks[sid] = {
-                    "live_pnl_rs": m.get("live_pnl_rs"),
-                    "detail": f"{float(m.get('capture_pct') or 0):.0f}% of "
-                              f"max profit, {m.get('days_left')}d to expiry",
-                }
-            if marks:
-                mark_source = "engine_snapshot"
+        from src.portfolio_report import get_live_marks
+        marked, mark_source = get_live_marks(entries=entries)
+        marks = {m["short_id"]: m for m in marked if m.get("short_id")}
     except Exception as e:
-        print(f"  (dashboard: snapshot marks unavailable: {e})")
-
-    if not marks:
-        try:
-            from src.dhan_guard import SafeDhanClient
-            from src.portfolio_report import _open_entries, mark_positions
-            spreads, equities = _open_entries()
-            marked = mark_positions(spreads, equities,
-                                    SafeDhanClient().get_live_price)
-            marks = {m["short_id"]: m for m in marked}
-            if marks:
-                mark_source = "direct_fetch"
-        except Exception as e:
-            print(f"  (dashboard: live marks unavailable: {e})")
+        print(f"  (dashboard: live marks unavailable: {e})")
 
     for p in positions:
         m = marks.get(p["trade_id"])
-        p["live_pnl_rs"] = m["live_pnl_rs"] if m else None
-        p["live_detail"] = m["detail"] if m else None
+        p["live_pnl_rs"] = m.get("live_pnl_rs") if m else None
+        p["live_detail"] = m.get("detail") if m else None
 
     exposure = None
     try:

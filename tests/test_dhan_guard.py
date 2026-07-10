@@ -391,6 +391,51 @@ def test_auth_failures_filters_token_errors_from_shape_noise():
         assert len(auth) == 1 and auth[0]["code"] == "DH-906"
 
 
+
+# --------------------------------------- 2026-07-10 refinement regressions
+
+def test_freshness_error_ignores_implausibly_old_stamps():
+    """A mid-session stamp HOURS old means a miszoned/misparsed field
+    (e.g. an epoch already expressed in IST wall-clock), not a feed that
+    is genuinely half a day behind — treated like no timestamp at all,
+    never a blanket StaleDataError across every quote."""
+    four_hours_old = "2026-07-10 07:00:00"
+    assert freshness_error({"last_trade_time": four_hours_old},
+                           max_age=60, now=MARKET_OPEN_NOW) is None
+
+
+def test_equity_quotes_skip_the_freshness_guard():
+    """The staleness guard is for indexes (they tick every second); an
+    individual equity legitimately goes minutes without a trade and must
+    still mark — a stale-stamped equity quote passes through."""
+    equity_instr = {"id": "11536", "seg": "NSE_EQ", "inst": "EQUITY"}
+    sec = dict(QUOTE_SEC, last_trade_time=STALE_TS)
+    resp = {"status": "success",
+            "data": {"data": {"NSE_EQ": {"11536": sec}}}}
+    p1, p2, p3 = _patched(instr=equity_instr)
+    with p1, p2 as client, p3:
+        client.return_value.quote_data.return_value = resp
+        safe = SafeDhanClient(now_fn=lambda: MARKET_OPEN_NOW)
+        assert safe.get_live_price("TCS.NS") == 3145.0
+        assert safe.last_error is None
+
+
+def test_safe_ohlc_since_ragged_arrays_degrade_never_raise():
+    """A truncated OHLC array yields fewer bars — never an IndexError out
+    of a class whose documented contract is empty-state-on-failure."""
+    ragged = {"timestamp": [1751932800, 1752019200, 1752105600],
+              "open": [100.0, 102.0], "high": [103.0, 104.0],
+              "low": [99.0, 101.0], "close": [102.0, 103.5],
+              "volume": []}
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.historical_daily_data.return_value = {
+            "status": "success", "data": ragged}
+        bars = SafeDhanClient().get_ohlc_since("NIFTY 50", "2020-01-01")
+    assert len(bars) == 2                      # shortest array wins
+    assert bars[1]["volume"] == 0.0            # missing volume defaults
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

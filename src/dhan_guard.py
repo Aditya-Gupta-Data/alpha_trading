@@ -96,7 +96,18 @@ class StaleDataError(DhanApiError):
 # How old a LIVE quote/chain snapshot may be, in seconds, while the market
 # is open. 60s is generous for indices ticking every second — anything
 # beyond it during a volatile session is a delayed feed, not a quiet one.
+# NOTE: the guard is therefore applied to INDEX instruments only (see
+# _quote_sec) — an individual equity or OTM option legitimately goes
+# minutes without a trade, and voiding those quotes silently dropped real
+# open positions from every mark sweep.
 STALE_QUOTE_MAX_AGE_SECONDS = 60
+
+# An "age" beyond this during market hours almost certainly means the
+# timestamp was misparsed or miszoned (e.g. an epoch already expressed in
+# IST wall-clock reads ~5.5h old), not that the feed is genuinely hours
+# behind. Treat it like an unparseable field (absence of evidence) rather
+# than blanking every live mark on a format variant.
+IMPLAUSIBLE_AGE_SECONDS = 3 * 3600
 
 # Timestamp keys observed/plausible across Dhan payload variants — checked
 # in order, first parseable wins.
@@ -157,6 +168,8 @@ def freshness_error(payload: dict, endpoint: str = "",
         if ts is None:
             continue
         age = (now - ts).total_seconds()
+        if age > IMPLAUSIBLE_AGE_SECONDS:
+            return None   # miszoned/misparsed stamp, not a delayed feed
         if age > max_age:
             return StaleDataError(age, max_age,
                                   f"{payload.get(field)!r} ({field})",
@@ -199,25 +212,12 @@ def classify_failure(resp) -> DhanApiError | None:
     return DhanApiError("UNKNOWN", f"status={resp.get('status')!r}", raw=str(resp))
 
 
-def unwrap_payload(resp, inner_marker: str = None):
-    """The innermost `data` payload regardless of single or double
-    nesting. `inner_marker` names a key the REAL payload must contain
-    (e.g. "oc" for chains, "timestamp" for bars) so a wrapper dict that
-    happens to hold a "data" key is unwrapped exactly one level too far
-    never silently passes through. Returns None on any unusable shape."""
-    if not isinstance(resp, dict):
-        return None
-    data = resp.get("data")
-    for _ in range(2):   # at most two unwraps: {"data": {"data": X}}
-        if not isinstance(data, dict):
-            break
-        if inner_marker is not None and inner_marker in data:
-            break
-        if "data" in data and (inner_marker is None or inner_marker not in data):
-            data = data["data"]
-        else:
-            break
-    return data
+# The double-nesting unwrap now lives in dhan_client (2026-07-10
+# refinement): the raw parsers there and every endpoint here must share
+# ONE copy of that knowledge — the 2026-07-09 incidents proved a fix
+# applied in only one style silently strands the other. Re-exported under
+# the old name because callers and tests import it from this module.
+unwrap_payload = dc.unwrap_payload
 
 
 class SafeDhanClient:
@@ -347,11 +347,16 @@ class SafeDhanClient:
                               DhanApiError("BAD_SHAPE", "instrument entry is "
                                            f"{type(sec).__name__}", raw=str(resp)),
                               None)
-        stale = freshness_error(sec, endpoint="quote_data",
-                                max_age=self.max_quote_age_seconds,
-                                now=self._now_fn())
-        if stale is not None:
-            return self._fail("quote_data", stale, None)
+        # Freshness (the API-deception guard) applies to INDEXES only:
+        # they tick every second, so a >60s stamp mid-session really is a
+        # delayed feed. Equities/derivatives legitimately idle for minutes
+        # — voiding those quotes dropped real positions from mark sweeps.
+        if instr["seg"] == "IDX_I":
+            stale = freshness_error(sec, endpoint="quote_data",
+                                    max_age=self.max_quote_age_seconds,
+                                    now=self._now_fn())
+            if stale is not None:
+                return self._fail("quote_data", stale, None)
         return sec
 
     def get_live_price(self, ticker: str) -> float | None:
@@ -394,17 +399,15 @@ class SafeDhanClient:
             return self._fail("historical_daily_data",
                               DhanApiError("BAD_SHAPE", "no timestamp arrays "
                                            "in payload", raw=str(resp)), [])
-        bars = []
-        ts = d["timestamp"]
-        for i in range(len(ts)):
-            bars.append({
-                "date": datetime.fromtimestamp(ts[i], tz=_IST).date().isoformat(),
-                "open": float(d["open"][i]),
-                "high": float(d["high"][i]),
-                "low": float(d["low"][i]),
-                "close": float(d["close"][i]),
-                "volume": float(d["volume"][i]) if d.get("volume") else 0.0,
-            })
+        # Shared ragged-tolerant assembly (dhan_client): a truncated OHLC
+        # array degrades to fewer bars — never an IndexError, which would
+        # break this class's never-raises-by-default contract.
+        bars = dc._bars_from_arrays(d)
+        if not bars:
+            return self._fail("historical_daily_data",
+                              DhanApiError("BAD_SHAPE", "empty/ragged OHLC "
+                                           "arrays in payload",
+                                           raw=str(resp)), [])
         return bars
 
     # ------------------------------------------------------------ audit view

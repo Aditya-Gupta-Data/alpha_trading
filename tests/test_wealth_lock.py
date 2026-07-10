@@ -174,6 +174,21 @@ def test_release_entry_triggers_the_sweep_on_a_winning_trade():
     assert len(ledger) == 1 and ledger[0]["journal_ref"] == "win00001"
 
 
+def test_release_entry_stays_truthful_when_the_sweep_itself_raises():
+    """The margin release is COMMITTED before the sweep runs; a sweep that
+    blows up (not just declines) must not flip the answer to
+    released=False — the caller would keep accounting a lock the DB has
+    already let go."""
+    conn = _conn()
+    pm.request_entry(conn, "win00002", 20000.0)
+    with mock.patch.object(wl, "sweep_on_settlement",
+                           side_effect=RuntimeError("ledger exploded")):
+        result = pm.release_entry("win00002", 9577.50, conn=conn)
+    assert result["released"] is True
+    assert result["wealth_sweep"] is None
+    assert "ledger exploded" in result["wealth_sweep_error"]
+
+
 def test_release_entry_losing_trade_settles_with_no_sweep():
     conn = _conn()
     pm.request_entry(conn, "loss0001", 20000.0)

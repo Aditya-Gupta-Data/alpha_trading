@@ -126,6 +126,35 @@ def _resolve(ticker: str) -> dict | None:
     return None
 
 
+# ----------------------------------------------------------- payload shapes
+
+def unwrap_payload(resp, inner_marker: str = None):
+    """The innermost `data` payload regardless of single or double nesting
+    — Dhan's SDK answers are shape-shifters ({"data": X} one day,
+    {"data": {"data": X}} the next; both observed live 2026-07-09).
+    `inner_marker` names a key the REAL payload must contain (e.g. "oc"
+    for chains, "timestamp" for bars) so a wrapper dict that happens to
+    hold a "data" key is never unwrapped one level too far. Returns None
+    on any unusable shape.
+
+    THE single copy of this knowledge: every parser in this module and
+    every SafeDhanClient endpoint (dhan_guard re-exports this) goes
+    through here, so the next nesting change is a one-line fix."""
+    if not isinstance(resp, dict):
+        return None
+    data = resp.get("data")
+    for _ in range(2):   # at most two unwraps: {"data": {"data": X}}
+        if not isinstance(data, dict):
+            break
+        if inner_marker is not None and inner_marker in data:
+            break
+        if "data" in data:
+            data = data["data"]
+        else:
+            break
+    return data
+
+
 # ------------------------------------------------------------------ OHLC
 
 def _fetch_daily(instr: dict, from_date: str, to_date: str) -> list:
@@ -149,26 +178,36 @@ def _fetch_daily(instr: dict, from_date: str, to_date: str) -> list:
     if not isinstance(resp, dict) or resp.get("status") != "success":
         print(f"  Dhan historical returned: {str(resp)[:160]}")
         return []
-    d = resp.get("data") or {}
-    # Same latent double-nesting as expiry_list/option_chain (both found
-    # live 2026-07-09): if the bar arrays sit one layer deeper
-    # ({"data": {"data": {"timestamp": ...}}}), unwrap before reading —
-    # otherwise this silently returns [] and looks like a data gap.
-    if isinstance(d, dict) and "timestamp" not in d and isinstance(d.get("data"), dict):
-        d = d["data"]
+    d = unwrap_payload(resp, inner_marker="timestamp")
     if not isinstance(d, dict):
         return []
+    return _bars_from_arrays(d)
+
+
+def _bars_from_arrays(d: dict) -> list:
+    """Bar dicts from Dhan's parallel arrays, tolerant of RAGGED payloads:
+    the row count is the SHORTEST of the four OHLC arrays (a truncated
+    array must degrade to fewer bars, never an IndexError — the empty-
+    state-on-failure contract callers rely on), and volume is optional
+    per-row."""
     ts = d.get("timestamp") or []
+    ohlc = {k: d.get(k) or [] for k in ("open", "high", "low", "close")}
+    n = min(len(ts), *(len(v) for v in ohlc.values()))
+    vol = d.get("volume") or []
     bars = []
-    for i in range(len(ts)):
-        bars.append({
-            "date": datetime.fromtimestamp(ts[i], tz=_IST).date().isoformat(),
-            "open": float(d["open"][i]),
-            "high": float(d["high"][i]),
-            "low": float(d["low"][i]),
-            "close": float(d["close"][i]),
-            "volume": float(d["volume"][i]) if d.get("volume") else 0.0,
-        })
+    for i in range(n):
+        try:
+            bars.append({
+                "date": datetime.fromtimestamp(ts[i], tz=_IST).date().isoformat(),
+                "open": float(ohlc["open"][i]),
+                "high": float(ohlc["high"][i]),
+                "low": float(ohlc["low"][i]),
+                "close": float(ohlc["close"][i]),
+                "volume": float(vol[i]) if i < len(vol) and vol[i] is not None
+                          else 0.0,
+            })
+        except (TypeError, ValueError, OSError, OverflowError):
+            continue   # one junk row never voids the rest of the series
     return bars
 
 
@@ -226,12 +265,7 @@ def _quote_sec(ticker: str) -> dict | None:
             time.sleep(_RATE_PAUSE)  # transient rate limit — retry once
     if not isinstance(resp, dict) or resp.get("status") != "success":
         return None
-    # quote_data has been observed doubly nested ({"data": {"data": {seg:
-    # {id: ...}}}}), but unwrap defensively like every other endpoint: if
-    # Dhan ever flattens it to {"data": {seg: ...}}, keep working.
-    d = resp.get("data")
-    if isinstance(d, dict) and instr["seg"] not in d and isinstance(d.get("data"), dict):
-        d = d["data"]
+    d = unwrap_payload(resp, inner_marker=instr["seg"])
     try:
         return d[instr["seg"]][str(instr["id"])]
     except (KeyError, TypeError):
@@ -293,9 +327,7 @@ def get_expiry_list(index_ticker: str) -> list:
     except Exception as e:
         print(f"  Dhan expiry_list error: {e}")
         return []
-    data = (resp or {}).get("data", []) if isinstance(resp, dict) else []
-    if isinstance(data, dict):
-        data = data.get("data", [])
+    data = unwrap_payload(resp)
     return data if isinstance(data, list) else []
 
 
@@ -317,9 +349,7 @@ def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:
         return None
     if not isinstance(resp, dict) or resp.get("status") != "success":
         return None
-    data = resp.get("data")
-    if isinstance(data, dict) and "oc" not in data and "data" in data:
-        data = data.get("data")
+    data = unwrap_payload(resp, inner_marker="oc")
     return data if isinstance(data, dict) else None
 
 

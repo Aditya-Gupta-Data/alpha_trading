@@ -177,9 +177,16 @@ function render(data) {
       : "exposure: n/a";
 }
 
+/* Behind the Phase 9 gateway every route needs the API key, and
+   EventSource cannot send headers — so the key rides as ?api_key=...
+   on the page URL (open /dashboard?api_key=YOURKEY) and is propagated
+   to both endpoints here. Keyless local dev works unchanged. */
+const API_KEY = new URLSearchParams(window.location.search).get("api_key");
+const KEY_QS = API_KEY ? "?api_key=" + encodeURIComponent(API_KEY) : "";
+
 async function refresh(reason) {
   try {
-    const resp = await fetch("/api/web/positions", {cache: "no-store"});
+    const resp = await fetch("/api/web/positions" + KEY_QS, {cache: "no-store"});
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     render(await resp.json());
   } catch (err) {
@@ -195,7 +202,7 @@ document.getElementById("refresh").addEventListener("click",
 /* Mechanism B: the server emits an event only when the journal or the
    master scheduler's log actually changed. EventSource reconnects on
    its own after drops — still not polling, the browser just listens. */
-const events = new EventSource("/api/web/events");
+const events = new EventSource("/api/web/events" + KEY_QS);
 events.onopen = () => { conn.textContent = "● live"; conn.className = "live"; };
 events.onerror = () => { conn.textContent = "● reconnecting"; conn.className = "down"; };
 events.onmessage = (e) => {

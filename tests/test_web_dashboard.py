@@ -108,6 +108,27 @@ def test_web_positions_respects_the_api_key_gate_when_configured():
     assert allowed.status_code == 200
 
 
+def test_api_key_query_param_authenticates_like_the_header():
+    """EventSource cannot send headers, so behind the gateway the key
+    rides as ?api_key= on the SSE and fetch URLs — it must authenticate
+    exactly like X-API-Key, and a wrong value must still 401."""
+    with mock.patch.dict(os.environ, {"API_KEY": "sekret"}, clear=False):
+        assert _client().get("/api/web/positions?api_key=wrong").status_code == 401
+        allowed = _client().get("/api/web/positions?api_key=sekret")
+        page = _client().get("/dashboard?api_key=sekret")
+    assert allowed.status_code == 200
+    assert page.status_code == 200
+
+
+def test_dashboard_page_propagates_the_key_to_both_endpoints():
+    """The page reads ?api_key= off its own URL and appends it to the
+    positions fetch AND the EventSource URL — keyless dev unchanged."""
+    html = STATIC_DASHBOARD.read_text()
+    assert "window.location.search" in html
+    assert '"/api/web/positions" + KEY_QS' in html
+    assert '"/api/web/events" + KEY_QS' in html
+
+
 # ------------------------------------------------------------- /dashboard
 
 def test_dashboard_route_serves_the_single_file_page():

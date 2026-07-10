@@ -225,3 +225,28 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}  {e}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+def test_get_live_marks_snapshot_spreads_plus_direct_equities():
+    """The exclusivity regression (review finding #2): a fresh engine
+    snapshot only ever carries SPREAD marks, so the ladder must still
+    direct-mark the equity swings it didn't cover and report 'mixed' —
+    never starve equities because one spread mark exists."""
+    from src import portfolio_report as pr
+    equity = {"short_id": "eq111111", "ticker": "TCS",
+              "decision": "approved", "outcome": None, "date": "2026-07-08",
+              "price": 3600.0, "shares": 10,
+              "plan": {"variant": "swing", "stop_loss": 3490.0,
+                       "target": 3820.0}}
+    entries = [_open_spread_entry("25da25ec", "NIFTY 50"), equity]
+    with tempfile.TemporaryDirectory() as tmp:
+        snap_path = Path(tmp) / "snap.json"
+        ms.write(SPOTS, [MARKS[0]], now=datetime.now(IST), path=snap_path)
+        with mock.patch("src.market_snapshot.SNAPSHOT_PATH", snap_path):
+            marked, source = pr.get_live_marks(entries=entries,
+                                               spot_fn=lambda t: 3700.0)
+    assert source == "mixed"
+    by_id = {m["short_id"]: m for m in marked}
+    assert by_id["25da25ec"]["live_pnl_rs"] == -836.56   # engine snapshot
+    assert by_id["eq111111"]["live_pnl_rs"] == 1000.0    # direct equity mark
+    assert "11d to expiry" in by_id["25da25ec"]["detail"]

@@ -106,20 +106,26 @@ def _read_only_connection(db_path=None) -> sqlite3.Connection:
     return conn
 
 
-def _graph_context(tags, db_path=None) -> dict | None:
+def _graph_context(tags, db_path=None, conn=None) -> dict | None:
     """Historical color from the knowledge graph, read-only: across every
     outcome linked to an event carrying any of `tags`, how often did the
     trade pay? {tags, count, win_rate} or None when the graph is absent,
     empty for these tags, or unreadable — enrichment only, never load-
-    bearing, never raising."""
+    bearing, never raising.
+
+    Pass an open read-only `conn` to reuse it across calls (the portfolio
+    sweep queries once per DISTINCT strategy, not once per position);
+    without one, a connection is opened and closed per call."""
     tags = sorted({brain_map._normalize_tag(t) for t in tags or [] if t}
                   - {""})
     if not tags:
         return None
-    try:
-        conn = _read_only_connection(db_path)
-    except sqlite3.Error:
-        return None
+    owns = conn is None
+    if owns:
+        try:
+            conn = _read_only_connection(db_path)
+        except sqlite3.Error:
+            return None
     try:
         marks = ",".join("?" * len(tags))
         rows = conn.execute(
@@ -131,7 +137,8 @@ def _graph_context(tags, db_path=None) -> dict | None:
     except sqlite3.Error:
         return None
     finally:
-        conn.close()
+        if owns:
+            conn.close()
     if not rows:
         return None
     wins = sum(1 for r in rows if r["result"] == "win")
@@ -338,6 +345,15 @@ def evaluate_portfolio_resonance(parsed_event, macro_matrix,
                   if e.get("spread") and e.get("short_id")}
 
     event_tag = (parsed_event or {}).get("event_classification")
+    # One read-only graph connection for the whole sweep, and one query
+    # per DISTINCT strategy (positions sharing a strategy produce the
+    # identical tag-set) — not one connection + query per position.
+    graph_conn = None
+    try:
+        graph_conn = _read_only_connection(db_path)
+    except sqlite3.Error:
+        graph_conn = None
+    context_by_strategy: dict = {}
     payloads = []
     for pos in open_positions:
         bucket = _underlying_bucket(pos.get("ticker"))
@@ -363,8 +379,12 @@ def evaluate_portfolio_resonance(parsed_event, macro_matrix,
         advisory, actions, adjustment = _advisory_for(
             pos, verdict, alignment, combined, direction, days_left, legs)
 
-        context = _graph_context([event_tag, pos.get("strategy")],
-                                 db_path=db_path)
+        strategy_key = pos.get("strategy")
+        if strategy_key not in context_by_strategy:
+            context_by_strategy[strategy_key] = (
+                _graph_context([event_tag, strategy_key], conn=graph_conn)
+                if graph_conn is not None else None)
+        context = context_by_strategy[strategy_key]
         if context is not None:
             advisory += (f" (Graph: {context['count']} linked outcome(s) "
                          f"for {'/'.join(context['tags'])}, win rate "
@@ -387,6 +407,8 @@ def evaluate_portfolio_resonance(parsed_event, macro_matrix,
             "graph_context": context,
             "generated_at": datetime.now(IST).isoformat(timespec="seconds"),
         })
+    if graph_conn is not None:
+        graph_conn.close()
     return payloads
 
 

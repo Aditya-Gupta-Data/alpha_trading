@@ -29,6 +29,10 @@ Terminal check (quick SSH view):
 from datetime import date, datetime, timedelta, timezone
 
 from src import journal
+# The tracker's own "still open" predicates — imported, not copied, so
+# this view and the tracker can never drift apart (the whole point of
+# this module per the docstring above).
+from src.plan_tracker import _spread_trackable, _trackable
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -96,12 +100,13 @@ def active_positions(entries: list = None, today: date = None) -> list:
     for e in entries:
         if e.get("decision") != "approved" or e.get("outcome") is not None:
             continue
-        if e.get("spread"):
+        if e.get("spread") and _spread_trackable(e):
             open_positions.append(_from_spread_entry(e, today))
-        elif (e.get("plan") or {}).get("stop_loss"):
+        elif _trackable(e):
             open_positions.append(_from_equity_entry(e, today))
-        # entries with neither a spread nor a stop-carrying plan are not
-        # tracker-managed positions (pre-4B lines, exits) — not "open".
+        # entries with neither a trackable spread (legs + expiry) nor a
+        # stop-carrying plan are not tracker-managed positions (pre-4B
+        # lines, exits, malformed blocks) — not "open".
     open_positions.reverse()   # journal is append-ordered; show newest first
     return open_positions
 

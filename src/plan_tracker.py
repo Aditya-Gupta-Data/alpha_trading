@@ -235,8 +235,10 @@ def _daily_bars(ticker: str, start_iso: str):
 
 
 def _trackable(entry: dict) -> bool:
+    # .get(): pre-Phase-4B journal lines may lack the outcome key entirely
+    # (same tolerance _spread_trackable already has).
     plan = entry.get("plan")
-    return entry["outcome"] is None and bool(plan and plan.get("stop_loss"))
+    return entry.get("outcome") is None and bool(plan and plan.get("stop_loss"))
 
 
 def _resolve(entry: dict, bars: list):

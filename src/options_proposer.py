@@ -492,12 +492,18 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
         if not allowed:
             return {"proposed": False, "reason": gate_reason, "entry": None}
     journal.log(entry)
-    auto_mode = paper_auto_approve_enabled()
+    # Auto-approve NEVER applies to an injected book: decide_pending's
+    # margin gate only knows the REAL Rs.10L account, so auto-approving a
+    # sandboxed (simulator / what-if) proposal would lock real margin from
+    # a run that was promised its own capital world (see the gate comment
+    # above). Sandbox callers decide their own entries.
+    auto_mode = paper_auto_approve_enabled() and "book" not in state
     if auto_mode:
         action_note = ("auto-proposed by the market loop — PAPER_AUTO_APPROVE "
                        f"is ON, so trade id `{entry['short_id']}` is being "
-                       "journaled as APPROVED automatically (paper only; the "
-                       "plan tracker manages the exit).")
+                       "journaled as APPROVED automatically, margin gate "
+                       "permitting (paper only; the plan tracker manages "
+                       "the exit).")
     else:
         action_note = ("auto-proposed by the market loop and journaled as "
                        f"PENDING_APPROVAL (trade id `{entry['short_id']}`) — "

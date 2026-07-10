@@ -337,6 +337,15 @@ def record_post_mortem(entry: dict, brain) -> None:
     initial_plan, actual_execution = _post_mortem_payloads(entry)
     post_mortem = analyst.generate_post_mortem(initial_plan, actual_execution)
     brain_map.record_resolved_entry(brain, entry, post_mortem=post_mortem)
+    # Phase 2 (holy-grail plan §5.1): the entry's proposal-time evidence
+    # snapshot joins its outcome in brain_map — the labeled row per-layer
+    # reliability learns from. Pre-substrate entries (no stamp) skip
+    # silently; a persistence failure never blocks resolution.
+    try:
+        from src.confluence.evidence import persist_entry_snapshot
+        persist_entry_snapshot(brain, entry)
+    except Exception:
+        pass
 
 
 def _fmt_signed(value, spec: str = "+.1f", suffix: str = "") -> str:

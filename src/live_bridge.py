@@ -247,12 +247,21 @@ class AlertRegistry:
 
 def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                aggregators: dict = None, registry: AlertRegistry = None,
-               notify_fn=None, now_fn=ist_now) -> list:
+               notify_fn=None, now_fn=ist_now,
+               publish_snapshot: bool = False) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
     push an advisory alert for each NEW exit signal. Returns the alerts
     fired this cycle (empty outside market hours). Fully injectable —
-    the async daemon and the offline playback tests share this body."""
+    the async daemon and the offline playback tests share this body.
+
+    `publish_snapshot` (the production daemon passes True) writes this
+    cycle's spots + every position mark to data/market_snapshot.json via
+    src.market_snapshot, so read-only viewers (the dashboard, a synced
+    Mac copy) can serve live marks without hitting Dhan themselves — the
+    loop stays the single quote consumer (decision #48). Fail-safe: a
+    publish failure never touches the cycle. Default False so the offline
+    playback tests and any other caller are unaffected."""
     now = now_fn()
     if not is_market_open(now):
         return []
@@ -273,8 +282,15 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
         aggregators.setdefault(u, CandleAggregator()).ingest(packet)
         spots[u] = packet["price"]
 
+    # Mark every open position ONCE, then reuse the list for both the
+    # published snapshot and the alert scan below.
+    marks = evaluate_open_positions(spots, entries, today=now.date())
+    if publish_snapshot:
+        from src import market_snapshot
+        market_snapshot.write(spots, marks, now=now)
+
     fired = []
-    for sig in evaluate_open_positions(spots, entries, today=now.date()):
+    for sig in marks:
         if sig["signal"] == "hold" or not registry.fresh(sig):
             continue
         fired.append(sig)
@@ -322,7 +338,7 @@ async def run_live_loop(underlyings=UNDERLYINGS,
             fired = await asyncio.to_thread(
                 live_cycle, underlyings, quote_fn=quote_fn,
                 aggregators=aggregators, registry=registry,
-                notify_fn=notify_fn, now_fn=now_fn)
+                notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
                       f"({sig['capture_pct']:.0f}% capture).", flush=True)

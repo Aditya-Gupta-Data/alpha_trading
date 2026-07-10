@@ -329,3 +329,55 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   established that any redundant renewal against the same Dhan account
   races the other, and this morning's failure is consistent with
   exactly that race.
+
+### Issue 10 — UPDATE 2026-07-10 ~13:35 IST: the 12:00 IST firing DID land mid-session and BLINDED the live trading loop (Issue 5 recurrence). The morning "impact: none observed" assessment was incomplete.
+- **Symptom (verified now, read-only):** today's running
+  `master_scheduler` session (log line 45 `[Scheduler] session open`,
+  started ~09:10 IST) is logging `[Market Loop] NIFTY 50: no market
+  state this cycle` / `NIFTY BANK: no market state this cycle`
+  continuously on every cycle in `logs/master_scheduler.log`, with a
+  `DH-906 Invalid Token` on the Dhan data path. The loop is fetching
+  no market data — so no entry proposals and no Live-Bridge advisory
+  exit alerts on the 4 open spreads for the rest of today's session.
+- **Root cause (mechanism confirmed; onset-minute inferred):** the
+  on-disk `.env` token is CURRENTLY VALID (decoded JWT `exp`
+  1783751402, in the future) — so this is NOT bad-token-on-disk. It is
+  Issue 5's stale-in-memory token: the deployed VM code predates the
+  scratchpad's `token_provider` live-`.env`-reread, so the process
+  keeps the token it loaded at 09:10 startup and never re-reads. Per
+  `renew.log`, renewals landed at expiry `2026-07-11T00:00:02` (minted
+  ~12:00 IST today) and `2026-07-11T12:00:02` — i.e. the root cron's
+  12:00 IST firing (flagged in the entry above as "worth a same-day
+  watch") minted a fresh token, which under decision #48 invalidated
+  the one the 09:10 process holds → DH-906 → blind. Exact blind-onset
+  minute not pinned (the loop only logs the negative "no market state"
+  line, so there is no positive mark to bracket against), but it is
+  consistent with the ~12:00 renewal.
+- **Correction to the morning Impact note:** that note scoped the
+  12:00 firing's risk to "a few-second Discord-bridge/API outage" from
+  the chained `systemctl restart alpha-trading`, and "none observed"
+  for the trading loop. That under-counted the failure: the renewal
+  ALSO mints a new token, and via Issue 5 that silently blinds the
+  separately-running `master_scheduler` for the remainder of the
+  session. The duplicate-root-cron race therefore has a second, larger
+  failure mode than the gateway blip — it takes the live loop offline
+  every afternoon the 12:00 renewal fires mid-session.
+- **NOT caused by this session's Mac dashboard work:** a Mac-side task
+  copied the VM's current (valid) `.env` token to the Mac at ~13:21
+  IST for read-only local quotes. That is a READ — it mints nothing
+  and cannot invalidate a token; the loop's DH-906 is renewal-driven
+  and independent, and the ~12:00 onset predates the copy. Verified
+  the copied token still returns live quotes from a fresh process, i.e.
+  the token is good — only the long-running VM process cannot see it.
+- **Resolution:** none applied. Blocked by both the no-build boundary
+  and the standing "no VM service restart during 09:15–15:30 IST"
+  rule. A `master_scheduler` restart would load the valid token and
+  restore data (Issue 5's known fix), but mid-session it would reset
+  cooldowns (the cooldown-persistence fix is also undeployed) — left
+  as the user's explicit call, not done unilaterally.
+- **Follow-up:** raises the priority of the duplicate-root-cron
+  removal — as configured, the 12:00 IST renewal blinds the live loop
+  every trading afternoon until the self-healing token re-read
+  (scratchpad Phase 1) is deployed. Deploy-day should do BOTH: remove
+  the root cron AND deploy `token_provider`'s live-reread, so a
+  renewal can never again silently blind a running session.

@@ -263,8 +263,18 @@ app = FastAPI(title="Alpha Trading Local API", docs_url="/api/docs",
 # The Vite/Bun dev server runs on localhost (its exact port varies), so a
 # localhost-only regex keeps this open for local frontend dev without
 # exposing the API to the internet.
+#
+# EXTRA_CORS_ORIGINS (comma-separated, default empty) additively allow-lists
+# specific non-localhost origins — e.g. a deployed Lovable frontend
+# (https://adi-trader-zen.lovable.app) reaching this backend through a
+# temporary tunnel. Empty by default, so the localhost-only posture is
+# unchanged unless the env var is deliberately set.
+_EXTRA_CORS_ORIGINS = [o.strip() for o in
+                       os.environ.get("EXTRA_CORS_ORIGINS", "").split(",")
+                       if o.strip()]
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=_EXTRA_CORS_ORIGINS,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
@@ -1103,16 +1113,46 @@ def web_positions():
     from src.positions import active_positions
     positions = active_positions()
 
+    # Live P&L marks, cheapest safe source first:
+    #   1. the engine's PUBLISHED snapshot (src.market_snapshot) — the live
+    #      loop already fetched these quotes, so reading its marks costs zero
+    #      Dhan calls and never races the engine on the shared token
+    #      (decision #48). This is the path that matters on the VM (the
+    #      gateway and the loop share the same file) and on the Mac once the
+    #      snapshot is synced over.
+    #   2. only if there's NO fresh snapshot, fall back to a direct mark.
+    # `mark_source` reports which one answered, so the UI never implies a
+    # freshness it doesn't have.
     marks = {}
+    mark_source = None
     try:
-        from src.dhan_guard import SafeDhanClient
-        from src.portfolio_report import _open_entries, mark_positions
-        spreads, equities = _open_entries()
-        marked = mark_positions(spreads, equities,
-                                SafeDhanClient().get_live_price)
-        marks = {m["short_id"]: m for m in marked}
+        from src import market_snapshot
+        snap = market_snapshot.read(
+            max_age_seconds=market_snapshot.DEFAULT_MAX_AGE_SECONDS)
+        if snap:
+            for sid, m in market_snapshot.marks_by_id(snap).items():
+                marks[sid] = {
+                    "live_pnl_rs": m.get("live_pnl_rs"),
+                    "detail": f"{float(m.get('capture_pct') or 0):.0f}% of "
+                              f"max profit, {m.get('days_left')}d to expiry",
+                }
+            if marks:
+                mark_source = "engine_snapshot"
     except Exception as e:
-        print(f"  (dashboard: live marks unavailable: {e})")
+        print(f"  (dashboard: snapshot marks unavailable: {e})")
+
+    if not marks:
+        try:
+            from src.dhan_guard import SafeDhanClient
+            from src.portfolio_report import _open_entries, mark_positions
+            spreads, equities = _open_entries()
+            marked = mark_positions(spreads, equities,
+                                    SafeDhanClient().get_live_price)
+            marks = {m["short_id"]: m for m in marked}
+            if marks:
+                mark_source = "direct_fetch"
+        except Exception as e:
+            print(f"  (dashboard: live marks unavailable: {e})")
 
     for p in positions:
         m = marks.get(p["trade_id"])
@@ -1129,7 +1169,8 @@ def web_positions():
     return {"ok": True,
             "as_of": datetime.now().isoformat(timespec="seconds"),
             "positions": positions,
-            "exposure": exposure}
+            "exposure": exposure,
+            "mark_source": mark_source}
 
 
 @app.get("/api/web/events")

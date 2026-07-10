@@ -272,12 +272,22 @@ def gate_headless_entry(journal_ref: str, required_margin: float,
 
 
 def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None) -> dict:
-    """Settle a resolved/rejected entry's lock; safe on unknown refs."""
+    """Settle a resolved/rejected entry's lock; safe on unknown refs.
+
+    Post-trade hook (Wealth-Locking Flywheel, paper scope): a PROFITABLE
+    settlement that actually released a lock also triggers the 50%
+    GOLDBEES paper sweep — a wealth_lock_ledger row + Discord card,
+    advisory only, never a cash movement. Same fail-safe contract as the
+    rest of this seam: a broken sweep can never block a settlement."""
     try:
         owns = conn is None
         if conn is None:
             conn = brain_map.connect()
         result = release_margin(conn, journal_ref, pnl_net)
+        if result.get("released") and float(pnl_net) > 0:
+            from src import wealth_lock
+            result["wealth_sweep"] = wealth_lock.sweep_on_settlement(
+                journal_ref, pnl_net, conn=conn)
         if owns:
             conn.close()
         return result

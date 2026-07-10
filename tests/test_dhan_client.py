@@ -109,6 +109,80 @@ def test_get_option_chain_none_on_failure_status_or_garbage():
             assert dc.get_option_chain("NIFTY 50", "2026-07-14") is None
 
 
+# --- 2026-07-10 audit: the remaining parsers, same latent double-nesting ---
+
+BAR_ARRAYS = {"timestamp": [1751932800, 1752019200],
+              "open": [100.0, 102.0], "high": [103.0, 104.0],
+              "low": [99.0, 101.0], "close": [102.0, 103.5],
+              "volume": [1000, 1100]}
+
+
+def _instr_patch():
+    instr = {"id": "13", "seg": "IDX_I", "inst": "INDEX"}
+    return (mock.patch.object(dc, "_resolve", return_value=instr),
+            mock.patch.object(dc, "_get_client", return_value=mock.Mock()))
+
+
+def test_get_daily_ohlc_unwraps_a_doubly_nested_historical_payload():
+    """Audit finding (planning_index §1.2): _fetch_daily read
+    resp["data"] one layer deep only — a doubly-nested payload made
+    d.get("timestamp") come back empty, so bars silently degraded to []
+    and looked exactly like a market data gap."""
+    resp = {"status": "success", "data": {"data": BAR_ARRAYS}}
+    p1, p2 = _instr_patch()
+    with p1, p2 as get_client:
+        get_client.return_value.historical_daily_data.return_value = resp
+        bars = dc.get_daily_ohlc("NIFTY 50", days=5)
+        assert len(bars) == 2
+        assert bars[0]["close"] == 102.0 and bars[1]["close"] == 103.5
+
+
+def test_get_daily_ohlc_still_handles_the_flat_shape():
+    resp = {"status": "success", "data": BAR_ARRAYS}
+    p1, p2 = _instr_patch()
+    with p1, p2 as get_client:
+        get_client.return_value.historical_daily_data.return_value = resp
+        assert len(dc.get_daily_ohlc("NIFTY 50", days=5)) == 2
+
+
+def test_get_daily_ohlc_empty_on_garbage_inner_shapes():
+    for data in ("", None, {"data": "not-a-dict"}, {"data": None}):
+        resp = {"status": "success", "data": data}
+        p1, p2 = _instr_patch()
+        with p1, p2 as get_client:
+            get_client.return_value.historical_daily_data.return_value = resp
+            assert dc.get_daily_ohlc("NIFTY 50", days=5) == []
+
+
+QUOTE_SEC = {"last_price": 3145.0, "ohlc": {"close": 3120.0}}
+
+
+def test_get_quote_handles_double_and_single_nested_payloads():
+    """_quote_sec hardcoded resp["data"]["data"][seg][id]: correct for
+    today's doubly-nested wire shape, but a single-nested revert would
+    have silently returned None for every quote. Both now work."""
+    inner = {"IDX_I": {"13": QUOTE_SEC}}
+    for data in ({"data": inner}, inner):
+        resp = {"status": "success", "data": data}
+        p1, p2 = _instr_patch()
+        with p1, p2 as get_client:
+            get_client.return_value.quote_data.return_value = resp
+            q = dc.get_quote("NIFTY 50")
+            assert q is not None
+            assert q["current_price"] == 3145.0
+            assert q["prev_close"] == 3120.0
+
+
+def test_get_quote_none_on_failure_and_garbage(monkeypatch=None):
+    for resp in ({"status": "failure", "remarks": {"error_code": "DH-906"}},
+                 {"status": "success", "data": None},
+                 {"status": "success", "data": {"data": "nope"}}):
+        p1, p2 = _instr_patch()
+        with p1, p2 as get_client, mock.patch.object(dc, "_RATE_PAUSE", 0):
+            get_client.return_value.quote_data.return_value = resp
+            assert dc.get_quote("NIFTY 50") is None
+
+
 def test_pick_expiry_actually_picks_from_a_realistic_expiry_list():
     """End-to-end proof the fix restores real proposal flow: with the
     unwrapped list, pick_expiry finds the first date >= MIN_DAYS_TO_EXPIRY

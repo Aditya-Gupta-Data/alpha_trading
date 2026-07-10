@@ -14,12 +14,54 @@
 # Note on #4: the sleep phase needs the machine that holds data/journal.jsonl,
 # data/brain_map.db AND a running Ollama server (Phase 10B). On a machine
 # without them it is harmless — ingestion/consolidation skip gracefully and
-# only the decay step runs (over an empty/local DB). Timezone: CRON_TZ below
-# pins all schedules to IST on Linux (cronie/Vixie); macOS cron ignores
-# CRON_TZ and uses the system timezone instead — fine when the Mac is on IST.
+# only the decay step runs (over an empty/local DB).
+#
+# TIMEZONE (ledger Issue 1, 2026-07-09): Debian's stock cron SILENTLY IGNORES
+# the CRON_TZ line below — it only works on cronie (RHEL-family). On a UTC
+# host every "IST" schedule fires 5h30m late, which is exactly how the
+# 2026-07-09 trading session was missed. The only reliable cross-distro fix
+# is the HOST clock being IST, so this script now refuses to install unless
+# the system timezone offset is +0530 (see the assertion right below).
+#
+# TOKEN RENEWAL CADENCE (ledger Issue 10, 2026-07-10 — decision): the
+# 07:00 IST job installed here is THE ONLY scheduled token renewal.
+# A second renewal cron (root's crontab, every 12h, a leftover from the
+# initial 2026-07-06 deployment) raced this one against Dhan's
+# one-token-per-account rule and caused the 2026-07-10 "Invalid TOTP"
+# failure. Never add a second renewal schedule anywhere (user crontab,
+# root crontab, systemd timer, Mac launchd) — see
+# docs/token_renewal_cadence.md for the standardization + the root-cron
+# removal steps. This script warns below if it can see a root-cron
+# duplicate.
 # ==============================================================================
 
 set -euo pipefail
+
+# 0a. HARD ASSERTION — the host clock must be IST (+0530) or every schedule
+#     below is a lie on Debian cron. Fail loudly with the exact fix.
+HOST_UTC_OFFSET="$(date +%z)"
+if [ "$HOST_UTC_OFFSET" != "+0530" ]; then
+    echo "[Cron Setup] FATAL: host timezone offset is $HOST_UTC_OFFSET, not +0530 (IST)."
+    echo "[Cron Setup] Debian cron ignores CRON_TZ, so these schedules would fire 5h30m off."
+    echo "[Cron Setup] Fix first:  sudo timedatectl set-timezone Asia/Kolkata && sudo systemctl restart cron"
+    echo "[Cron Setup] Then re-run this script."
+    exit 1
+fi
+echo "[Cron Setup] Host timezone offset is +0530 (IST) — OK."
+
+# 0b. SINGLE-RENEWAL-CADENCE GUARD — warn (not fail: sudo may prompt) if a
+#     duplicate renew_token schedule exists in root's crontab. `sudo -n`
+#     never prompts; if we can't read root's crontab, print the manual check.
+if sudo -n crontab -l >/dev/null 2>&1; then
+    if sudo -n crontab -l 2>/dev/null | grep -q "renew_token"; then
+        echo "[Cron Setup] WARNING: root's crontab ALSO schedules renew_token —"
+        echo "[Cron Setup] two renewal cadences race each other (ledger Issue 10)."
+        echo "[Cron Setup] Remove it per docs/token_renewal_cadence.md before market hours."
+    fi
+else
+    echo "[Cron Setup] Note: could not read root's crontab non-interactively."
+    echo "[Cron Setup] Verify no duplicate renewal exists:  sudo crontab -l | grep renew_token"
+fi
 
 # 1. Resolve repo root path dynamically
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

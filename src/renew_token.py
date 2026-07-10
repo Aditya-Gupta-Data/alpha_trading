@@ -41,6 +41,7 @@ import base64
 import json
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -271,29 +272,69 @@ def _write_new_token(env_text: str, new_token: str, expiry) -> None:
     print(f"  (.env updated; previous version saved to {BACKUP_PATH.name})")
 
 
-def renew_v2(env_text: str, creds: dict = None) -> int:
+# One TOTP window is 30s; waiting slightly past it guarantees the retry
+# computes a genuinely NEW code (covers both clock skew and Dhan's
+# one-time-use rejection of a code another caller already burned —
+# ledger Issue 10, 2026-07-10).
+_TOTP_RETRY_WAIT_SECONDS = 31
+_TOTP_ATTEMPTS = 3
+
+
+def _is_totp_rejection(body) -> bool:
+    """True when Dhan's reply blames the TOTP code specifically (observed
+    live 2026-07-10: {"message": "Invalid TOTP", "status": "error"}) —
+    the one failure a next-window retry can actually fix."""
+    try:
+        text = json.dumps(body) if not isinstance(body, str) else body
+    except (TypeError, ValueError):
+        text = str(body)
+    return "totp" in (text or "").lower()
+
+
+def renew_v2(env_text: str, creds: dict = None,
+             attempts: int = _TOTP_ATTEMPTS, wait_fn=None) -> int:
     """The headless V2 flow: PIN + TOTP -> a brand-new 24h access token.
     Unlike the legacy renewal, this works even when the old token is
     already dead — there is no manual-dashboard fallback ever needed as
     long as the V2 credentials (in .env, or Secret-Manager-fetched by
-    the caller) stay valid."""
+    the caller) stay valid.
+
+    An "Invalid TOTP" rejection retries in the NEXT TOTP window (up to
+    `attempts` total tries) — with the single 07:00 IST cadence the token
+    expires the moment its renewal is due, so one transient TOTP failure
+    must not cost a whole market day. Any other rejection fails
+    immediately as before; .env is never touched on failure."""
     if creds is None:
         creds = read_env_values(env_text)
-    totp_code = generate_totp(creds["DHAN_TOTP_SECRET"])
-    if totp_code is None:
-        return 1
-    body = request_v2_token(creds, totp_code)
-    if body is None:
-        return 1
-    new_token = extract_new_token(body)
-    if new_token is None:
-        body_text = json.dumps(body) if not isinstance(body, str) else body
+    if wait_fn is None:
+        wait_fn = time.sleep
+    last_body = None
+    for attempt in range(1, max(1, attempts) + 1):
+        totp_code = generate_totp(creds["DHAN_TOTP_SECRET"])
+        if totp_code is None:
+            return 1
+        body = request_v2_token(creds, totp_code)
+        if body is not None:
+            new_token = extract_new_token(body)
+            if new_token is not None:
+                _write_new_token(env_text, new_token, body.get("expiryTime"))
+                return 0
+            last_body = body
+        if body is None or not _is_totp_rejection(body):
+            break   # transport/HTTP failure (already printed) or a
+                    # non-TOTP rejection — a retry cannot change either
+        if attempt < max(1, attempts):
+            print(f"  (Invalid TOTP on attempt {attempt}/{attempts} — "
+                  f"waiting {_TOTP_RETRY_WAIT_SECONDS}s for the next TOTP "
+                  "window, then retrying)")
+            wait_fn(_TOTP_RETRY_WAIT_SECONDS)
+    if last_body is not None:
+        body_text = (json.dumps(last_body) if not isinstance(last_body, str)
+                     else last_body)
         print("Token renewal failed: no token in Dhan's V2 reply — .env "
               "left untouched.")
         print(f"  (response: {body_text[:300]})")
-        return 1
-    _write_new_token(env_text, new_token, body.get("expiryTime"))
-    return 0
+    return 1
 
 
 def renew_legacy(env_text: str) -> int:

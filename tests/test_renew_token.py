@@ -200,6 +200,91 @@ def test_renew_dispatches_v2_when_creds_present_else_legacy():
     assert legacy.called and not v2.called
 
 
+# --- TOTP-rejection retry (ledger Issue 10, 2026-07-10) ---------------------
+# With the single 07:00 IST cadence the token expires the moment its renewal
+# is due — a transient "Invalid TOTP" must retry in the NEXT TOTP window
+# instead of costing a whole market day.
+
+TOTP_REJECTION = {"message": "Invalid TOTP", "status": "error"}
+
+
+def _v2_tmp_paths():
+    tmp = Path(tempfile.mkdtemp())
+    return tmp / ".env", tmp / ".env.bak"
+
+
+def test_renew_v2_retries_a_totp_rejection_in_the_next_window():
+    env_file, bak_file = _v2_tmp_paths()
+    env_file.write_text(V2_ENV)
+    waits = []
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "BACKUP_PATH", bak_file), \
+         mock.patch.object(rt, "generate_totp",
+                           side_effect=["111111", "222222"]), \
+         mock.patch.object(rt, "request_v2_token",
+                           side_effect=[TOTP_REJECTION,
+                                        {"accessToken": "eyJsecond.try",
+                                         "expiryTime": "2026-07-11T07:00:00"}]) as req:
+        rc = rt.renew_v2(V2_ENV, wait_fn=waits.append)
+    assert rc == 0
+    assert waits == [rt._TOTP_RETRY_WAIT_SECONDS]     # waited exactly once
+    assert req.call_count == 2
+    # each attempt used a FRESH totp code, not a reuse of the rejected one
+    assert req.call_args_list[0][0][1] == "111111"
+    assert req.call_args_list[1][0][1] == "222222"
+    assert "DHAN_ACCESS_TOKEN=eyJsecond.try\n" in env_file.read_text()
+
+
+def test_renew_v2_gives_up_after_the_attempt_budget():
+    env_file, bak_file = _v2_tmp_paths()
+    env_file.write_text(V2_ENV)
+    waits = []
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "BACKUP_PATH", bak_file), \
+         mock.patch.object(rt, "generate_totp", return_value="111111"), \
+         mock.patch.object(rt, "request_v2_token",
+                           return_value=TOTP_REJECTION) as req:
+        rc = rt.renew_v2(V2_ENV, attempts=3, wait_fn=waits.append)
+    assert rc == 1
+    assert req.call_count == 3
+    assert waits == [rt._TOTP_RETRY_WAIT_SECONDS] * 2  # no wait after the last try
+    assert env_file.read_text() == V2_ENV              # .env untouched on failure
+    assert not bak_file.exists()
+
+
+def test_renew_v2_does_not_retry_non_totp_rejections():
+    env_file, bak_file = _v2_tmp_paths()
+    env_file.write_text(V2_ENV)
+    waits = []
+    with mock.patch.object(rt, "ENV_PATH", env_file), \
+         mock.patch.object(rt, "BACKUP_PATH", bak_file), \
+         mock.patch.object(rt, "generate_totp", return_value="111111"), \
+         mock.patch.object(rt, "request_v2_token",
+                           return_value={"message": "Invalid credentials",
+                                         "status": "error"}) as req:
+        rc = rt.renew_v2(V2_ENV, wait_fn=waits.append)
+    assert rc == 1
+    assert req.call_count == 1     # retrying a bad PIN would never succeed
+    assert waits == []
+    assert env_file.read_text() == V2_ENV
+
+
+def test_renew_v2_does_not_retry_transport_failures():
+    waits = []
+    with mock.patch.object(rt, "generate_totp", return_value="111111"), \
+         mock.patch.object(rt, "request_v2_token", return_value=None) as req:
+        rc = rt.renew_v2(V2_ENV, wait_fn=waits.append)
+    assert rc == 1
+    assert req.call_count == 1 and waits == []
+
+
+def test_is_totp_rejection_shapes():
+    assert rt._is_totp_rejection(TOTP_REJECTION)
+    assert rt._is_totp_rejection('{"message": "invalid totp"}')
+    assert not rt._is_totp_rejection({"message": "Invalid credentials"})
+    assert not rt._is_totp_rejection(None)
+
+
 # --- GCP Secret Manager layer (decision #47: VM-side credentials) ----------
 
 def _sm_payload(value: str) -> bytes:

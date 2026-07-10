@@ -84,19 +84,30 @@ _ALIASES = {
 }
 
 _client = None
+_client_token = None   # the token the cached client was built with
 
 
 def _get_client():
     """Lazily build the dhanhq client. Returns None if creds are missing so
-    callers can degrade instead of crashing at import."""
-    global _client
-    if _client is not None:
-        return _client
-    cid, token = os.environ.get("DHAN_CLIENT_ID"), os.environ.get("DHAN_ACCESS_TOKEN")
+    callers can degrade instead of crashing at import.
+
+    Self-healing (Issue 5, 2026-07-09): the token comes from
+    token_provider.get_token() — a LIVE read of .env — instead of the
+    startup os.environ snapshot. When a renewal rewrites .env mid-session,
+    the next call here sees the new token and rebuilds the SDK client, so
+    a long-running session recovers from an external renewal with no
+    restart. A stat-per-call is negligible at the engine's cadences."""
+    global _client, _client_token
+    from src import token_provider
+    cid = os.environ.get("DHAN_CLIENT_ID")
+    token = token_provider.get_token()
     if not cid or not token:
         return None
+    if _client is not None and token == _client_token:
+        return _client
     from dhanhq import DhanContext, dhanhq
     _client = dhanhq(DhanContext(cid, token))
+    _client_token = token
     return _client
 
 
@@ -139,6 +150,14 @@ def _fetch_daily(instr: dict, from_date: str, to_date: str) -> list:
         print(f"  Dhan historical returned: {str(resp)[:160]}")
         return []
     d = resp.get("data") or {}
+    # Same latent double-nesting as expiry_list/option_chain (both found
+    # live 2026-07-09): if the bar arrays sit one layer deeper
+    # ({"data": {"data": {"timestamp": ...}}}), unwrap before reading —
+    # otherwise this silently returns [] and looks like a data gap.
+    if isinstance(d, dict) and "timestamp" not in d and isinstance(d.get("data"), dict):
+        d = d["data"]
+    if not isinstance(d, dict):
+        return []
     ts = d.get("timestamp") or []
     bars = []
     for i in range(len(ts)):
@@ -207,8 +226,14 @@ def _quote_sec(ticker: str) -> dict | None:
             time.sleep(_RATE_PAUSE)  # transient rate limit — retry once
     if not isinstance(resp, dict) or resp.get("status") != "success":
         return None
+    # quote_data has been observed doubly nested ({"data": {"data": {seg:
+    # {id: ...}}}}), but unwrap defensively like every other endpoint: if
+    # Dhan ever flattens it to {"data": {seg: ...}}, keep working.
+    d = resp.get("data")
+    if isinstance(d, dict) and instr["seg"] not in d and isinstance(d.get("data"), dict):
+        d = d["data"]
     try:
-        return resp["data"]["data"][instr["seg"]][str(instr["id"])]
+        return d[instr["seg"]][str(instr["id"])]
     except (KeyError, TypeError):
         return None
 

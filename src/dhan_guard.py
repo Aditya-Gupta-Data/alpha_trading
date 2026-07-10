@@ -1,0 +1,310 @@
+"""
+src/dhan_guard.py — response-shape hardening & audit wrapper for dhan_client
+============================================================================
+
+Observation-week finding (Issues 5/6, 2026-07-09): Dhan's SDK answers are
+shape-shifters. The same endpoint can return
+
+  * flat success:            {"status": "success", "data": <payload>}
+  * doubly nested success:   {"status": "success", "data": {"data": <payload>}}
+  * structured failure:      {"status": "failure",
+                              "remarks": {"error_code": "DH-906",
+                                          "error_type": "Order_Error",
+                                          "error_message": "Invalid Token"},
+                              "data": ""}
+  * raw error dicts:         {"errorType": ..., "errorCode": "DH-905", ...}
+
+The existing dhan_client parsers degrade to []/None but throw the error
+DETAIL away — which is why the DH-906 token deaths looked identical to
+"the market's just quiet" until someone read raw logs. This module keeps
+the fail-safe empty-state contract AND preserves a structured audit trail:
+
+    from src.dhan_guard import SafeDhanClient
+
+    safe = SafeDhanClient()
+    quote = safe.get_quote("TCS.NS")     # same shape dhan_client returns
+    if quote is None and safe.last_error:
+        print(safe.last_error.code)      # e.g. "DH-906"
+
+  * Every endpoint returns exactly what its dhan_client counterpart
+    returns on success, and the same empty state ([] / None) on failure —
+    drop-in, never raises by default.
+  * Failures are classified into DhanApiError records (code, message,
+    endpoint, raw excerpt) on `last_error` and appended to `audit` so an
+    ops sweep can distinguish "token dead" from "no data".
+  * strict=True flips the contract to raising DhanApiError for callers
+    that prefer exceptions over sentinel checks.
+
+Pure wrapper: reuses dhan_client's _resolve/_get_client (so the
+SECURITY_ID_MAP and the self-healing token seam stay single-sourced) and
+calls only the same market-data SDK endpoints — the paper-only guarantee
+(decision #11) is untouched.
+"""
+
+import time
+from datetime import datetime, timedelta, timezone
+
+from src import dhan_client as dc
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+# Codes that mean "credentials/token", not "market data" — the ops-visible
+# distinction that was lost when everything degraded to a silent [].
+AUTH_ERROR_CODES = {"DH-901", "DH-905", "DH-906"}
+
+
+class DhanApiError(Exception):
+    """One classified Dhan failure. Carried on SafeDhanClient.last_error
+    (default mode) or raised (strict mode)."""
+
+    def __init__(self, code: str, message: str, endpoint: str = "", raw: str = ""):
+        self.code = code or "UNKNOWN"
+        self.message = message or ""
+        self.endpoint = endpoint
+        self.raw = (raw or "")[:300]
+        self.ts = datetime.now(tz=_IST).isoformat(timespec="seconds")
+        super().__init__(f"{self.code} on {endpoint or '?'}: {self.message}")
+
+    @property
+    def is_auth_error(self) -> bool:
+        return self.code in AUTH_ERROR_CODES
+
+    def as_dict(self) -> dict:
+        return {"ts": self.ts, "endpoint": self.endpoint, "code": self.code,
+                "message": self.message, "auth_error": self.is_auth_error}
+
+
+def classify_failure(resp) -> DhanApiError | None:
+    """A DhanApiError if `resp` is any known failure shape, else None.
+
+    Handles, in order of specificity:
+      * {"status": "failure", "remarks": {"error_code": ..., ...}}  — the
+        nested remarks dict observed live (DH-906 token deaths)
+      * {"status": "failure", "remarks": "<string>"}                — the
+        SDK sometimes flattens remarks to a plain string
+      * {"errorCode"/"errorType"/"errorMessage": ...}               — raw
+        API error bodies that skip the status envelope entirely
+      * non-dict / missing-status responses                          — the
+        transport handed back something unparseable
+    """
+    if not isinstance(resp, dict):
+        return DhanApiError("BAD_SHAPE", f"non-dict response: {type(resp).__name__}",
+                            raw=str(resp))
+    if resp.get("status") == "success":
+        return None
+    remarks = resp.get("remarks")
+    if isinstance(remarks, dict):
+        return DhanApiError(str(remarks.get("error_code") or "UNKNOWN"),
+                            str(remarks.get("error_message") or ""),
+                            raw=str(resp))
+    if "errorCode" in resp or "errorType" in resp:
+        return DhanApiError(str(resp.get("errorCode") or "UNKNOWN"),
+                            str(resp.get("errorMessage") or resp.get("errorType") or ""),
+                            raw=str(resp))
+    if isinstance(remarks, str) and remarks.strip():
+        # e.g. {"status": "failure", "remarks": "DH-906 : Invalid Token"}
+        code = next((c for c in sorted(AUTH_ERROR_CODES) if c in remarks), "UNKNOWN")
+        return DhanApiError(code, remarks.strip(), raw=str(resp))
+    return DhanApiError("UNKNOWN", f"status={resp.get('status')!r}", raw=str(resp))
+
+
+def unwrap_payload(resp, inner_marker: str = None):
+    """The innermost `data` payload regardless of single or double
+    nesting. `inner_marker` names a key the REAL payload must contain
+    (e.g. "oc" for chains, "timestamp" for bars) so a wrapper dict that
+    happens to hold a "data" key is unwrapped exactly one level too far
+    never silently passes through. Returns None on any unusable shape."""
+    if not isinstance(resp, dict):
+        return None
+    data = resp.get("data")
+    for _ in range(2):   # at most two unwraps: {"data": {"data": X}}
+        if not isinstance(data, dict):
+            break
+        if inner_marker is not None and inner_marker in data:
+            break
+        if "data" in data and (inner_marker is None or inner_marker not in data):
+            data = data["data"]
+        else:
+            break
+    return data
+
+
+class SafeDhanClient:
+    """Hardened, audited access to the five market-data endpoints.
+
+    Same return shapes and empty states as the dhan_client module
+    functions; adds `last_error` (DhanApiError or None, per call) and
+    `audit` (rolling list of classified failures, oldest first)."""
+
+    AUDIT_MAX = 200   # keep the trail bounded on long sessions
+
+    def __init__(self, strict: bool = False):
+        self.strict = strict
+        self.last_error: DhanApiError | None = None
+        self.audit: list = []
+
+    # ------------------------------------------------------------ plumbing
+
+    def _fail(self, endpoint: str, err: DhanApiError, empty):
+        err.endpoint = endpoint
+        self.last_error = err
+        self.audit.append(err.as_dict())
+        if len(self.audit) > self.AUDIT_MAX:
+            del self.audit[:len(self.audit) - self.AUDIT_MAX]
+        if self.strict:
+            raise err
+        return empty
+
+    def _call(self, endpoint: str, fn, *args):
+        """One raw SDK call with a single rate-limit retry (matching
+        dhan_client's convention) → (resp, None) or (None, DhanApiError)."""
+        resp, last_exc = None, None
+        for attempt in range(2):
+            try:
+                resp = fn(*args)
+                last_exc = None
+            except Exception as e:          # transport/SDK raise
+                resp, last_exc = None, e
+            if isinstance(resp, dict) and resp.get("status") == "success":
+                return resp, None
+            if attempt == 0:
+                time.sleep(dc._RATE_PAUSE)
+        if last_exc is not None:
+            return None, DhanApiError("TRANSPORT", str(last_exc))
+        return None, classify_failure(resp)
+
+    def _client_and_instr(self, ticker: str, endpoint: str, empty):
+        instr = dc._resolve(ticker)
+        if instr is None:
+            return None, None, self._fail(
+                endpoint, DhanApiError("UNMAPPED", f"no SECURITY_ID_MAP entry "
+                                       f"for {ticker!r}"), empty)
+        client = dc._get_client()
+        if client is None:
+            return None, None, self._fail(
+                endpoint, DhanApiError("NO_CREDENTIALS",
+                                       "DHAN_CLIENT_ID / access token missing"),
+                empty)
+        return instr, client, None
+
+    # ------------------------------------------------------------ endpoints
+
+    def get_expiry_list(self, index_ticker: str) -> list:
+        self.last_error = None
+        instr, client, failed = self._client_and_instr(
+            index_ticker, "expiry_list", [])
+        if failed is not None:
+            return failed
+        resp, err = self._call("expiry_list", client.expiry_list,
+                               int(instr["id"]), instr["seg"])
+        if err is not None:
+            return self._fail("expiry_list", err, [])
+        data = unwrap_payload(resp)
+        if isinstance(data, list):
+            return data
+        return self._fail("expiry_list",
+                          DhanApiError("BAD_SHAPE",
+                                       f"expected list, got {type(data).__name__}",
+                                       raw=str(resp)), [])
+
+    def get_option_chain(self, index_ticker: str, expiry_date: str) -> dict | None:
+        self.last_error = None
+        instr, client, failed = self._client_and_instr(
+            index_ticker, "option_chain", None)
+        if failed is not None:
+            return failed
+        resp, err = self._call("option_chain", client.option_chain,
+                               int(instr["id"]), instr["seg"], expiry_date)
+        if err is not None:
+            return self._fail("option_chain", err, None)
+        data = unwrap_payload(resp, inner_marker="oc")
+        if isinstance(data, dict) and "oc" in data:
+            return data
+        return self._fail("option_chain",
+                          DhanApiError("BAD_SHAPE", "no 'oc' in payload",
+                                       raw=str(resp)), None)
+
+    def _quote_sec(self, ticker: str) -> dict | None:
+        self.last_error = None
+        instr, client, failed = self._client_and_instr(ticker, "quote_data", None)
+        if failed is not None:
+            return failed
+        resp, err = self._call("quote_data", client.quote_data,
+                               {instr["seg"]: [int(instr["id"])]})
+        if err is not None:
+            return self._fail("quote_data", err, None)
+        data = unwrap_payload(resp, inner_marker=instr["seg"])
+        try:
+            sec = data[instr["seg"]][str(instr["id"])]
+        except (KeyError, TypeError):
+            return self._fail("quote_data",
+                              DhanApiError("BAD_SHAPE",
+                                           f"no {instr['seg']}/{instr['id']} "
+                                           "in quote payload", raw=str(resp)),
+                              None)
+        if not isinstance(sec, dict):
+            return self._fail("quote_data",
+                              DhanApiError("BAD_SHAPE", "instrument entry is "
+                                           f"{type(sec).__name__}", raw=str(resp)),
+                              None)
+        return sec
+
+    def get_live_price(self, ticker: str) -> float | None:
+        sec = self._quote_sec(ticker)
+        if sec is None or sec.get("last_price") is None:
+            return None
+        return float(sec["last_price"])
+
+    def get_quote(self, ticker: str) -> dict | None:
+        """Same shape as dhan_client.get_quote:
+        {ticker, current_price, prev_close, percent_change} or None."""
+        sec = self._quote_sec(ticker)
+        if sec is None or sec.get("last_price") is None:
+            return None
+        last = float(sec["last_price"])
+        prev = float((sec.get("ohlc") or {}).get("close") or last)
+        pct = 0.0 if prev == 0 else (last - prev) / prev * 100
+        return {"ticker": ticker, "current_price": round(last, 2),
+                "prev_close": round(prev, 2), "percent_change": round(pct, 2)}
+
+    def get_ohlc_since(self, ticker: str, start_iso: str) -> list:
+        """Daily bars from start_iso to today, oldest first — same contract
+        as dhan_client.get_ohlc_since including the same-day guard."""
+        from datetime import date
+        self.last_error = None
+        if start_iso >= date.today().isoformat():
+            return []   # no completed bar yet — same clean wait as dhan_client
+        instr, client, failed = self._client_and_instr(
+            ticker, "historical_daily_data", [])
+        if failed is not None:
+            return failed
+        resp, err = self._call("historical_daily_data",
+                               client.historical_daily_data,
+                               instr["id"], instr["seg"], instr["inst"],
+                               start_iso, date.today().isoformat())
+        if err is not None:
+            return self._fail("historical_daily_data", err, [])
+        d = unwrap_payload(resp, inner_marker="timestamp")
+        if not isinstance(d, dict) or not d.get("timestamp"):
+            return self._fail("historical_daily_data",
+                              DhanApiError("BAD_SHAPE", "no timestamp arrays "
+                                           "in payload", raw=str(resp)), [])
+        bars = []
+        ts = d["timestamp"]
+        for i in range(len(ts)):
+            bars.append({
+                "date": datetime.fromtimestamp(ts[i], tz=_IST).date().isoformat(),
+                "open": float(d["open"][i]),
+                "high": float(d["high"][i]),
+                "low": float(d["low"][i]),
+                "close": float(d["close"][i]),
+                "volume": float(d["volume"][i]) if d.get("volume") else 0.0,
+            })
+        return bars
+
+    # ------------------------------------------------------------ audit view
+
+    def auth_failures(self) -> list:
+        """The audit entries that mean credentials/token, not market data —
+        what an ops sweep should page on."""
+        return [a for a in self.audit if a.get("auth_error")]

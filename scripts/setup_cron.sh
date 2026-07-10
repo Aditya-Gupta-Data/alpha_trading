@@ -16,12 +16,9 @@
 #                             the script self-gates; off-hours runs exit
 #                             quietly). Fires at even hours, so it can
 #                             NEVER collide with the 07:00 renewal slot.
-#   8. src.evolution:         Saturday 02:00 IST (off-market, off-renewal).
-#                             Needs a local Ollama server: on the Mac it
-#                             runs the full Analyst/Critic dialectic; on a
-#                             machine without Ollama (the VM) the critic
-#                             gate fails CLOSED and the run is a no-op
-#                             that mutates nothing (decision #49).
+#   (src.evolution is deliberately NOT here: it needs a local Ollama, which
+#    the VM lacks by design — it is scheduled on the MAC via launchd instead;
+#    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
 #
 # Note on #4: the sleep phase needs the machine that holds data/journal.jsonl,
 # data/brain_map.db AND a running Ollama server (Phase 10B). On a machine
@@ -127,11 +124,6 @@ CRON_TZ=Asia/Kolkata
 #    during NSE market hours (Mon-Fri 09:15-15:30 IST) and exits quietly
 #    otherwise. Even-hour slots never touch the 07:00 renewal minute.
 0 */2 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.portfolio_report >> "$REPO_ROOT/logs/portfolio_report.log" 2>&1
-
-# 8. Procedural Evolution — weekly, Saturday 02:00 IST (market closed, far
-#    from the renewal slot). Whitelisted-parameter mutations only, critic
-#    gate fails closed; without a local Ollama (the VM) it no-ops.
-0 2 * * 6 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.evolution >> "$REPO_ROOT/logs/evolution.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Procedural Evolution — Mac LaunchAgent (Saturdays 02:00 local = IST).
+
+  The VM cannot host this job (no Ollama, decision #47); the Mac is the
+  designated learning machine (same split as the edge miner). Do NOT
+  install this on the VM.
+
+  INSTALL (run scripts/install_evolution_agent.sh, or by hand):
+    cp scripts/com.alphatrading.evolution.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.alphatrading.evolution.plist
+    launchctl enable gui/$(id -u)/com.alphatrading.evolution
+
+  VERIFY:
+    launchctl list | grep alphatrading
+    launchctl kickstart gui/$(id -u)/com.alphatrading.evolution   # force one run
+    tail -f logs/evolution.log logs/evolution.launchd.err
+
+  UNINSTALL:
+    launchctl bootout gui/$(id -u)/com.alphatrading.evolution
+    rm ~/Library/LaunchAgents/com.alphatrading.evolution.plist
+
+  Notes:
+  * /bin/bash must hold Full Disk Access (System Settings -> Privacy &
+    Security) for launchd to run scripts inside ~/Documents — already
+    granted on this Mac for the edge miner (TCC lesson, 2026-07-09).
+  * StartCalendarInterval Weekday 6 = Saturday (launchd: 0 = Sunday).
+  * If a 02:00 slot is missed (Mac asleep), launchd coalesces to the next
+    wake — the module's own gates make a late run harmless.
+  * Paths are absolute by launchd requirement; adjust if the repo moves.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.alphatrading.evolution</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/adityagupta/Documents/Claude/alpha_trading/scripts/run_evolution.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>6</integer>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/adityagupta/Documents/Claude/alpha_trading</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/adityagupta/Documents/Claude/alpha_trading/logs/evolution.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/adityagupta/Documents/Claude/alpha_trading/logs/evolution.launchd.err</string>
+</dict>
+</plist>

@@ -74,6 +74,97 @@ class DhanApiError(Exception):
                 "message": self.message, "auth_error": self.is_auth_error}
 
 
+class StaleDataError(DhanApiError):
+    """A 200-OK response whose market data is older than the engine may
+    trust mid-session (the API deception threat: transport says fine,
+    the snapshot is delayed). Raised in strict mode; empty-state +
+    last_error in default mode, like every other classified failure —
+    either way the stale numbers never reach the engine's math."""
+
+    def __init__(self, age_seconds: float, max_age: float,
+                 ts_text: str, endpoint: str = ""):
+        super().__init__(
+            "STALE_DATA",
+            f"market data is {age_seconds:.0f}s old (max {max_age:g}s "
+            f"during market hours) — data timestamp {ts_text}",
+            endpoint=endpoint)
+        self.age_seconds = age_seconds
+
+
+# --- freshness validation (the API deception guard) -------------------------
+
+# How old a LIVE quote/chain snapshot may be, in seconds, while the market
+# is open. 60s is generous for indices ticking every second — anything
+# beyond it during a volatile session is a delayed feed, not a quiet one.
+STALE_QUOTE_MAX_AGE_SECONDS = 60
+
+# Timestamp keys observed/plausible across Dhan payload variants — checked
+# in order, first parseable wins.
+_TIMESTAMP_FIELDS = ("last_trade_time", "lastTradeTime", "ltt",
+                     "exchange_time", "exchangeTime", "as_of", "timestamp")
+
+
+def parse_market_timestamp(value) -> datetime | None:
+    """Best-effort parse of a Dhan payload timestamp into an aware IST
+    datetime: epoch seconds, epoch milliseconds, "YYYY-MM-DD HH:MM:SS",
+    or ISO-8601. None when unparseable — never raises."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            if value <= 0:
+                return None
+            epoch = float(value)
+            if epoch > 1e12:          # milliseconds
+                epoch /= 1000.0
+            return datetime.fromtimestamp(epoch, tz=_IST)
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.replace(".", "", 1).isdigit():
+            return parse_market_timestamp(float(text))
+        parsed = datetime.fromisoformat(text.replace(" ", "T", 1)
+                                        if " " in text else text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_IST)  # Dhan clocks are IST
+        return parsed
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def freshness_error(payload: dict, endpoint: str = "",
+                    max_age: float = STALE_QUOTE_MAX_AGE_SECONDS,
+                    now: datetime = None) -> StaleDataError | None:
+    """A StaleDataError when `payload` carries a parseable data timestamp
+    older than `max_age` seconds DURING MARKET HOURS, else None.
+
+    Deliberate asymmetries:
+      * outside market hours the check never fires — an evening quote is
+        legitimately hours old (the day's close), not deceptive;
+      * a payload with NO recognizable timestamp field passes — absence
+        of evidence is not staleness, and failing closed on it would
+        brick every code path against payload variants that simply omit
+        the field. Only a present, parseable, out-of-date timestamp is
+        treated as deception."""
+    if not isinstance(payload, dict):
+        return None
+    now = now or datetime.now(tz=_IST)
+    from src.market_loop import is_market_open
+    if not is_market_open(now):
+        return None
+    for field in _TIMESTAMP_FIELDS:
+        ts = parse_market_timestamp(payload.get(field))
+        if ts is None:
+            continue
+        age = (now - ts).total_seconds()
+        if age > max_age:
+            return StaleDataError(age, max_age,
+                                  f"{payload.get(field)!r} ({field})",
+                                  endpoint=endpoint)
+        return None   # first parseable timestamp is fresh — done
+    return None
+
+
 def classify_failure(resp) -> DhanApiError | None:
     """A DhanApiError if `resp` is any known failure shape, else None.
 
@@ -138,8 +229,12 @@ class SafeDhanClient:
 
     AUDIT_MAX = 200   # keep the trail bounded on long sessions
 
-    def __init__(self, strict: bool = False):
+    def __init__(self, strict: bool = False,
+                 max_quote_age_seconds: float = STALE_QUOTE_MAX_AGE_SECONDS,
+                 now_fn=None):
         self.strict = strict
+        self.max_quote_age_seconds = max_quote_age_seconds
+        self._now_fn = now_fn or (lambda: datetime.now(tz=_IST))
         self.last_error: DhanApiError | None = None
         self.audit: list = []
 
@@ -219,6 +314,11 @@ class SafeDhanClient:
             return self._fail("option_chain", err, None)
         data = unwrap_payload(resp, inner_marker="oc")
         if isinstance(data, dict) and "oc" in data:
+            stale = freshness_error(data, endpoint="option_chain",
+                                    max_age=self.max_quote_age_seconds,
+                                    now=self._now_fn())
+            if stale is not None:
+                return self._fail("option_chain", stale, None)
             return data
         return self._fail("option_chain",
                           DhanApiError("BAD_SHAPE", "no 'oc' in payload",
@@ -247,6 +347,11 @@ class SafeDhanClient:
                               DhanApiError("BAD_SHAPE", "instrument entry is "
                                            f"{type(sec).__name__}", raw=str(resp)),
                               None)
+        stale = freshness_error(sec, endpoint="quote_data",
+                                max_age=self.max_quote_age_seconds,
+                                now=self._now_fn())
+        if stale is not None:
+            return self._fail("quote_data", stale, None)
         return sec
 
     def get_live_price(self, ticker: str) -> float | None:

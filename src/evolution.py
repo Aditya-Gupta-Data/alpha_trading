@@ -380,19 +380,60 @@ def _cluster_losses(conn, cluster: dict) -> int:
     return sum(1 for r in rows if vix_band(r[0]) == cluster["vix_band"])
 
 
+# --- anti-overfitting guardrails (Phase 5 scratchpad build) ------------------
+#
+# Two structural sanity checks against the classic genetic-optimizer trap:
+# "perfect" parameters mined from a small or one-regime sample that break
+# the moment conditions shift (decision #50 already demonstrated the
+# failure mode empirically on regime tags).
+
+# 1. Refuse to evolve at all on a thin corpus — below this many resolved
+#    simulated trades, every cluster is more likely noise than signal.
+MIN_TRADES_FOR_EVOLUTION = 30
+
+
+def corpus_size(conn) -> int:
+    """Resolved trades available to learn from (0 when the table is
+    missing — a fresh DB must gate exactly like a thin one)."""
+    try:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM simulated_trades").fetchone()[0])
+    except Exception:
+        return 0
+
+
+# 2. Split-window stability: a candidate that only wins in the full-window
+#    average may be riding one regime. The replay window is cut into two
+#    halves (earlier half vs later half — regimes shift over time, so the
+#    halves are cheap regime proxies), and a would-be promotion must not
+#    DEGRADE total P&L in either half. Mathematically lightweight (two
+#    extra baseline/mutated replays), structurally the standard
+#    out-of-sample sign-consistency test.
+
+def window_halves(start: str, end: str) -> tuple:
+    """((start, mid), (mid, end)) — the midpoint date of the replay
+    window, shared as the boundary bar."""
+    d0, d1 = date.fromisoformat(start), date.fromisoformat(end)
+    mid = (d0 + (d1 - d0) / 2).isoformat()
+    return (start, mid), (mid, end)
+
+
 def backtest_candidate(cluster: dict, proposal: dict, bars_by_underlying: dict,
                        vix_by_date: dict, start: str, end: str) -> dict:
     """Baseline vs mutated replay over identical cached history. Verdict:
-      promoted             — cluster repaired, no global regression
-      revert_on_regression — cluster repaired but Sharpe/drawdown degraded
-      no_repair            — the mutation didn't even fix its own cluster"""
+      promoted               — cluster repaired, no global regression, AND
+                               stable across both window halves
+      unstable_out_of_sample — full-window winner that degrades one half
+                               (one-regime overfit; discarded)
+      revert_on_regression   — cluster repaired but Sharpe/drawdown degraded
+      no_repair              — the mutation didn't even fix its own cluster"""
     from src import brain_map
     from src.simulator import run_simulation
     underlyings = tuple(bars_by_underlying)
 
-    def replay() -> tuple:
+    def replay(win_start: str, win_end: str) -> tuple:
         conn = brain_map.connect(":memory:")
-        run_simulation(start, end, underlyings, conn=conn,
+        run_simulation(win_start, win_end, underlyings, conn=conn,
                        bars_by_underlying=bars_by_underlying,
                        vix_by_date=vix_by_date)
         metrics = _portfolio_metrics(conn)
@@ -400,10 +441,11 @@ def backtest_candidate(cluster: dict, proposal: dict, bars_by_underlying: dict,
         conn.close()
         return metrics, losses
 
-    baseline, baseline_losses = replay()
-    with override_parameters(
-            {proposal["parameter"]: proposal["proposed_value"]}):
-        mutated, mutated_losses = replay()
+    overrides = {proposal["parameter"]: proposal["proposed_value"]}
+
+    baseline, baseline_losses = replay(start, end)
+    with override_parameters(overrides):
+        mutated, mutated_losses = replay(start, end)
 
     repaired = mutated_losses < baseline_losses
     regressed = (mutated["sharpe"] < baseline["sharpe"] * SHARPE_TOLERANCE
@@ -411,9 +453,31 @@ def backtest_candidate(cluster: dict, proposal: dict, bars_by_underlying: dict,
                  baseline["max_drawdown"] * DRAWDOWN_TOLERANCE)
     verdict = ("no_repair" if not repaired
                else "revert_on_regression" if regressed else "promoted")
+
+    stability = None
+    if verdict == "promoted":
+        # Only would-be promotions pay for the four extra half-replays.
+        halves = []
+        for win_start, win_end in window_halves(start, end):
+            half_baseline, _ = replay(win_start, win_end)
+            with override_parameters(overrides):
+                half_mutated, _ = replay(win_start, win_end)
+            halves.append({
+                "window": [win_start, win_end],
+                "baseline_pnl": half_baseline["total_pnl"],
+                "mutated_pnl": half_mutated["total_pnl"],
+                "delta_pnl": round(half_mutated["total_pnl"]
+                                   - half_baseline["total_pnl"], 2),
+            })
+        stable = all(h["delta_pnl"] >= 0 for h in halves)
+        stability = {"stable": stable, "halves": halves}
+        if not stable:
+            verdict = "unstable_out_of_sample"
+
     return {"verdict": verdict, "baseline": baseline, "mutated": mutated,
             "cluster_losses_baseline": baseline_losses,
-            "cluster_losses_mutated": mutated_losses}
+            "cluster_losses_mutated": mutated_losses,
+            "stability": stability}
 
 
 # --- 7. provenance, lineage, and the candidate file ---------------------------
@@ -547,10 +611,22 @@ def run_evolution(conn, extractor, bars_cache: dict,
     vix = bars_cache["vix"]
     start, end = bars_cache["start"], bars_cache["end"]
 
+    # Anti-overfitting guard 1: no evolution on a thin corpus — clusters
+    # mined from a handful of trades are noise wearing a pattern costume.
+    n_trades = corpus_size(conn)
+    if n_trades < MIN_TRADES_FOR_EVOLUTION:
+        reason = (f"corpus too small: {n_trades} resolved trades < the "
+                  f"{MIN_TRADES_FOR_EVOLUTION}-trade floor — refusing to "
+                  "optimize against noise (anti-overfitting guard)")
+        print(f"  {reason}")
+        return {"skipped": reason, "clusters_found": 0, "examined": 0,
+                "written": 0, "reverted": 0, "no_repair": 0, "dropped": 0,
+                "unstable": 0, "candidates": []}
+
     clusters = find_loss_clusters(conn)
     stats = {"clusters_found": len(clusters), "examined": 0,
              "written": 0, "reverted": 0, "no_repair": 0, "dropped": 0,
-             "candidates": []}
+             "unstable": 0, "candidates": []}
     for cluster in clusters[:max_candidates]:
         stats["examined"] += 1
         summary = cluster_summary(cluster)
@@ -592,6 +668,11 @@ def run_evolution(conn, extractor, bars_cache: dict,
             print("    RevertOnRegression — repaired the cluster but "
                   "degraded global Sharpe/drawdown; discarded (lineage "
                   "remembers the attempt).")
+        elif result["verdict"] == "unstable_out_of_sample":
+            stats["unstable"] += 1
+            print("    unstable_out_of_sample — wins the full window but "
+                  "degrades one half of it (one-regime overfit); discarded "
+                  "(lineage remembers the attempt).")
         else:
             stats["no_repair"] += 1
             print("    no_repair — mutation didn't fix its own cluster; "

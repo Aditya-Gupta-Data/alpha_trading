@@ -250,6 +250,131 @@ def test_safe_ohlc_since_same_day_guard_never_calls_the_sdk():
         assert not client.return_value.historical_daily_data.called
 
 
+# --- Phase 5: the API deception guard (stale-data rejection) ----------------
+
+from datetime import datetime, timedelta, timezone
+
+from src.dhan_guard import (StaleDataError, freshness_error,
+                            parse_market_timestamp)
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+MARKET_OPEN_NOW = datetime(2026, 7, 10, 11, 0, 0, tzinfo=_IST)   # Friday 11:00
+MARKET_CLOSED_NOW = datetime(2026, 7, 11, 11, 0, 0, tzinfo=_IST)  # Saturday
+
+FRESH_TS = "2026-07-10 10:59:30"    # 30s old at 11:00
+STALE_TS = "2026-07-10 10:57:00"    # 180s old at 11:00
+
+
+def test_parse_market_timestamp_formats():
+    epoch = MARKET_OPEN_NOW.timestamp()
+    assert parse_market_timestamp(epoch) == MARKET_OPEN_NOW
+    assert parse_market_timestamp(epoch * 1000) == MARKET_OPEN_NOW  # millis
+    assert parse_market_timestamp(str(int(epoch))) == MARKET_OPEN_NOW
+    parsed = parse_market_timestamp("2026-07-10 10:57:00")
+    assert parsed == datetime(2026, 7, 10, 10, 57, 0, tzinfo=_IST)
+    assert parse_market_timestamp("2026-07-10T10:57:00+05:30") == parsed
+    for garbage in (None, "", "not a time", {}, -5, 0):
+        assert parse_market_timestamp(garbage) is None
+
+
+def test_freshness_error_fires_only_on_stale_data_during_market_hours():
+    stale = freshness_error({"last_trade_time": STALE_TS, "last_price": 1.0},
+                            endpoint="quote_data", max_age=60,
+                            now=MARKET_OPEN_NOW)
+    assert isinstance(stale, StaleDataError)
+    assert stale.code == "STALE_DATA"
+    assert stale.age_seconds == 180.0
+    assert not stale.is_auth_error
+    # fresh data passes
+    assert freshness_error({"last_trade_time": FRESH_TS}, max_age=60,
+                           now=MARKET_OPEN_NOW) is None
+    # the same stale timestamp OUTSIDE market hours is legitimate (the close)
+    assert freshness_error({"last_trade_time": STALE_TS}, max_age=60,
+                           now=MARKET_CLOSED_NOW) is None
+    # no recognizable timestamp field = unverifiable, never punished
+    assert freshness_error({"last_price": 1.0}, now=MARKET_OPEN_NOW) is None
+    assert freshness_error("not a dict", now=MARKET_OPEN_NOW) is None
+
+
+def test_freshness_error_reads_alternate_field_names():
+    for field in ("lastTradeTime", "ltt", "exchange_time", "timestamp"):
+        err = freshness_error({field: STALE_TS}, max_age=60,
+                              now=MARKET_OPEN_NOW)
+        assert err is not None and err.code == "STALE_DATA", field
+
+
+def _stale_quote_resp():
+    sec = dict(QUOTE_SEC, last_trade_time=STALE_TS)
+    return {"status": "success", "data": {"data": {"IDX_I": {"13": sec}}}}
+
+
+def test_safe_quote_rejects_stale_snapshots_mid_session():
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.quote_data.return_value = _stale_quote_resp()
+        safe = SafeDhanClient(now_fn=lambda: MARKET_OPEN_NOW)
+        assert safe.get_quote("NIFTY 50") is None
+        assert safe.last_error.code == "STALE_DATA"
+        assert safe.last_error.endpoint == "quote_data"
+        assert "180s old" in safe.last_error.message
+
+
+def test_safe_quote_strict_mode_raises_stale_data_error():
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.quote_data.return_value = _stale_quote_resp()
+        safe = SafeDhanClient(strict=True, now_fn=lambda: MARKET_OPEN_NOW)
+        try:
+            safe.get_quote("NIFTY 50")
+            assert False, "strict mode must raise on stale data"
+        except StaleDataError as e:
+            assert e.age_seconds == 180.0
+
+
+def test_safe_quote_accepts_fresh_and_off_hours_data():
+    fresh = dict(QUOTE_SEC, last_trade_time=FRESH_TS)
+    resp = {"status": "success", "data": {"data": {"IDX_I": {"13": fresh}}}}
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.quote_data.return_value = resp
+        safe = SafeDhanClient(now_fn=lambda: MARKET_OPEN_NOW)
+        assert safe.get_quote("NIFTY 50")["current_price"] == 3145.0
+    # the stale snapshot is fine when the market is closed (it IS the close)
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.quote_data.return_value = _stale_quote_resp()
+        safe = SafeDhanClient(now_fn=lambda: MARKET_CLOSED_NOW)
+        assert safe.get_quote("NIFTY 50") is not None
+
+
+def test_safe_quote_threshold_is_configurable():
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.quote_data.return_value = _stale_quote_resp()
+        lenient = SafeDhanClient(max_quote_age_seconds=300,
+                                 now_fn=lambda: MARKET_OPEN_NOW)
+        assert lenient.get_quote("NIFTY 50") is not None   # 180s < 300s
+
+
+def test_safe_option_chain_rejects_stale_and_passes_untimestamped():
+    stale_chain = dict(CHAIN_INNER, last_trade_time=STALE_TS)
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.option_chain.return_value = {
+            "status": "success", "data": {"data": stale_chain}}
+        safe = SafeDhanClient(now_fn=lambda: MARKET_OPEN_NOW)
+        assert safe.get_option_chain("NIFTY 50", "2026-07-21") is None
+        assert safe.last_error.code == "STALE_DATA"
+        assert safe.last_error.endpoint == "option_chain"
+    # a chain payload with no timestamp field keeps working (unverifiable)
+    p1, p2, p3 = _patched()
+    with p1, p2 as client, p3:
+        client.return_value.option_chain.return_value = {
+            "status": "success", "data": {"data": CHAIN_INNER}}
+        safe = SafeDhanClient(now_fn=lambda: MARKET_OPEN_NOW)
+        assert safe.get_option_chain("NIFTY 50", "2026-07-21") == CHAIN_INNER
+
+
 # ---------------------------------------------------------------- audit view
 
 def test_auth_failures_filters_token_errors_from_shape_noise():

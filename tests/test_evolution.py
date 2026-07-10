@@ -209,16 +209,24 @@ def test_backtest_verdicts_promoted_reverted_norepair():
                 dict(vix=12.0, result="win", pnl=2000.0),
                 dict(vix=12.0, result="win", pnl=2000.0)]
 
-    # 1. repaired + healthy -> promoted
+    # 1. repaired + healthy + stable in both window halves -> promoted
+    #    (a would-be promotion now also replays each half: baseline then
+    #    mutated per half, so the factory needs 4 extra result sets)
     mutated_good = [dict(vix=12.0, result="win", pnl=2000.0),
                     dict(vix=12.0, result="win", pnl=2100.0)]
+    half_baseline = [dict(vix=12.0, result="win", pnl=800.0)]
+    half_mutated = [dict(vix=12.0, result="win", pnl=1000.0)]
     with mock.patch("src.simulator.run_simulation",
-                    _fake_replay_factory([baseline, mutated_good])):
+                    _fake_replay_factory([baseline, mutated_good,
+                                          half_baseline, half_mutated,
+                                          half_baseline, half_mutated])):
         out = ev.backtest_candidate(cluster, proposal, {"NIFTY BANK": []},
                                     {}, "2026-01-01", "2026-06-01")
     assert out["verdict"] == "promoted"
     assert out["cluster_losses_baseline"] == 1
     assert out["cluster_losses_mutated"] == 0
+    assert out["stability"]["stable"] is True
+    assert [h["delta_pnl"] for h in out["stability"]["halves"]] == [200.0, 200.0]
 
     # 2. repaired but global metrics degrade -> revert_on_regression
     mutated_bad = [dict(vix=12.0, result="loss", pnl=-6000.0),
@@ -235,6 +243,88 @@ def test_backtest_verdicts_promoted_reverted_norepair():
         out = ev.backtest_candidate(cluster, proposal, {"NIFTY BANK": []},
                                     {}, "2026-01-01", "2026-06-01")
     assert out["verdict"] == "no_repair"
+    assert out["stability"] is None      # never reached the halves check
+
+
+# --- Phase 5 anti-overfitting guardrails ------------------------------------
+
+def test_window_halves_split_on_the_midpoint_date():
+    first, second = ev.window_halves("2026-01-01", "2026-12-31")
+    assert first == ("2026-01-01", "2026-07-02")
+    assert second == ("2026-07-02", "2026-12-31")
+    # degenerate one-day window still yields two (identical) halves
+    a, b = ev.window_halves("2026-06-01", "2026-06-01")
+    assert a == ("2026-06-01", "2026-06-01") == b
+
+
+def test_backtest_flags_one_regime_winners_as_unstable():
+    """The overfit trap: a mutation that wins the FULL window but only
+    because one half carries it — the other half actually degrades. Must
+    come back unstable_out_of_sample, never promoted."""
+    from unittest import mock
+    cluster = {"underlying": "NIFTY BANK", "strategy": "iron_condor",
+               "vix_band": "mid",
+               "trades": [{"vix": 15.5}], "journal_refs": []}
+    proposal = {"parameter": "vix_block_above", "proposed_value": 15.0}
+    baseline = [dict(vix=15.5, result="loss", pnl=-3000.0),
+                dict(vix=12.0, result="win", pnl=2000.0),
+                dict(vix=12.0, result="win", pnl=2000.0)]
+    mutated_good = [dict(vix=12.0, result="win", pnl=2000.0),
+                    dict(vix=12.0, result="win", pnl=2100.0)]
+    half_baseline = [dict(vix=12.0, result="win", pnl=800.0)]
+    half1_mutated = [dict(vix=12.0, result="win", pnl=2500.0)]   # carried...
+    half2_mutated = [dict(vix=12.0, result="win", pnl=300.0)]    # ...degraded
+    with mock.patch("src.simulator.run_simulation",
+                    _fake_replay_factory([baseline, mutated_good,
+                                          half_baseline, half1_mutated,
+                                          half_baseline, half2_mutated])):
+        out = ev.backtest_candidate(cluster, proposal, {"NIFTY BANK": []},
+                                    {}, "2026-01-01", "2026-06-01")
+    assert out["verdict"] == "unstable_out_of_sample"
+    assert out["stability"]["stable"] is False
+    deltas = [h["delta_pnl"] for h in out["stability"]["halves"]]
+    assert deltas == [1700.0, -500.0]
+
+
+def test_corpus_size_counts_and_tolerates_missing_table():
+    conn = make_conn()
+    assert ev.corpus_size(conn) == 0
+    seed_cluster(conn)                    # 4 losses + 3 wins
+    assert ev.corpus_size(conn) == 7
+    bare = brain_map.connect(":memory:")  # no simulated_trades table at all
+    assert ev.corpus_size(bare) == 0
+
+
+def test_run_evolution_refuses_a_thin_corpus():
+    """Guard 1: below the 30-trade floor the run must stop BEFORE mining
+    clusters or invoking the LLM — no mutation from noise."""
+    from unittest import mock
+    conn = make_conn()
+    seed_cluster(conn)                    # only 7 resolved trades
+    cache = {"bars": {"NIFTY BANK": []}, "vix": {},
+             "start": "2026-01-01", "end": "2026-06-01"}
+    with mock.patch.object(ev, "find_loss_clusters") as miner, \
+         mock.patch.object(ev, "backtest_candidate") as backtester:
+        stats = ev.run_evolution(conn, extractor=None, bars_cache=cache)
+    assert "corpus too small" in stats["skipped"]
+    assert "7 resolved trades" in stats["skipped"]
+    assert stats["written"] == 0
+    assert not miner.called and not backtester.called
+
+
+def test_run_evolution_proceeds_at_the_floor():
+    from unittest import mock
+    conn = make_conn()
+    for i in range(ev.MIN_TRADES_FOR_EVOLUTION):     # exactly 30
+        insert_sim(conn, f"t{i}", vix=12.0, result="win", pnl=100.0)
+    cache = {"bars": {"NIFTY BANK": []}, "vix": {},
+             "start": "2026-01-01", "end": "2026-06-01"}
+    with mock.patch.object(ev, "find_loss_clusters",
+                           return_value=[]) as miner:
+        stats = ev.run_evolution(conn, extractor=None, bars_cache=cache)
+    assert "skipped" not in stats
+    assert miner.called
+    assert stats["clusters_found"] == 0
 
 
 # --- lineage + candidate file ---------------------------------------------------
@@ -313,8 +403,11 @@ def test_run_evolution_end_to_end_writes_only_promoted_candidates():
                           "sharpe": 0.2, "max_drawdown": 4.0},
               "cluster_losses_baseline": 4, "cluster_losses_mutated": 1}
     with tempfile.TemporaryDirectory() as tmp:
+        # the seeded cluster is 7 trades — below the Phase 5 anti-overfit
+        # floor, which has its own tests; lift it here to test the rest
         with mock.patch.object(ev, "backtest_candidate",
-                               return_value=canned):
+                               return_value=canned), \
+             mock.patch.object(ev, "corpus_size", return_value=100):
             stats = ev.run_evolution(
                 conn, llm, cache, out_dir=Path(tmp) / "candidates",
                 lineage_path=Path(tmp) / "lineage.json",

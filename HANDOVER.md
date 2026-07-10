@@ -6,17 +6,26 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
-## 🟡 SCRATCHPAD PHASES 1–8 + REFINEMENT — BUILT, REVIEWED, TESTED; DEPLOYING THIS WEEKEND (updated 2026-07-10 Fri evening)
+## 🟢 SCRATCHPAD PHASES 1–8 + REFINEMENT — DEPLOYED TO THE VM Fri 2026-07-10 ~21:45 IST AND SMOKE-TESTED; Monday 07-13 09:10 IST is the first live session (updated 2026-07-10 late night)
 
-**The single most important facts for a cold session: twelve local
-commits (`dfcdf9b` → `1794ef4`) are UNPUSHED on the Mac's `main` — the VM
-still runs pre-scratchpad code. The user ENDED the observation week early
-(Fri 2026-07-10): live-market observation closed with Friday's session
-(ledger Issues 1–10 are the harvest), the deploy happens over the weekend
-of 07-11/12 (markets closed = safest window), and Monday 2026-07-13
-09:10 IST is the first live session on the new build. The old "no
-build/deploy before ~07-16" freeze is SUPERSEDED. Never restart VM
-services mid-session (09:15–15:30 IST) still stands.** Suite went
+**The single most important facts for a cold session: the deploy is
+DONE — the VM runs `bf9dc77` (everything below), pushed and pulled Fri
+2026-07-10 night, markets closed. The full checklist executed and
+verified: `PAPER_AUTO_APPROVE=1` live in the VM `.env`, `setup_cron.sh`
+re-ran clean (7-job block, 07:00 renewal restored, 2h report card added),
+root's interim `30 6,18` renewal crontab REMOVED ("no crontab for root" —
+the single-07:00 cadence of `docs/token_renewal_cadence.md` is now
+reality), all 3 services active, regime backfill 366/366. Smoke-tested
+live: a manual retry-hardened `renew_token` run minted a real token
+(expiry 07-11T21:47), `get_live_price` works on it, the gateway kept
+serving keyed requests after the mint with no restart, `/dashboard` is
+200 through the tunnel from outside (401 without key). Ledger Issue 10
+carries the full verified record. Remaining watch items: Sat 07:00 first
+cron-fired renewal on new code, Monday's first live session (clean
+afternoon past 12:00). NOT yet done (optional, Mac-side): evolution
+LaunchAgent install (`bash scripts/install_evolution_agent.sh`) and the
+`pull_snapshot_from_vm.sh` sync. Never restart VM services mid-session
+(09:15–15:30 IST) still stands.** Suite went
 486 → **710 green**, all offline; the full diff passed an 8-angle
 multi-agent review (27 candidates → 10 verified findings → all fixed,
 commit `1794ef4`). What landed, by phase:

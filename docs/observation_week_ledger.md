@@ -411,3 +411,36 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   (c) note the Mac's copied dashboard token gets invalidated by the
   18:30 mint (expected; the phase-8 snapshot sync is the durable
   answer there, not token sharing).
+
+### Issue 10 — RESOLVED 2026-07-10 ~21:45–22:00 IST: weekend deploy executed, single-07:00 cadence restored (all steps verified on the VM)
+
+- **What ran (deploy, markets closed):** the 13 unpushed commits
+  (`dfcdf9b` → `bf9dc77`) were pushed and pulled onto the VM
+  (`git pull` fast-forward `e0dcfba` → `bf9dc77`), deps installed,
+  `PAPER_AUTO_APPROVE=1` set in `.env` (decision from deploy-day
+  choices), `scripts/setup_cron.sh` re-ran clean (IST assertion passed;
+  7-job block incl. the 07:00 renewal + 2h report card installed),
+  root's interim `30 6,18` crontab REMOVED whole (`sudo crontab -l` →
+  "no crontab for root"; it held only the renewal entry — verified
+  before removal; backups from the hotfix remain in `~`), all 3
+  services restarted and active, regime backfill tagged 366/366
+  simulated trades (bars cache scp'd from the Mac).
+- **Verified working on the new build (not assumed):** manual
+  `src.renew_token` run minted a REAL new token through the
+  retry-hardened path (exit 0, expiry 2026-07-11T21:47, `.env`
+  fingerprint changed, `.env.bak` written); a fresh
+  `dhan_client.get_live_price("RELIANCE.NS")` returned 1307.8 on that
+  token; the gateway kept answering keyed `/api/health` after the mint
+  with NO restart; `view_positions` lists the 7 open paper spreads;
+  Discord bot reconnected to the gateway; external checks THROUGH the
+  quick tunnel from the Mac: keyed `/api/health` 200-ok,
+  `/dashboard?api_key=` 200, unauthenticated `/dashboard` 401. New
+  tunnel URL (rotated by the restart, expected):
+  `https://generates-edgar-scored-cancel.trycloudflare.com`.
+- **Still to watch (the only unproven pieces):** (a) Sat 2026-07-11
+  07:00 IST — first CRON-fired renewal on the new code (check
+  `logs/renew_token.log`); (b) Mon 2026-07-13 — first live session on
+  the new build, especially a clean afternoon past 12:00 (the old
+  blinding hour) and the in-session token_provider re-read under a real
+  mid-session mint; (c) auto-approve behaviour (`/pending` stays empty
+  by design — proposals journal straight to APPROVED).

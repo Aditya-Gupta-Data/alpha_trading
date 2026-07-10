@@ -369,15 +369,39 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   and independent, and the ~12:00 onset predates the copy. Verified
   the copied token still returns live quotes from a fresh process, i.e.
   the token is good — only the long-running VM process cannot see it.
-- **Resolution:** none applied. Blocked by both the no-build boundary
-  and the standing "no VM service restart during 09:15–15:30 IST"
-  rule. A `master_scheduler` restart would load the valid token and
-  restore data (Issue 5's known fix), but mid-session it would reset
-  cooldowns (the cooldown-persistence fix is also undeployed) — left
-  as the user's explicit call, not done unilaterally.
-- **Follow-up:** raises the priority of the duplicate-root-cron
-  removal — as configured, the 12:00 IST renewal blinds the live loop
-  every trading afternoon until the self-healing token re-read
-  (scratchpad Phase 1) is deployed. Deploy-day should do BOTH: remove
-  the root cron AND deploy `token_provider`'s live-reread, so a
-  renewal can never again silently blind a running session.
+- **Resolution (HOTFIX APPLIED 2026-07-10 ~15:24 IST, on the user's
+  explicit "fix this asap" instruction — config-only, no code deployed,
+  no service restarted, freeze on code otherwise intact):** stopped the
+  recurrence by making sure no token mint can ever land mid-session,
+  while keeping the renewal path that is actually proven to work:
+    1. root's renewal cron rescheduled `0 */12 * * *` (00:00/12:00 IST;
+       the 12:00 firing is the blinder) → `30 6,18 * * *` (06:30/18:30
+       IST, both outside 09:15–15:30). Command byte-identical, only the
+       schedule field changed; its chained `systemctl restart
+       alpha-trading` now also lands off-hours only (kills the Issue-10
+       gateway-blip concern too).
+    2. the documented 07:00 IST user-cron renewal DISABLED (commented
+       in place, not deleted): it failed this morning with `Invalid
+       TOTP`, and per decision #48 / docs/token_renewal_cadence.md two
+       schedules racing one Dhan account is the underlying disease.
+       Single renewal now = root's, at safe hours. This inverts the
+       cadence doc's deploy-day plan (which keeps 07:00 and removes
+       root) — deliberately, because the retry hardening that makes the
+       07:00 job trustworthy is still undeployed; triage flips it back
+       when that ships.
+  Backups on the VM: `~/root_crontab.bak-20260710-152339`,
+  `~/user_crontab.bak-20260710-152339` (restore = `sudo crontab
+  <file>` / `crontab <file>`). Today's blinded `master_scheduler` was
+  deliberately NOT restarted (~15 min to close, defined-risk spreads);
+  it self-terminates at 15:30 by design and tomorrow's 09:10 launch
+  reads the valid on-disk token.
+- **Follow-up:** (a) verify the rescheduled cron's first firing at
+  18:30 IST today (`~/renew.log` should show a fresh mint + expiry
+  ~2026-07-11T18:30) and a clean full session tomorrow with NO
+  "no market state" runs after 12:00; (b) triage still owns the real
+  fix — deploy the self-healing token re-read + renewal retry
+  (scratchpad Phase 1), then restore the documented single-07:00
+  cadence and remove the root cron per docs/token_renewal_cadence.md;
+  (c) note the Mac's copied dashboard token gets invalidated by the
+  18:30 mint (expected; the phase-8 snapshot sync is the durable
+  answer there, not token sharing).

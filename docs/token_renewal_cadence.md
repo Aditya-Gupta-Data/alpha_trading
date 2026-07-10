@@ -5,6 +5,19 @@ system — the 07:00 IST job in the user crontab installed by
 `scripts/setup_cron.sh`. Nothing else may mint tokens on a schedule.
 Not root's crontab, not a systemd timer, not a Mac cron/LaunchAgent.**
 
+> ⚠️ **INTERIM STATE since the 2026-07-10 ~15:24 IST hotfix (ledger
+> Issue 10 UPDATE — read it first): the single renewal is currently
+> ROOT'S cron at `30 6,18 * * *` (06:30/18:30 IST), and the 07:00 user
+> job is DISABLED (commented in place).** The 12:00 IST root firing had
+> blinded the live loop mid-session (stale in-memory token), and the
+> 07:00 job could not be trusted as sole renewer while its TOTP-retry
+> hardening is undeployed — so the hotfix moved the proven path
+> off-session instead of removing it. The removal steps below therefore
+> change at deploy time: after deploying the retry hardening, (1)
+> re-enable the 07:00 user line (uncomment), (2) THEN remove root's
+> crontab as written below. Crontab backups from the hotfix:
+> `~/root_crontab.bak-20260710-152339`, `~/user_crontab.bak-20260710-152339`.
+
 ## Why (ledger Issue 10, 2026-07-10)
 
 DhanHQ allows **one active access token per client id** (decision #48):

@@ -56,8 +56,14 @@ root's duplicate renewal cron per `docs/token_renewal_cadence.md` (same
 session) → re-run `scripts/setup_cron.sh` (adds the report card; asserts
 IST) → restart the Discord bot (`/positions` registers) → optionally
 `bash scripts/install_evolution_agent.sh` on the Mac → watch the next
-07:00 renewal + first session. `PAPER_AUTO_APPROVE` stays off unless the
-user flips it deliberately.
+07:00 renewal + first session. **USER DECISION 2026-07-10: set
+`PAPER_AUTO_APPROVE=1` in the VM's `.env` at deploy** (the switch means
+nothing on the Mac — the VM is the engine, decision #47). Consequence to
+expect: proposals auto-journal as APPROVED and the `/pending` queue stays
+empty by design; the human role shifts from Approve/Reject to monitoring,
+and the margin gate + persisted cooldown (Phase 1/2) become the only
+brakes. Flip it back to off by deleting the line and restarting
+`alpha-trading` — it is re-read per call, no code change.
 
 ## ✅ Regime-Aware Memory — BUILT AND TESTED; skeptic hypothesis honestly NOT confirmed (2026-07-09)
 

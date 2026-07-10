@@ -17,7 +17,7 @@ cd ~/alpha_trading && bash scripts/setup_cron.sh
 
 | IST | Job | Notes |
 |---|---|---|
-| 07:00 daily | `src.renew_token` | mints the day's Dhan token — V2 creds fetched from **GCP Secret Manager** at runtime (never on disk) |
+| 07:00 daily | `src.renew_token` | mints the day's Dhan token — V2 creds fetched from **GCP Secret Manager** at runtime (never on disk). ⚠️ **INTERIM (2026-07-10 hotfix, until the weekend deploy): this line is DISABLED (commented) on the VM; the only renewal is root's cron at 06:30/18:30 IST** — a 12:00 mint had blinded the live loop (ledger Issue 10). Deploy-day re-enables it and removes root's cron, per `docs/token_renewal_cadence.md`. |
 | 08:00 Mon-Fri | `src.suggest` | daily suggestions digest |
 | 09:10 Mon-Fri | `src.master_scheduler` | the full trading session; waits for 09:15, self-terminates 15:30 |
 | 15:35 Mon-Fri | `src.main` | watchlist alert checks |

@@ -122,9 +122,13 @@ architecture as of the 2026-07-06 milestone (post Dhan migration).
   Debian 13, Python 3.13. Runs the FastAPI server as a systemd service
   (`alpha-trading`, `Restart=always`, enabled on boot). Deployed by `git clone`
   of `main` into `~/alpha_trading` with a venv; updates via `git pull` +
-  `systemctl restart`. Scheduled cron jobs (`src.renew_token` at 07:00 IST,
-  `src.main` at 15:35 IST, `src.suggest` at 08:00 IST, and `src.sleep_phase` at
-  20:00 IST) are fully deployed via `scripts/setup_cron.sh`.
+  `systemctl restart`. Scheduled cron jobs (`src.renew_token`,
+  `src.main` at 15:35 IST, `src.suggest` at 08:00 IST, `src.master_scheduler`
+  at 09:10 IST, `src.sleep_phase` at 20:00 IST, `src.ops_monitor` at
+  20:30 IST) are deployed via `scripts/setup_cron.sh`. (Token renewal is at
+  07:00 IST by design, but is on an INTERIM 06:30/18:30 IST root-cron
+  cadence as of the 2026-07-10 hotfix — see `docs/token_renewal_cadence.md`;
+  a mint inside 09:15–15:30 blinds the running loop.)
 - **API Server & Cloudflare Tunnel**: All inbound internet traffic reaches the VM
   only via `cloudflared` dialing out to form a Cloudflare Tunnel, which forwards
   public HTTPS traffic to the internal port 8000. On `localhost:8000`, the strict
@@ -145,8 +149,19 @@ architecture as of the 2026-07-06 milestone (post Dhan migration).
 - **All engine state is local, file-based JSON/JSONL under `data/`**
   (git-ignored — see `OVERVIEW.md` / `DECISIONS.md` for why, no cloud DB):
   `portfolio.json`, `journal.jsonl`, `news_sentiment.json`,
-  `brain_weights.json`. Config (non-secret, versioned) lives in
-  `config.json` (root) and `config/watchlist.yaml`.
+  `brain_weights.json`, plus `brain_map.db` (sqlite knowledge graph) and
+  `market_snapshot.json` (the engine's published live-marks read-model —
+  the live loop writes it, viewers read it so the loop stays the single
+  Dhan quote consumer; decision #56). Config (non-secret, versioned) lives
+  in `config.json` (root), `config/watchlist.yaml`, and
+  `config/macro_securities.json` (verified Dhan ids for the Phase 7 macro
+  tracker).
+- **Advisory analytics layers (Phase 7–8, all read-only on live state,
+  see `MODULES.md` for the module list):** `src/ingestion/` (macro matrix
+  + local-LLM news parsing), `src/knowledge_graph/resonance.py`
+  (macro/news vs open positions → CONFLICT/RESONANCE/NEUTRAL advisories),
+  and the `/api/web/*` event-driven dashboard. None of these place,
+  modify, or gate a trade — they emit advisories and read-models only.
 - **Secrets**: `.env` (git-ignored, `.env.example` is the versioned
   template) — `DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN`, `GEMINI_API_KEY`,
   `DISCORD_BOT_TOKEN`, `ALERT_EMAIL_*`. See `HANDOVER.md`.

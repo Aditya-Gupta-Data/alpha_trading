@@ -6,14 +6,20 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
-## 🟡 OBSERVATION-WEEK SCRATCHPAD BUILD, PHASES 1–5 — BUILT + TESTED LOCALLY, **NOT DEPLOYED** (2026-07-10)
+## 🟡 SCRATCHPAD PHASES 1–8 + REFINEMENT — BUILT, REVIEWED, TESTED; DEPLOYING THIS WEEKEND (updated 2026-07-10 Fri evening)
 
-**The single most important fact for a cold session: five local commits
-(`dfcdf9b` → `722d3ff`, "Local scratchpad build…") are UNPUSHED on the Mac's
-`main` — the VM still runs pre-scratchpad code with every bug these commits
-fix. Do not push/deploy before the observation-week triage (~2026-07-16),
-and never restart VM services mid-session (09:15–15:30 IST).** Suite went
-486 → **655 green**, all offline. What landed, by phase:
+**The single most important facts for a cold session: twelve local
+commits (`dfcdf9b` → `1794ef4`) are UNPUSHED on the Mac's `main` — the VM
+still runs pre-scratchpad code. The user ENDED the observation week early
+(Fri 2026-07-10): live-market observation closed with Friday's session
+(ledger Issues 1–10 are the harvest), the deploy happens over the weekend
+of 07-11/12 (markets closed = safest window), and Monday 2026-07-13
+09:10 IST is the first live session on the new build. The old "no
+build/deploy before ~07-16" freeze is SUPERSEDED. Never restart VM
+services mid-session (09:15–15:30 IST) still stands.** Suite went
+486 → **710 green**, all offline; the full diff passed an 8-angle
+multi-agent review (27 candidates → 10 verified findings → all fixed,
+commit `1794ef4`). What landed, by phase:
 
 1. **Self-healing token + Dhan hardening** — `src/token_provider.py` (live
    .env re-read; Issue 5 fix) wired into `dhan_client._get_client`;
@@ -49,21 +55,64 @@ and never restart VM services mid-session (09:15–15:30 IST).** Suite went
    to a Mac LaunchAgent (`scripts/com.alphatrading.evolution.plist` +
    `install_evolution_agent.sh`, Sat 02:00, pinned interpreter) — **not
    yet loaded into launchd**, run the installer to activate.
+6. **Event-driven web dashboard** — `src/web/static/dashboard.html`
+   (single-file, SSE-driven, deliberately no polling) + `GET /dashboard`,
+   `GET /api/web/positions`, `GET /api/web/events` on `src/api.py`.
+   Behind the gateway it authenticates via `?api_key=` on the page URL
+   (EventSource can't send headers — refinement fix #1).
+7. **Semantic resonance & macro horizon matrix** (`d4df8cc`) —
+   `src/ingestion/macro_tracker.py` (Crude/Gold-India/Gold-World/USDINR →
+   SHORT/MEDIUM/LONG matrix; verified-ids-only Dhan path, fail-open to
+   `data/macro_snapshot.json`, index-impact weights), `src/ingestion/
+   news_parser.py` (local-Ollama headline → strict 5-key signal frame),
+   `src/knowledge_graph/resonance.py` (CONFLICT/RESONANCE/NEUTRAL
+   advisories vs open positions, strike/expiry-roll suggestions,
+   brain_map strictly mode=ro). All advisory, zero writes to live state.
+8. **Engine-published market snapshot** (`0ebd736`) — the live loop
+   publishes spots + every position's mark to `data/market_snapshot.json`
+   each cycle (`src/market_snapshot.py`); `portfolio_report.
+   get_live_marks()` is THE shared mark ladder (snapshot first — zero
+   Dhan calls — direct fetch only for uncovered positions), consumed by
+   the dashboard AND the 2h report card. Makes the engine the single Dhan
+   quote consumer (decision #48 architecture); `scripts/
+   pull_snapshot_from_vm.sh` syncs it to the Mac post-deploy.
+9. **Refinement pass** (`1794ef4`, Fri evening) — all 10 verified review
+   findings fixed: dashboard gateway auth, equity-mark starvation,
+   freshness guard scoped to indexes (+ implausible-age escape), honest
+   `release_entry` after commit, ragged-payload tolerance, single-sourced
+   open-position predicates, auto-approve never on injected books, shared
+   mark ladder, one `unwrap_payload`, resonance graph-query memoization.
+   Also that afternoon (VM config hotfix, ledger Issue 10 UPDATE): root's
+   renewal cron rescheduled to 06:30/18:30 IST and the 07:00 user renewal
+   DISABLED — a 12:00 IST mint had blinded the live loop all afternoon
+   (stale in-memory token; the deployed code can't re-read `.env`).
 
-**Deploy-day checklist (triage):** push the 5 commits → VM `git pull` +
-`pip install -r requirements.txt` + restart services OFF-hours → remove
-root's duplicate renewal cron per `docs/token_renewal_cadence.md` (same
-session) → re-run `scripts/setup_cron.sh` (adds the report card; asserts
-IST) → restart the Discord bot (`/positions` registers) → optionally
-`bash scripts/install_evolution_agent.sh` on the Mac → watch the next
-07:00 renewal + first session. **USER DECISION 2026-07-10: set
-`PAPER_AUTO_APPROVE=1` in the VM's `.env` at deploy** (the switch means
-nothing on the Mac — the VM is the engine, decision #47). Consequence to
-expect: proposals auto-journal as APPROVED and the `/pending` queue stays
-empty by design; the human role shifts from Approve/Reject to monitoring,
-and the margin gate + persisted cooldown (Phase 1/2) become the only
-brakes. Flip it back to off by deleting the line and restarting
-`alpha-trading` — it is re-read per call, no code change.
+**Weekend deploy checklist (user-approved timeline, target Sun 07-12,
+live Mon 07-13 09:10 IST):** push the 12 commits → VM `git pull` +
+`pip install -r requirements.txt` + restart services (markets closed all
+weekend, restart freely) → **token endgame, order matters** (per the
+INTERIM STATE note in `docs/token_renewal_cadence.md`): the retry-hardened
+`renew_token` is now deployed, so re-enable the 07:00 user renewal
+(uncomment the crontab line tagged `#DISABLED-2026-07-10-hotfix`) and
+THEN remove root's interim `30 6,18` cron (backups:
+`~/root_crontab.bak-20260710-152339`, `~/user_crontab.bak-20260710-152339`)
+→ re-run `scripts/setup_cron.sh` (adds the report card; asserts IST) →
+restart the Discord bot (`/positions` registers) → verify the dashboard
+through the gateway at `/dashboard?api_key=<API_KEY>` (query-param auth is
+how the SSE stream authenticates) → optionally `bash
+scripts/install_evolution_agent.sh` on the Mac and set up
+`scripts/pull_snapshot_from_vm.sh` for Mac-side live marks → watch
+Sunday 18:30 (or next) renewal run on new code + Monday's first session,
+especially past 12:00 (the old blinding hour — closes ledger Issue 10).
+**USER DECISION 2026-07-10: set `PAPER_AUTO_APPROVE=1` in the VM's `.env`
+at deploy** (the switch means nothing on the Mac — the VM is the engine,
+decision #47). Consequence to expect: proposals auto-journal as APPROVED
+and the `/pending` queue stays empty by design; the human role shifts
+from Approve/Reject to monitoring, and the margin gate + persisted
+cooldown (Phase 1/2) become the only brakes (note: no concentration/
+duplicate-exposure check exists — review flagged this as the one judgment
+the human gate used to supply). Flip it back off by deleting the line and
+restarting `alpha-trading` — it is re-read per call, no code change.
 
 ## ✅ Regime-Aware Memory — BUILT AND TESTED; skeptic hypothesis honestly NOT confirmed (2026-07-09)
 

@@ -19,6 +19,13 @@
 #   8. src.ingestion.deals_tracker: 19:30 IST daily (EOD bulk/block deals
 #                             pull; NSE publishes ~19:00, so this lands
 #                             after it and before the 20:00 sleep phase).
+#   9. src.ingestion.chain_archiver: 15:40 IST Mon-Fri (post-close option
+#                             chain capture — after master_scheduler
+#                             self-terminates at 15:30, so it never
+#                             contends for the single Dhan token).
+#  10. src.ingestion.daily_archiver: 19:45 IST daily (snapshot the
+#                             perishable news/macro artifacts into the
+#                             lake before the 20:00 sleep phase).
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -133,6 +140,16 @@ CRON_TZ=Asia/Kolkata
 #    the per-ticker net smart-money footprint, and writes data/bulk_deals.json.
 #    Advisory-only (decision #60), fails open, runs before the 20:00 sleep phase.
 30 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.deals_tracker >> "$REPO_ROOT/logs/deals_tracker.log" 2>&1
+
+# 9. EOD option-chain capture (Mon-Fri 15:40 IST) — the one dataset that is
+#    unbuyable later (decision #36: historical chains aren't retrievable).
+#    Runs AFTER the 15:30 scheduler self-termination: zero token contention.
+40 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.chain_archiver >> "$REPO_ROOT/logs/chain_archiver.log" 2>&1
+
+# 10. Perishable-artifact snapshots (Daily 19:45 IST) — news_sentiment.json
+#     and the macro matrix are overwritten/never persisted; archive each
+#     day's copy into the lake so cross-layer history accumulates.
+45 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.daily_archiver >> "$REPO_ROOT/logs/daily_archiver.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

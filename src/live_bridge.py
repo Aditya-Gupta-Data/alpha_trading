@@ -39,7 +39,7 @@ Run the live loop from the project folder:
 """
 
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from src import journal
 from src import plan_tracker as pt
@@ -118,6 +118,79 @@ class CandleAggregator:
 
     def last_price(self) -> float | None:
         return self._candles[-1]["close"] if self._candles else None
+
+
+class CandleSink:
+    """Phase-0 capture-forward tap: persists COMPLETED candles from the
+    aggregators into the lake (data/lake/candles/<slug>/date=.../). The
+    aggregator computed these all along and threw them away at session end
+    — and intraday high/low SEQUENCING is the known blind spot of the
+    tracker's daily-OHLC resolution, so this history is unbuyable later.
+
+    Honesty rules (#55): every row carries source="poll" — poll-sampled
+    candles are NOT true OHLC (highs/lows between polls never print) and
+    must never be mistaken for exchange candles; a missing bucket between
+    consecutive candles is recorded as an explicit gap row, never
+    interpolated. A candle is sealed (written once) only when a LATER
+    bucket has opened for that underlying. Fail-open: a lake failure never
+    touches the cycle. READ-ONLY on all trade state, like everything here."""
+
+    def __init__(self, lake_root=None, source: str = "poll"):
+        self.lake_root = lake_root
+        self.source = source
+        self._written = {}   # underlying -> set of sealed start-isoformats
+
+    @staticmethod
+    def _slug(underlying: str) -> str:
+        return "".join(ch if ch.isalnum() else "-"
+                       for ch in underlying.lower()).strip("-")
+
+    def observe(self, underlying: str, aggregator: "CandleAggregator") -> int:
+        """Seal + persist every completed candle not yet written. Returns
+        rows written (gap markers included). Never raises."""
+        try:
+            candles = aggregator.candles()
+            if len(candles) < 2:
+                return 0            # nothing completed yet
+            seen = self._written.setdefault(underlying, set())
+            width = timedelta(minutes=aggregator.minutes)
+            rows_by_day, prev_start = {}, None
+            for c in candles[:-1]:                 # last is still forming
+                start = c["start"]
+                key = start.isoformat()
+                if key in seen:
+                    prev_start = start
+                    continue
+                day = start.date().isoformat()
+                if prev_start is not None and start - prev_start > width:
+                    rows_by_day.setdefault(day, []).append({
+                        "type": "gap", "underlying": underlying,
+                        "after": prev_start.isoformat(),
+                        "before": key, "source": self.source,
+                    })
+                rows_by_day.setdefault(day, []).append({
+                    "type": "candle", "underlying": underlying,
+                    "start": key, "minutes": aggregator.minutes,
+                    "open": c["open"], "high": c["high"],
+                    "low": c["low"], "close": c["close"],
+                    "source": self.source,
+                })
+                seen.add(key)
+                prev_start = start
+            from src import lake
+            written = 0
+            for day, rows in rows_by_day.items():
+                written += lake.append_rows(
+                    f"candles/{self._slug(underlying)}", day, rows,
+                    root=self.lake_root)
+            return written
+        except Exception as exc:
+            print(f"  (candle sink: persist failed for {underlying} [{exc}])")
+            return 0
+
+    def observe_all(self, aggregators: dict) -> int:
+        return sum(self.observe(u, agg)
+                   for u, agg in (aggregators or {}).items())
 
 
 # --- ENTRY: the fetch_market_state drop-in -------------------------------
@@ -248,7 +321,8 @@ class AlertRegistry:
 def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                aggregators: dict = None, registry: AlertRegistry = None,
                notify_fn=None, now_fn=ist_now,
-               publish_snapshot: bool = False) -> list:
+               publish_snapshot: bool = False,
+               candle_sink: "CandleSink" = None) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
     push an advisory alert for each NEW exit signal. Returns the alerts
@@ -281,6 +355,11 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
             continue
         aggregators.setdefault(u, CandleAggregator()).ingest(packet)
         spots[u] = packet["price"]
+
+    # Phase-0 capture tap: seal + persist completed candles. Additive and
+    # fail-open — a None sink (offline tests, legacy callers) is a no-op.
+    if candle_sink is not None:
+        candle_sink.observe_all(aggregators)
 
     # Mark every open position ONCE, then reuse the list for both the
     # published snapshot and the alert scan below.
@@ -329,16 +408,19 @@ async def run_live_loop(underlyings=UNDERLYINGS,
     cycles. Advisory alerts only — nothing here executes or settles."""
     aggregators: dict = {}
     registry = AlertRegistry()
+    candle_sink = CandleSink()   # Phase-0 tap: sealed candles -> the lake
     print(f"[Live Bridge] armed — {', '.join(underlyings)} every "
           f"{interval:g}s during "
           f"{MARKET_OPEN:%H:%M}-{MARKET_CLOSE:%H:%M} IST "
-          f"({CANDLE_MINUTES}m candles; advisory exit alerts).", flush=True)
+          f"({CANDLE_MINUTES}m candles; advisory exit alerts; "
+          "candle capture -> lake).", flush=True)
     while True:
         try:
             fired = await asyncio.to_thread(
                 live_cycle, underlyings, quote_fn=quote_fn,
                 aggregators=aggregators, registry=registry,
-                notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True)
+                notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True,
+                candle_sink=candle_sink)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
                       f"({sig['capture_pct']:.0f}% capture).", flush=True)

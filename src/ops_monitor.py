@@ -60,6 +60,9 @@ EXPECTED_JOBS = {
     "suggest.log": True,             # Mon-Fri 08:00 IST
     "main.log": True,                # Mon-Fri 15:35 IST
     "master_scheduler.log": True,    # Mon-Fri 09:10 IST
+    "chain_archiver.log": True,      # Mon-Fri 15:40 IST (Phase-0 capture)
+    "deals_tracker.log": False,      # daily 19:30 IST (EOD bulk/block pull)
+    "daily_archiver.log": False,     # daily 19:45 IST (perishable snapshots)
 }
 
 
@@ -166,12 +169,71 @@ def record_problems(problems: list, when: str,
             f.write(json.dumps(dict(p, found=when)) + "\n")
 
 
-def build_card(problems: list, missing: list, when: str) -> str:
+def system_telemetry(meminfo_path: str = "/proc/meminfo",
+                     loadavg_path: str = "/proc/loadavg",
+                     disk_path: str = None) -> dict:
+    """Host resource readings for the health card (Phase-0 rule: the VM
+    resize is TRIGGER-gated, so pressure must be a measured fact on the
+    nightly card, not a vibe). Pure /proc + shutil reads; any missing
+    field reads None (e.g. on macOS) — never raises."""
+    out = {"mem_total_mb": None, "mem_available_mb": None, "mem_used_pct": None,
+           "swap_total_mb": None, "swap_used_mb": None,
+           "load_1m": None, "disk_free_gb": None, "disk_used_pct": None}
+    try:
+        fields = {}
+        for line in Path(meminfo_path).read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].endswith(":"):
+                fields[parts[0][:-1]] = int(parts[1])   # kB
+        if "MemTotal" in fields:
+            out["mem_total_mb"] = round(fields["MemTotal"] / 1024)
+        if "MemAvailable" in fields and fields.get("MemTotal"):
+            out["mem_available_mb"] = round(fields["MemAvailable"] / 1024)
+            out["mem_used_pct"] = round(
+                100 * (1 - fields["MemAvailable"] / fields["MemTotal"]))
+        if "SwapTotal" in fields:
+            out["swap_total_mb"] = round(fields["SwapTotal"] / 1024)
+            out["swap_used_mb"] = round(
+                (fields["SwapTotal"] - fields.get("SwapFree", 0)) / 1024)
+    except (OSError, ValueError):
+        pass
+    try:
+        out["load_1m"] = float(Path(loadavg_path).read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        import shutil
+        usage = shutil.disk_usage(disk_path or str(ROOT))
+        out["disk_free_gb"] = round(usage.free / 1e9, 1)
+        out["disk_used_pct"] = round(100 * usage.used / usage.total)
+    except OSError:
+        pass
+    return out
+
+
+def telemetry_line(t: dict) -> str:
+    """One human line for the card. Absent readings render as '?' — an
+    absent number is never faked."""
+    def fmt(v, suffix=""):
+        return f"{v}{suffix}" if v is not None else "?"
+    return (f"🖥 mem {fmt(t.get('mem_used_pct'), '%')} used "
+            f"({fmt(t.get('mem_available_mb'))}MB free) · "
+            f"swap {fmt(t.get('swap_used_mb'))}MB · "
+            f"load {fmt(t.get('load_1m'))} · "
+            f"disk {fmt(t.get('disk_free_gb'))}GB free "
+            f"({fmt(t.get('disk_used_pct'), '%')})")
+
+
+def build_card(problems: list, missing: list, when: str,
+               telemetry: dict = None) -> str:
     """The terse nightly health card."""
     total = sum(p["count"] for p in problems)
     if not problems and not missing:
-        return (f"✅ **Ops sweep {when}** — all jobs ran, "
+        card = (f"✅ **Ops sweep {when}** — all jobs ran, "
                 "no problem lines in any log.")
+        if telemetry:
+            card += "\n" + telemetry_line(telemetry)
+        return card
     lines = [f"🩺 **Ops sweep {when}** — {total} problem line(s), "
              f"{len(missing)} silent job(s):"]
     for m in missing:
@@ -182,6 +244,8 @@ def build_card(problems: list, missing: list, when: str) -> str:
     if len(problems) > MAX_CARD_PROBLEMS:
         lines.append(f"…and {len(problems) - MAX_CARD_PROBLEMS} more — "
                      "see logs/problems.jsonl")
+    if telemetry:
+        lines.append(telemetry_line(telemetry))
     return "\n".join(lines)
 
 
@@ -196,7 +260,8 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
     record_problems(problems, when, problems_path)
     _save_state(state_path, new_state)
 
-    card = build_card(problems, missing, when)
+    telemetry = system_telemetry()
+    card = build_card(problems, missing, when, telemetry=telemetry)
     print(card, flush=True)
     if notify_fn is None:
         def notify_fn(text):
@@ -213,7 +278,8 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
         print(f"  (ops card notify failed: {e})")
     return {"problem_lines": sum(p["count"] for p in problems),
             "distinct_problems": len(problems),
-            "silent_jobs": len(missing), "when": when}
+            "silent_jobs": len(missing), "when": when,
+            "telemetry": telemetry}
 
 
 if __name__ == "__main__":

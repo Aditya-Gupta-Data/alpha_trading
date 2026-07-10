@@ -118,11 +118,12 @@ async def send_discord_message(message: str, thread_id: str = None) -> bool:
 # ---- broadcast_alert: structured Discord embed notifications -------------
 # Colour palette for trade lifecycle events (Discord uses RGB as a decimal int).
 _COLOUR = {
-    "opened":       0x2ECC71,   # green  — new approved position
-    "closed":       0xE67E22,   # orange — default for closed (before verdict check)
-    "stop_loss":    0xE74C3C,   # red    — stop hit
-    "eod":          0x3498DB,   # blue   — end-of-day summary card
-    "wealth_sweep": 0xF1C40F,   # gold   — paper profit locked into GOLDBEES
+    "opened":           0x2ECC71,   # green  — new approved position
+    "closed":           0xE67E22,   # orange — default for closed (before verdict check)
+    "stop_loss":        0xE74C3C,   # red    — stop hit
+    "eod":              0x3498DB,   # blue   — end-of-day summary card
+    "wealth_sweep":     0xF1C40F,   # gold   — paper profit locked into GOLDBEES
+    "portfolio_report": 0x9B59B6,   # purple — intraday portfolio report card
 }
 _COLOUR_WIN  = 0x2ECC71   # green override: winning closed trade
 _COLOUR_LOSS = 0xE74C3C   # red override:   losing closed trade
@@ -160,11 +161,12 @@ def _build_embed(payload: dict) -> dict:
     today  = payload.get("date", "")
 
     titles = {
-        "opened":       f"🟢 Trade Opened — {ticker}",
-        "closed":       f"📊 Trade Closed — {ticker}",
-        "stop_loss":    f"🔴 Stop-Loss Hit — {ticker}",
-        "eod":          f"📋 End-of-Day Summary — {today}",
-        "wealth_sweep": f"🔒 Paper Wealth Sweep — {ticker}",
+        "opened":           f"🟢 Trade Opened — {ticker}",
+        "closed":           f"📊 Trade Closed — {ticker}",
+        "stop_loss":        f"🔴 Stop-Loss Hit — {ticker}",
+        "eod":              f"📋 End-of-Day Summary — {today}",
+        "wealth_sweep":     f"🔒 Paper Wealth Sweep — {ticker}",
+        "portfolio_report": f"🗂️ Portfolio Report Card — {payload.get('time', today)}",
     }
     title = titles.get(event, f"📌 {event.title()} — {ticker}")
 
@@ -207,8 +209,9 @@ def _build_embed(payload: dict) -> dict:
         if payload.get("short_id"):
             fields.append({"name": "Trade ID", "value": f"`{payload['short_id']}`", "inline": True})
 
-    elif event == "eod":
-        # EOD fields are pre-built by eod_summary.py and passed directly.
+    elif event in ("eod", "portfolio_report"):
+        # Fields are pre-built by the summary job (eod_summary.py /
+        # portfolio_report.py) and passed directly.
         fields = list(payload.get("fields") or [])
 
     elif event == "wealth_sweep":

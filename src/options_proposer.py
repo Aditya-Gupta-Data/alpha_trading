@@ -30,6 +30,7 @@ Run interactively from the project folder:
 Every data input is injectable so tests run fully offline.
 """
 
+import os
 from datetime import date, timedelta
 
 from src import journal
@@ -414,6 +415,29 @@ def _notify_discord(text: str) -> bool:
         return False
 
 
+AUTO_APPROVE_ENV_KEY = "PAPER_AUTO_APPROVE"
+AUTO_APPROVE_WHY = ("(auto-approved: PAPER_AUTO_APPROVE learning mode — "
+                    "paper journal only; no broker exists anywhere in this "
+                    "system, decision #11's no-execution rule untouched)")
+
+
+def paper_auto_approve_enabled() -> bool:
+    """True ONLY when PAPER_AUTO_APPROVE is explicitly truthy in the
+    environment/.env. Default is OFF: the human Approve/Reject gate
+    (decision #11's human-in-the-loop, reaffirmed by the Discord-ingestion
+    spec §3) stays exactly as it is unless the user deliberately flips
+    this switch to maximize learning data. Checked per call so a .env
+    change takes effect without a restart.
+
+    Physical isolation from real capital is structural, not conditional:
+    the ONLY thing an approval ever does in this codebase is journal a
+    paper decision and lock simulated margin — there is no broker client,
+    no order endpoint, no real-capital code path for this to reach
+    (dhan_client is data-only by hard rule)."""
+    return (os.environ.get(AUTO_APPROVE_ENV_KEY, "")
+            .strip().lower() in ("1", "true", "yes"))
+
+
 def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     """The market loop's entry point: build the proposal, fire the rich
     Discord alert, journal the entry as PENDING_APPROVAL, and return
@@ -425,8 +449,17 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
 
     Pending entries are tracked hypothetically like rejected ones (user's
     call): if nobody ever decides, the tracker still scores what the
-    setup would have done. Returns {"proposed": bool, "reason": str,
-    "entry": dict-or-None}."""
+    setup would have done.
+
+    PAPER_AUTO_APPROVE mode: when the env switch is on, the freshly
+    journaled pending entry is immediately decided through decide_pending
+    — the SAME code path a human tap takes, so the margin gate, the
+    journal rewrite, the Discord confirmation and the "opened" broadcast
+    all behave identically; only the finger on the button changes. The
+    entry's `why` carries the auto-approval marker for the audit trail.
+
+    Returns {"proposed": bool, "reason": str, "entry": dict-or-None,
+    "auto_approved": bool}."""
     state = dict(state or {})
     vol_overrides = state.pop("vol_overrides", {})
     bp_extras = {k: vol_overrides[k]
@@ -459,13 +492,33 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
         if not allowed:
             return {"proposed": False, "reason": gate_reason, "entry": None}
     journal.log(entry)
-    _notify_discord(_format_proposal_alert(
-        p, action_note=("auto-proposed by the market loop and journaled as "
-                        f"PENDING_APPROVAL (trade id `{entry['short_id']}`) — "
-                        "type `/pending` here for Approve/Reject buttons, or "
-                        "run `python3 -m src.options_proposer "
-                        "--review-pending` in a terminal (paper only).")))
-    return {"proposed": True, "reason": "ok", "entry": entry}
+    auto_mode = paper_auto_approve_enabled()
+    if auto_mode:
+        action_note = ("auto-proposed by the market loop — PAPER_AUTO_APPROVE "
+                       f"is ON, so trade id `{entry['short_id']}` is being "
+                       "journaled as APPROVED automatically (paper only; the "
+                       "plan tracker manages the exit).")
+    else:
+        action_note = ("auto-proposed by the market loop and journaled as "
+                       f"PENDING_APPROVAL (trade id `{entry['short_id']}`) — "
+                       "type `/pending` here for Approve/Reject buttons, or "
+                       "run `python3 -m src.options_proposer "
+                       "--review-pending` in a terminal (paper only).")
+    _notify_discord(_format_proposal_alert(p, action_note=action_note))
+    if auto_mode:
+        verdict = decide_pending(entry["short_id"], approve=True,
+                                 why=AUTO_APPROVE_WHY)
+        if verdict["status"] == "approved":
+            return {"proposed": True, "reason": "ok (auto-approved)",
+                    "entry": verdict["entry"], "auto_approved": True}
+        # margin_blocked etc. — the entry stays pending for a human; report
+        # honestly instead of pretending the auto-approval happened.
+        return {"proposed": True,
+                "reason": f"proposed; auto-approval declined "
+                          f"({verdict.get('reason', verdict['status'])})",
+                "entry": entry, "auto_approved": False}
+    return {"proposed": True, "reason": "ok", "entry": entry,
+            "auto_approved": False}
 
 
 def run_session(underlying: str = "NIFTY 50") -> None:

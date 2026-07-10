@@ -6,10 +6,22 @@
 # trading background tasks at their exact scheduled Indian Standard Times (IST).
 #
 # Schedules:
-#   1. src.renew_token: 07:00 IST daily
-#   2. src.main:        15:35 IST (Mon-Fri)
-#   3. src.suggest:     08:00 IST (Mon-Fri)
-#   4. src.sleep_phase: 20:00 IST daily (off-market Brain Map memory pass)
+#   1. src.renew_token:       07:00 IST daily (THE ONLY token renewal — see below)
+#   2. src.main:              15:35 IST (Mon-Fri)
+#   3. src.suggest:           08:00 IST (Mon-Fri)
+#   4. src.sleep_phase:       20:00 IST daily (off-market Brain Map memory pass)
+#   5. src.master_scheduler:  09:10 IST (Mon-Fri)
+#   6. src.ops_monitor:       20:30 IST daily
+#   7. src.portfolio_report:  every 2h (posts only during market hours —
+#                             the script self-gates; off-hours runs exit
+#                             quietly). Fires at even hours, so it can
+#                             NEVER collide with the 07:00 renewal slot.
+#   8. src.evolution:         Saturday 02:00 IST (off-market, off-renewal).
+#                             Needs a local Ollama server: on the Mac it
+#                             runs the full Analyst/Critic dialectic; on a
+#                             machine without Ollama (the VM) the critic
+#                             gate fails CLOSED and the run is a no-op
+#                             that mutates nothing (decision #49).
 #
 # Note on #4: the sleep phase needs the machine that holds data/journal.jsonl,
 # data/brain_map.db AND a running Ollama server (Phase 10B). On a machine
@@ -110,6 +122,16 @@ CRON_TZ=Asia/Kolkata
 
 # 6. Nightly ops sweep — log problems + job heartbeats -> Discord health card
 30 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ops_monitor >> "$REPO_ROOT/logs/ops_monitor.log" 2>&1
+
+# 7. Portfolio report card — cron fires every 2h; the SCRIPT only posts
+#    during NSE market hours (Mon-Fri 09:15-15:30 IST) and exits quietly
+#    otherwise. Even-hour slots never touch the 07:00 renewal minute.
+0 */2 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.portfolio_report >> "$REPO_ROOT/logs/portfolio_report.log" 2>&1
+
+# 8. Procedural Evolution — weekly, Saturday 02:00 IST (market closed, far
+#    from the renewal slot). Whitelisted-parameter mutations only, critic
+#    gate fails closed; without a local Ollama (the VM) it no-ops.
+0 2 * * 6 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.evolution >> "$REPO_ROOT/logs/evolution.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

@@ -487,6 +487,23 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     from src.confluence.evidence import capture_for_entry
     capture_for_entry(entry, underlying, analysis=state.get("analysis"),
                       vix=state.get("vix"))
+    # Phase 2 (§5.3): the decision receipt — the WHY-context that isn't
+    # otherwise journaled, frozen at proposal time so a human (or a future
+    # session) can reconstruct this firing without re-deriving anything.
+    # Additive key, fail-open like the stamp.
+    try:
+        entry["receipt"] = {
+            "underlying": underlying,
+            "vix": state.get("vix"),
+            "analysis": {k: (state.get("analysis") or {}).get(k)
+                         for k in ("uptrend", "fresh_cross", "rsi", "price")},
+            "vol_overrides": dict(vol_overrides) if vol_overrides else {},
+            "book": "sandbox" if "book" in state else "real",
+            "memory_context": p.get("memory_context") or "",
+            "skeptic_note": p.get("skeptic_note") or "",
+        }
+    except Exception:
+        pass
     # Phase 6G: the capital layer's strict entry guard — lock the SPAN
     # margin against the Rs.10L account pool, or reject SILENTLY (no
     # journal line, no Discord alert; the manager logs the exhaustion/halt

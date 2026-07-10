@@ -47,7 +47,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import (FileResponse, JSONResponse,
+                               StreamingResponse)
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -1013,3 +1014,141 @@ def dashboard():
         return FileResponse(index)
     return JSONResponse({"status": "ok", "note": "No static dashboard bundled; "
                          "use the Bun frontend against this API."})
+
+
+# --- Phase 6 scratchpad: the event-driven positions dashboard ---------------
+#
+# A single-file dark-terminal dashboard (src/web/static/dashboard.html)
+# with a strict anti-polling contract: the browser fetches ONLY on page
+# load, on the manual refresh button, or when the server-sent-events
+# stream below says engine state actually changed. Nothing in the
+# frontend runs on a timer.
+#
+# Read-only by construction: positions come from data/journal.jsonl (a
+# file read — SQLite is never involved), exposure comes through
+# portfolio_report.read_exposure()'s mode=ro connection, and the SSE
+# watcher stats file mtimes (microseconds, no locks). The engine cannot
+# be contended by any number of open dashboards.
+
+def _dashboard_watch_paths() -> list:
+    """The files whose mtime means 'engine state changed': the journal
+    (every proposal/decision/resolution rewrites it) and the master
+    scheduler's log (every 15-minute cycle appends). Both cover
+    Mechanism B's 'scheduler completed a cycle or executed a trade'
+    without any cross-process plumbing."""
+    from src.journal import JOURNAL_PATH
+    root = Path(__file__).resolve().parent.parent
+    return [JOURNAL_PATH, root / "logs" / "master_scheduler.log"]
+
+
+def _dashboard_state_snapshot(paths: list = None) -> dict:
+    """{path: mtime_ns} for every watched file (0 when absent)."""
+    snapshot = {}
+    for p in (paths if paths is not None else _dashboard_watch_paths()):
+        try:
+            snapshot[str(p)] = p.stat().st_mtime_ns
+        except OSError:
+            snapshot[str(p)] = 0
+    return snapshot
+
+
+async def _dashboard_event_stream(poll_seconds: float = 5.0,
+                                  max_events: int = None,
+                                  paths: list = None):
+    """SSE generator: one 'connected' event immediately, then a 'changed'
+    event whenever a watched file's mtime moves, and a keepalive comment
+    (ignored by EventSource) roughly every 30s of silence so tunnels
+    don't drop the idle stream. Server-side stat-watching only — the
+    CLIENT never polls anything. `max_events`/`poll_seconds`/`paths` are
+    injectable so tests run offline in milliseconds."""
+    import asyncio
+    import json as _json
+
+    def _event(kind: str) -> str:
+        payload = _json.dumps({"event": kind,
+                               "at": datetime.now().isoformat(timespec="seconds")})
+        return f"data: {payload}\n\n"
+
+    emitted = 0
+    # Baseline BEFORE the first yield: an async generator suspends at
+    # yield, so snapshotting after it would silently swallow any change
+    # that lands between 'connected' and the first poll.
+    last = _dashboard_state_snapshot(paths)
+    yield _event("connected")
+    emitted += 1
+    quiet_cycles = 0
+    while max_events is None or emitted < max_events:
+        await asyncio.sleep(poll_seconds)
+        current = _dashboard_state_snapshot(paths)
+        if current != last:
+            last = current
+            quiet_cycles = 0
+            yield _event("changed")
+            emitted += 1
+        else:
+            quiet_cycles += 1
+            if quiet_cycles * poll_seconds >= 30:
+                quiet_cycles = 0
+                yield ": keepalive\n\n"
+
+
+@app.get("/api/web/positions")
+def web_positions():
+    """The dashboard's read model: every open paper position (same
+    journal predicates as /api/discord/positions), plus a best-effort
+    live P&L mark per position and the account exposure. Marks and
+    exposure are strictly optional — no token / closed market / missing
+    tables degrade to nulls, never to an error, and never touch SQLite
+    outside a mode=ro connection."""
+    from src.positions import active_positions
+    positions = active_positions()
+
+    marks = {}
+    try:
+        from src.dhan_guard import SafeDhanClient
+        from src.portfolio_report import _open_entries, mark_positions
+        spreads, equities = _open_entries()
+        marked = mark_positions(spreads, equities,
+                                SafeDhanClient().get_live_price)
+        marks = {m["short_id"]: m for m in marked}
+    except Exception as e:
+        print(f"  (dashboard: live marks unavailable: {e})")
+
+    for p in positions:
+        m = marks.get(p["trade_id"])
+        p["live_pnl_rs"] = m["live_pnl_rs"] if m else None
+        p["live_detail"] = m["detail"] if m else None
+
+    exposure = None
+    try:
+        from src.portfolio_report import read_exposure
+        exposure = read_exposure()
+    except Exception as e:
+        print(f"  (dashboard: exposure unavailable: {e})")
+
+    return {"ok": True,
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "positions": positions,
+            "exposure": exposure}
+
+
+@app.get("/api/web/events")
+async def web_events():
+    """Server-Sent Events: tells connected dashboards WHEN to refetch
+    (Mechanism B). EventSource reconnects automatically on drops."""
+    return StreamingResponse(
+        _dashboard_event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/dashboard")
+def positions_dashboard():
+    """The Phase 6 single-file dashboard. Localhost-dev friendly; behind
+    the Phase 9 gateway it stays fail-closed like every other route."""
+    page = STATIC_DIR / "dashboard.html"
+    if page.exists():
+        return FileResponse(page)
+    return JSONResponse(status_code=404,
+                        content={"ok": False,
+                                 "error": "dashboard.html not bundled"})

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADiTrader — Open Positions</title>
+<style>
+  /* Dark terminal aesthetic — no frameworks, no build step. */
+  :root {
+    --bg: #0b0f0c;
+    --panel: #10161200;
+    --grid: #1e2a20;
+    --text: #c8e6c9;
+    --dim: #6b8f6e;
+    --accent: #4ade80;
+    --red: #f87171;
+    --amber: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--text);
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 14px; line-height: 1.5;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--grid); padding-bottom: 12px;
+  }
+  h1 { font-size: 16px; margin: 0; letter-spacing: 1px; color: var(--accent); }
+  h1::before { content: "▮ "; }
+  .badge { color: var(--dim); font-size: 12px; }
+  #conn {
+    font-size: 12px; padding: 1px 8px; border: 1px solid var(--grid);
+    border-radius: 3px; color: var(--dim);
+  }
+  #conn.live { color: var(--accent); border-color: var(--accent); }
+  #conn.down { color: var(--red); border-color: var(--red); }
+  #refresh {
+    margin-left: auto; cursor: pointer;
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 3px;
+    font: inherit; font-size: 13px; padding: 4px 14px;
+  }
+  #refresh:hover { background: rgba(74, 222, 128, 0.12); }
+  #refresh:active { transform: translateY(1px); }
+  #asof { color: var(--dim); font-size: 12px; }
+  #table-wrap { overflow-x: auto; margin-top: 18px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td {
+    text-align: left; padding: 7px 12px;
+    border-bottom: 1px solid var(--grid); white-space: nowrap;
+  }
+  th {
+    color: var(--dim); font-weight: normal; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  td.num, th.num { text-align: right; }
+  .pnl-pos { color: var(--accent); }
+  .pnl-neg { color: var(--red); }
+  .pnl-na { color: var(--dim); }
+  .strategy { color: var(--dim); }
+  .detail { color: var(--dim); font-size: 12px; }
+  #empty, #error {
+    margin-top: 24px; color: var(--dim); display: none;
+  }
+  #error { color: var(--red); }
+  footer {
+    margin-top: 20px; padding-top: 12px;
+    border-top: 1px solid var(--grid);
+    color: var(--dim); font-size: 12px;
+    display: flex; gap: 24px; flex-wrap: wrap;
+  }
+  #exposure { color: var(--amber); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ADiTrader</h1>
+  <span class="badge">open paper positions — read-only</span>
+  <span id="conn">connecting…</span>
+  <span id="asof"></span>
+  <button id="refresh" type="button">Manual Status Check ⟳</button>
+</header>
+
+<div id="table-wrap">
+<table id="positions" aria-live="polite">
+  <thead>
+    <tr>
+      <th>Symbol</th><th>Strategy</th>
+      <th class="num">Entry</th><th class="num">Target</th>
+      <th class="num">Stop</th><th class="num">Live P&amp;L</th>
+      <th>In Trade</th><th>Expiry</th><th>ID</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+</div>
+<div id="empty">No open paper positions — everything is settled.</div>
+<div id="error"></div>
+
+<footer>
+  <span id="exposure"></span>
+  <span id="count"></span>
+  <span>updates: manual button + server-sent events only — this page never polls</span>
+</footer>
+
+<script>
+/* Anti-polling contract: fetches happen on (1) page load, (2) the manual
+   button, (3) a server-sent "changed" event. There is deliberately no
+   timer of any kind in this file — the server watches engine state and
+   tells us when reality moved. */
+"use strict";
+
+const tbody = document.querySelector("#positions tbody");
+const conn = document.getElementById("conn");
+const asof = document.getElementById("asof");
+const emptyMsg = document.getElementById("empty");
+const errorMsg = document.getElementById("error");
+const exposureEl = document.getElementById("exposure");
+const countEl = document.getElementById("count");
+
+function rs(v, signed) {
+  if (v === null || v === undefined) return "–";
+  const num = Number(v).toLocaleString("en-IN",
+      {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return (signed && v > 0 ? "+" : "") + "₹" + num;
+}
+
+function targetCell(p) {
+  if (p.kind === "spread") return "max " + rs(p.max_profit_rs);
+  return rs(p.target);
+}
+
+function stopCell(p) {
+  if (p.kind === "spread") return "max −" + rs(p.max_loss_rs).replace("₹", "₹");
+  return rs(p.stop_loss);
+}
+
+function pnlCell(p) {
+  if (p.live_pnl_rs === null || p.live_pnl_rs === undefined) {
+    return '<span class="pnl-na">n/a</span>';
+  }
+  const cls = p.live_pnl_rs >= 0 ? "pnl-pos" : "pnl-neg";
+  const detail = p.live_detail
+      ? ' <span class="detail">(' + p.live_detail + ")</span>" : "";
+  return '<span class="' + cls + '">' + rs(p.live_pnl_rs, true) + "</span>" + detail;
+}
+
+function escapeHtml(s) {
+  return String(s ?? "–").replace(/[&<>"']/g,
+      c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function render(data) {
+  errorMsg.style.display = "none";
+  const positions = data.positions || [];
+  tbody.innerHTML = positions.map(p => `
+    <tr>
+      <td>${escapeHtml(p.ticker)}</td>
+      <td class="strategy">${escapeHtml((p.strategy || p.kind || "–").replace(/_/g, " "))}</td>
+      <td class="num">${rs(p.entry_price)}</td>
+      <td class="num">${targetCell(p)}</td>
+      <td class="num">${stopCell(p)}</td>
+      <td class="num">${pnlCell(p)}</td>
+      <td>${p.days_in_trade !== null && p.days_in_trade !== undefined ? p.days_in_trade + "d" : "–"}</td>
+      <td>${escapeHtml(p.expiry || "–")}</td>
+      <td class="detail">${escapeHtml(p.trade_id)}</td>
+    </tr>`).join("");
+  emptyMsg.style.display = positions.length ? "none" : "block";
+  countEl.textContent = positions.length + " open position(s), paper only";
+  asof.textContent = "as of " + (data.as_of || "?");
+  const e = data.exposure;
+  exposureEl.textContent = e
+      ? "exposure: " + rs(e.locked_margin_rs) + " locked of " + rs(e.equity_rs)
+        + (e.exposure_pct !== null ? " (" + e.exposure_pct.toFixed(1) + "%)" : "")
+      : "exposure: n/a";
+}
+
+async function refresh(reason) {
+  try {
+    const resp = await fetch("/api/web/positions", {cache: "no-store"});
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    render(await resp.json());
+  } catch (err) {
+    errorMsg.textContent = "fetch failed (" + err.message +
+        ") — is the API running? Retry with the button.";
+    errorMsg.style.display = "block";
+  }
+}
+
+document.getElementById("refresh").addEventListener("click",
+    () => refresh("manual"));
+
+/* Mechanism B: the server emits an event only when the journal or the
+   master scheduler's log actually changed. EventSource reconnects on
+   its own after drops — still not polling, the browser just listens. */
+const events = new EventSource("/api/web/events");
+events.onopen = () => { conn.textContent = "● live"; conn.className = "live"; };
+events.onerror = () => { conn.textContent = "● reconnecting"; conn.className = "down"; };
+events.onmessage = (e) => {
+  try {
+    const msg = JSON.parse(e.data);
+    if (msg.event === "changed") refresh("event");
+  } catch (_) { /* keepalives and comments are ignored */ }
+};
+
+refresh("load");
+</script>
+</body>
+</html>

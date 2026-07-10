@@ -268,3 +268,64 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
 - Issue numbering here is chronological-append, not the sequence the
   user quotes in chat — this "Issue 7" is what the user called the
   forecast/"Issue #3" report on 2026-07-09.
+
+---
+
+## Date: 2026-07-10
+
+### Context for triage (not an issue)
+- Today's two approved journal entries (`f0ae401e` NIFTY 50,
+  `2df15c4d` NIFTY BANK) carry `"why": "Test"` — confirmed with the
+  user this is an intentional label they're entering by hand during
+  the observation week, not a pipeline bug or default string. Noting
+  it here so a future triage pass doesn't misread it as a defect.
+
+### Issue 10 — 07:00 IST token renewal failed ("Invalid TOTP"); real cause is a second, undocumented renewal cron racing the documented one
+- **Symptom:** `logs/renew_token.log` (the officially documented
+  07:00 IST renewal job, per [[project_gcp_vm_deployment]]) shows a
+  failure this morning: `Token renewal failed: no token in Dhan's V2
+  reply — .env left untouched`, with Dhan's response `{"message":
+  "Invalid TOTP", "status": "error"}`.
+- **Root cause — CONFIRMED, two independent renewal crons exist on
+  the VM, not one:** (a) the documented user-crontab job, `0 7 * * *`
+  → `src.renew_token` → `logs/renew_token.log`; (b) a SEPARATE,
+  previously-undocumented **root** crontab entry
+  (`/var/spool/cron/crontabs/root`, file dated 2026-07-06 17:16 —
+  predates the observation week, evidently a leftover from initial
+  Phase 9 deployment that was never recorded in project memory)
+  running `src.renew_token.py` every 12h at local 00:00 and 12:00 IST
+  (`0 */12 * * *`; root's crontab has no `CRON_TZ` line, but the VM's
+  system timezone is now Asia/Kolkata per Issue 1's fix, so the
+  schedule resolves to IST wall-clock — confirmed via `timedatectl`
+  and a matching `journalctl` cron-fire entry at
+  `2026-07-09T18:30:01 UTC` = `00:00 IST`), logging to a separate file
+  (`~/renew.log`) and always chaining `systemctl restart alpha-trading`
+  after a successful mint. Both crons independently call the same Dhan
+  V2 PIN+TOTP mint endpoint against the same account. Confirmed via
+  `renew.log`: the root job's 00:00 IST run succeeded ("Token renewed
+  successfully. New expiry: 2026-07-10T12:00:02") — hours before the
+  documented 07:00 IST job ran and got rejected. The exact rejection
+  mechanism (TOTP single-use/replay window vs. Dhan-side lockout from
+  two callers sharing one TOTP secret) was NOT chased further —
+  deferred to triage.
+- **Impact:** none observed — `renew_token.py` fails closed (`.env`
+  left untouched on failure), and the token was already fresh from the
+  root job's midnight renewal, so the 07:00 failure never left a stale
+  token in place. Also confirmed: `systemctl restart alpha-trading`
+  only restarts the FastAPI gateway (`uvicorn src.api_server:app`,
+  verified via `ps` as a distinct PID from `master_scheduler`) — it
+  does NOT touch the trading loop process, so this does not carry
+  Issue 8's cooldown-reset risk. It would, however, cause a
+  few-second Discord-bridge/API outage if the 12:00 IST firing lands
+  mid-market-hours (09:15–15:30 IST) — worth a same-day watch, not
+  confirmed either way as of this writing (10:09 IST, before today's
+  12:00 firing).
+- **Resolution:** none this week (no-build boundary). Logged here for
+  triage.
+- **Follow-up:** triage should decide whether to (a) remove the
+  undocumented root cron now that it's identified, keeping only the
+  documented 07:00 IST path, or (b) formally adopt the 12h cadence and
+  retire the 07:00 one — but NOT keep both, since decision #48
+  established that any redundant renewal against the same Dhan account
+  races the other, and this morning's failure is consistent with
+  exactly that race.

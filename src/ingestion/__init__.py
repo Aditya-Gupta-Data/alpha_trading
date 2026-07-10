@@ -9,8 +9,12 @@ inputs for the knowledge graph:
                  live path and a strict fail-open local JSON fallback.
   news_parser    local-Ollama semantic parsing of headlines into a strict
                  five-key trading signal frame.
+  deals_tracker  end-of-day NSE bulk & block deals folded into a per-ticker
+                 smart-money footprint (net buy/sell, marquee-investor
+                 tagging), with an NSE live path and a fail-open snapshot.
 
 Everything here is advisory-input plumbing: nothing in this package
 places, modifies, or proposes trades, and nothing writes to
-brain_map.db, the journal, or any live state.
+brain_map.db, the journal, or any live state. The only file any of these
+writes is its own advisory snapshot under data/ (e.g. bulk_deals.json).
 """

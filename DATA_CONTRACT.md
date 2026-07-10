@@ -266,6 +266,33 @@ context only, never part of `score`.
 }
 ```
 
+### 2.7 Bulk & block deals footprint — `data/bulk_deals.json`
+End-of-day smart-money footprint, written by `src/ingestion/deals_tracker.py`
+(decision #60). NSE bulk/block deals aggregated per ticker; advisory only,
+never part of any trade decision yet.
+```json
+{
+  "as_of": "2026-07-10",                 // IST date of the report
+  "source": "nse",                       // "nse" (live) | "snapshot" (local fallback) | "none"
+  "entries": {
+    "RELIANCE.NS": {
+      "net_qty": 10000,                  // Σ(buy qty − sell qty), signed; the footprint
+      "net_value_rs": 29000000.0,        // signed notional (net_qty-weighted), rupees
+      "buy_deals": 1,                    // disclosed buy-side legs
+      "sell_deals": 1,                   // disclosed sell-side legs
+      "block_deal": true,                // any block-window deal touched the name
+      "marquee_names": ["SBI Mutual Fund A/C X"],  // curated names seen (config/deals_watchlist.json)
+      "marquee_net": "accumulating"      // "accumulating" | "distributing" | "mixed" | "none"
+    }
+  }
+}
+```
+`source: "none"` with empty `entries` is the honest no-data day (no
+network, no snapshot) — never a guess. Consumers read it via
+`deals_tracker.load_deals()`, which degrades to `{}` on any problem. The
+hand-editable fallback input is `data/bulk_deals_snapshot.json` (a bare
+list of raw NSE-shaped deal rows, or `{"deals": [...]}`).
+
 ### 2.6 Coming later (do not build against yet)
 `data/brain_map.db` (SQLite, Phase 6 macro-event memory) — schema is still
 being designed; it will be exposed only through backend endpoints, never

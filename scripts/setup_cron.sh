@@ -16,6 +16,9 @@
 #                             the script self-gates; off-hours runs exit
 #                             quietly). Fires at even hours, so it can
 #                             NEVER collide with the 07:00 renewal slot.
+#   8. src.ingestion.deals_tracker: 19:30 IST daily (EOD bulk/block deals
+#                             pull; NSE publishes ~19:00, so this lands
+#                             after it and before the 20:00 sleep phase).
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -124,6 +127,12 @@ CRON_TZ=Asia/Kolkata
 #    during NSE market hours (Mon-Fri 09:15-15:30 IST) and exits quietly
 #    otherwise. Even-hour slots never touch the 07:00 renewal minute.
 0 */2 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.portfolio_report >> "$REPO_ROOT/logs/portfolio_report.log" 2>&1
+
+# 8. EOD bulk & block deals footprint (Daily at 19:30 IST). NSE publishes
+#    the large-deal report after close (~19:00); this pulls it, aggregates
+#    the per-ticker net smart-money footprint, and writes data/bulk_deals.json.
+#    Advisory-only (decision #60), fails open, runs before the 20:00 sleep phase.
+30 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.deals_tracker >> "$REPO_ROOT/logs/deals_tracker.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

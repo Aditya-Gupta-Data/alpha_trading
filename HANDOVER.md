@@ -6,6 +6,59 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## 🟡 OBSERVATION-WEEK SCRATCHPAD BUILD, PHASES 1–5 — BUILT + TESTED LOCALLY, **NOT DEPLOYED** (2026-07-10)
+
+**The single most important fact for a cold session: five local commits
+(`dfcdf9b` → `722d3ff`, "Local scratchpad build…") are UNPUSHED on the Mac's
+`main` — the VM still runs pre-scratchpad code with every bug these commits
+fix. Do not push/deploy before the observation-week triage (~2026-07-16),
+and never restart VM services mid-session (09:15–15:30 IST).** Suite went
+486 → **655 green**, all offline. What landed, by phase:
+
+1. **Self-healing token + Dhan hardening** — `src/token_provider.py` (live
+   .env re-read; Issue 5 fix) wired into `dhan_client._get_client`;
+   `renew_token` retries "Invalid TOTP" in the next TOTP window (Issue 10);
+   `setup_cron.sh` refuses non-IST hosts (Issue 1) and warns on duplicate
+   renewal crons; `src/dhan_guard.py` `SafeDhanClient` (classified DH-9xx
+   errors, audit trail); in-place double-nest fixes for
+   `get_daily_ohlc`/`get_quote`; single-renewal-cadence decision doc at
+   `docs/token_renewal_cadence.md` (root cron removal = deploy-day step).
+2. **Visibility + cooldown persistence** — `src/positions.py` +
+   `python3 -m src.view_positions` (read-only open-positions table);
+   gateway `GET /api/discord/positions` + bot `/positions` embed; journal
+   entries stamp `created_at` (IST) and `CooldownRegistry.seed_from_journal`
+   rebuilds cooldowns across restarts (Issue 8 fix); `/analyze`'s lying
+   "Yahoo Finance" string fixed (Issue 7); Ollama-offline logged once
+   quietly (Issue 4); edge miner `extractor_ready()` end-to-end probe —
+   no more "ok" from a dead extractor (Issue 9).
+3. **MFE/MAE expectancy surface** — `src/calibration/mfe_mae_analyzer.py`
+   (spec §3.1/§3.2): journal + simulated_trades sources (read-only
+   `mode=ro`), one bar-fetch per ticker via SafeDhanClient, winner-based
+   Apex TP/SL suggestion with a 20-trade abstention floor; advisory only.
+   First real run needs a valid token (VM, post-deploy).
+4. **Auto-approve gate + report card** — `PAPER_AUTO_APPROVE` env switch
+   (**default OFF**; when on, headless proposals approve through the same
+   `decide_pending` path a human tap takes — decision #53);
+   `src/portfolio_report.py` 2-hourly read-only Discord book snapshot
+   (cron `0 */2`, self-gates to market hours).
+5. **Threat mitigation** — `dhan_guard` freshness guard (`StaleDataError`
+   when a 200-OK quote/chain is >60s old mid-session; off-hours and
+   untimestamped payloads pass); evolution anti-overfitting guards
+   (30-trade corpus floor + split-window stability → new verdict
+   `unstable_out_of_sample`); evolution scheduling moved OFF the VM cron
+   to a Mac LaunchAgent (`scripts/com.alphatrading.evolution.plist` +
+   `install_evolution_agent.sh`, Sat 02:00, pinned interpreter) — **not
+   yet loaded into launchd**, run the installer to activate.
+
+**Deploy-day checklist (triage):** push the 5 commits → VM `git pull` +
+`pip install -r requirements.txt` + restart services OFF-hours → remove
+root's duplicate renewal cron per `docs/token_renewal_cadence.md` (same
+session) → re-run `scripts/setup_cron.sh` (adds the report card; asserts
+IST) → restart the Discord bot (`/positions` registers) → optionally
+`bash scripts/install_evolution_agent.sh` on the Mac → watch the next
+07:00 renewal + first session. `PAPER_AUTO_APPROVE` stays off unless the
+user flips it deliberately.
+
 ## ✅ Regime-Aware Memory — BUILT AND TESTED; skeptic hypothesis honestly NOT confirmed (2026-07-09)
 
 Roadmap item #4. Every trade the learning stack remembers now carries the

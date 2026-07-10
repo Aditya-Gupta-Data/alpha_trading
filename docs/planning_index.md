@@ -14,20 +14,34 @@
 
 ## 1. What's confirmed to build FIRST — no gate, already approved
 
+> **STATUS UPDATE 2026-07-10: BOTH items below are BUILT AND TESTED
+> locally** (observation-week scratchpad build, commits `dfcdf9b`…
+> `722d3ff`, unpushed — see HANDOVER.md's top section for the full
+> five-phase inventory and the deploy-day checklist). So are several
+> items from §4's build order: the §4.2-adjacent MFE/MAE Apex analysis
+> (`src/calibration/mfe_mae_analyzer.py`) landed with its abstention
+> floor, and evolution gained the out-of-sample guards §3 of this file
+> asked for. Deployment (VM pull/restart, root-cron removal) waits for
+> the triage.
+
 These sit **above** everything else in this index. Agreed explicitly
 (see `project_alpha_trading_status` memory), because they hardened real
 failures the live system hit *today*, not speculative future features:
 
-1. **Self-healing token refresh** — the live session loads
+1. **Self-healing token refresh** ✅ BUILT — the live session loads
    `DHAN_ACCESS_TOKEN` once at startup and never re-reads `.env`; today's
    mid-session blackout happened because an external renewal (decision
    #48's single-token-per-account rule) invalidated the in-memory token
    with no recovery path but a manual restart. Fix: periodic re-read.
-2. **`dhan_client` response-shape audit** — the identical double-nesting
-   bug hit `get_expiry_list` and `get_option_chain` within minutes of
-   each other today (commits `5fe5647`, `e0dcfba`). Audit the remaining
-   parsers (`get_quote`, `get_ohlc_since`, `get_live_price`) for the same
-   latent issue; extend `tests/test_dhan_client.py`.
+   (Landed as `src/token_provider.py` + the `dhan_client` seam, plus the
+   TOTP-window renewal retry — decision #51.)
+2. **`dhan_client` response-shape audit** ✅ BUILT — the identical
+   double-nesting bug hit `get_expiry_list` and `get_option_chain` within
+   minutes of each other today (commits `5fe5647`, `e0dcfba`). Audit the
+   remaining parsers (`get_quote`, `get_ohlc_since`, `get_live_price`)
+   for the same latent issue; extend `tests/test_dhan_client.py`.
+   (Landed as in-place fixes + the `SafeDhanClient` audit wrapper with
+   the Phase 5 stale-data guard — decision #55.)
 
 Everything below this line is the *next* layer — real feature work, but
 strictly after #1–#2, and only once the observation-week triage clears

@@ -303,7 +303,8 @@ def accumulate_entity_affinity(conn, history: list = None, groups: dict = None,
                     conn, client, "concentrates_in", grp,
                     confidence_score=concentration,
                     context=f"{group_deals} deals; {int(concentration*100)}% concentration",
-                    valid_from=last_seen)
+                    valid_from=last_seen,
+                    source="affinity_projected")
                 edges += 1
         conn.commit()
 

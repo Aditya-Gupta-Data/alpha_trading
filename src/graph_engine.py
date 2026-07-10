@@ -81,12 +81,25 @@ def ensure_schema(conn) -> None:
         conn.execute("ALTER TABLE graph_edges ADD COLUMN invalid_at TEXT")
     if "decay_lambda" not in cols:
         conn.execute("ALTER TABLE graph_edges ADD COLUMN decay_lambda REAL")
+    if "source" not in cols:
+        # Provenance firewall (holy-grail plan §5.6): WHO wrote an edge
+        # decides what it may DO — only outcome_derived edges may ever feed
+        # vol_bridge's sizing signal; affinity projections and future miner
+        # edges are context, never risk. Backfill is deterministic: the
+        # only non-causal writer to date is entity_affinity's
+        # concentrates_in relation; everything else came from the Task-D
+        # causal writer / edge_miner (reviewed outcomes, decision #34).
+        conn.execute("ALTER TABLE graph_edges ADD COLUMN source TEXT")
+        conn.execute("UPDATE graph_edges SET source = 'affinity_projected' "
+                     "WHERE relation = 'concentrates_in' AND source IS NULL")
+        conn.execute("UPDATE graph_edges SET source = 'outcome_derived' "
+                     "WHERE source IS NULL")
     conn.commit()
 
 
 def add_edge(conn, source_node, relation, target_node,
              confidence_score=None, context=None, decay_lambda=None,
-             valid_from=None) -> None:
+             valid_from=None, source: str = "outcome_derived") -> None:
     """Write (or reinforce) one causal link. Idempotent on the
     (source, relation, target) triple: re-writing the same edge UPDATES its
     confidence/context instead of duplicating, so repeated Sleep-Phase runs
@@ -124,15 +137,17 @@ def add_edge(conn, source_node, relation, target_node,
         lambda_val = float(decay_lambda)
     conn.execute(
         "INSERT INTO graph_edges (source_node, relation, target_node, "
-        "confidence_score, context, valid_from, decay_lambda) VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "confidence_score, context, valid_from, decay_lambda, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (source_node, relation, target_node) DO UPDATE SET "
         "confidence_score = excluded.confidence_score, "
         "context = COALESCE(excluded.context, graph_edges.context), "
         "valid_from = excluded.valid_from, "
         f"decay_lambda = {lambda_sql}, "
+        "source = COALESCE(excluded.source, graph_edges.source), "
         "invalid_at = NULL",
         (source_node, relation, target_node, confidence_score, context,
-         now_str, lambda_val),
+         now_str, lambda_val, source or "outcome_derived"),
     )
     conn.commit()
 

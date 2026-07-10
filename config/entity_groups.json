@@ -1,0 +1,57 @@
+{
+  "_note": "Ticker -> promoter/business group mapping for the entity-affinity learning layer (src/knowledge_graph/entity_affinity.py). Each group lists its major LISTED entities as project '.NS' tickers. Used to detect when a trading entity concentrates its bulk/block-deal activity in one group (an inferred, public-data-only affinity) and to read that entity's net direction (accumulating vs distributing). Tickers not listed fall into 'UNGROUPED' and still accumulate per-ticker, just without group-level rollup. `client_aliases` maps a normalized client-name variant to a canonical name where the rule-based canonicalizer under-merges (e.g. two spellings of the same fund). Edit freely, no code change needed. This is NOT investment advice or a claim of actual ownership links — it is a grouping heuristic over public disclosures.",
+  "groups": {
+    "ADANI": [
+      "ADANIENT.NS", "ADANIPORTS.NS", "ADANIPOWER.NS", "ADANIGREEN.NS",
+      "ADANIENSOL.NS", "ATGL.NS", "AWL.NS", "ACC.NS", "AMBUJACEM.NS",
+      "NDTV.NS"
+    ],
+    "TATA": [
+      "TCS.NS", "TATAMOTORS.NS", "TATASTEEL.NS", "TATAPOWER.NS", "TITAN.NS",
+      "TRENT.NS", "TATACONSUM.NS", "TATAELXSI.NS", "TATACOMM.NS",
+      "TATACHEM.NS", "VOLTAS.NS", "INDHOTEL.NS", "TATAINVEST.NS",
+      "TATATECH.NS", "NELCO.NS", "TRF.NS", "TINPLATE.NS"
+    ],
+    "RELIANCE": [
+      "RELIANCE.NS", "JIOFIN.NS", "NETWORK18.NS", "TV18BRDCST.NS",
+      "HATHWAY.NS", "DEN.NS"
+    ],
+    "BIRLA": [
+      "ULTRACEMCO.NS", "GRASIM.NS", "HINDALCO.NS", "ABCAPITAL.NS",
+      "ABFRL.NS", "NUVAMA.NS", "VODAFONEIDEA.NS", "IDEA.NS"
+    ],
+    "BAJAJ": [
+      "BAJFINANCE.NS", "BAJAJFINSV.NS", "BAJAJ-AUTO.NS", "BAJAJHLDNG.NS",
+      "BAJAJHFL.NS", "MUKANDLTD.NS"
+    ],
+    "MAHINDRA": [
+      "M&M.NS", "TECHM.NS", "MMFIN.NS", "MAHINDRA.NS", "MAHLIFE.NS",
+      "MHRIL.NS", "MAHSCOOTER.NS"
+    ],
+    "JINDAL": [
+      "JSWSTEEL.NS", "JSWENERGY.NS", "JINDALSTEL.NS", "JSWINFRA.NS",
+      "JSL.NS", "JSWHL.NS", "JINDALSAW.NS"
+    ],
+    "VEDANTA": [
+      "VEDL.NS", "HINDZINC.NS"
+    ],
+    "GODREJ": [
+      "GODREJCP.NS", "GODREJIND.NS", "GODREJPROP.NS", "GODREJAGRO.NS"
+    ],
+    "LT": [
+      "LT.NS", "LTIM.NS", "LTTS.NS", "LTF.NS", "LTFOODS.NS"
+    ],
+    "MURUGAPPA": [
+      "TIINDIA.NS", "CHOLAFIN.NS", "CHOLAHLDNG.NS", "CGCL.NS",
+      "COROMANDEL.NS", "EIDPARRY.NS", "CARBORUNIV.NS"
+    ],
+    "HINDUJA": [
+      "ASHOKLEY.NS", "HINDUJAGLOB.NS", "GOCLCORP.NS", "NXTDIGITAL.NS"
+    ],
+    "TVS": [
+      "TVSMOTOR.NS", "TVSHLTD.NS", "SUNDRMFAST.NS", "SUNDARMFIN.NS",
+      "TVSSCS.NS"
+    ]
+  },
+  "client_aliases": {}
+}

@@ -429,6 +429,19 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  E. evolution failed: {e}")
         results["evolution"] = None
+    try:
+        # Task F — Entity-Affinity accumulation (Phase 8): fold the raw
+        # bulk/block-deal history into the entity↔group affinity graph and
+        # refresh the advisory read-model. Pure DB + arithmetic, no LLM and
+        # no network, so it runs fully on the VM (like decay). Advisory
+        # only — writes to brain_map affinity tables + data/entity_affinity.json,
+        # never to portfolio/journal, and proposes no trades.
+        from src.knowledge_graph import entity_affinity
+        results["affinity"] = entity_affinity.run(conn=conn, today=today)
+        print(f"  F. entity affinity: {results['affinity']}")
+    except Exception as e:
+        print(f"  F. entity affinity failed: {e}")
+        results["affinity"] = None
 
     conn.close()
     return results

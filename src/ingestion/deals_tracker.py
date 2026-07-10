@@ -63,6 +63,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_PATH = ROOT / "data" / "bulk_deals.json"
 SNAPSHOT_PATH = ROOT / "data" / "bulk_deals_snapshot.json"
 WATCHLIST_PATH = ROOT / "config" / "deals_watchlist.json"
+# Append-only raw-deal ledger (one normalized deal per line, stamped with
+# the report date). The daily bulk_deals.json is an overwritten aggregate;
+# this file is the permanent per-deal history the entity-affinity learning
+# layer (src/knowledge_graph/entity_affinity.py) accumulates over months.
+HISTORY_PATH = ROOT / "data" / "deals_history.jsonl"
 
 # Python's urllib doesn't use the system CA store; certifi (already a
 # project dependency) makes the NSE HTTPS fetch verify cleanly everywhere.
@@ -343,6 +348,30 @@ def aggregate_deals(deals: list, marquee: list = None) -> dict:
 
 # ------------------------------------------------------------- build
 
+def _collect_deals(snapshot_path=None, watchlist_path=None,
+                   use_live: bool = True) -> tuple:
+    """Fetch + normalize the day's deals once. Returns (deals, wl, source):
+    the list of normalized deal dicts, the loaded watchlist, and the source
+    label. Live NSE first (Option A) when use_live; otherwise / on failure
+    the local snapshot (Option B); otherwise nothing. Shared by
+    build_deals_matrix (aggregate view) and run (aggregate + raw history)
+    so the fetch happens exactly once. No writes, no raises."""
+    wl = load_watchlist(watchlist_path)
+    raw_rows, source = None, "none"
+    if use_live:
+        raw_rows = _fetch_nse_largedeals()
+        if raw_rows is not None:
+            source = "nse"
+    if raw_rows is None:
+        raw_rows = _load_snapshot(snapshot_path)
+        source = "snapshot" if raw_rows else "none"
+    deals = [normalize_deal(r, wl["aliases"]) for r in raw_rows]
+    deals = [d for d in deals if d is not None]
+    if not deals:
+        source = "none"
+    return deals, wl, source
+
+
 def build_deals_matrix(snapshot_path=None, watchlist_path=None,
                        today: date = None, use_live: bool = True) -> dict:
     """The entry point: one advisory bulk/block-deals snapshot.
@@ -356,26 +385,69 @@ def build_deals_matrix(snapshot_path=None, watchlist_path=None,
     local snapshot (Option B); otherwise no entries. Pure aside from the
     two reads — no writes, no raises."""
     today = today or date.today()
-    wl = load_watchlist(watchlist_path)
-
-    raw_rows, source = None, "none"
-    if use_live:
-        raw_rows = _fetch_nse_largedeals()
-        if raw_rows is not None:
-            source = "nse"
-    if raw_rows is None:
-        raw_rows = _load_snapshot(snapshot_path)
-        source = "snapshot" if raw_rows else "none"
-
-    deals = [normalize_deal(r, wl["aliases"]) for r in raw_rows]
-    deals = [d for d in deals if d is not None]
-    if not deals:
-        source = "none"
+    deals, wl, source = _collect_deals(snapshot_path, watchlist_path, use_live)
     return {
         "as_of": today.isoformat(),
         "source": source,
         "entries": aggregate_deals(deals, wl["marquee"]),
     }
+
+
+def append_raw_deals(deals: list, as_of: str, path=None) -> int:
+    """Append the day's normalized deals to the raw history ledger, one JSON
+    line each stamped with `as_of`. Idempotent per DAY: if the ledger
+    already holds any row for `as_of`, this is a no-op (a re-run of the
+    same EOD pull must not double-count the concentration math downstream).
+    Returns the number of rows written (0 if the day was already present or
+    there were no deals). Never raises — a write/read failure is logged."""
+    if not deals:
+        return 0
+    path = Path(path) if path is not None else HISTORY_PATH
+    try:
+        # Day-level dedup: scan existing as_of values (cheap — the ledger is
+        # a few dozen rows/day) and skip if this date is already folded in.
+        if path.exists():
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    if json.loads(line).get("as_of") == as_of:
+                        return 0
+                except ValueError:
+                    continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            for deal in deals:
+                row = dict(deal)
+                row["as_of"] = as_of
+                f.write(json.dumps(row) + "\n")
+        return len(deals)
+    except OSError as exc:
+        print(f"  (deals tracker: could not append raw history {path} [{exc}])")
+        return 0
+
+
+def read_deal_history(path=None) -> list:
+    """The raw ledger -> a list of normalized deal rows (each carrying its
+    `as_of` date). A missing/broken ledger degrades to []. Malformed lines
+    are skipped, never fatal. Never raises — mirrors journal.read_all."""
+    path = Path(path) if path is not None else HISTORY_PATH
+    if not path.exists():
+        return []
+    rows = []
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        return []
+    return rows
 
 
 def load_deals(path=None) -> dict:
@@ -395,14 +467,20 @@ def load_deals(path=None) -> dict:
 
 
 def run(output_path=None, snapshot_path=None, watchlist_path=None,
-        use_live: bool = True) -> dict:
-    """Build the matrix and persist it to data/bulk_deals.json. The one
-    write in this module, and it's a self-owned advisory artifact (like
+        history_path=None, use_live: bool = True, today: date = None) -> dict:
+    """Fetch once, then persist BOTH artifacts: the overwritten daily
+    aggregate data/bulk_deals.json AND an append to the raw history ledger
+    data/deals_history.jsonl (the substrate the entity-affinity layer
+    learns from). Both are self-owned advisory files (like
     data/news_sentiment.json) — never portfolio/journal/brain_map. Returns
-    the matrix. A write failure is logged, not raised."""
-    matrix = build_deals_matrix(snapshot_path=snapshot_path,
-                                watchlist_path=watchlist_path,
-                                use_live=use_live)
+    the matrix. Any write failure is logged, not raised."""
+    today = today or date.today()
+    deals, wl, source = _collect_deals(snapshot_path, watchlist_path, use_live)
+    matrix = {
+        "as_of": today.isoformat(),
+        "source": source,
+        "entries": aggregate_deals(deals, wl["marquee"]),
+    }
     out = Path(output_path) if output_path is not None else OUTPUT_PATH
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -411,6 +489,10 @@ def run(output_path=None, snapshot_path=None, watchlist_path=None,
               f"[{matrix['source']}] -> {out})")
     except OSError as exc:
         print(f"  (deals tracker: could not write {out} [{exc}])")
+    written = append_raw_deals(deals, matrix["as_of"], path=history_path)
+    if written:
+        print(f"  (deals tracker: appended {written} raw deal(s) for "
+              f"{matrix['as_of']} -> history ledger)")
     return matrix
 
 

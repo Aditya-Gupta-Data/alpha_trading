@@ -200,9 +200,11 @@ def test_run_writes_snapshot_that_load_deals_reads_back():
         snap = Path(tmp) / "snap.json"
         snap.write_text(json.dumps([_bulk_row("LT", "FII", "BUY", 3000, 3500)]))
         out = Path(tmp) / "bulk_deals.json"
+        hist = Path(tmp) / "deals_history.jsonl"
         m = dt.run(output_path=out, snapshot_path=snap,
-                   watchlist_path=Path(tmp) / "no.json", use_live=False)
-        assert out.exists()
+                   watchlist_path=Path(tmp) / "no.json",
+                   history_path=hist, use_live=False)
+        assert out.exists() and hist.exists()   # both artifacts, temp paths only
         on_disk = json.loads(out.read_text())
         assert on_disk == m
         entries = dt.load_deals(out)

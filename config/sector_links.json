@@ -1,0 +1,42 @@
+{
+  "_note": "The owner's macro->sector links (captured 2026-07-10/11 night), seeded as hand-authored PRIORS for the Phase-3 sector macro layer (docs/HOLY_GRAIL_PLAN.md 6.3). Each link is a hypothesis the proving harness must validate from outcomes before it earns veto/scoring power — never trusted blindly (decision #50's lesson). direction_when_driver_rises: +1 = sector tailwind, -1 = headwind. Edit freely, no code change needed.",
+  "links": [
+    {
+      "driver": "CRUDE",
+      "sectors": ["OMC", "PAINTS", "AVIATION", "TYRES"],
+      "direction_when_driver_rises": -1,
+      "rationale": "India imports ~85% of its oil: rising crude squeezes oil-marketing margins, paint/tyre input costs, and aviation fuel bills; falling crude is their tailwind.",
+      "example_tickers": ["IOC.NS", "BPCL.NS", "HINDPETRO.NS", "ASIANPAINT.NS", "BERGEPAINT.NS", "INDIGO.NS", "MRF.NS", "APOLLOTYRE.NS"]
+    },
+    {
+      "driver": "USDINR",
+      "sectors": ["IT", "PHARMA"],
+      "direction_when_driver_rises": 1,
+      "rationale": "Rupee weakness inflates exporters' rupee earnings (IT services, pharma); rupee strength compresses them.",
+      "example_tickers": ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS"]
+    },
+    {
+      "driver": "RISK_OFF",
+      "driver_definition": "gold rising AND VIX rising together, or a broad market fall",
+      "sectors": ["FMCG"],
+      "direction_when_driver_rises": 1,
+      "rationale": "Owner's tell (2026-07-11): in a falling market institutional money doesn't exit, it ROTATES - FMCG is the defensive parking lot ('the liquid amounts have to be invested somewhere'). Two-sided: risk-off = FMCG relative strength / inflow; risk appetite returning = rotation back OUT of FMCG into cyclicals is itself a signal.",
+      "example_tickers": ["HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS", "BRITANNIA.NS", "DABUR.NS", "MARICO.NS", "GODREJCP.NS", "TATACONSUM.NS", "COLPAL.NS"]
+    },
+    {
+      "driver": "RISK_OFF",
+      "sectors": ["AGGRESSIVE_LONGS"],
+      "direction_when_driver_rises": -1,
+      "rationale": "Gold+VIX rising together = regime caution on aggressive/high-beta long setups (the veto side of the same rotation).",
+      "example_tickers": []
+    },
+    {
+      "driver": "US_OVERNIGHT",
+      "driver_definition": "US close direction + GIFT-Nifty gap indication",
+      "sectors": ["INDEX_OPEN_PLAYBOOK"],
+      "direction_when_driver_rises": 1,
+      "rationale": "US overnight moves + GIFT Nifty set the open; certain setups only work on gap-up vs gap-down days - a per-setup conditioning variable, not a sector rotation.",
+      "example_tickers": ["NIFTY 50", "NIFTY BANK"]
+    }
+  ]
+}

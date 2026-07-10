@@ -395,10 +395,16 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   deliberately NOT restarted (~15 min to close, defined-risk spreads);
   it self-terminates at 15:30 by design and tomorrow's 09:10 launch
   reads the valid on-disk token.
-- **Follow-up:** (a) verify the rescheduled cron's first firing at
-  18:30 IST today (`~/renew.log` should show a fresh mint + expiry
-  ~2026-07-11T18:30) and a clean full session tomorrow with NO
-  "no market state" runs after 12:00; (b) triage still owns the real
+- **Follow-up:** (a) ✅ VERIFIED 2026-07-10 ~20:35 IST — the rescheduled
+  cron's first firing at 18:30 IST succeeded: `~/renew.log` shows "Token
+  renewed successfully. New expiry: 2026-07-11T18:30:02", the `.env`
+  token decodes valid (~21h left), and `sudo crontab -l` confirms the
+  `30 6,18` schedule. (The Invalid TOTP that surfaced in tonight's 20:30
+  ops sweep is the 07:00 USER job from THIS MORNING — `logs/
+  renew_token.log` mtime 07:00:13 — now disabled, not a tonight failure;
+  the ops sweep scans `logs/*.log`, not root's `~/renew.log`, so it can't
+  see the successful 18:30 mint.) Still to watch: a clean full session
+  post-deploy with NO "no market state" runs after 12:00; (b) triage still owns the real
   fix — deploy the self-healing token re-read + renewal retry
   (scratchpad Phase 1), then restore the documented single-07:00
   cadence and remove the root cron per docs/token_renewal_cadence.md;

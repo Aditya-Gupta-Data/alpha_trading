@@ -63,6 +63,8 @@ EXPECTED_JOBS = {
     "chain_archiver.log": True,      # Mon-Fri 15:40 IST (Phase-0 capture)
     "deals_tracker.log": False,      # daily 19:30 IST (EOD bulk/block pull)
     "daily_archiver.log": False,     # daily 19:45 IST (perishable snapshots)
+    "earnings_calendar.log": False,  # daily 19:20 IST (results dates)
+    "flows_tracker.log": False,      # daily 19:35 IST (FII/DII cash flows)
 }
 
 

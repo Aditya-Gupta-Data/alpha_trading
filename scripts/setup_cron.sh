@@ -150,6 +150,14 @@ CRON_TZ=Asia/Kolkata
 #     and the macro matrix are overwritten/never persisted; archive each
 #     day's copy into the lake so cross-layer history accumulates.
 45 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.daily_archiver >> "$REPO_ROOT/logs/daily_archiver.log" 2>&1
+
+# 11. Earnings/results calendar (Daily 19:20 IST) — deterministic
+#     days_to_results feed; whole-calendar overwrite so postponements heal.
+20 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.earnings_calendar >> "$REPO_ROOT/logs/earnings_calendar.log" 2>&1
+
+# 12. FII/DII daily cash flows (Daily 19:35 IST) — who IS moving the
+#     indices; one row/day into data/ + the lake.
+35 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.flows_tracker >> "$REPO_ROOT/logs/flows_tracker.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

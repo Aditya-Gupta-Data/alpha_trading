@@ -17,6 +17,13 @@ cites it.
                       trade's entry) — the "early tell precedes the move"
                       shape both owner theses (H1/H2) turn on. No look-ahead
                       by construction (timelock-tested).
+  run_miners          the manual discovery-pass orchestrator: every miner
+                      × both corpora, one honest combined report.
+  strategy_evidence   the "check WHICH strategy" view — per-structure
+                      Wilson-bounded win-rates for a pattern, real/sim kept
+                      apart, a ≥5-real render floor, and a descriptive
+                      PREFER/ABSTAIN decided on the honest lower bound. The
+                      duel's read-only substrate, never the duel.
 
 Honesty rails (the panel): near-zero survivors on thin data is CORRECT,
 reported as such — never loosened to produce output. Miners consume only

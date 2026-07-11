@@ -49,6 +49,7 @@ def configured_floors(config_path=None) -> dict:
         "min_support_itemset": MIN_SUPPORT_ITEMSET,
         "min_support_sequence": MIN_SUPPORT_SEQUENCE,
         "min_affinity_episodes": MIN_AFFINITY_EPISODES,
+        "min_view_resolutions": MIN_VIEW_RESOLUTIONS,
         "fdr_q": FDR_Q,
     }
     path = Path(config_path) if config_path is not None else _CONFIG_PATH
@@ -62,6 +63,7 @@ def configured_floors(config_path=None) -> dict:
         "min_support_itemset": ("harness_min_support_itemset", int),
         "min_support_sequence": ("harness_min_support_sequence", int),
         "min_affinity_episodes": ("harness_min_affinity_episodes", int),
+        "min_view_resolutions": ("harness_min_view_resolutions", int),
         "fdr_q": ("harness_fdr_q", float),
     }
     for out_key, (cfg_key, cast) in key_map.items():
@@ -86,6 +88,11 @@ MIN_SUPPORT_SEQUENCE = 6
 MIN_PROMOTION_RESOLUTIONS = 7
 MIN_VALIDATION_N = 20
 MIN_AFFINITY_EPISODES = 6
+# The pattern×strategy evidence view (HOLY_GRAIL_PLAN §8.6) refuses to
+# render a strategy row below this many REAL resolutions — a 2-real
+# structure comparison is noise wearing a preference. Distinct from the
+# promotion floor: this only gates what the descriptive view SHOWS.
+MIN_VIEW_RESOLUTIONS = 5
 FDR_Q = 0.15
 
 # Journal-ref namespaces that are the system's own hypotheses/replays —

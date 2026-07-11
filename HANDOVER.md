@@ -6,6 +6,46 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## 🟢 HOLY-GRAIL PHASES 0–1 DONE + BACKFILL RUN; Sat 07:00 renewal VERIFIED; Monday 07-13 09:10 IST is the first live session (updated 2026-07-11 midday)
+
+**Sat 2026-07-11 session, on top of the overnight builds:** the two
+overnight PRs are merged and ON THE VM (PR #1 `84fe9c8`: data lake +
+Phase 0 capture jobs + Phase 1 backfill CLI/flows/earnings + Phase 2
+Evidence Snapshot substrate + provenance firewall; PR #2 `9e85b87`:
+knowledge-graph visualizer + Phase-3 macro→sector prior config). VM
+crontab now has 12 jobs — the 5 new capture crons (earnings 19:20,
+deals 19:30, flows 19:35, perishables 19:45 daily; chains 15:40
+Mon–Fri) fire for the FIRST time tonight — check their logs and
+`data/lake/` on the VM after 20:00 IST. Suite 805 green (one
+weekend-only test bug fixed: heartbeat test pinned to a fixed Monday).
+
+**The Phase 1 moat is REAL now:** the 3-year NSE bulk/block backfill
+ran clean from the Mac after fixing three NSE breakages found live
+(retired endpoints → `historicalOR`; JSON API silently truncates to
+~70 rows → must use `&csv=true`; homepage 403 would have aborted the
+daily pull's warm-up — all fixed in `4aac239`, regression-tested,
+ledger Issue 11). Result: **75,600 deals / 742 trading days
+(2023-07-11 → 2026-07-10, no gap before tonight's first daily pull),
+0 failed windows**, raw CSVs archived to the Mac's lake, JSONL shipped
+to the VM, and the VM's entity-affinity ingest folded all of it: 16
+`concentrates_in` edges across 6 promoter groups, each with its TRUE
+historical `valid_from` (as-of projection verified). Sleep-Phase Task
+F continues folding daily increments from here.
+
+**Sat 07:00 renewal (Issue 10 watch item (a)): VERIFIED WORKING** —
+cron fired, first attempt "Invalid TOTP", retry waited one TOTP window,
+minted clean (expiry 07-12T07:00). Remaining watch items: tonight's
+first capture-cron firings, Monday's first live session (clean
+afternoon past 12:00, auto-approve keeping `/pending` empty).
+
+**Next per HOLY_GRAIL_PLAN §12:** Phase 2 remainder — §5.2
+`daily_context` Market-Frame table, §5.3 decision receipts +
+`src.explain`, §5.4 timelock leakage tests, §5.5 T+1-open contract —
+then Phase 3 (composition law + supervision contract). Phase 1's
+gated sibling streams (delivery %, insider/SAST, shareholding) wait
+for flows to run clean 2+ weeks. §4.6 gap-playbook ids (US/GIFT via
+verified Dhan ids) also still open.
+
 ## 🟢 SCRATCHPAD PHASES 1–8 + REFINEMENT — DEPLOYED TO THE VM Fri 2026-07-10 ~21:45 IST AND SMOKE-TESTED; Monday 07-13 09:10 IST is the first live session (updated 2026-07-10 late night)
 
 **The single most important facts for a cold session: the deploy is

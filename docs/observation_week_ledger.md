@@ -444,3 +444,38 @@ confirmed mechanism, `Resolution` = what was actually done + commit ids,
   blinding hour) and the in-session token_provider re-read under a real
   mid-session mint; (c) auto-approve behaviour (`/pending` stays empty
   by design — proposals journal straight to APPROVED).
+
+### Issue 11 — FOUND AND FIXED 2026-07-11 ~11:30 IST: NSE deals fetch was broken three ways (caught on the first real backfill run)
+
+- **What happened:** the first 3-year deals backfill attempt
+  (HOLY_GRAIL Phase 1, run from the Mac) failed every window. Root
+  causes, each verified by hand against nseindia.com before fixing:
+  (1) the module's `/api/historical/{bulk,block}-deals` endpoints are
+  RETIRED — they now serve an HTML challenge page / plain 503 even to
+  a real browser fingerprint; the live endpoint is
+  `/api/historicalOR/bulk-block-short-deals?optionType=...`;
+  (2) that JSON API silently TRUNCATES every response to ~70 rows no
+  matter how small the from/to window (a 1-day window still capped) —
+  only the `&csv=true` download variant returns the complete window
+  (763 vs 74 rows over the same test week);
+  (3) NSE's homepage now 403s non-browser clients, and the daily
+  pull's cookie warm-up ran INSIDE the same try as the API call — the
+  403 would have aborted tonight's first VM 19:30 pull into snapshot
+  fallback even though the API answers fine without cookies.
+- **Fix (commit `4aac239`, deployed to the VM the same hour):**
+  historical fetch switched to the csv=true endpoint with era-tolerant
+  substring header mapping into the same `normalize_deal`; raw CSV
+  windows archived to the lake as `.csv`; homepage warm-up made
+  best-effort in the daily path; regression tests for all three.
+- **Verified outcome (not assumed):** full 3-year crawl then ran clean
+  from the Mac — 75,600 deals / 742 trading days spanning 2023-07-11
+  → 2026-07-10, 0 failed windows; JSONL shipped to the VM; VM's
+  entity-affinity ingest folded all 75,600 (742 new days) and
+  projected 16 `concentrates_in` edges across 6 linked promoter
+  groups, each carrying its true historical `valid_from` (as-of
+  projection working — no born-today lie on 2023 links).
+- **Also verified this morning (watch item (a) of Issue 10):** the Sat
+  07:00 IST cron-fired renewal on new code WORKED — first attempt got
+  "Invalid TOTP", the retry waited for the next TOTP window and minted
+  clean (expiry 2026-07-12T07:00). The retry hardening earned its keep
+  on its very first scheduled firing.

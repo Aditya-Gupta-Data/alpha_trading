@@ -108,9 +108,12 @@ def canonicalize_client(name, aliases: dict = None) -> str | None:
     # Punctuation (keep & and spaces) -> space; drop long digit runs (acct #s).
     s = re.sub(r"[^A-Z0-9& ]", " ", s)
     s = re.sub(r"\b\d{3,}\b", " ", s)
-    # Strip trailing legal tokens, then collapse whitespace.
+    # Strip trailing legal tokens, then collapse whitespace. A legal tail
+    # like "& CO PVT LTD" can leave a dangling connector ("BACHHRAJ &") —
+    # trim trailing/leading orphan '&' so one promoter vehicle doesn't
+    # fork across spellings.
     s = _LEGAL_TAIL.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s+", " ", s).strip().strip("&").strip()
     if not s:
         return None
     aliases = aliases or {}
@@ -260,8 +263,15 @@ def accumulate_entity_affinity(conn, history: list = None, groups: dict = None,
 
     ingested = {r["as_of"] for r in
                 conn.execute("SELECT as_of FROM entity_affinity_ingested")}
+    # TIMELOCK (as-of contract, holy-grail plan §5.4): rows dated after
+    # `today` are INVISIBLE to this fold — an as-of replay must produce
+    # byte-identical state whether or not the ledger already holds later
+    # days. Without this, a backfill replayed as-of a past date would
+    # leak the future into concentration stats.
+    horizon = today.isoformat()
     new_rows = [r for r in history
                 if isinstance(r, dict) and r.get("as_of")
+                and r["as_of"] <= horizon
                 and r["as_of"] not in ingested]
     if not new_rows:
         return {"folded": 0, "new_days": 0, "edges": 0}
@@ -326,13 +336,18 @@ def _classify_direction(buy: float, sell: float) -> str:
 
 
 def _recent_flows(history: list, aliases: dict, ttg: dict,
-                  cutoff: str) -> dict:
+                  cutoff: str, horizon: str = "9999-12-31") -> dict:
     """Per (client, group) recent buy/sell value+qty from deals on/after
-    cutoff (ISO date; lexical compare is valid for YYYY-MM-DD). Value-based
+    cutoff AND on/before horizon (ISO dates; lexical compare is valid for
+    YYYY-MM-DD). The horizon is the timelock upper bound — an as-of
+    readmodel must not see deals dated after its own day. Value-based
     where prices exist, qty as the fallback basis."""
     flows = {}
     for r in history:
-        if not isinstance(r, dict) or (r.get("as_of") or "") < cutoff:
+        if not isinstance(r, dict):
+            continue
+        day = r.get("as_of") or ""
+        if day < cutoff or day > horizon:
             continue
         client = canonicalize_client(r.get("client"), aliases)
         side, qty = r.get("side"), r.get("qty")
@@ -364,7 +379,8 @@ def build_affinity_readmodel(conn, groups: dict = None, history: list = None,
     ttg = groups["ticker_to_group"]
     aliases = groups["client_aliases"]
     cutoff = (today - timedelta(days=window_days)).isoformat()
-    recent = _recent_flows(history, aliases, ttg, cutoff)
+    recent = _recent_flows(history, aliases, ttg, cutoff,
+                           horizon=today.isoformat())
 
     # Every client with any named activity, and its top link.
     clients = [r["client"] for r in
@@ -447,10 +463,23 @@ def evaluate_distribution_signals(readmodel: dict, today: date = None) -> list:
     return advisories
 
 
-def log_affinity_advisories(payloads: list, path=None) -> Path:
+def _default_writes_muzzled() -> bool:
+    """True inside a test run (the decision-#43 muzzle rule, applied to
+    file artifacts): a test that didn't pass its OWN path must never write
+    the real data/logs artifacts — a suite run on the VM would otherwise
+    clobber the live read-model with test junk."""
+    import os
+    return bool(os.environ.get("PYTEST_CURRENT_TEST")
+                or os.environ.get("IS_TEST_ENV"))
+
+
+def log_affinity_advisories(payloads: list, path=None) -> Path | None:
     """Append advisory payloads to logs/affinity_advisories.jsonl (one JSON
     line each) — read by humans/dashboards only, never the execution loop.
-    Mirrors resonance.log_advisories. Returns the path."""
+    Mirrors resonance.log_advisories. Returns the path (None when muzzled
+    under a test without an explicit path)."""
+    if path is None and _default_writes_muzzled():
+        return None
     path = Path(path) if path is not None else ADVISORY_LOG_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
@@ -462,7 +491,10 @@ def log_affinity_advisories(payloads: list, path=None) -> Path:
 def write_readmodel(readmodel: dict, path=None) -> None:
     """Persist the per-group affinity read-model to data/entity_affinity.json
     (advisory artifact, like data/bulk_deals.json). Logged, not raised, on
-    failure."""
+    failure. Muzzled under tests unless the test passes its own path
+    (decision-#43 rule — suite runs must never touch live artifacts)."""
+    if path is None and _default_writes_muzzled():
+        return
     path = Path(path) if path is not None else AFFINITY_PATH
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -475,7 +507,8 @@ def write_readmodel(readmodel: dict, path=None) -> None:
 
 def run(conn=None, db_path=None, history_path=None, groups_path=None,
         today: date = None, window_days: int = RECENCY_WINDOW_DAYS,
-        emit_advisories: bool = True) -> dict:
+        emit_advisories: bool = True, readmodel_path=None,
+        advisory_path=None) -> dict:
     """Full pass: accumulate new deal-days into the affinity graph, rebuild
     the read-model, and emit advisories. Reuses a caller-supplied `conn`
     (Sleep-Phase shares one and MUST keep it open) or opens its own from
@@ -490,10 +523,10 @@ def run(conn=None, db_path=None, history_path=None, groups_path=None,
         acc = accumulate_entity_affinity(conn, history, groups, today=today)
         readmodel = build_affinity_readmodel(conn, groups, history, today=today,
                                              window_days=window_days)
-        write_readmodel(readmodel)
+        write_readmodel(readmodel, path=readmodel_path)
         advisories = evaluate_distribution_signals(readmodel, today=today)
         if emit_advisories and advisories:
-            log_affinity_advisories(advisories)
+            log_affinity_advisories(advisories, path=advisory_path)
         return {"folded": acc["folded"], "new_days": acc["new_days"],
                 "edges": acc["edges"],
                 "linked_groups": len(readmodel["groups"]),

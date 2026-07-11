@@ -454,6 +454,18 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  F. entity affinity failed: {e}")
         results["affinity"] = None
+    try:
+        # Task G — the daily Market Frame (Phase 2 §5.2): one NULL-honest
+        # row joining every layer's day (vix, macro, news, deals, flows,
+        # affinity) into brain_map.daily_context. Pure DB + local file
+        # reads; VM-safe like decay and Task F.
+        from src import daily_context
+        results["daily_context"] = daily_context.run_for_today(conn,
+                                                               today=today)
+        print(f"  G. daily context: {results['daily_context']}")
+    except Exception as e:
+        print(f"  G. daily context failed: {e}")
+        results["daily_context"] = None
 
     conn.close()
     return results

@@ -327,6 +327,71 @@ def persist_snapshot(conn, journal_ref: str, snapshot: dict) -> bool:
         return False
 
 
+def alignment_line(snapshot: dict, view: str) -> str | None:
+    """Phase 3 (§6.2): the DESCRIPTIVE macro/news/smart-money alignment
+    line for the proposal card — facts stated against the proposal's own
+    direction, with NO statistical claim and NO gating ('evidence, not a
+    gate'). Returns None when the proposal has no direction or every
+    context layer abstained — an empty line is noise, not honesty."""
+    view_sign = {"bullish": 1, "bearish": -1}.get(str(view or "").lower())
+    if view_sign is None or not isinstance(snapshot, dict):
+        return None
+    parts = []
+    for ev in snapshot.get("layers", []):
+        if ev["layer"] not in ("macro", "news", "affinity", "flows"):
+            continue
+        if ev.get("abstained") or ev["direction"] == 0.0:
+            continue
+        agree = (ev["direction"] > 0) == (view_sign > 0)
+        parts.append(f"{ev['layer']} {'ALIGNED' if agree else 'OPPOSED'} "
+                     f"({ev['stance']})")
+    if not parts:
+        return None
+    days = snapshot.get("days_to_results")
+    if days is not None and days <= 5:
+        parts.append(f"results in {days}d")
+    return ("📐 Alignment vs this proposal — " + " · ".join(parts)
+            + "  *(evidence, not a gate)*")
+
+
+def capture_for_entry(entry: dict, ticker: str, analysis: dict = None,
+                      vix=None, today: date = None) -> dict | None:
+    """THE shared proposal-time stamp (holy-grail plan §5.1): build the
+    snapshot from what the caller actually consulted (analysis/vix from
+    the live state) plus the standard local artifacts (news, affinity,
+    flows, earnings — file reads only, never a live fetch), and attach it
+    to the journal entry as an additive `evidence` key (the #52
+    created_at precedent). EVERY proposal path calls this one function —
+    a path that skips it would silently bias every downstream reliability
+    stat. Fail-open: any failure leaves the entry untouched and returns
+    None; a stamp must never block a proposal."""
+    try:
+        snapshot = build_evidence_snapshot(ticker, today=today,
+                                           analysis=analysis, vix=vix,
+                                           load_missing=True)
+        entry["evidence"] = snapshot
+        return snapshot
+    except Exception as exc:
+        print(f"  (evidence: stamp failed for {ticker} [{exc}] — "
+              "proposal unaffected)")
+        return None
+
+
+def persist_entry_snapshot(conn, entry: dict) -> bool:
+    """Resolution-time persistence: copy the entry's stamped evidence into
+    the evidence_snapshots table keyed by its journal_ref, so outcome and
+    evidence join for the reliability learners. Entries without a stamp
+    (pre-substrate history) are skipped silently. Never raises."""
+    try:
+        snapshot = entry.get("evidence")
+        if not isinstance(snapshot, dict):
+            return False
+        from src.brain_map import journal_ref_for
+        return persist_snapshot(conn, journal_ref_for(entry), snapshot)
+    except Exception:
+        return False
+
+
 def load_snapshot(conn, journal_ref: str) -> dict | None:
     """The stored snapshot for one trade, or None. Never raises."""
     try:

@@ -336,6 +336,23 @@ The bearish/bullish advisories derived from this (a linked entity unloading
 its group = DISTRIBUTION) are appended to `logs/affinity_advisories.jsonl`
 — read by humans/dashboards only, never the execution loop.
 
+### 2.10 Layer-verdict vocabulary (the composition law, decision #63)
+Context layers (macro, news, affinity, flows) speak about a proposal ONLY
+in this vocabulary — never score points:
+
+| Verdict | Meaning |
+|---|---|
+| `CONFIRM` | the layer's evidence agrees with the proposal's direction |
+| `NEUTRAL` | the layer spoke, but without direction |
+| `VETO` | earned authority only (Phase-4 registry + human grant): downgrade the proposal to `advisory_flagged` |
+| `ABSTAIN` | the layer had nothing to say (explicit — never a guessed neutral) |
+
+`advisory_flagged` is the RESERVED journal `decision` status for a vetoed
+proposal: it still journals, still tracks hypothetically (#31), still
+accumulates the veto class's own scoreable record. Today no layer holds
+VETO power; the alignment line on proposal cards is the ANNOTATE stage of
+this vocabulary (facts, "evidence not gate").
+
 ### 2.6 Coming later (do not build against yet)
 `data/brain_map.db` (SQLite, Phase 6 macro-event memory) — schema is still
 being designed; it will be exposed only through backend endpoints, never

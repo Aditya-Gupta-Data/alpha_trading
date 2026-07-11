@@ -1,0 +1,23 @@
+{
+  "_note": "The owner's running ledger of trading theses, captured verbatim-in-spirit as he dumps them. Each is a HYPOTHESIS, not a rule: the Phase-4 proving harness (src/validation/registry.py) registers it, the discovery layer builds the signal that tests it, and it earns its way onto proposal cards only after surviving out-of-sample (decision #50/#63). `testable_signal` sketches what the engine must compute to score it; `builds` names the layer that would carry it; `status` is idea|scoping|building|registered|validated|killed. This file is the human capture surface — edit freely; nothing here trades until validated.",
+  "hypotheses": [
+    {
+      "id": "H1_rotation_reversion",
+      "captured": "2026-07-11",
+      "statement": "In a flat market, capital doesn't exit — it rotates by exhaustion. When a leading sector/instrument is extended AND its volatility rises (choppy top), money flees it and hunts whatever has been stagnant/basing; that laggard then breaks out. Buy the BASING laggard WHEN the former leader is extended + going high-vol, not just because the laggard is cheap.",
+      "mechanism": "leader extension + rising leader-volatility -> capital flight -> inflow to a low-vol basing laggard -> laggard breakout (volume/delivery confirming).",
+      "examples": ["PSU sector rise 2023-24", "bonds + financial services becoming the destination as the broad index has gone ~2 years without real upside"],
+      "testable_signal": "A rotation radar: rank sectors/instruments by trailing return (multi-horizon) AND realized volatility. Flag LEADERS = high trailing return + rising vol (extension). Flag LAGGARDS = flat trailing return + low/compressing vol (basing). Fire when a flagged laggard breaks its base range with volume/delivery-% confirmation while >=1 leader is simultaneously extended-high-vol. Score: does the laggard breakout outperform over the next N weeks?",
+      "confirmation_layers": ["FII/DII flows rotating out of the leader group into the laggard group (flows_tracker)", "delivery % spike on the laggard breakout day", "smart-money accumulation in the laggard (entity-affinity)"],
+      "builds": "a new sector/instrument relative-strength + volatility-regime tracker (Phase-5 rotation radar) feeding daily_context; registered as a candidate_pattern once the radar emits it",
+      "caveats": ["needs a sector->constituents map (partly in config/entity_groups.json + config/sector_links.json; needs a broader sector index set)", "'basing then breakout' must be defined precisely (range compression + a real range-break, not noise) or it over-fires", "survivorship: only patterns that survive the walk-forward trial reach a card"],
+      "status": "scoping"
+    }
+  ],
+  "_prior_captures": {
+    "note": "Earlier theses already seeded as config priors, not repeated here:",
+    "macro_sector_links": "config/sector_links.json — crude->OMC/paints/aviation/tyres, USDINR->IT/pharma, gold+VIX risk-off veto, RISK_OFF->FMCG defensive rotation, US-overnight gap playbook",
+    "smart_money_confirmations": "price holds/rises next days; promoter/insider buying own stock; delivery % spike with the deal",
+    "news_catalysts": "order wins/contracts; policy/budget/RBI; red flags (fraud/pledge/auditor exit/SEBI) as VETO events"
+  }
+}

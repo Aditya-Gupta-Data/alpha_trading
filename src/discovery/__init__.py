@@ -12,6 +12,11 @@ cites it.
                       FDR-controlled, real and simulated corpora mined
                       SEPARATELY, stratified base rates so it can't
                       rediscover the pipeline's own gates.
+  sequence_miner      the same core lifted onto a time axis: LAGGED
+                      antecedent tags (market state k trading-days BEFORE a
+                      trade's entry) — the "early tell precedes the move"
+                      shape both owner theses (H1/H2) turn on. No look-ahead
+                      by construction (timelock-tested).
 
 Honesty rails (the panel): near-zero survivors on thin data is CORRECT,
 reported as such — never loosened to produce output. Miners consume only

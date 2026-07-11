@@ -108,9 +108,12 @@ def canonicalize_client(name, aliases: dict = None) -> str | None:
     # Punctuation (keep & and spaces) -> space; drop long digit runs (acct #s).
     s = re.sub(r"[^A-Z0-9& ]", " ", s)
     s = re.sub(r"\b\d{3,}\b", " ", s)
-    # Strip trailing legal tokens, then collapse whitespace.
+    # Strip trailing legal tokens, then collapse whitespace. A legal tail
+    # like "& CO PVT LTD" can leave a dangling connector ("BACHHRAJ &") —
+    # trim trailing/leading orphan '&' so one promoter vehicle doesn't
+    # fork across spellings.
     s = _LEGAL_TAIL.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s+", " ", s).strip().strip("&").strip()
     if not s:
         return None
     aliases = aliases or {}

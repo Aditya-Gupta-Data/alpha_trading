@@ -52,9 +52,11 @@ def run_all(conn=None, db_path=None, today: date = None) -> dict:
             for corpus in CORPORA:
                 try:
                     res = mod.run(conn=conn, corpus=corpus, today=today)
-                    runs.append({"miner": name, **{k: res[k] for k in (
-                        "corpus", "transactions", "survivors",
-                        "newly_registered")}})
+                    runs.append({"miner": name,
+                                 "registered": res.get("registered") or [],
+                                 **{k: res[k] for k in (
+                                     "corpus", "transactions", "survivors",
+                                     "newly_registered")}})
                     for k in ("transactions", "survivors", "newly_registered"):
                         totals[k] += res[k]
                 except Exception as exc:      # one miner never sinks the pass
@@ -64,9 +66,36 @@ def run_all(conn=None, db_path=None, today: date = None) -> dict:
     finally:
         if own:
             conn.close()
-    return {"date": today.isoformat(), "runs": runs, "totals": totals,
-            "floors": sg.configured_floors(),
-            "summary": _summary(runs, totals)}
+    report = {"date": today.isoformat(), "runs": runs, "totals": totals,
+              "floors": sg.configured_floors(),
+              "summary": _summary(runs, totals)}
+    _notify_new_candidates(runs, totals)
+    return report
+
+
+def _notify_new_candidates(runs: list, totals: dict) -> None:
+    """Owner concern #2 (observability): a Discord card the moment the
+    miners register NEW candidates — plain-English, explicitly framed as
+    hypotheses, never signals. Fail-open; the notifier muzzles itself
+    under pytest (Phase 6J guard)."""
+    if not totals.get("newly_registered"):
+        return
+    try:
+        lines = [f"🔎 **Discovery: {totals['newly_registered']} new candidate "
+                 f"pattern(s) registered** — hypotheses, NOT signals. Each "
+                 "now gathers shadow evidence and must survive the proving "
+                 "harness before any card cites it."]
+        for r in runs:
+            for reg in (r.get("registered") or []):
+                if reg.get("created"):
+                    lines.append(f"• [{r['miner']}/{r.get('corpus')}] "
+                                 + " + ".join(reg.get("tags") or [])[:120])
+        lines.append("_Inspect any of them: `python3 -m "
+                     "src.discovery.inspect <tags or id>`_")
+        from src.notifier import fire_broadcast
+        fire_broadcast({"text": "\n".join(lines[:12])})
+    except Exception:
+        pass
 
 
 def _summary(runs: list, totals: dict) -> str:

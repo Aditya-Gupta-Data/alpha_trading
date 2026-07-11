@@ -25,8 +25,13 @@ During the window it supervises the two live loops as asyncio tasks:
          the vol_bridge regime, REQUESTS MARGIN from the Phase 6G
          capital layer (silent discard on exhaustion/ruin-halt), records
          the paper trade as a PENDING_APPROVAL journal entry, and fires
-         the Discord alert. Decision #11 stands: nothing is ever
-         auto-approved — the human's Approve/Reject buttons execute.
+         the Discord alert. Decisions #11/#53: by default a human's
+         Approve/Reject buttons execute; with PAPER_AUTO_APPROVE=1 in the
+         environment (the VM's deployed setting since 2026-07-10),
+         headless proposals auto-approve through the SAME decide_pending
+         path a human tap takes — paper-only either way, and the
+         engagement tripwire (src/human_pulse.py) alerts when the owner
+         hasn't been seen for days.
 
   EXIT   live_bridge.run_live_loop: every minute, live ticks are folded
          into candles and every ACTIVE open spread is marked against the

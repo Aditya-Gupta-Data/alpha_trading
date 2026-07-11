@@ -50,6 +50,18 @@ _ARCHETYPES = {
     "rsi_oversold": lambda signal: "RSI" in signal,
 }
 
+# Owner concern #4 (2026-07-11, Way A): calendar-cycle points. Because
+# every seasonal cycle is a PURE function of a date (src/cycles.py), the
+# tuner honestly recomputes "was this cycle active at entry?" for every
+# resolved trade — no stamping, no look-ahead. A cycle's points move off
+# zero only past the same TUNER_MIN_SAMPLES floor the archetypes use, and
+# are capped so no cycle can swamp the checklist. Event cycles (results
+# proximity) are deliberately NOT learned here: the earnings calendar is
+# whole-overwritten daily, so historical as-of recomputation would be a
+# guess — they ride the evidence-snapshot path instead.
+CYCLE_POINT_SENSITIVITY = 0.5   # avg +1R over the floor -> +0.5 points
+CYCLE_POINT_CAP = 1.0           # per-cycle cap (forecast caps the total)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -125,14 +137,44 @@ def build_weights(entries: list = None) -> dict:
         else:
             weights[archetype] = 1.0  # not enough evidence yet -- stay neutral
 
+    cycle_points, cycle_counts = _cycle_points(resolved)
+
     return {
         "generated": _now(),
         "min_samples": TUNER_MIN_SAMPLES,
         "resolved_trade_count": len(resolved),
         "sample_counts": sample_counts,
         "weights": weights,
+        "cycle_points": cycle_points,
+        "cycle_sample_counts": cycle_counts,
         "pattern_tag_report": _pattern_tag_breakdown(resolved),
     }
+
+
+def _cycle_points(resolved: list) -> tuple:
+    """(cycle_points, cycle_sample_counts) — Way A. Seasonal cycles are
+    recomputed as-of each entry's own date (pure calendar math); a cycle
+    below the sample floor stays at 0.0 (silent), above it its points are
+    a capped linear function of average R. Fail-open: a bad date simply
+    contributes to no cycle."""
+    from src import cycles
+    buckets = {}
+    for entry in resolved:
+        r = entry["outcome"]["r_multiple"]
+        for tag in cycles.cycle_tags_for_iso(entry.get("date")):
+            b = buckets.setdefault(tag, {"count": 0, "total_r": 0.0})
+            b["count"] += 1
+            b["total_r"] += r
+    points, counts = {}, {}
+    for tag, b in buckets.items():
+        counts[tag] = b["count"]
+        if b["count"] >= TUNER_MIN_SAMPLES:
+            raw = (b["total_r"] / b["count"]) * CYCLE_POINT_SENSITIVITY
+            points[tag] = round(max(-CYCLE_POINT_CAP,
+                                    min(CYCLE_POINT_CAP, raw)), 2)
+        else:
+            points[tag] = 0.0   # below the floor -- stays silent
+    return points, counts
 
 
 def write_weights(data: dict) -> None:
@@ -153,6 +195,12 @@ def run() -> dict:
         count = data["sample_counts"][archetype]
         status = "tuned" if count >= data["min_samples"] else f"needs {data['min_samples']}, has {count}"
         print(f"  {archetype}: weight {weight:.2f} ({status})")
+    learned_cycles = {t: p for t, p in data.get("cycle_points", {}).items() if p}
+    if learned_cycles:
+        print("  Cycle points (Way A, learned from outcomes):")
+        for tag, pts in sorted(learned_cycles.items()):
+            print(f"    {tag}: {pts:+.2f} pts "
+                  f"({data['cycle_sample_counts'][tag]} trade(s))")
     if data["pattern_tag_report"]:
         print("  Pattern tags (informational only, not yet fed into weights):")
         for tag, stats in data["pattern_tag_report"].items():

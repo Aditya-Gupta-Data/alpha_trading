@@ -103,6 +103,15 @@ def context_tags(row) -> set:
         elif acc > dist:
             tags.add("ctx:affinity:accumulation")
 
+    # Seasonal-cycle tags (owner concern #4, Way A): pure date math via
+    # src/cycles.py, so they backfill honestly for EVERY frame and can't
+    # leak the future. The miners are how a cycle EARNS meaning — nothing
+    # hand-adds points for one.
+    day = g("date", None)
+    if day:
+        from src import cycles
+        tags.update(f"ctx:{t}" for t in cycles.cycle_tags_for_iso(day))
+
     return tags
 
 

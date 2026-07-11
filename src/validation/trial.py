@@ -61,6 +61,14 @@ def ensure_schema(conn) -> None:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_pattern "
                  "ON shadow_trades (pattern_id)")
+    # In-place additive upgrade (#25 discipline, the brain_map pattern):
+    # host_ref ties a shadow fire to the REAL trade whose entry matched
+    # the pattern, so the resolution sweep (src/discovery/shadow_runner)
+    # fills the shadow's outcome from the host's — one resolver, no
+    # parallel price arithmetic. NULL on standalone fires.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(shadow_trades)")}
+    if "host_ref" not in cols:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN host_ref TEXT")
     conn.commit()
 
 

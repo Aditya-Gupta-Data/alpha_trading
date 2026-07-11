@@ -370,11 +370,31 @@ def capture_for_entry(entry: dict, ticker: str, analysis: dict = None,
                                            analysis=analysis, vix=vix,
                                            load_missing=True)
         entry["evidence"] = snapshot
-        return snapshot
     except Exception as exc:
         print(f"  (evidence: stamp failed for {ticker} [{exc}] — "
               "proposal unaffected)")
         return None
+    # Owner concern #1 (2026-07-11): shadow-fire every registered pattern
+    # whose tag picture matches this entry — the pattern's out-of-sample
+    # evidence stream. Bookkeeping only (shadow_trades rows, never journal/
+    # portfolio); fail-open; muzzled under pytest so suites never touch the
+    # real brain_map.db (a test that wants it passes its own conn to
+    # shadow_runner.on_entry directly).
+    import os
+    if not (os.environ.get("PYTEST_CURRENT_TEST")
+            or os.environ.get("IS_TEST_ENV")):
+        try:
+            from src import brain_map
+            from src.discovery import shadow_runner
+            conn = brain_map.connect()
+            try:
+                shadow_runner.on_entry(conn, entry,
+                                       day=snapshot.get("as_of"))
+            finally:
+                conn.close()
+        except Exception:
+            pass
+    return snapshot
 
 
 def persist_entry_snapshot(conn, entry: dict) -> bool:

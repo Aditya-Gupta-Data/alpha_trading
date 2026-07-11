@@ -21,12 +21,15 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def test_forecast_scored_drivers_stay_frozen_to_the_sanctioned_set():
     """forecast.py's checklist may only score trend/cross/RSI/news (the
-    pre-law vocabulary). New layers enter as verdicts via the harness, or
-    not at all — never as fresh _*_driver score contributors."""
+    pre-law vocabulary) plus the Way-A cycle driver (owner decision
+    2026-07-11, H3): its points come ONLY from tuner-learned outcome
+    evidence (floor-gated, capped, ZERO until earned) — the same learning
+    channel as the archetype weights, not a hand-stacked context layer.
+    Anything else enters as verdicts via the harness, or not at all."""
     src = (ROOT / "src" / "forecast.py").read_text()
     drivers = set(re.findall(r"def (_[a-z_]+_driver)\(", src))
     assert drivers == {"_trend_driver", "_cross_driver", "_rsi_driver",
-                       "_news_driver"}, (
+                       "_news_driver", "_cycle_driver"}, (
         f"forecast.py grew a scored driver outside decision #63's frozen "
         f"set: {sorted(drivers)} — route it through the harness instead")
     # And the advisory layers are not imported into the scored path.

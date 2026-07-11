@@ -67,7 +67,14 @@ TREND_POINTS = 4
 CROSS_POINTS = 2
 RSI_POINTS = 2
 NEWS_POINTS_MAX = 2
-MAX_SCORE = TREND_POINTS + CROSS_POINTS + RSI_POINTS + NEWS_POINTS_MAX
+# Owner concern #4 (2026-07-11, Way A): calendar cycles may contribute at
+# most this many points in either direction — and ONLY from tuner-learned
+# per-cycle values in brain_weights.json's `cycle_points` (floor-gated on
+# resolved outcomes, ±1 cap per cycle). An unlearned cycle contributes
+# ZERO: silent until earned, never hand-added (composition law #63).
+CYCLE_POINTS_CAP = 2
+MAX_SCORE = (TREND_POINTS + CROSS_POINTS + RSI_POINTS + NEWS_POINTS_MAX
+             + CYCLE_POINTS_CAP)
 
 BULLISH_THRESHOLD = 2
 BEARISH_THRESHOLD = -2
@@ -109,6 +116,38 @@ def load_weights() -> dict:
     with open(WEIGHTS_PATH) as f:
         data = json.load(f) or {}
     return data.get("weights", {})
+
+
+def load_cycle_points() -> dict:
+    """Cycle tag -> learned points from brain_weights.json's
+    `cycle_points` (written by the tuner, Way A). Empty dict until the
+    tuner has floor-clearing evidence — cycles stay silent until earned."""
+    if not WEIGHTS_PATH.exists():
+        return {}
+    with open(WEIGHTS_PATH) as f:
+        data = json.load(f) or {}
+    return data.get("cycle_points", {}) or {}
+
+
+def _cycle_driver(today=None, cycle_points: dict = None):
+    """The Way-A calendar-cycle driver: sum of the LEARNED points of every
+    cycle active today, clamped to ±CYCLE_POINTS_CAP. Returns None when
+    nothing is learned yet (the honest default) — active-but-unlearned
+    cycles ride in the payload's `cycles` key instead, as context."""
+    from datetime import date as _date
+    from src import cycles
+    today = today or _date.today()
+    active = sorted(cycles.cycle_tags(today))
+    if cycle_points is None:
+        cycle_points = load_cycle_points()
+    contributions = [(t, cycle_points.get(t, 0.0)) for t in active]
+    total = sum(p for _, p in contributions)
+    total = max(-CYCLE_POINTS_CAP, min(CYCLE_POINTS_CAP, total))
+    learned = [(t, p) for t, p in contributions if p]
+    if not learned or total == 0:
+        return None
+    detail = ", ".join(f"{t.split(':', 1)[1]} {p:+.1f}" for t, p in learned)
+    return total, f"calendar cycle ({detail} — learned from outcomes)"
 
 
 def _trend_driver(result: dict) -> tuple:
@@ -235,6 +274,7 @@ def forecast(ticker: str, news_by_ticker: dict = None, weights: dict = None,
         _cross_driver(result, weights),
         _rsi_driver(result, RSI_OVERSOLD, RSI_OVERBOUGHT, weights),
         _news_driver(news_entry),
+        _cycle_driver(),
     ):
         if driver is not None:
             drivers.append(driver)
@@ -258,11 +298,18 @@ def forecast(ticker: str, news_by_ticker: dict = None, weights: dict = None,
     # nothing to the score (see module docstring).
     memory = _memory_lookup(_active_pattern_tags(result, RSI_OVERSOLD), brain)
 
+    # Which calendar cycles are active today (transparency: unlearned ones
+    # appear here with zero score contribution — Way A's honest silence).
+    from datetime import date as _date
+    from src import cycles as _cycles
+    cycles_active = sorted(_cycles.cycle_tags(_date.today()))
+
     return {
         "ticker": ticker,
         "bias": bias,
         "confidence": confidence,
         "score": score,
+        "cycles_active": cycles_active,
         "drivers": [label for _, label in ranked],
         "time_horizon": TIME_HORIZON,
         "price": result["price"],

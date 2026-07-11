@@ -32,7 +32,10 @@ def test_lagged_tags_read_strictly_prior_frames():
     # Entry at index 5; lag2 -> index 3 (the fii-up frame), strictly before.
     tags = sm.lagged_antecedent_tags("2026-01-06", ctx_dates, frames,
                                      lags=(1, 2, 3))
-    assert tags == {"lag2:ctx:fii:up"}
+    # The fii tell sits at exactly lag2 — and ONLY lag2 (seasonal tags,
+    # pure date math, ride along on every lag day by design).
+    assert {t for t in tags if "season" not in t} == {"lag2:ctx:fii:up"}
+    assert "lag1:ctx:season:month_jan" in tags     # cycles present + lagged
     # No frame at/after entry is ever consulted.
     assert not any("2026-01-06" in t for t in tags)
     # Entry before the whole series -> nothing (no fabricated antecedent).
@@ -89,7 +92,8 @@ def test_build_anchors_on_entry_date_and_splits_corpus():
     real = sm.build_lagged_transactions(conn, corpus="real", lags=(1, 2, 3))
     sim = sm.build_lagged_transactions(conn, corpus="sim", lags=(1, 2, 3))
     assert len(real) == 1 and len(sim) == 1
-    assert real[0]["items"] == frozenset({"lag2:ctx:fii:up"})
+    non_season = {t for t in real[0]["items"] if "season" not in t}
+    assert non_season == {"lag2:ctx:fii:up"}
     assert real[0]["win"] is True
 
 

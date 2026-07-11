@@ -158,6 +158,11 @@ CRON_TZ=Asia/Kolkata
 # 12. FII/DII daily cash flows (Daily 19:35 IST) — who IS moving the
 #     indices; one row/day into data/ + the lake.
 35 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.flows_tracker >> "$REPO_ROOT/logs/flows_tracker.log" 2>&1
+
+# 13. Weekly proving-harness digest (Saturday 10:00 IST) — what's in trial,
+#     what validated/died this week, the placebo false-discovery rate.
+#     Read-only over brain_map.db; the owner's window on the harness.
+0 10 * * 6 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.validation.digest >> "$REPO_ROOT/logs/harness_digest.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

@@ -38,13 +38,30 @@ minted clean (expiry 07-12T07:00). Remaining watch items: tonight's
 first capture-cron firings, Monday's first live session (clean
 afternoon past 12:00, auto-approve keeping `/pending` empty).
 
-**Next per HOLY_GRAIL_PLAN §12:** Phase 2 remainder — §5.2
-`daily_context` Market-Frame table, §5.3 decision receipts +
-`src.explain`, §5.4 timelock leakage tests, §5.5 T+1-open contract —
-then Phase 3 (composition law + supervision contract). Phase 1's
-gated sibling streams (delivery %, insider/SAST, shareholding) wait
-for flows to run clean 2+ weeks. §4.6 gap-playbook ids (US/GIFT via
-verified Dhan ids) also still open.
+**Sat afternoon update — PHASE 2 IS COMPLETE, PHASE 3 LANDED TOO (two
+sessions in parallel; watch for concurrent agents in this repo!).** A
+mobile session's PR #3 (merged 11:28 IST) built §5.1-wiring, §5.2
+daily_context, §5.3 receipts + `python3 -m src.explain`, a timelock
+harness (`src/validation/timelock.py` + `tests/test_no_lookahead.py` —
+THE canonical one; register new discovery functions there), all of
+Phase 3 (descriptive alignment line, composition law = decision #63 +
+`tests/test_composition_law.py`, engagement tripwire) and Phase 4's
+`stat_gates` start. This session then closed the read-side timelock
+hole PR #3 missed (concentration from history-as-of-T, decision #64,
+proven by a fails-on-old-code test) and built §5.5: the T+1-open
+execution-timing contract (`src/execution_timing.py` +
+`run_simulation(eod_signal_days=…)`, decision #65 — EOD signals decide
+on T, fill at T+1's true open, rows carry signal_day/signal_age_hours/
+entry_basis; refusal-never-interpolation). Suite 860 green, VM synced
+and services verified after each push.
+
+**Next per HOLY_GRAIL_PLAN §12:** Phase 4 remainder (pattern registry +
+lifecycle, walk-forward trial, stability battery, noise-injection
+suite — `stat_gates` P4-1 exists), plus the small §5.6 leftovers
+(llm_mined confidence cap, nightly no-LLM audit of outcome_derived
+edges). Phase 1's gated sibling streams (delivery %, insider/SAST,
+shareholding) wait for flows to run clean 2+ weeks. §4.6 gap-playbook
+ids (US/GIFT via verified Dhan ids) also still open.
 
 ## 🟢 SCRATCHPAD PHASES 1–8 + REFINEMENT — DEPLOYED TO THE VM Fri 2026-07-10 ~21:45 IST AND SMOKE-TESTED; Monday 07-13 09:10 IST is the first live session (updated 2026-07-10 late night)
 

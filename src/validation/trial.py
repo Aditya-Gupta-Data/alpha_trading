@@ -166,8 +166,9 @@ def evaluate_trial(conn, pattern_id: str, windows: dict,
     sim = sim_evidence or {"n": 0, "wins": 0}
     null_rate = (base_rate if base_rate is not None
                  else sg.breakeven_win_rate(avg_win_r, avg_loss_r))
+    min_res = sg.configured_floors()["min_resolutions"]
     verdict = sg.promotable(real["wins"], real["n"], sim["wins"], sim["n"],
-                            null_rate=null_rate)
+                            null_rate=null_rate, min_resolutions=min_res)
     verdict["windows"] = windows
     rg.update_oos_stats(conn, pattern_id, {
         "real": real, "sim": sim, "null_rate": round(null_rate, 4),

@@ -73,8 +73,8 @@ def test_promotable_composes_floor_reality_and_lb():
     # Sim-only mountains never promote.
     v = sg.promotable(0, 0, 80, 100, null_rate=0.4)
     assert v["promote"] is False and "sim-only" in v["reason"]
-    # Below the floor: insufficient.
-    v = sg.promotable(3, 4, 2, 3, null_rate=0.4)
+    # Below the floor (n=5 < the balanced 7): insufficient.
+    v = sg.promotable(2, 3, 1, 2, null_rate=0.4)
     assert v["promote"] is False and "insufficient" in v["reason"]
     # Enough n, real evidence present, LB beats the structural null.
     v = sg.promotable(9, 11, 14, 18, null_rate=0.4)

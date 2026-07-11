@@ -213,6 +213,118 @@ def test_run_writes_snapshot_that_load_deals_reads_back():
         assert dt.load_deals(Path(tmp) / "gone.json") == {}
 
 
+def test_live_fetch_survives_homepage_warmup_block():
+    """NSE's homepage started 403-ing bots (2026-07-11) while the JSON API
+    kept answering — a failed cookie warm-up must not abort the pull."""
+    import urllib.error
+
+    payload = {"BULK_DEALS_DATA": [
+        {"symbol": "LT", "clientName": "F", "buySell": "BUY",
+         "qty": 100, "watp": 10}], "BLOCK_DEALS_DATA": []}
+    raw = json.dumps(payload).encode()
+
+    class _Resp:
+        def read(self):
+            return raw
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            url = req.get_full_url()
+            if url == dt._NSE_HOME:
+                raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+            return _Resp()
+
+    saved = dt._nse_opener
+    dt._nse_opener = lambda: _Opener()
+    try:
+        fetched = dt._fetch_nse_largedeals()
+    finally:
+        dt._nse_opener = saved
+    assert fetched is not None
+    rows, got_raw = fetched
+    assert got_raw == raw
+    assert [r["symbol"] for r in rows] == ["LT"]
+
+
+def test_historical_url_joins_onto_optiontype_query():
+    """The historicalOR endpoint already carries ?optionType=... — the
+    csv/from/to params must append with '&', each deal type must select
+    its own optionType, and csv=true must be requested (the JSON variant
+    silently truncates to ~70 rows)."""
+    captured = []
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            captured.append(req.get_full_url())
+            raise OSError("stop here — URL is what's under test")
+
+    for deal_type in ("bulk", "block"):
+        assert dt._fetch_nse_historical(
+            deal_type, date(2023, 7, 11), date(2023, 9, 8),
+            opener=_Opener()) is None
+    bulk_url, block_url = captured
+    assert "optionType=bulk_deals&" in bulk_url
+    assert "optionType=block_deals&" in block_url
+    for url in (bulk_url, block_url):
+        assert "csv=true" in url
+        assert "from=11-07-2023&to=08-09-2023" in url
+        assert "?from=" not in url and url.count("?") == 1
+
+
+def test_csv_rows_parse_nse_download_format():
+    """The csv=true payload: BOM, trailing-space quoted headers, Indian
+    comma grouping — rows come back keyed for normalize_deal."""
+    raw = ("﻿\"Date \",\"Symbol \",\"Security Name \",\"Client Name \","
+           "\"Buy / Sell \",\"Quantity Traded \","
+           "\"Trade Price / Wght. Avg. Price \",\"Remarks \"\n"
+           "\"11-JUL-2023\",\"AARTECH\",\"Aartech Solonics Limited\","
+           "\"MOHTA SARITA\",\"BUY\",\"70,000\",\"113\",\"-\"\n"
+           "\n").encode("utf-8")
+    rows = dt._csv_rows(raw)
+    assert len(rows) == 1
+    row = rows[0]
+    deal = dt.normalize_deal(row)
+    assert deal["ticker"] == "AARTECH.NS"
+    assert deal["side"] == "buy"
+    assert deal["qty"] == 70000
+    assert deal["price"] == 113
+    assert dt.parse_report_date(
+        dt._first_field(row, dt._DATE_FIELDS)) == "2023-07-11"
+
+
+def test_fetch_historical_parses_csv_and_tags_deal_type():
+    class _Resp:
+        def __init__(self, raw):
+            self._raw = raw
+        def read(self):
+            return self._raw
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    raw = ("\"Date \",\"Symbol \",\"Client Name \",\"Buy / Sell \","
+           "\"Quantity Traded \",\"Trade Price / Wght. Avg. Price \"\n"
+           "\"12-JUL-2023\",\"TCS\",\"BIG FUND\",\"SELL\",\"1,000\","
+           "\"3,400.5\"\n").encode()
+
+    class _Opener:
+        def open(self, req, timeout=None):
+            return _Resp(raw)
+
+    fetched = dt._fetch_nse_historical(
+        "block", date(2023, 7, 12), date(2023, 7, 12), opener=_Opener())
+    assert fetched is not None
+    rows, got_raw = fetched
+    assert got_raw == raw
+    assert rows[0]["deal_type"] == "block"
+    assert dt.normalize_deal(rows[0])["ticker"] == "TCS.NS"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

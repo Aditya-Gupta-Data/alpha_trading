@@ -240,10 +240,15 @@ def _fetch_nse_largedeals(timeout: int = HTTP_TIMEOUT):
     failure (no network, 401, timeout, shape change) so the caller falls
     open to the snapshot. Never raises."""
     opener = _nse_opener()
+    # 1. Warm the session — best-effort only. NSE's homepage started
+    #    bot-blocking (403) on 2026-07-11 while the JSON APIs kept answering
+    #    without cookies, so a failed warm-up must never abort the pull.
     try:
-        # 1. Warm the session — NSE hands out the cookies its API demands.
         warm = urllib.request.Request(_NSE_HOME, headers=_NSE_HEADERS)
         opener.open(warm, timeout=timeout).read()
+    except (urllib.error.URLError, OSError, TimeoutError):
+        pass
+    try:
         # 2. Pull the report.
         api = urllib.request.Request(_NSE_LARGEDEAL_API, headers=_NSE_HEADERS)
         with opener.open(api, timeout=timeout) as resp:
@@ -595,10 +600,15 @@ def run(output_path=None, snapshot_path=None, watchlist_path=None,
 
 # NSE's historical large-deal reports (public archives, same disclosure
 # stream as the daily snapshot — the decision-#60 escape hatch's own data,
-# reached at depth). One JSON endpoint per deal type, windowed by from/to.
+# reached at depth). One JSON endpoint, selected by optionType, windowed by
+# from/to. The older /api/historical/{bulk,block}-deals endpoints were
+# retired (HTML challenge page / 503 as of 2026-07-11) — historicalOR is
+# what nseindia.com's own report page calls.
 _NSE_HISTORICAL_APIS = {
-    "bulk": "https://www.nseindia.com/api/historical/bulk-deals",
-    "block": "https://www.nseindia.com/api/historical/block-deals",
+    "bulk": ("https://www.nseindia.com/api/historicalOR/"
+             "bulk-block-short-deals?optionType=bulk_deals"),
+    "block": ("https://www.nseindia.com/api/historicalOR/"
+              "bulk-block-short-deals?optionType=block_deals"),
 }
 # NSE rejects windows much over a year; stay far under it so each request
 # is small and a mid-crawl failure loses little.
@@ -644,30 +654,94 @@ def _backfill_windows(start: date, end: date,
     return windows
 
 
+def _canon_csv_header(name) -> str | None:
+    """One CSV column header -> the canonical raw-row key normalize_deal
+    already understands, or None to drop the column. NSE's header spellings
+    drift across eras ('Trade Price / Wght. Avg. Price ', trailing spaces),
+    so match by lowercase substring, never exactly."""
+    n = str(name).strip().lower()
+    if "symbol" in n:
+        return "symbol"
+    if "client" in n:
+        return "clientName"
+    if "buy" in n and "sell" in n:
+        return "buySell"
+    if "quantity" in n or n == "qty":
+        return "qty"
+    if "price" in n:
+        return "watp"
+    if "date" in n:
+        return "date"
+    if "security" in n:
+        return "securityName"
+    if "remark" in n:
+        return "remarks"
+    return None
+
+
+def _csv_rows(raw: bytes) -> list:
+    """NSE's csv=true payload -> list of raw row dicts keyed canonically.
+    Tolerates the BOM, quoted fields, comma-grouped numbers (kept as
+    strings — _to_number handles them) and skips ragged/blank lines.
+    Never raises."""
+    import csv as _csv
+    import io as _io
+    try:
+        text = raw.decode("utf-8-sig", errors="replace")
+        reader = _csv.reader(_io.StringIO(text))
+        header = next(reader, None)
+        if not header:
+            return []
+        keys = [_canon_csv_header(h) for h in header]
+        rows = []
+        for parts in reader:
+            row = {k: v.strip() for k, v in zip(keys, parts) if k}
+            if row.get("symbol"):
+                rows.append(row)
+        return rows
+    except Exception:
+        return []
+
+
 def _fetch_nse_historical(deal_type: str, frm: date, to: date, opener=None,
                           timeout: int = HTTP_TIMEOUT):
     """One historical window for one deal type -> (rows, raw_bytes) with
-    rows tagged {"deal_type": ...}, or None on any failure. Never raises."""
+    rows tagged {"deal_type": ...}, or None on any failure. Never raises.
+
+    Uses the csv=true download variant: the JSON API silently TRUNCATES to
+    ~70 rows per request no matter how small the window (verified
+    2026-07-11 — a 1-day window still capped), while the CSV download
+    returns the complete window."""
     opener = opener or _nse_opener()
-    url = (f"{_NSE_HISTORICAL_APIS[deal_type]}?from="
+    base = _NSE_HISTORICAL_APIS[deal_type]
+    sep = "&" if "?" in base else "?"
+    url = (f"{base}{sep}csv=true&from="
            f"{frm.strftime('%d-%m-%Y')}&to={to.strftime('%d-%m-%Y')}")
     try:
         req = urllib.request.Request(url, headers=_NSE_HEADERS)
         with opener.open(req, timeout=timeout) as resp:
             raw = resp.read()
-        payload = json.loads(raw.decode("utf-8"))
     except (urllib.error.URLError, ValueError, OSError, TimeoutError) as exc:
         print(f"  (backfill: {deal_type} {frm}..{to} failed [{exc}])")
         return None
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, list):
-        return None
+    if raw.lstrip()[:1] in (b"{", b"["):
+        # Era drift back to JSON — accept it rather than fail the window.
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            return None
+        data = payload.get("data") if isinstance(payload, dict) else None
+        parsed = [r for r in data if isinstance(r, dict)] if isinstance(
+            data, list) else None
+        if parsed is None:
+            return None
+    else:
+        parsed = _csv_rows(raw)
     rows = []
-    for row in data:
-        if isinstance(row, dict):
-            tagged = dict(row)
-            tagged.setdefault("deal_type", deal_type)
-            rows.append(tagged)
+    for row in parsed:
+        tagged = dict(row)
+        tagged.setdefault("deal_type", deal_type)
+        rows.append(tagged)
     return rows, raw
 
 
@@ -728,10 +802,12 @@ def backfill(start: date, end: date = None, history_path=None,
             if raw:
                 try:
                     from src import lake
+                    ext = ("json" if raw.lstrip()[:1] in (b"{", b"[")
+                           else "csv")
                     lake.archive_blob(
                         "deals_raw_backfill", frm.isoformat(),
                         f"{deal_type}-{frm.isoformat()}-{to.isoformat()}",
-                        raw, ext="json", root=lake_root)
+                        raw, ext=ext, root=lake_root)
                 except Exception:
                     pass
             for row in rows:

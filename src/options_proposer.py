@@ -386,6 +386,8 @@ def _format_proposal_alert(p: dict, action_note: str = None) -> str:
                     if memory else "")
     skeptic = p.get("skeptic_note")
     skeptic_block = f"{skeptic}\n" if skeptic else ""
+    alignment = p.get("alignment_line")
+    alignment_block = f"{alignment}\n" if alignment else ""
     return (
         f"🚨 **PROPOSAL ALERT: {s['strategy'].replace('_', ' ').title()}**\n"
         f"**Market Regime**: {p['view'].title()} view on {p['ticker']} | "
@@ -396,6 +398,7 @@ def _format_proposal_alert(p: dict, action_note: str = None) -> str:
         f"Max Loss Rs.{s['max_loss'] * lots:,.0f} | "
         f"Max Profit Rs.{s['max_profit'] * lots:,.0f} | "
         f"SPAN Margin Rs.{s['margin']['total_margin'] * lots:,.0f}\n"
+        f"{alignment_block}"
         f"{memory_block}"
         f"{skeptic_block}"
         f"⏸️ **Action Required**: {action}"
@@ -484,9 +487,18 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     # learned from. Simulator-injected runs stamp too (their state carries
     # the as-of analysis/vix; local artifacts read as-is). Fail-open: a
     # stamp failure never blocks the proposal.
-    from src.confluence.evidence import capture_for_entry
-    capture_for_entry(entry, underlying, analysis=state.get("analysis"),
-                      vix=state.get("vix"))
+    from src.confluence.evidence import alignment_line, capture_for_entry
+    snapshot = capture_for_entry(entry, underlying,
+                                 analysis=state.get("analysis"),
+                                 vix=state.get("vix"))
+    # Phase 3 (§6.2): the descriptive alignment line rides the alert card
+    # exactly like memory_context/skeptic_note — facts vs the proposal's
+    # direction, "evidence not gate", nothing scored, nothing blocked.
+    if snapshot is not None:
+        try:
+            p["alignment_line"] = alignment_line(snapshot, p.get("view"))
+        except Exception:
+            p["alignment_line"] = None
     # Phase 2 (§5.3): the decision receipt — the WHY-context that isn't
     # otherwise journaled, frozen at proposal time so a human (or a future
     # session) can reconstruct this firing without re-deriving anything.

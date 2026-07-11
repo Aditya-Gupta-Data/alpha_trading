@@ -327,6 +327,33 @@ def persist_snapshot(conn, journal_ref: str, snapshot: dict) -> bool:
         return False
 
 
+def alignment_line(snapshot: dict, view: str) -> str | None:
+    """Phase 3 (§6.2): the DESCRIPTIVE macro/news/smart-money alignment
+    line for the proposal card — facts stated against the proposal's own
+    direction, with NO statistical claim and NO gating ('evidence, not a
+    gate'). Returns None when the proposal has no direction or every
+    context layer abstained — an empty line is noise, not honesty."""
+    view_sign = {"bullish": 1, "bearish": -1}.get(str(view or "").lower())
+    if view_sign is None or not isinstance(snapshot, dict):
+        return None
+    parts = []
+    for ev in snapshot.get("layers", []):
+        if ev["layer"] not in ("macro", "news", "affinity", "flows"):
+            continue
+        if ev.get("abstained") or ev["direction"] == 0.0:
+            continue
+        agree = (ev["direction"] > 0) == (view_sign > 0)
+        parts.append(f"{ev['layer']} {'ALIGNED' if agree else 'OPPOSED'} "
+                     f"({ev['stance']})")
+    if not parts:
+        return None
+    days = snapshot.get("days_to_results")
+    if days is not None and days <= 5:
+        parts.append(f"results in {days}d")
+    return ("📐 Alignment vs this proposal — " + " · ".join(parts)
+            + "  *(evidence, not a gate)*")
+
+
 def capture_for_entry(entry: dict, ticker: str, analysis: dict = None,
                       vix=None, today: date = None) -> dict | None:
     """THE shared proposal-time stamp (holy-grail plan §5.1): build the

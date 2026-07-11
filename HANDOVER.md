@@ -6,6 +6,67 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## 🟢 HOLY-GRAIL PHASES 4 & 5 COMPLETE, MERGED & DEPLOYED — the discovery brain now RUNS; it is DATA-STARVED by design, not broken (updated 2026-07-11 evening)
+
+**The single most important fact for a cold session: the build has reached
+its designed resting point.** Phases 0–3 (substrate + confluence + macro
+alignment) were already in; this evening Phase 4 (the proving harness) and
+Phase 5's entire offline-buildable surface (the miners + the strategy
+evidence view) landed on `main` via PR #4 (`41dcc72`) and PR #5
+(`3dc7d21`), and both are pulled to the VM. Suite **909 green**, all
+offline. **Nothing more should be BUILT until real data accumulates** —
+the remaining Phase 5 pieces are data/human-gated (see "next" below) and
+building them now would rediscover the entry gates on an empty corpus
+(#50's exact failure). The system's job now is to RUN and accumulate.
+
+**What Phase 4 added — the proving harness (`src/validation/`):** every
+pattern the brain ever surfaces must first survive this. `stat_gates.py`
+(the shared anti-hallucination toolkit — Wilson lower bounds, exact
+binomial, structural breakeven nulls, Benjamini-Hochberg, block-permutation
+nulls, split-window stability, `promotable`: sim supports but never solely
+justifies; BALANCED floors, all config-tunable via `harness_*` keys),
+`registry.py` (pattern lifecycle CANDIDATE→TRIAL→VALIDATED→LIVE_ADVISORY /
+QUARANTINED / INSUFFICIENT_N / DEAD, frozen-definition idempotency, audited
+soft-only transitions), `trial.py` (walk-forward split + 5-day embargo +
+`shadow_trades`, never `journal.jsonl`), `monitor.py` (validation-is-a-lease:
+CUSUM + Wilson-crossing auto-quarantine, adaptive lease expiry — wired as
+Sleep-Phase Task H), `placebo.py` (seeded information-free hypotheses →
+realized false-discovery meter), `digest.py` (the owner's weekly Discord
+window — **cron #13, Saturday 10:00 IST**; first fire 2026-07-18).
+
+**What Phase 5 added — the discovery brain (`src/discovery/`):** the brain
+starts finding its OWN hypotheses instead of only checking hand-coded ones.
+Miners ENUMERATE + REGISTER candidates; they never surface anything (the
+harness above is the only path to a card). `cooccurrence_miner.py` (Apriori
+over resolved-outcome transactions = event tags ∪ market-day `ctx:` tags,
+stratified base rates so it can't rediscover the pipeline's gates),
+`sequence_miner.py` (the same core on a time axis — `lag{k}:` antecedents
+k trading-days BEFORE entry, the "early tell precedes the move" shape H1/H2
+turn on; no look-ahead by construction, timelock-proven), `run_miners.py`
+(the manual orchestrator — honest combined report), `strategy_evidence.py`
+(the "check WHICH structure" view — per-structure Wilson-bounded win-rates,
+real/sim never pooled, ≥5-real render floor, descriptive PREFER/ABSTAIN on
+the honest lower bound; the read-only substrate the future duel consumes).
+
+**CRITICAL — the miners are MANUAL-ONLY, deliberately not cron-wired.** On
+today's empty corpus `./venv/bin/python -m src.discovery.run_miners` reports
+`0 survivors — CORRECT` and says why (support floor not met). That is the
+designed output, not a failure. Wiring them into the nightly sleep phase
+waits until `daily_context` has enough history for an itemset to plausibly
+clear the floor — that wiring gets its own DECISIONS row when the data
+justifies it.
+
+**Next per HOLY_GRAIL_PLAN §8.6-8.7 (ALL gated — do NOT pre-build):**
+counterfactual structure pricing + the champion/challenger **duel** (needs
+a VALIDATED pattern + a ≥30-day disagreement floor + the human dethroning
+ritual #49 — never auto-applied), and **skeptic v3** (realized-vs-implied
+vol / distance-to-support / days_to_results features; the ablation study is
+deferred until the layers reach ≥50% non-NULL coverage, else it would
+"prove" the new layers earn zero — an artifact the owner would misread).
+The trigger to resume building is DATA: the first pattern reaching
+VALIDATED, or layer coverage crossing the ablation gate. Until then, watch
+the weekly digest and let the substrate fill.
+
 ## 🟢 HOLY-GRAIL PHASES 0–1 DONE + BACKFILL RUN; Sat 07:00 renewal VERIFIED; Monday 07-13 09:10 IST is the first live session (updated 2026-07-11 midday)
 
 **Sat 2026-07-11 session, on top of the overnight builds:** the two

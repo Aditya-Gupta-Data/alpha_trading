@@ -86,6 +86,45 @@ def test_affinity_readmodel_and_advisories_are_future_blind():
         label="entity_affinity.build_affinity_readmodel")
 
 
+def test_readmodel_is_future_blind_on_a_fully_folded_db():
+    """The production case the replay tests can't see: the DB has already
+    been folded through the WHOLE ledger (fold horizon = far future, so
+    the accumulation table contains later days' deals), and the readmodel
+    is asked about a PAST day. Concentration must come from history rows
+    dated <= that day, not from the table's all-time fold state —
+    otherwise every walk-forward question against production leaks."""
+    def compute(history):
+        conn = brain_map.connect(":memory:")
+        ea.accumulate_entity_affinity(conn, history, GROUPS,
+                                      today=date(2099, 1, 1))
+        rm = ea.build_affinity_readmodel(conn, GROUPS, history,
+                                         today=date.fromisoformat(AS_OF))
+        adv = ea.evaluate_distribution_signals(
+            rm, today=date.fromisoformat(AS_OF))
+        conn.close()
+        return {"rm": rm, "adv": adv}
+
+    tl.assert_future_blind(
+        compute, _base_history(),
+        tl.future_salt(_base_history(), AS_OF, _future_row),
+        label="entity_affinity.build_affinity_readmodel on folded DB")
+    # Teeth: the salted future rows are answer-changing when legally
+    # visible (asked about a later day) — the check above isn't vacuous.
+    salted = tl.future_salt(_base_history(), AS_OF, _future_row)
+
+    def compute_late(history):
+        conn = brain_map.connect(":memory:")
+        ea.accumulate_entity_affinity(conn, history, GROUPS,
+                                      today=date(2099, 1, 1))
+        rm = ea.build_affinity_readmodel(conn, GROUPS, history,
+                                         today=date(2026, 9, 1))
+        conn.close()
+        return rm
+
+    assert not tl.semantic_equal(compute_late(_base_history()),
+                                 compute_late(salted))
+
+
 def test_the_harness_itself_catches_a_planted_leak():
     """Sanity: a deliberately leaky computation (no horizon filter) must
     FAIL the check — proving the suite can actually catch violations."""

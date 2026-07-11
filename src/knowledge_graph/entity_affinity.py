@@ -364,13 +364,50 @@ def _recent_flows(history: list, aliases: dict, ttg: dict,
     return flows
 
 
+def _concentrations_as_of(history: list, aliases: dict, ttg: dict,
+                          as_of: str) -> dict:
+    """{client: (top_named_group, concentration, group_deals)} computed
+    purely from the raw deal history UP TO AND INCLUDING as_of — never from
+    the accumulation table, whose contents depend on what has been FOLDED
+    (a production DB folded through the whole ledger holds later days'
+    deals, so a table read asked about a past T would leak them). This is
+    the read-side half of the timelock: `accumulate_entity_affinity`'s
+    horizon protects as-of REPLAYS, this protects as-of QUERIES against an
+    already-folded DB. UNGROUPED deals stay in the denominator (a
+    mostly-ungrouped trader shows low concentration in any group)."""
+    counts = {}
+    for r in history:
+        if not isinstance(r, dict) or (r.get("as_of") or "") > as_of:
+            continue
+        client = canonicalize_client(r.get("client"), aliases)
+        if not client or r.get("side") not in ("buy", "sell") or not r.get("qty"):
+            continue
+        grp = group_for_ticker(r.get("ticker"), ttg)
+        per = counts.setdefault(client, {})
+        per[grp] = per.get(grp, 0) + 1
+    out = {}
+    for client, per in counts.items():
+        total = sum(per.values())
+        named = [(g, c) for g, c in per.items() if g != UNGROUPED]
+        if not total or not named:
+            continue
+        top_group, top_count = max(named, key=lambda gc: gc[1])
+        out[client] = (top_group, round(top_count / total, 3), top_count)
+    return out
+
+
 def build_affinity_readmodel(conn, groups: dict = None, history: list = None,
                              today: date = None,
                              window_days: int = RECENCY_WINDOW_DAYS) -> dict:
     """Per-group view: which entities are structurally linked (all-time
-    concentration) and which way they've traded that group RECENTLY (the
-    window). `net_bias` rolls the linked entities' recent net flow into one
-    group verdict. Pure read — no writes. Never raises."""
+    concentration as of `today`) and which way they've traded that group
+    RECENTLY (the window ending at `today`). `net_bias` rolls the linked
+    entities' recent net flow into one group verdict. Pure read — no
+    writes, and FUTURE-BLIND on both halves (§5.4): recent flows are
+    horizon-bounded and concentration derives from history rows dated
+    <= today rather than the fold-state-dependent table, so the answer
+    about day T is identical on a fresh replay and on a production DB
+    already folded through later days. Never raises."""
     ensure_schema(conn)
     today = today or date.today()
     groups = groups or load_entity_groups()
@@ -378,17 +415,15 @@ def build_affinity_readmodel(conn, groups: dict = None, history: list = None,
         history = deals_tracker.read_deal_history()
     ttg = groups["ticker_to_group"]
     aliases = groups["client_aliases"]
+    as_of = today.isoformat()
     cutoff = (today - timedelta(days=window_days)).isoformat()
-    recent = _recent_flows(history, aliases, ttg, cutoff,
-                           horizon=today.isoformat())
+    recent = _recent_flows(history, aliases, ttg, cutoff, horizon=as_of)
 
-    # Every client with any named activity, and its top link.
-    clients = [r["client"] for r in
-               conn.execute("SELECT DISTINCT client FROM entity_affinity")]
     out_groups = {}
-    for client in clients:
-        top_group, concentration, group_deals = _client_concentration(conn, client)
-        if (top_group is None or group_deals < MIN_GROUP_DEALS
+    links = _concentrations_as_of(history, aliases, ttg, as_of)
+    for client in sorted(links):
+        top_group, concentration, group_deals = links[client]
+        if (group_deals < MIN_GROUP_DEALS
                 or concentration < MIN_CONCENTRATION):
             continue
         f = recent.get((client, top_group))

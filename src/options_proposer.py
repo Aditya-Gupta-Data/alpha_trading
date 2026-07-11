@@ -535,6 +535,22 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     # a run that was promised its own capital world (see the gate comment
     # above). Sandbox callers decide their own entries.
     auto_mode = paper_auto_approve_enabled() and "book" not in state
+    # Phase 3 (§6.6) engagement tripwire: full autonomy is a supervision
+    # contract, not abandonment. No human action for N trading days while
+    # auto-approve is ON -> NEW auto-approvals pause (the entry stays
+    # pending, which decision #31 already tracks hypothetically) and one
+    # "unsupervised" card fires per pause episode. Any human decision
+    # re-arms instantly (decide_pending touches the pulse). Fail-open: a
+    # tripwire error never changes behavior.
+    if auto_mode:
+        try:
+            from src import human_pulse
+            if human_pulse.auto_approve_tripped():
+                auto_mode = False
+                if human_pulse.should_alert_once():
+                    _notify_discord(human_pulse.unsupervised_card())
+        except Exception:
+            pass
     if auto_mode:
         action_note = ("auto-proposed by the market loop — PAPER_AUTO_APPROVE "
                        f"is ON, so trade id `{entry['short_id']}` is being "
@@ -550,7 +566,7 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     _notify_discord(_format_proposal_alert(p, action_note=action_note))
     if auto_mode:
         verdict = decide_pending(entry["short_id"], approve=True,
-                                 why=AUTO_APPROVE_WHY)
+                                 why=AUTO_APPROVE_WHY, human=False)
         if verdict["status"] == "approved":
             return {"proposed": True, "reason": "ok (auto-approved)",
                     "entry": verdict["entry"], "auto_approved": True}
@@ -644,7 +660,8 @@ def _describe_pending(entry: dict) -> list:
     return lines
 
 
-def decide_pending(trade_id: str, approve: bool, why: str = "") -> dict:
+def decide_pending(trade_id: str, approve: bool, why: str = "",
+                   human: bool = True) -> dict:
     """The two-way Discord bridge's headless twin of review_pending():
     decide ONE stored pending_approval entry, located by its journal
     short_id, with exactly the CLI's semantics —
@@ -659,6 +676,15 @@ def decide_pending(trade_id: str, approve: bool, why: str = "") -> dict:
 
     Returns {"status": "approved"|"rejected"|"not_found"|"already_resolved",
              "entry": dict-or-None}."""
+    if human:
+        # Phase 3 (§6.6): any human decision — button, CLI, either verdict
+        # — is the pulse that keeps full autonomy armed. Recorded before
+        # the lookup so even a not_found tap counts as presence.
+        try:
+            from src import human_pulse
+            human_pulse.touch("decide_pending")
+        except Exception:
+            pass
     entries = journal.read_all()
     target = None
     for e in entries:

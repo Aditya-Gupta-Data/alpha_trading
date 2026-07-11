@@ -8,6 +8,7 @@ Run from the project folder:
 """
 
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime
@@ -86,10 +87,15 @@ def test_sweep_never_scans_its_own_output_log():
 
 def test_heartbeats_flag_silent_jobs_weekday_aware():
     with tempfile.TemporaryDirectory() as tmp:
-        logs = make_logs(tmp, {"renew_token.log": "ok\n"})   # fresh today
+        logs = make_logs(tmp, {"renew_token.log": "ok\n"})
         expected = {"renew_token.log": False, "master_scheduler.log": True}
-        # Monday: the missing weekday job is flagged
-        missing = om.check_heartbeats(logs, now=datetime.now(),
+        # Monday: the missing weekday job is flagged. Freshness is
+        # mtime-date == now-date, so pin BOTH to a fixed Monday — with a
+        # real datetime.now() this test only passed on weekdays.
+        monday = datetime(2026, 7, 6, 20, 30)
+        os.utime(logs / "renew_token.log",
+                 (monday.timestamp(), monday.timestamp()))
+        missing = om.check_heartbeats(logs, now=monday,
                                       expected=expected)
         assert missing == ["master_scheduler.log — did not run today"]
         # weekend: weekday-only jobs are excused

@@ -1,0 +1,50 @@
+{
+  "_note": "The owner's running ledger of trading theses, captured verbatim-in-spirit as he dumps them. Each is a HYPOTHESIS, not a rule: the Phase-4 proving harness (src/validation/registry.py) registers it, the discovery layer builds the signal that tests it, and it earns its way onto proposal cards only after surviving out-of-sample (decision #50/#63). `testable_signal` sketches what the engine must compute to score it; `builds` names the layer that would carry it; `status` is idea|scoping|building|registered|validated|killed. This file is the human capture surface — edit freely; nothing here trades until validated.",
+  "hypotheses": [
+    {
+      "id": "H1_rotation_reversion",
+      "captured": "2026-07-11",
+      "statement": "In a flat market, capital doesn't exit — it rotates by exhaustion. When a leading sector/instrument is extended AND its volatility rises (choppy top), money flees it and hunts whatever has been stagnant/basing; that laggard then breaks out. Buy the BASING laggard WHEN the former leader is extended + going high-vol, not just because the laggard is cheap.",
+      "mechanism": "leader is EXHAUSTED only when BOTH fire together: high trailing return (extension threshold) AND rising realized volatility (choppy top). Either alone is a false alarm — big return with calm vol is a healthy trend still worth riding; rising vol without a big prior run is just noise. Exhaustion -> capital flight -> inflow to a low-vol basing laggard -> laggard breakout (volume/delivery confirming).",
+      "examples": ["PSU sector rise 2023-24", "bonds + financial services becoming the destination as the broad index has gone ~2 years without real upside"],
+      "leader_exhaustion_trigger": "CONJUNCTIVE (owner, 2026-07-11): trailing return above an extension threshold AND realized volatility rising vs its own recent baseline. Both required; thresholds to be calibrated on the rotation radar (candidate: return >= ~X% over the leader-run horizon AND vol up vs its trailing median).",
+      "testable_signal": "A rotation radar: rank sectors/instruments by trailing return (multi-horizon) AND realized volatility. Flag LEADERS = high trailing return AND rising vol (the conjunctive exhaustion trigger above). Flag LAGGARDS = flat trailing return + low/compressing vol (basing). Fire when a flagged laggard breaks its base range with volume/delivery-% confirmation while >=1 leader is simultaneously in exhaustion. Score: does the laggard breakout outperform over the next N weeks?",
+      "confirmation_layers": ["FII/DII flows rotating out of the leader group into the laggard group (flows_tracker)", "delivery % spike on the laggard breakout day", "smart-money accumulation in the laggard (entity-affinity)"],
+      "builds": "a new sector/instrument relative-strength + volatility-regime tracker (Phase-5 rotation radar) feeding daily_context; registered as a candidate_pattern once the radar emits it",
+      "caveats": ["needs a sector->constituents map (partly in config/entity_groups.json + config/sector_links.json; needs a broader sector index set)", "'basing then breakout' must be defined precisely (range compression + a real range-break, not noise) or it over-fires", "survivorship: only patterns that survive the walk-forward trial reach a card"],
+      "status": "scoping"
+    },
+    {
+      "id": "H2_housing_cycle_top_cascade",
+      "captured": "2026-07-11",
+      "statement": "The Indian post-COVID housing cycle is topping, and its unwind cascades through equities. A big structural TREND (months-to-years), but with an actionable near-term POINT: the earliest tell is investors (not end-users) seeking liquidity first — visible as smart-money distribution in realty/HFC/infra names before it shows in the news.",
+      "causal_chain": [
+        "COVID: salaries rose (tech/WFH); real estate crashed/stagnated (no renting, no buying)",
+        "post-COVID: spend rotated experiences -> flats; limited supply -> prices rose",
+        "price rise pulled in INVESTORS not just end-users (speculative demand); developers built more -> supply maxed",
+        "now: supply peaked, salaries stalled, mid-level AI layoffs, cost of living up",
+        "under pressure the FIRST cut is the large home-loan EMI",
+        "investors seek liquidity FIRST (exit before retail); then SOME retail follows (not all)",
+        "cascade: real-estate cos with unsold inventory -> banks/HFCs with mortgage books (rising defaults/NPAs) -> infra/construction cos hit by developer payment defaults"
+      ],
+      "point_for_now": "The investors-exit-first step is the near-term watchable trigger and the one THIS system can see early: sustained smart-money DISTRIBUTION in realty/HFC/infra names (entity-affinity + deals), FII/DII rotating out of the sector (flows), plus the news red-flag layer catching the first developer payment default / HFC NPA uptick / pledge spike. Confluence of these = the cycle-top early warning.",
+      "affected_groups": {
+        "real_estate_developers": ["DLF.NS", "GODREJPROP.NS", "OBEROIRLTY.NS", "PRESTIGE.NS", "LODHA.NS", "MACROTECH.NS", "SOBHA.NS", "BRIGADE.NS", "PHOENIXLTD.NS"],
+        "housing_finance": ["LICHSGFIN.NS", "PNBHOUSING.NS", "BAJAJHFL.NS", "AAVAS.NS", "HOMEFIRST.NS", "APTUS.NS", "CANFINHOME.NS"],
+        "mortgage_heavy_banks": ["HDFCBANK.NS", "SBIN.NS", "ICICIBANK.NS", "KOTAKBANK.NS"],
+        "infra_construction": ["LT.NS", "NBCC.NS", "KNRCON.NS", "PNCINFRA.NS"]
+      },
+      "expression": "PAPER + long-biased engine has no naked single-stock short. Near-term this is (a) a SECTOR VETO on fresh long setups in these groups when the distribution tell is active, and (b) a VALIDATION target — track whether distribution in the linked names actually precedes sector drawdown (the harness scores it before it's ever trusted). Index bearish view can express via a defined-risk bear put spread only if/when a real signal validates.",
+      "testable_signal": "A sector-stress composite over the affected_groups: (net smart-money distribution across the group) + (FII/DII net outflow from the group) + (news red-flags: developer default / HFC NPA / pledge) + (rising group volatility). Fire an early-warning advisory when >=N of these align; score whether the group underperforms over the next 1-3 months.",
+      "builds": "reuses entity-affinity (distribution), flows_tracker, the news red-flag classes (H-prior), and daily_context; needs the affected_groups added to config/entity_groups.json (realty/HFC/infra clusters) + a sector-stress composite in the Phase-5 discovery layer",
+      "caveats": ["structural + slow — this is a regime bias and early-warning, NOT a precise short entry; timing a housing top is famously hard and can be years early", "confirmation bias risk: a bearish narrative is seductive — this MUST earn validation before any card treats it as signal (decision #50)", "macro-driven: much of the real tell (EMI stress, HFC NPAs, developer cashflow) is fundamental data the engine doesn't ingest yet; the engine's honest edge here is only the market-visible slice (distribution, flows, price/vol, disclosed news)"],
+      "status": "scoping"
+    }
+  ],
+  "_prior_captures": {
+    "note": "Earlier theses already seeded as config priors, not repeated here:",
+    "macro_sector_links": "config/sector_links.json — crude->OMC/paints/aviation/tyres, USDINR->IT/pharma, gold+VIX risk-off veto, RISK_OFF->FMCG defensive rotation, US-overnight gap playbook",
+    "smart_money_confirmations": "price holds/rises next days; promoter/insider buying own stock; delivery % spike with the deal",
+    "news_catalysts": "order wins/contracts; policy/budget/RBI; red flags (fraud/pledge/auditor exit/SEBI) as VETO events"
+  }
+}

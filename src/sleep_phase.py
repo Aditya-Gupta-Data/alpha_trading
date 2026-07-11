@@ -466,6 +466,17 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  G. daily context failed: {e}")
         results["daily_context"] = None
+    try:
+        # Task H — the validation drift monitor (Phase 4 §7.6): sweep every
+        # live pattern for CUSUM drift / lease expiry and auto-quarantine
+        # the ones that stopped working (owner: auto-quarantine + notify).
+        # No-LLM, VM-safe. A no-op until patterns reach VALIDATED.
+        from src.validation import monitor
+        results["pattern_monitor"] = monitor.run_sweep(conn, today=today)
+        print(f"  H. pattern monitor: {results['pattern_monitor']}")
+    except Exception as e:
+        print(f"  H. pattern monitor failed: {e}")
+        results["pattern_monitor"] = None
 
     conn.close()
     return results

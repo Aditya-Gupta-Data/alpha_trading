@@ -30,17 +30,63 @@ zero-real-evidence cases regardless of sim volume. Learning consumers
 never learns from its own hypotheses.
 """
 
+import json
 import math
 import random
+from pathlib import Path
+
+_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config.json"
+
+
+def configured_floors(config_path=None) -> dict:
+    """The active floors: BALANCED defaults, overridden by any
+    harness_* key in config.json. Read per call so a tuning edit takes
+    effect without a restart. Never raises — a broken config keeps the
+    defaults."""
+    floors = {
+        "min_resolutions": MIN_PROMOTION_RESOLUTIONS,
+        "min_validation_n": MIN_VALIDATION_N,
+        "min_support_itemset": MIN_SUPPORT_ITEMSET,
+        "min_support_sequence": MIN_SUPPORT_SEQUENCE,
+        "min_affinity_episodes": MIN_AFFINITY_EPISODES,
+        "fdr_q": FDR_Q,
+    }
+    path = Path(config_path) if config_path is not None else _CONFIG_PATH
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return floors
+    key_map = {
+        "min_resolutions": ("harness_min_resolutions", int),
+        "min_validation_n": ("harness_min_validation_n", int),
+        "min_support_itemset": ("harness_min_support_itemset", int),
+        "min_support_sequence": ("harness_min_support_sequence", int),
+        "min_affinity_episodes": ("harness_min_affinity_episodes", int),
+        "fdr_q": ("harness_fdr_q", float),
+    }
+    for out_key, (cfg_key, cast) in key_map.items():
+        if cfg_key in raw:
+            try:
+                floors[out_key] = cast(raw[cfg_key])
+            except (ValueError, TypeError):
+                pass
+    return floors
 
 # --------------------------------------------------------------- floors
 
-MIN_SUPPORT_ITEMSET = 15
-MIN_SUPPORT_SEQUENCE = 8
-MIN_PROMOTION_RESOLUTIONS = 10
-MIN_VALIDATION_N = 30
-MIN_AFFINITY_EPISODES = 8
-FDR_Q = 0.10
+# Defaults are the owner's BALANCED strictness (chosen 2026-07-11): patterns
+# surface a bit sooner than the strict panel numbers, with more of them
+# flagged-then-killed. Every floor is overridable in config.json
+# (harness_min_resolutions / harness_fdr_q / harness_min_support_itemset /
+# harness_min_support_sequence / harness_min_validation_n /
+# harness_min_affinity_episodes) so strictness re-tunes without a code
+# change — see configured_floors().
+MIN_SUPPORT_ITEMSET = 12
+MIN_SUPPORT_SEQUENCE = 6
+MIN_PROMOTION_RESOLUTIONS = 7
+MIN_VALIDATION_N = 20
+MIN_AFFINITY_EPISODES = 6
+FDR_Q = 0.15
 
 # Journal-ref namespaces that are the system's own hypotheses/replays —
 # NEVER training data for tuner/skeptic/miners (self-poisoning guard).

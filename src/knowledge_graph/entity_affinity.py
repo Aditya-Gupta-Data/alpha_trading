@@ -260,8 +260,15 @@ def accumulate_entity_affinity(conn, history: list = None, groups: dict = None,
 
     ingested = {r["as_of"] for r in
                 conn.execute("SELECT as_of FROM entity_affinity_ingested")}
+    # TIMELOCK (as-of contract, holy-grail plan §5.4): rows dated after
+    # `today` are INVISIBLE to this fold — an as-of replay must produce
+    # byte-identical state whether or not the ledger already holds later
+    # days. Without this, a backfill replayed as-of a past date would
+    # leak the future into concentration stats.
+    horizon = today.isoformat()
     new_rows = [r for r in history
                 if isinstance(r, dict) and r.get("as_of")
+                and r["as_of"] <= horizon
                 and r["as_of"] not in ingested]
     if not new_rows:
         return {"folded": 0, "new_days": 0, "edges": 0}
@@ -326,13 +333,18 @@ def _classify_direction(buy: float, sell: float) -> str:
 
 
 def _recent_flows(history: list, aliases: dict, ttg: dict,
-                  cutoff: str) -> dict:
+                  cutoff: str, horizon: str = "9999-12-31") -> dict:
     """Per (client, group) recent buy/sell value+qty from deals on/after
-    cutoff (ISO date; lexical compare is valid for YYYY-MM-DD). Value-based
+    cutoff AND on/before horizon (ISO dates; lexical compare is valid for
+    YYYY-MM-DD). The horizon is the timelock upper bound — an as-of
+    readmodel must not see deals dated after its own day. Value-based
     where prices exist, qty as the fallback basis."""
     flows = {}
     for r in history:
-        if not isinstance(r, dict) or (r.get("as_of") or "") < cutoff:
+        if not isinstance(r, dict):
+            continue
+        day = r.get("as_of") or ""
+        if day < cutoff or day > horizon:
             continue
         client = canonicalize_client(r.get("client"), aliases)
         side, qty = r.get("side"), r.get("qty")
@@ -364,7 +376,8 @@ def build_affinity_readmodel(conn, groups: dict = None, history: list = None,
     ttg = groups["ticker_to_group"]
     aliases = groups["client_aliases"]
     cutoff = (today - timedelta(days=window_days)).isoformat()
-    recent = _recent_flows(history, aliases, ttg, cutoff)
+    recent = _recent_flows(history, aliases, ttg, cutoff,
+                           horizon=today.isoformat())
 
     # Every client with any named activity, and its top link.
     clients = [r["client"] for r in

@@ -205,12 +205,11 @@ def test_run_end_to_end_writes_readmodel_and_advisory_log():
                                  "ADANIPOWER.NS", "ADANIGREEN.NS"]}}))
         readmodel_path = Path(tmp) / "entity_affinity.json"
         advisory_path = Path(tmp) / "affinity_advisories.jsonl"
-        ea.AFFINITY_PATH = readmodel_path
-        ea.ADVISORY_LOG_PATH = advisory_path
-
         conn = brain_map.connect(":memory:")
         summary = ea.run(conn=conn, history_path=hist_path,
-                         groups_path=groups_path, today=date(2026, 8, 1))
+                         groups_path=groups_path, today=date(2026, 8, 1),
+                         readmodel_path=readmodel_path,
+                         advisory_path=advisory_path)
         assert summary["folded"] == 5 and summary["edges"] == 1
         assert summary["advisories"] == 1
         assert readmodel_path.exists() and advisory_path.exists()

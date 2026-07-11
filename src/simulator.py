@@ -108,14 +108,29 @@ def ensure_schema(conn) -> None:
     for col in ("regime_trend", "regime_vix"):
         if col not in cols:
             conn.execute(f"ALTER TABLE simulated_trades ADD COLUMN {col} TEXT")
+    # T+1-open execution-timing contract (§5.5): NULL on every technical-
+    # signal row (they execute same-day, the pre-contract behaviour);
+    # populated only for trades whose driver was an EOD-sourced signal.
+    for col, sqltype in (("signal_day", "TEXT"),
+                         ("signal_age_hours", "REAL"),
+                         ("entry_basis", "TEXT")):
+        if col not in cols:
+            conn.execute(
+                f"ALTER TABLE simulated_trades ADD COLUMN {col} {sqltype}")
     conn.commit()
 
 
-def sim_ref(underlying: str, day: str, strategy: str, expiry: str) -> str:
+def sim_ref(underlying: str, day: str, strategy: str, expiry: str,
+            basis: str = None) -> str:
     """The deterministic journal_ref for one simulated trade — same inputs,
     same ref, forever. This single key is what makes every write in the
-    pipeline (simulated_trades PK, outcomes UNIQUE, event links) idempotent."""
+    pipeline (simulated_trades PK, outcomes UNIQUE, event links) idempotent.
+    `basis` (e.g. "t1_open") keys an EOD-signal trade separately from a
+    same-day technical trade on the same structure — different information
+    sets are different trades, never a dedup collision."""
     key = f"{underlying}|{day}|{strategy}|{expiry}"
+    if basis:
+        key += f"|{basis}"
     return "sim:" + hashlib.sha1(key.encode()).hexdigest()[:12]
 
 
@@ -171,13 +186,16 @@ def build_synthetic_chain(spot: float, vix: float, days_to_expiry: int,
     return {"last_price": spot, "oc": oc}
 
 
-def _entry_for(proposal: dict, day: str, ref: str) -> dict:
+def _entry_for(proposal: dict, day: str, ref: str,
+               timing: dict = None) -> dict:
     """A journal-entry-shaped dict for the resolution helpers and the Brain
-    Map — auto-approved, clearly marked simulated, NEVER journaled."""
+    Map — auto-approved, clearly marked simulated, NEVER journaled.
+    `timing` is the §5.5 receipt for EOD-signal trades:
+    {signal_day, signal_age_hours, entry_basis}."""
     from src.regime import regime_for
     spread = proposal["spread"]
     regime = regime_for(proposal.get("view"), proposal.get("vix"))
-    return dict(regime=regime, **{
+    entry = dict(regime=regime, **{
         "short_id": ref,
         "date": day,
         "action": "SPREAD",
@@ -191,6 +209,12 @@ def _entry_for(proposal: dict, day: str, ref: str) -> dict:
         "spread": spread,
         "outcome": None,
     })
+    if timing:
+        entry["timing"] = dict(timing)
+        entry["why"] = ("(simulated — Phase 7 replay; EOD signal of "
+                        f"{timing.get('signal_day')} executed T+1 open, "
+                        f"age {timing.get('signal_age_hours')}h)")
+    return entry
 
 
 def _resolve_and_score(entry: dict, bars: list) -> dict | None:
@@ -243,13 +267,16 @@ def _record(conn, entry: dict, vix) -> None:
     result = ("win" if o["pnl_rs"] > 0 else
               "loss" if o["pnl_rs"] < 0 else "scratch")
     regime = entry.get("regime") or {}
+    timing = entry.get("timing") or {}
     conn.execute(
         "INSERT OR IGNORE INTO simulated_trades (journal_ref, underlying, "
         "strategy, view, proposed_on, expiry, vix, net_credit, net_debit, "
         "spread_width, max_loss, max_profit, lots, lot_size, resolution, "
         "exit_date, pnl_net, frictions_rs, slippage_rs, capture_pct, "
-        "r_multiple, result, verdict, regime_trend, regime_vix) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "r_multiple, result, verdict, regime_trend, regime_vix, "
+        "signal_day, signal_age_hours, entry_basis) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+        "?, ?, ?, ?, ?, ?, ?, ?)",
         (entry["short_id"], entry["ticker"], s["strategy"],
          entry["pattern_tags"][1] if len(entry["pattern_tags"]) > 1 else None,
          entry["date"], s["expiry"], vix, s.get("net_credit"),
@@ -257,23 +284,39 @@ def _record(conn, entry: dict, vix) -> None:
          s.get("max_profit"), int(s.get("lots", 1)), int(s["lot_size"]),
          o["resolution"], o["exit_date"], o["pnl_rs"], o["frictions_rs"],
          o["slippage_rs"], o["pct"], o["r_multiple"], result, o["verdict"],
-         regime.get("trend"), regime.get("vix_band")))
+         regime.get("trend"), regime.get("vix_band"),
+         timing.get("signal_day"), timing.get("signal_age_hours"),
+         timing.get("entry_basis")))
     conn.commit()
     brain_map.record_resolved_entry(conn, entry)
 
 
 def run_simulation(start: str, end: str, underlyings=("NIFTY 50",), *,
                    conn=None, bars_by_underlying: dict = None,
-                   vix_by_date: dict = None) -> dict:
+                   vix_by_date: dict = None,
+                   eod_signal_days=None, eod_signal_layer: str = "deals",
+                   opens_by_date: dict = None) -> dict:
     """The replay loop. `bars_by_underlying` maps underlying ->
     [(date_iso, low, high, close), ...] covering [warmup, end + buffer]
     (inject in tests; the CLI fetches via dhan_client). `vix_by_date` maps
     date_iso -> India VIX close (missing dates -> None: the VIX gate then
     blocks range-bound structures, exactly like a live outage).
 
+    T+1-open execution-timing contract (§5.5): days in `eod_signal_days`
+    (ISO strings) mark proposals DRIVEN by an EOD-sourced signal of that
+    day (`eod_signal_layer` names which — deals/flows/news/macro). The
+    DECISION still uses only data known by day T (closes <= T, T's VIX),
+    but EXECUTION happens at T+1's open: the option chain is priced on
+    the gapped open from `opens_by_date` ({date: open}; CLI fetches it,
+    tests inject it), the entry is dated T+1, and the row carries
+    signal_day / signal_age_hours / entry_basis="t1_open". No usable next
+    open -> the trade is REFUSED and counted, never entered at T's close
+    (a same-close fill would be trading on the future of its own fill).
+
     One position per underlying at a time: while a simulated spread is
     open, later days are skipped until its exit date — mirroring the live
     market loop's cool-down spirit at daily resolution."""
+    from src import execution_timing as et
     owns_conn = conn is None
     if conn is None:
         conn = brain_map.connect()
@@ -281,9 +324,15 @@ def run_simulation(start: str, end: str, underlyings=("NIFTY 50",), *,
     if bars_by_underlying is None:
         bars_by_underlying = {u: _fetch_bars(u, start) for u in underlyings}
     vix_by_date = vix_by_date or {}
+    eod_signal_days = set(eod_signal_days or ())
+    if eod_signal_days and opens_by_date is None:
+        opens_by_date = {}
+        for u in underlyings:
+            opens_by_date.update(_fetch_opens(u, start))
 
     stats = {"days_scanned": 0, "proposed": 0, "resolved": 0,
              "duplicates_skipped": 0, "unresolved_at_range_end": 0,
+             "t1_entries": 0, "t1_refused_no_open": 0,
              "results": {"win": 0, "loss": 0, "scratch": 0}}
     for underlying in underlyings:
         bars = bars_by_underlying.get(underlying) or []
@@ -298,9 +347,25 @@ def run_simulation(start: str, end: str, underlyings=("NIFTY 50",), *,
             if analysis is None:
                 continue  # not enough history yet at this date
             vix = vix_by_date.get(day)
-            expiry = next_expiry(date.fromisoformat(day))
-            dte = (date.fromisoformat(expiry) - date.fromisoformat(day)).days
-            chain = build_synthetic_chain(analysis["price"], vix, dte, step)
+
+            # ---- §5.5: where and when does this trade EXECUTE? ----
+            timing, exec_day, exec_index, chain_spot = None, day, i, analysis["price"]
+            if day in eod_signal_days:
+                fill = et.t1_open_entry(bars, day, opens_by_date)
+                if fill is None:
+                    stats["t1_refused_no_open"] += 1
+                    continue
+                exec_day, exec_index = fill["exec_day"], fill["bar_index"]
+                chain_spot = fill["open"]
+                timing = {"signal_day": day,
+                          "signal_age_hours": et.signal_age_hours(
+                              eod_signal_layer, day, exec_day),
+                          "entry_basis": fill["basis"]}
+
+            expiry = next_expiry(date.fromisoformat(exec_day))
+            dte = (date.fromisoformat(expiry)
+                   - date.fromisoformat(exec_day)).days
+            chain = build_synthetic_chain(chain_spot, vix, dte, step)
             result = build_proposal(
                 underlying, analysis=analysis, vix=vix, expiry=expiry,
                 chain=chain, book={"cash": SIM_BOOK_CASH, "holdings": {}},
@@ -308,7 +373,8 @@ def run_simulation(start: str, end: str, underlyings=("NIFTY 50",), *,
             if result["proposal"] is None:
                 continue
             p = result["proposal"]
-            ref = sim_ref(underlying, day, p["spread"]["strategy"], expiry)
+            ref = sim_ref(underlying, day, p["spread"]["strategy"], expiry,
+                          basis=timing["entry_basis"] if timing else None)
             stats["proposed"] += 1
             if conn.execute("SELECT 1 FROM simulated_trades WHERE journal_ref = ?",
                             (ref,)).fetchone():
@@ -317,14 +383,16 @@ def run_simulation(start: str, end: str, underlyings=("NIFTY 50",), *,
                     "SELECT exit_date FROM simulated_trades WHERE journal_ref = ?",
                     (ref,)).fetchone()["exit_date"]
                 continue
-            entry = _entry_for(p, day, ref)
-            outcome = _resolve_and_score(entry, bars[i:])
+            entry = _entry_for(p, exec_day, ref, timing=timing)
+            outcome = _resolve_and_score(entry, bars[exec_index:])
             if outcome is None:
                 stats["unresolved_at_range_end"] += 1
                 break  # bars ran out — later days can't resolve either
             entry["outcome"] = outcome
             _record(conn, entry, vix)
             stats["resolved"] += 1
+            if timing:
+                stats["t1_entries"] += 1
             stats["results"]["win" if outcome["pnl_rs"] > 0 else
                              "loss" if outcome["pnl_rs"] < 0 else "scratch"] += 1
             blocked_until = outcome["exit_date"]
@@ -357,6 +425,17 @@ def _fetch_bars(underlying: str, start: str) -> list:
                     - timedelta(days=430)).isoformat()
     return [(b["date"], b["low"], b["high"], b["close"])
             for b in get_ohlc_since(underlying, warmup_start)]
+
+
+def _fetch_opens(underlying: str, start: str) -> dict:
+    """CLI-only: {date_iso: open} for the §5.5 T+1-open execution path.
+    Kept SEPARATE from the (date, low, high, close) bar tuples — five
+    strict 4-way unpacks (plan_tracker's resolvers included) consume
+    those, so opens ride their own map instead of a fifth field."""
+    from src.dhan_client import get_ohlc_since
+    return {b["date"]: b.get("open")
+            for b in get_ohlc_since(underlying, start)
+            if b.get("open") is not None}
 
 
 def _fetch_vix_series(start: str) -> dict:

@@ -168,6 +168,26 @@ def ingest_journal(conn, journal_entries=None, extractor=None,
     today = today or date.today().isoformat()
     stats = {"ingested": 0, "skipped_duplicate": 0, "skipped_empty": 0, "failed": 0}
 
+    # One reachability check before the loop (2026-07-12, ops-card noise
+    # fix): on a host with no Ollama AT ALL — the VM, by design — every
+    # attempt below is doomed, so N rows would count as "failed" and read
+    # as breakage on the nightly health card. Check once, defer quietly
+    # with an explicit reason; the rows stay un-ingested and the Mac's
+    # next pass (which HAS Ollama) picks them up unchanged. A server that
+    # IS reachable but returns unusable output still counts per-row
+    # "failed" below — that case is genuinely retryable and worth seeing.
+    try:
+        reachable = bool(extractor.is_reachable())
+    except Exception:
+        reachable = False
+    if not reachable:
+        stats["skipped_no_llm"] = sum(1 for e in journal_entries
+                                      if _journal_text(e))
+        print(f"  (ingestion: no reachable extractor on this host — "
+              f"{stats['skipped_no_llm']} row(s) deferred to a host with "
+              "Ollama; not failures)")
+        return stats
+
     for entry in journal_entries:
         text = _journal_text(entry)
         if not text:

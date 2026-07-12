@@ -98,3 +98,10 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}: {e}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+def test_calendar_referer_is_its_own_page_not_the_deals_page():
+    """Same 403 class as flows (ledger 2026-07-12)."""
+    from src.ingestion import earnings_calendar as ec
+    assert "event-calendar" in ec._EVENTS_HEADERS["Referer"]
+    assert "bulk-and-block" not in ec._EVENTS_HEADERS["Referer"]

@@ -89,3 +89,12 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}: {e}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+def test_flows_referer_is_its_own_page_not_the_deals_page():
+    """Ledger 2026-07-12: NSE 403s a JSON call whose Referer doesn't match
+    the endpoint's owning page — this module must never borrow the deals
+    page's Referer again."""
+    from src.ingestion import flows_tracker as ft
+    assert ft._FLOWS_HEADERS["Referer"] == "https://www.nseindia.com/reports/fii-dii"
+    assert "bulk-and-block" not in ft._FLOWS_HEADERS["Referer"]

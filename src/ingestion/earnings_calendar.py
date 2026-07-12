@@ -72,13 +72,24 @@ def normalize_calendar(rows: list) -> dict:
     return events
 
 
+# Per-endpoint Referer (ledger 2026-07-12, same 403 class as flows): the
+# event-calendar API expects its own page as Referer, not the deals page.
+_EVENTS_HEADERS = dict(
+    _NSE_HEADERS,
+    Referer="https://www.nseindia.com/companies-listing/corporate-filings-event-calendar")
+
+
 def _fetch_nse_calendar(timeout: int = HTTP_TIMEOUT):
-    """Live path -> (rows, raw_bytes) or None. Never raises."""
+    """Live path -> (rows, raw_bytes) or None. Never raises. Warm-up
+    failure tolerated separately (deals_tracker discipline)."""
     opener = _nse_opener()
     try:
-        opener.open(urllib.request.Request(_NSE_HOME, headers=_NSE_HEADERS),
+        opener.open(urllib.request.Request(_NSE_HOME, headers=_EVENTS_HEADERS),
                     timeout=timeout).read()
-        req = urllib.request.Request(_NSE_EVENTS_API, headers=_NSE_HEADERS)
+    except (urllib.error.URLError, ValueError, OSError, TimeoutError):
+        pass  # cookies may already exist / API may still answer
+    try:
+        req = urllib.request.Request(_NSE_EVENTS_API, headers=_EVENTS_HEADERS)
         with opener.open(req, timeout=timeout) as resp:
             raw = resp.read()
         payload = json.loads(raw.decode("utf-8"))

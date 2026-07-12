@@ -78,13 +78,26 @@ def normalize_flows(rows: list) -> dict | None:
     return {"as_of": as_of, "fii": out.get("fii"), "dii": out.get("dii")}
 
 
+# NSE's API gateway 403s a JSON call whose Referer doesn't match the
+# endpoint's OWNING page (ledger 2026-07-12: this module borrowed the
+# deals page's Referer via _NSE_HEADERS and got 403'd where the deals
+# pull succeeded from the same host minutes earlier). Own Referer here.
+_FLOWS_HEADERS = dict(_NSE_HEADERS,
+                      Referer="https://www.nseindia.com/reports/fii-dii")
+
+
 def _fetch_nse_flows(timeout: int = HTTP_TIMEOUT):
-    """Live path -> (rows, raw_bytes) or None. Never raises."""
+    """Live path -> (rows, raw_bytes) or None. Never raises. The homepage
+    warm-up is tolerated separately (deals_tracker discipline): a failed
+    warm-up must never abort the API attempt itself."""
     opener = _nse_opener()
     try:
-        opener.open(urllib.request.Request(_NSE_HOME, headers=_NSE_HEADERS),
+        opener.open(urllib.request.Request(_NSE_HOME, headers=_FLOWS_HEADERS),
                     timeout=timeout).read()
-        req = urllib.request.Request(_NSE_FLOWS_API, headers=_NSE_HEADERS)
+    except (urllib.error.URLError, ValueError, OSError, TimeoutError):
+        pass  # cookies may already exist / API may still answer
+    try:
+        req = urllib.request.Request(_NSE_FLOWS_API, headers=_FLOWS_HEADERS)
         with opener.open(req, timeout=timeout) as resp:
             raw = resp.read()
         payload = json.loads(raw.decode("utf-8"))

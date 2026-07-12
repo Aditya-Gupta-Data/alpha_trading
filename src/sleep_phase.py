@@ -477,6 +477,17 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  H. pattern monitor failed: {e}")
         results["pattern_monitor"] = None
+    try:
+        # Task I — shadow resolution sweep (owner concern #1): every
+        # host-linked shadow fire whose real trade has resolved inherits
+        # the host's outcome — the patterns' out-of-sample evidence
+        # stream. Pure DB joins; VM-safe; a no-op until patterns exist.
+        from src.discovery import shadow_runner
+        results["shadow_sweep"] = shadow_runner.resolve_from_outcomes(conn)
+        print(f"  I. shadow sweep: {results['shadow_sweep']} resolved")
+    except Exception as e:
+        print(f"  I. shadow sweep failed: {e}")
+        results["shadow_sweep"] = None
 
     conn.close()
     return results

@@ -89,6 +89,21 @@ def test_ingest_from_dummy_journal_without_double_inserting():
     conn.close()
 
 
+def test_ingest_defers_quietly_when_no_extractor_host():
+    """VM case (2026-07-12 ops-card noise fix): no reachable Ollama ->
+    rows DEFER with an explicit reason instead of counting as failures,
+    and nothing is hash-logged so the Mac's pass ingests them."""
+    conn = fresh_conn()
+    ex = fake_extractor(frames=[dict(FRAME_TCS)], reachable=False)
+    stats = sleep_phase.ingest_journal(conn, JOURNAL_ENTRIES, extractor=ex,
+                                       today=TODAY.isoformat())
+    assert stats["failed"] == 0
+    assert stats["skipped_no_llm"] == 2   # the 3rd fixture row has no text
+    assert conn.execute("SELECT COUNT(*) AS n FROM ingest_log").fetchone()["n"] == 0
+    ex.extract_event_json.assert_not_called()   # zero doomed calls
+    conn.close()
+
+
 def test_ingest_failure_is_retryable_not_logged():
     conn = fresh_conn()
     ex = fake_extractor(frames=[])  # extractor always returns None (Ollama down)

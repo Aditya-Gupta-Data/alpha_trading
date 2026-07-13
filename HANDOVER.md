@@ -236,9 +236,12 @@ at deploy** (the switch means nothing on the Mac — the VM is the engine,
 decision #47). Consequence to expect: proposals auto-journal as APPROVED
 and the `/pending` queue stays empty by design; the human role shifts
 from Approve/Reject to monitoring, and the margin gate + persisted
-cooldown (Phase 1/2) become the only brakes (note: no concentration/
-duplicate-exposure check exists — review flagged this as the one judgment
-the human gate used to supply). Flip it back off by deleting the line and
+cooldown (Phase 1/2) become the only brakes. **UPDATE 2026-07-13: the
+flagged concentration/duplicate-exposure gap is CLOSED** — decision #68's
+`src/exposure_gate.py` now blocks a second open spread on the same
+underlying+direction at proposal time (before margin lock), after the
+book was observed carrying NINE near-identical bear put spreads; a
+trend-flip exit advisory rides the live loop alongside it. Flip it back off by deleting the line and
 restarting `alpha-trading` — it is re-read per call, no code change.
 
 ## ✅ Regime-Aware Memory — BUILT AND TESTED; skeptic hypothesis honestly NOT confirmed (2026-07-09)

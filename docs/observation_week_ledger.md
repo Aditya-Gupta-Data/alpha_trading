@@ -489,3 +489,34 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   "Invalid TOTP", the retry waited for the next TOTP window and minted
   clean (expiry 2026-07-12T07:00). The retry hardening earned its keep
   on its very first scheduled firing.
+
+## Issue 12 — correlated duplicate-exposure pileup (2026-07-13, first live Monday)
+
+- **Observed (verified against the VM's journal + margin_locks):** the live
+  paper book held NINE open bear put spreads accumulated over three sessions
+  (Jul 9 ×4 — user's own manual "Test" entries; Jul 10 ×3 and Jul 13 ×2 —
+  engine proposals, the Jul-13 pair auto-approved). All nine expressed the
+  same bearish index view (4× NIFTY 50, 5× NIFTY BANK), ~Rs.49.4k combined
+  max loss, ~Rs.1.79L margin locked. At the 11:02 IST mark, 7 of 9 were
+  underwater (combined open P&L ≈ −Rs.11.3k) while spot chopped sideways.
+- **Root cause:** nothing between the 2h per-underlying cooldown and the
+  margin gate inspects open positions at proposal time. The binary trend
+  read (SMA50<SMA200) stays "bearish" across sessions, so each morning
+  re-proposes the same trade; with PAPER_AUTO_APPROVE=1 the human judgment
+  that used to catch duplicates is out of the loop (exactly the gap the
+  deploy-day handover note flagged).
+- **Fix (decision #68, built + tested this session, 25 new tests, suite
+  949 green; NOT yet deployed to the VM at the time of this entry):**
+  `src/exposure_gate.py` — one open spread per underlying+direction,
+  enforced in `run_headless` before the margin gate, fail-open,
+  sandbox-exempt; blocks ledgered to `logs/exposure_blocks.jsonl` with a
+  once-per-day Discord note. Companion trend-flip exit advisory in the
+  live loop (advisory only, one de-duped card per flip). Confidence-based
+  trade prioritisation deliberately deferred to the Phase-4 harness.
+- **Also this session (separate, minor):** the Jul-3 ONGC.NS "testing
+  default suggestions" equity entry was removed from the VM journal
+  (backup `data/journal.jsonl.bak-20260713-100420`); the Jul-9 "Test"
+  spreads were left in place by user decision. A `rejected` spread
+  (`f2b9edbd`, Jul 10) was found to have locked margin for ~2 minutes
+  before releasing at Rs.0 — self-healed, logged here as a watch item on
+  the reject path.

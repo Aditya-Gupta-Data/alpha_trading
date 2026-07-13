@@ -322,7 +322,8 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                aggregators: dict = None, registry: AlertRegistry = None,
                notify_fn=None, now_fn=ist_now,
                publish_snapshot: bool = False,
-               candle_sink: "CandleSink" = None) -> list:
+               candle_sink: "CandleSink" = None,
+               flip_registry=None, closes_fn=None) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
     push an advisory alert for each NEW exit signal. Returns the alerts
@@ -384,6 +385,22 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                 f"(modeled P&L Rs.{sig['live_pnl_rs']:,.2f}, "
                 f"{sig['days_left']}d to expiry). Advisory only — the "
                 "tracker settles at the daily close.")
+
+    # Decision #68: trend-flip exit advisory. A None flip_registry (the
+    # default — offline tests, legacy callers) is a byte-identical no-op.
+    # Belt-and-braces try/except on top of the advisory's own fail-open:
+    # this block can never touch exit alerts or snapshot publishing.
+    if flip_registry is not None:
+        try:
+            from src import exposure_gate
+            for u, spot in spots.items():
+                adv = exposure_gate.trend_flip_advisory(
+                    u, spot, registry=flip_registry, entries=entries,
+                    closes_fn=closes_fn, today=now.date())
+                if adv and notify_fn:
+                    notify_fn(adv["card"])
+        except Exception as e:
+            print(f"  (trend-flip advisory skipped: {e})")
     return fired
 
 
@@ -409,6 +426,10 @@ async def run_live_loop(underlyings=UNDERLYINGS,
     aggregators: dict = {}
     registry = AlertRegistry()
     candle_sink = CandleSink()   # Phase-0 tap: sealed candles -> the lake
+    # Decision #68: persistent per-ticker trend state so a flip fires ONE
+    # advisory card, not one per polling minute (AlertRegistry's pattern).
+    from src.exposure_gate import TrendFlipRegistry
+    flip_registry = TrendFlipRegistry()
     print(f"[Live Bridge] armed — {', '.join(underlyings)} every "
           f"{interval:g}s during "
           f"{MARKET_OPEN:%H:%M}-{MARKET_CLOSE:%H:%M} IST "
@@ -420,7 +441,7 @@ async def run_live_loop(underlyings=UNDERLYINGS,
                 live_cycle, underlyings, quote_fn=quote_fn,
                 aggregators=aggregators, registry=registry,
                 notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True,
-                candle_sink=candle_sink)
+                candle_sink=candle_sink, flip_registry=flip_registry)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
                       f"({sig['capture_pct']:.0f}% capture).", flush=True)

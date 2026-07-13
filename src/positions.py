@@ -57,6 +57,8 @@ def _from_spread_entry(e: dict, today: date = None) -> dict:
         "ticker": e.get("ticker"),
         "kind": "spread",
         "strategy": s.get("strategy"),
+        "direction": s.get("direction"),  # stamped by StrategyConstructor;
+                                          # None on pre-stamp legacy lines
         "entry_price": net,               # net credit/debit per share
         "target": None,                   # spreads bound P&L structurally:
         "stop_loss": None,                # max_profit / max_loss below

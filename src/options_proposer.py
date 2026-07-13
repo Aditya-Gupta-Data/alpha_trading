@@ -472,6 +472,17 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     if result["proposal"] is None:
         return {"proposed": False, "reason": result["reason"], "entry": None}
     p = result["proposal"]
+    # Decision #68: one open position per underlying+direction. Sits
+    # BEFORE enrichment, the evidence stamp and the margin gate — a
+    # blocked duplicate costs nothing downstream and never locks margin.
+    # Sandbox books (simulator / tests / what-ifs) are their own worlds —
+    # exempt, same rule as the margin gate below. Fail-OPEN by hard rule.
+    if "book" not in state:
+        from src import exposure_gate
+        allowed, exp_reason = exposure_gate.gate_entry(
+            p, notify_fn=_notify_discord)
+        if not allowed:
+            return {"proposed": False, "reason": exp_reason, "entry": None}
     # Phase 6C: enrich the Discord rationale with linked historical patterns
     # from the knowledge graph (fail-safe: "" when the graph is empty).
     p["memory_context"] = _memory_context_for(_memory_seeds(p))

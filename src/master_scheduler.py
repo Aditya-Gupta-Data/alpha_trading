@@ -249,6 +249,8 @@ async def _main() -> dict:
 
 
 if __name__ == "__main__":
+    from src import deploy_log
+    deploy_log.record_startup("master_scheduler")
     try:
         summary = asyncio.run(_main())
         print(f"[Scheduler] done: {summary}")

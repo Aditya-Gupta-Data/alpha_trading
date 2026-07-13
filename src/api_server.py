@@ -45,13 +45,14 @@ from starlette.requests import Request
 # truth for how a key is read from .env and compared (constant-time).
 from src.api import app as engine_app
 from src.api import _extract_api_key, _keys_match, _read_api_key
-from src import options_proposer
+from src import deploy_log, options_proposer
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Run the engine app's lifespan (auto-sync + watchlist poll loops) —
     Starlette does not start a mounted app's lifespan on its own."""
+    deploy_log.record_startup("api_server")
     async with engine_app.router.lifespan_context(engine_app):
         yield
 

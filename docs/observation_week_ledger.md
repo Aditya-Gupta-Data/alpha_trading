@@ -9,6 +9,16 @@ Conventions: `Symptom` = what was observed (Discord/logs), `Root cause` =
 confirmed mechanism, `Resolution` = what was actually done + commit ids,
 `Follow-up` = anything the triage should still decide.
 
+**What code was live at the time:** since 2026-07-13 every service
+startup on the VM appends its running commit to `logs/deploy_log.jsonl`
+(VM-local, git-ignored) — view with `python3 -m src.deploy_log` on the
+VM. New issue entries should cite the sha that was live when the
+symptom appeared, so triage can tell "broke after deploy X" apart from
+"was always broken". Deploys before 07-13 predate the log; the only
+verified deploy timestamp is the full scratchpad-phases deploy Fri
+2026-07-10 ~21:45 IST (per HANDOVER) — the 07-12 ops fixes' exact
+deploy time went unrecorded, which is precisely the gap this log closes.
+
 ---
 
 ## Date: 2026-07-09

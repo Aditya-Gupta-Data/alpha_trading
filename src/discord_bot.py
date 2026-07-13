@@ -58,6 +58,7 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 import discord
 from discord import app_commands
 
+from src import deploy_log
 from src.forecast import describe, forecast, load_news, load_tickers, load_weights
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -524,6 +525,7 @@ async def on_message(message: discord.Message):
 
 def run() -> None:
     _load_env()
+    deploy_log.record_startup("discord_bot")
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if not token:
         raise SystemExit("DISCORD_BOT_TOKEN is not set in .env -- see "

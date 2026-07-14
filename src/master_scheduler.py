@@ -35,9 +35,11 @@ During the window it supervises the two live loops as asyncio tasks:
 
   EXIT   live_bridge.run_live_loop: every minute, live ticks are folded
          into candles and every ACTIVE open spread is marked against the
-         live spot — profit-take / pre-expiry exit conditions fire ONE
-         advisory Discord alert each (the plan tracker still settles at
-         the daily close; the live loop is read-only by decision #41).
+         live spot. Profit-take conditions are SQUARED OFF intraday on
+         real chain quotes (decision #69, config-gated) through the
+         tracker's one settlement path; pre-expiry conditions stay ONE
+         advisory Discord alert each (the tracker settles those at the
+         daily close; #41's read-only rule holds everywhere else).
 
 Session bookends go to Discord (fail-safe, muzzled in tests by the
 Phase 6J guard): the OPEN card carries the Phase 6G account snapshot

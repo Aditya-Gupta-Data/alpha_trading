@@ -318,12 +318,63 @@ class AlertRegistry:
         return True
 
 
+# --------------------------------------------- intraday square-off (#69)
+
+def _leg_quotes_for(entry: dict) -> dict | None:
+    """REAL last-traded premiums for every leg of one open spread, from
+    the live option chain: {(strike, 'CE'/'PE') -> premium}. None when the
+    chain is unreachable or ANY leg has no quote — the caller falls back
+    to the EOD path, never a modeled fill (decision #69)."""
+    try:
+        from src.dhan_client import get_option_chain
+        from src.options_proposer import _premium
+        spread = entry["spread"]
+        chain = get_option_chain(entry["ticker"], spread["expiry"])
+        if not chain:
+            return None
+        quotes = {}
+        for leg in spread["legs"]:
+            prem = _premium(chain, leg["strike"], leg["option_type"].lower())
+            if prem is None or prem <= 0:
+                return None
+            quotes[(float(leg["strike"]), leg["option_type"].upper())] = prem
+        return quotes
+    except Exception:
+        return None
+
+
+def intraday_square_off(sig: dict, entries=None, quotes_fn=_leg_quotes_for,
+                        today: date = None) -> dict:
+    """The production square-off seam: profit-take signal -> real chain
+    quotes -> plan_tracker.resolve_intraday_profit_take (the ONE
+    settlement path; decision #41's read-only rule is amended by #69 for
+    exactly this call). Approved trades only; every failure returns a
+    status and leaves the trade to the EOD path. Never raises."""
+    try:
+        entry = next((e for e in _open_spreads(entries)
+                      if e.get("short_id") == sig["short_id"]), None)
+        if entry is None:
+            return {"status": "not_open", "short_id": sig["short_id"]}
+        if entry.get("decision") != "approved":
+            return {"status": "not_approved", "short_id": sig["short_id"]}
+        quotes = quotes_fn(entry)
+        if not quotes:
+            return {"status": "no_chain_quotes", "short_id": sig["short_id"]}
+        return pt.resolve_intraday_profit_take(
+            sig["short_id"], quotes,
+            model_capture_pct=sig.get("capture_pct"), today=today)
+    except Exception as exc:
+        return {"status": "error", "short_id": sig.get("short_id"),
+                "reason": str(exc)}
+
+
 def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                aggregators: dict = None, registry: AlertRegistry = None,
                notify_fn=None, now_fn=ist_now,
                publish_snapshot: bool = False,
                candle_sink: "CandleSink" = None,
-               flip_registry=None, closes_fn=None) -> list:
+               flip_registry=None, closes_fn=None,
+               square_off_fn=None) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
     push an advisory alert for each NEW exit signal. Returns the alerts
@@ -374,8 +425,37 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
         if sig["signal"] == "hold" or not registry.fresh(sig):
             continue
         fired.append(sig)
+        # Decision #69: with a square_off_fn armed (the production daemon,
+        # config-gated), a profit-take signal is EXECUTED intraday on real
+        # chain quotes instead of advised. None (the default — offline
+        # tests, legacy callers) keeps the loop byte-identical read-only
+        # advisory (#41). Every non-squared status falls back to the
+        # advisory + the EOD path untouched.
+        squared = None
+        if square_off_fn is not None and sig["signal"] == "profit_take":
+            try:
+                squared = square_off_fn(sig)
+            except Exception:
+                squared = None
+        if squared and squared.get("status") == "squared_off":
+            sig["squared_off"] = True
+            if notify_fn:
+                notify_fn(
+                    f"✅ **SQUARED OFF intraday — {sig['ticker']} "
+                    f"{(sig['strategy'] or 'spread').replace('_', ' ')}** "
+                    f"(`{sig['short_id']}`)\n"
+                    f"profit take filled at {squared['capture_pct']:.0f}% "
+                    f"of max profit on REAL chain quotes — P&L "
+                    f"Rs.{squared['pnl_rs']:,.2f} net (booked now, "
+                    "decision #69; model had said "
+                    f"{sig['capture_pct']:.0f}%).")
+            continue
         if notify_fn:
             emoji = "🎯" if sig["signal"] == "profit_take" else "⏳"
+            fallback = ""
+            if squared is not None:
+                fallback = (f" (intraday fill declined: "
+                            f"{squared.get('status')} — EOD path owns it)")
             notify_fn(
                 f"{emoji} **LIVE exit signal — {sig['ticker']} "
                 f"{(sig['strategy'] or 'spread').replace('_', ' ')}** "
@@ -384,7 +464,7 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                 f"{sig['capture_pct']:.0f}% of max profit "
                 f"(modeled P&L Rs.{sig['live_pnl_rs']:,.2f}, "
                 f"{sig['days_left']}d to expiry). Advisory only — the "
-                "tracker settles at the daily close.")
+                f"tracker settles at the daily close.{fallback}")
 
     # Decision #68: trend-flip exit advisory. A None flip_registry (the
     # default — offline tests, legacy callers) is a byte-identical no-op.
@@ -430,6 +510,21 @@ async def run_live_loop(underlyings=UNDERLYINGS,
     # advisory card, not one per polling minute (AlertRegistry's pattern).
     from src.exposure_gate import TrendFlipRegistry
     flip_registry = TrendFlipRegistry()
+    # Decision #69: intraday profit-take square-off, config-gated so it
+    # can be disabled without a code change ("intraday_profit_take": false
+    # in config.json). Default ON — the owner's 2026-07-14 call.
+    square_off_fn = None
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        _cfg = _json.loads((_Path(__file__).resolve().parent.parent
+                            / "config.json").read_text())
+    except Exception:
+        _cfg = {}
+    if _cfg.get("intraday_profit_take", True):
+        square_off_fn = intraday_square_off
+        print("[Live Bridge] intraday profit-take square-off ARMED "
+              "(real chain quotes, decision #69).", flush=True)
     print(f"[Live Bridge] armed — {', '.join(underlyings)} every "
           f"{interval:g}s during "
           f"{MARKET_OPEN:%H:%M}-{MARKET_CLOSE:%H:%M} IST "
@@ -441,7 +536,8 @@ async def run_live_loop(underlyings=UNDERLYINGS,
                 live_cycle, underlyings, quote_fn=quote_fn,
                 aggregators=aggregators, registry=registry,
                 notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True,
-                candle_sink=candle_sink, flip_registry=flip_registry)
+                candle_sink=candle_sink, flip_registry=flip_registry,
+                square_off_fn=square_off_fn)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
                       f"({sig['capture_pct']:.0f}% capture).", flush=True)

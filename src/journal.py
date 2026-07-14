@@ -73,6 +73,40 @@ def rewrite_all(entries: list) -> None:
             f.write(json.dumps(entry) + "\n")
 
 
+def update_entry(short_id: str, mutate_fn) -> dict | None:
+    """Race-safe read-modify-write of ONE journal entry (decision #69).
+
+    Two processes now resolve trades — the api service's hourly tracker
+    sweep and the scheduler's live loop (intraday square-off). A naive
+    read → long work → rewrite_all() from either can clobber the other's
+    outcome with a stale in-memory copy. This helper is the shared safe
+    write: hold an OS-level lock on a sidecar lockfile, re-read the file
+    FRESH, apply `mutate_fn(entry)` to the matching row only, and rewrite
+    atomically — so every writer merges against the latest truth.
+
+    mutate_fn receives the fresh entry dict and mutates it in place;
+    return False from it to abort (nothing written, returns None) — the
+    validate-then-write seam for "someone else already resolved this".
+    Returns the updated entry, or None (not found / aborted)."""
+    import fcntl
+    DATA_DIR.mkdir(exist_ok=True)
+    lock_path = DATA_DIR / "journal.lock"
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            entries = read_all()
+            target = next((e for e in entries
+                           if e.get("short_id") == short_id), None)
+            if target is None:
+                return None
+            if mutate_fn(target) is False:
+                return None
+            rewrite_all(entries)
+            return target
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def new_entry(
     proposal: dict,
     decision: str,

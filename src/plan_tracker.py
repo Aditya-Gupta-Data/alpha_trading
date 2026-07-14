@@ -207,6 +207,150 @@ def _settle_spread_cash(pnl_net: float) -> bool:
     return True
 
 
+# ------------------------------------------------- intraday square-off
+
+def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict) -> tuple:
+    """(total_frictions, total_slippage) like _spread_exit_costs, but the
+    exit side is priced on REAL quoted premiums instead of the linear
+    model — the intraday square-off's cost basis (decision #69)."""
+    qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
+    frictions = slippage = 0.0
+    for leg in spread["legs"]:
+        entry_side = leg["side"].upper()
+        exit_side = "SELL" if entry_side == "BUY" else "BUY"
+        exit_premium = float(leg_exit_premiums[(float(leg["strike"]),
+                                                leg["option_type"].upper())])
+        frictions += pf.calculate_trade_frictions("OPTION", entry_side, leg["premium"], qty)
+        frictions += pf.calculate_trade_frictions("OPTION", exit_side, exit_premium, qty)
+        slippage += apply_slippage(leg["premium"], "OPTION") * qty
+        slippage += apply_slippage(exit_premium, "OPTION") * qty
+    return frictions, slippage
+
+
+def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
+                                 model_capture_pct: float = None,
+                                 today: date = None) -> dict:
+    """Decision #69 (owner, 2026-07-14): square off ONE approved open
+    spread the moment its profit-take fires intraday — priced on REAL
+    option-chain quotes, never the linear model. The live loop calls this
+    (the ONE settlement seam it is allowed); the same helpers the EOD
+    path uses do the arithmetic, and journal.update_entry makes the write
+    race-safe against the hourly tracker sweep.
+
+    `leg_quotes` maps (strike, 'CE'/'PE') -> last traded premium for every
+    leg. The threshold is RE-VERIFIED on these real quotes: a modeled 70%
+    that is really 55% does NOT exit (model-vs-market divergence guard) —
+    the EOD path keeps owning it. Returns {"status", ...}; every non-
+    "squared_off" status leaves the trade untouched for the EOD path.
+    Never raises."""
+    today = today or date.today()
+    result = {"status": "error", "short_id": short_id}
+    try:
+        def _mutate(entry):
+            spread = entry.get("spread")
+            if not spread or entry.get("outcome") is not None:
+                result["status"] = "already_resolved"
+                return False
+            if entry.get("decision") != "approved":
+                result["status"] = "not_approved"
+                return False
+            # Every leg must have a real quote or we refuse (fail to EOD).
+            try:
+                m_exit = sum((1.0 if l["side"].upper() == "BUY" else -1.0)
+                             * float(leg_quotes[(float(l["strike"]),
+                                                 l["option_type"].upper())])
+                             for l in spread["legs"])
+            except (KeyError, TypeError, ValueError):
+                result["status"] = "missing_leg_quote"
+                return False
+            lot = int(spread["lot_size"])
+            lots = int(spread.get("lots", 1))
+            qty = lot * lots
+            max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+            max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+            m_entry = _spread_entry_mark(spread)
+            profit_ps = max(-max_loss_ps, min(m_exit - m_entry, max_profit_ps))
+            # The real-quote verification gate.
+            if not (max_profit_ps > 0 and profit_ps
+                    >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
+                result["status"] = "below_threshold_on_real_quotes"
+                result["real_capture_pct"] = round(
+                    profit_ps / max_profit_ps * 100, 2) if max_profit_ps else 0.0
+                return False
+
+            m_exit = m_entry + profit_ps          # clamped basket exit mark
+            gross_pnl = profit_ps * qty
+            frictions, slippage = _spread_exit_costs_quoted(
+                spread, leg_quotes)
+            pnl_net = round(gross_pnl - frictions - slippage, 2)
+            capture_pct = (gross_pnl / (max_profit_ps * qty) * 100
+                           if max_profit_ps > 0 else 0.0)
+            max_loss_total = float(spread["max_loss"]) * lots
+
+            _settle_spread_cash(pnl_net)
+            from src import portfolio_manager as pm
+            pm.release_entry(short_id, pnl_net)
+
+            entry["outcome"] = {
+                "checked": today.isoformat(),
+                "resolution": "profit_take",
+                "price": round(m_exit, 2),
+                "exit_date": today.isoformat(),
+                "pct": round(capture_pct, 2),
+                "r_multiple": round(pnl_net / max_loss_total, 2)
+                              if max_loss_total > 0 else None,
+                "days_in_trade": (today
+                                  - date.fromisoformat(entry["date"])).days,
+                "pnl_rs": pnl_net,
+                "frictions_rs": round(frictions, 2),
+                "slippage_rs": round(slippage, 2),
+                "exit_style": "atomic_basket",
+                "exit_basis": "intraday_chain",    # vs the EOD path's bars
+                "model_capture_pct": model_capture_pct,  # signal-vs-fill gap
+                "hypothetical": False,
+                "position_closed": True,
+                "verdict": _spread_verdict(entry, "profit_take", pnl_net,
+                                           capture_pct),
+            }
+            result.update(status="squared_off", pnl_rs=pnl_net,
+                          capture_pct=round(capture_pct, 2))
+            return True
+
+        updated = journal.update_entry(short_id, _mutate)
+        if updated is None:
+            if result["status"] == "error":
+                result["status"] = "not_found"
+            return result
+
+        # Post-settlement recording (both fail-open; the trade IS closed).
+        try:
+            brain = brain_map.connect()
+            try:
+                record_post_mortem(updated, brain)
+            finally:
+                brain.close()
+        except Exception:
+            pass
+        try:
+            from src.notifier import fire_broadcast
+            fire_broadcast({
+                "event": "closed",
+                "ticker": updated["ticker"],
+                "date": today.isoformat(),
+                "strategy": (updated.get("spread") or {}).get("strategy"),
+                "pnl_rs": result.get("pnl_rs"),
+                "note": (f"intraday square-off at "
+                         f"{result.get('capture_pct', 0):.0f}% of max "
+                         "profit (real chain quotes, decision #69)"),
+            })
+        except Exception:
+            pass
+        return result
+    except Exception as exc:
+        result["reason"] = str(exc)
+        return result
+
+
 def _spread_verdict(entry: dict, resolution: str, pnl_net: float, capture_pct: float) -> str:
     approved = entry["decision"] == "approved"
     if resolution == "profit_take":

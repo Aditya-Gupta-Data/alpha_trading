@@ -178,6 +178,15 @@ def discord_positions():
     return {"ok": True, "positions": active_positions()}
 
 
+@app.get("/api/discord/pnl")
+def discord_pnl():
+    """The owner's on-demand P&L (2026-07-14 ask): realized (banked) +
+    live marked + honest total, via portfolio_report.build_pnl_card.
+    Read-only; every layer inside degrades honestly, never errors."""
+    from src.portfolio_report import build_pnl_card
+    return {"ok": True, "card": build_pnl_card()}
+
+
 # Everything else — watchlist, chat, decision, scorecard, static dashboard —
 # is the engine app, unchanged, now behind the strict gate. Mounted LAST so
 # the gateway's own routes above win the match first.

@@ -111,6 +111,7 @@ def test_read_exposure_via_read_only_connection():
         exposure = pr.read_exposure(db)
     assert exposure == {"locked_margin_rs": 20422.5,
                         "equity_rs": 1_000_000.0,
+                        "realized_pnl_rs": 0.0,
                         "exposure_pct": 2.04}
 
 

@@ -470,6 +470,31 @@ async def pending(interaction: discord.Interaction):
                                         view=_pending_view(p["trade_id"]))
 
 
+def _fetch_pnl() -> dict:
+    """GET /api/discord/pnl -> the realized + live-marked P&L card."""
+    status, body = _bridge_call("GET", "/api/discord/pnl")
+    if status != 200:
+        raise RuntimeError(f"gateway answered {status}: {body[:200]}")
+    data = json.loads(body)
+    return data.get("card") or {}
+
+
+@tree.command(name="pnl",
+              description="P&L now: realized (banked) + live marked on open positions (paper)")
+async def pnl(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    try:
+        card = await asyncio.to_thread(_fetch_pnl)
+    except Exception as e:
+        await interaction.followup.send(
+            f"Can't reach the gateway at {_bridge_base_url()}: {e}\n"
+            "(Is the alpha-trading service running, and API_KEY set in .env "
+            "on this machine?)")
+        return
+    await interaction.followup.send(card.get("text") or
+                                    "(no P&L data available)")
+
+
 @tree.command(name="positions",
               description="Open paper positions: entry, target/stop, time in trade (read-only)")
 async def positions(interaction: discord.Interaction):

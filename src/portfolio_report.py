@@ -181,8 +181,8 @@ def read_exposure(db_path: Path = None) -> dict | None:
                 "SELECT COALESCE(SUM(margin_rs), 0) FROM margin_locks "
                 "WHERE released_at IS NULL").fetchone()[0]
             row = conn.execute(
-                "SELECT starting_capital + realized_pnl FROM account_state "
-                "WHERE id = 1").fetchone()
+                "SELECT starting_capital + realized_pnl, realized_pnl "
+                "FROM account_state WHERE id = 1").fetchone()
         finally:
             conn.close()
     except sqlite3.OperationalError:
@@ -193,6 +193,7 @@ def read_exposure(db_path: Path = None) -> dict | None:
     locked = float(locked)
     return {"locked_margin_rs": round(locked, 2),
             "equity_rs": round(equity, 2),
+            "realized_pnl_rs": round(float(row[1]), 2),
             "exposure_pct": round(locked / equity * 100, 2) if equity else None}
 
 
@@ -220,6 +221,10 @@ def build_report_payload(marked: list, open_count: int, unmarked: int,
             fields.append({"name": f"Top Loser — {loser['ticker']}",
                            "value": f"{_rs(loser['live_pnl_rs'])} "
                                     f"({loser['detail']})", "inline": False})
+    if exposure is not None and exposure.get("realized_pnl_rs") is not None:
+        fields.append({"name": "Realized P&L (banked)",
+                       "value": _rs(exposure["realized_pnl_rs"]),
+                       "inline": True})
     if exposure is not None:
         value = (f"Rs.{exposure['locked_margin_rs']:,.0f} locked of "
                  f"Rs.{exposure['equity_rs']:,.0f} equity")
@@ -239,6 +244,76 @@ def build_report_payload(marked: list, open_count: int, unmarked: int,
                        "tracker owns every exit. Paper only.",
         "fields": fields,
     }
+
+
+def build_pnl_card(entries: list = None, spot_fn=None,
+                   db_path: Path = None, summary: dict = None,
+                   marked: list = None, mark_source=None,
+                   now=None) -> dict:
+    """The owner's on-demand P&L answer (2026-07-14 ask): REALIZED
+    (banked, from the capital layer) + LIVE MARKED (open positions via
+    the one shared mark ladder) + the honest total, in one phone-first
+    text. Injectable summary/marks for tests; the live path reads the
+    real account + marks. Never raises — every layer degrades to an
+    honest absence line, never a guess."""
+    from datetime import datetime
+    now = now or datetime.now()
+    if summary is None:
+        try:
+            from src import brain_map, portfolio_manager as pm
+            conn = brain_map.connect(db_path)
+            try:
+                summary = pm.account_summary(conn)
+            finally:
+                conn.close()
+        except Exception as e:
+            summary = {"error": str(e)}
+    if marked is None:
+        try:
+            marked, mark_source = get_live_marks(entries=entries,
+                                                 spot_fn=spot_fn)
+        except Exception:
+            marked, mark_source = [], None
+
+    realized = summary.get("realized_pnl")
+    live_net = (round(sum(m["live_pnl_rs"] for m in marked), 2)
+                if marked else None)
+    total = (round((realized or 0.0) + (live_net or 0.0), 2)
+             if realized is not None or live_net is not None else None)
+
+    lines = [f"💰 **P&L — {now.strftime('%Y-%m-%d %H:%M IST')}** (paper)"]
+    if realized is not None:
+        lines.append(f"Realized (banked): {_rs(realized)}")
+    else:
+        lines.append(f"Realized: unavailable ({summary.get('error', '?')})")
+    if live_net is not None:
+        src_note = {"engine_snapshot": "engine snapshot",
+                    "direct_fetch": "direct quotes",
+                    "mixed": "snapshot + quotes"}.get(mark_source,
+                                                      mark_source or "?")
+        lines.append(f"Live marked ({len(marked)} open): {_rs(live_net)} "
+                     f"[{src_note}]")
+    else:
+        lines.append("Live marked: no marks available "
+                     "(market closed / no open positions / stale snapshot)")
+    if total is not None:
+        lines.append(f"**Total if all closed at marks: {_rs(total)}**")
+    if summary.get("equity") is not None:
+        lines.append(f"Equity Rs.{summary['equity']:,.2f} | free "
+                     f"Rs.{summary.get('available_cash', 0):,.2f} | locked "
+                     f"Rs.{summary.get('locked_margin', 0):,.2f} "
+                     f"({summary.get('open_locks', 0)} open)")
+    if summary.get("trading_halted"):
+        lines.append("⛔ RISK-OF-RUIN HALT ACTIVE")
+    if marked:
+        w = max(marked, key=lambda m: m["live_pnl_rs"])
+        l = min(marked, key=lambda m: m["live_pnl_rs"])
+        lines.append(f"Best: {w['ticker']} {_rs(w['live_pnl_rs'])}"
+                     + (f" · Worst: {l['ticker']} {_rs(l['live_pnl_rs'])}"
+                        if l["short_id"] != w["short_id"] else ""))
+    return {"realized_pnl": realized, "live_net": live_net, "total": total,
+            "open_marked": len(marked or []), "mark_source": mark_source,
+            "text": "\n".join(lines)}
 
 
 # ------------------------------------------------------------------ main

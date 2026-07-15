@@ -49,6 +49,18 @@ PROBLEM_PATTERNS = re.compile(
     r"unusable|unavailable|corrupt|refused|denied|timed?\s*out|"
     r"muzzled \[test env\]|risk-of-ruin|margin exhaustion)\b")
 
+# Zero-valued failure counters inside healthy stats dicts — e.g. the
+# sleep phase's "{'ingested': 3, ..., 'failed': 0}" — are NOT problems
+# (2026-07-14 false alarm: a clean ingestion line tripped the card via
+# the literal word "failed"). Scrub them before the problem test so any
+# NONZERO count still fires.
+ZERO_STAT_PATTERNS = re.compile(
+    r"(?i)['\"]?(failed|errors?|failures?)['\"]?\s*[:=]\s*0\b")
+
+
+def is_problem_line(text: str) -> bool:
+    return bool(PROBLEM_PATTERNS.search(ZERO_STAT_PATTERNS.sub("", text)))
+
 # What should have written its log today (name -> weekdays-only flag).
 # This default is the VM's schedule (the engine machine). Any deployment
 # can override per-machine via OPS_EXPECTED_JOBS, a comma list of
@@ -127,7 +139,7 @@ def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None) -> tuple:
         seen: dict = {}
         for line in chunk.splitlines():
             text = line.strip()
-            if not text or not PROBLEM_PATTERNS.search(text):
+            if not text or not is_problem_line(text):
                 continue
             key = text[:MAX_LINE_CHARS]
             if key in seen:

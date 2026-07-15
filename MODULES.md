@@ -10,6 +10,21 @@ the first stop for every code-review/search agent — point them here
 instead of letting them grep the tree from scratch; a stale index is what
 makes reviews expensive.
 
+## Department map (the Manager registry) — see `ARCHITECTURE.md` for the plain-English version
+
+Every module belongs to ONE department; to change a department's behavior,
+approach its **Manager** — don't dig through files.
+
+| # | Department | Manager (the seam you approach) | The file sections below |
+|---|---|---|---|
+| 1 | **Data** (market data in) | `dhan_guard.SafeDhanClient` (+ `token_provider`; `market_snapshot` for shared marks) | Data layer · Ingestion |
+| 2 | **Decision** (the live engine) | `options_proposer.run_headless` (+ `decide_pending`; composed by `master_scheduler`/`market_loop`) | Live engine · Strategy |
+| 3 | **Risk & Capital** (gatekeeper) | `portfolio_manager` (entry/margin) + `plan_tracker` (THE exit/settlement path) | Risk & capital |
+| 4 | **Memory & Learning** (ledger+brain) | `journal` (truth) + `brain_map` (learning); nightly `sleep_phase`; `tuner` (weights) | Knowledge graph · Memory |
+| 5 | **Validation** (proving court) | `validation/registry` (lifecycle) + `validation/stat_gates` (the one rulebook) | Validation · Discovery |
+| 6 | **Reporting** (announcer) | `notifier.fire_broadcast` (the one Discord door) | Reporting & advisory |
+| 7 | **Interfaces** (front doors) | `api_server` (gateway) → `api` / `discord_bot` | Interfaces |
+
 ## Data layer (market data)
 
 | File | Purpose |

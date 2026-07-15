@@ -29,5 +29,6 @@
   "performance_min_trades": 20,
   "text_intelligence_backend": "ollama",
   "text_intelligence_model": "claude-opus-4-8",
-  "text_intelligence_daily_call_cap": 200
+  "text_intelligence_daily_call_cap": 200,
+  "rss_model": "claude-haiku-4-5"
 }

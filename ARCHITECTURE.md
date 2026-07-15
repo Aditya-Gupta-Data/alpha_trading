@@ -65,7 +65,10 @@ live prices, daily history, and option chains (with per-strike Greeks) — and
 does it *safely*: it classifies failures (auth vs data outage), retries once on
 a rate-limit, and voids stale quotes. Separately, the `ingestion/` clerks
 capture end-of-day data that can never be re-bought later (option chains, bulk
-deals, FII/DII flows, earnings dates, macro, news) into a `lake/` archive.
+deals, FII/DII flows, earnings dates, macro, news) into a `lake/` archive —
+including `rss_ingester` (decision #75), which pulls publishers' OWN RSS feeds
+(never scrapes ⇒ no IP ban), dedups, and classifies only NEW headlines via the
+text-intelligence manager.
 
 **Inputs:** DhanHQ Data API (read-only), NSE end-of-day reports, Google-News RSS.
 **Outputs:** clean quotes/chains on demand; `data/market_snapshot.json` (the

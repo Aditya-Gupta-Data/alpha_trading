@@ -1,0 +1,11 @@
+{
+  "_comment": "Official RSS feeds for the Data Department's rss_ingester (decision #75). RSS ONLY — never scrape the sites (that gets the VM IP-banned). Hand-editable: add/remove feeds freely; each feed's 'sector' is trusted as-is (the feed already knows its section), so the LLM only classifies entities/impact. A dead or moved URL is skipped per-feed, never fatal. VERIFY these URLs against each publisher's current RSS page before relying on them — publishers move feeds. name = short id, url = the feed, sector = the section label used as the record's sector.",
+  "feeds": [
+    {"name": "mc_markets",   "url": "https://www.moneycontrol.com/rss/marketreports.xml", "sector": "markets"},
+    {"name": "mc_business",  "url": "https://www.moneycontrol.com/rss/business.xml",      "sector": "business"},
+    {"name": "mc_economy",   "url": "https://www.moneycontrol.com/rss/economy.xml",       "sector": "economy"},
+    {"name": "et_markets",   "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms", "sector": "markets"},
+    {"name": "et_industry",  "url": "https://economictimes.indiatimes.com/industry/rssfeeds/13352306.cms",  "sector": "industry"},
+    {"name": "bs_markets",   "url": "https://www.business-standard.com/rss/markets-106.rss", "sector": "markets"}
+  ]
+}

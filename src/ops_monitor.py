@@ -78,6 +78,7 @@ EXPECTED_JOBS = {
     "earnings_calendar.log": False,  # daily 19:20 IST (results dates)
     "flows_tracker.log": False,      # daily 19:35 IST (FII/DII cash flows)
     "news_processor.log": False,     # daily 19:10 IST (Gemini news sentiment)
+    "rss_ingester.log": False,       # daily 18:50 IST (official-RSS news pull)
 }
 
 

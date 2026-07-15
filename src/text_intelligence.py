@@ -256,14 +256,18 @@ def _json_line(line) -> dict | None:
 
 # ------------------------------------------------- backend selection
 
-def get_extractor(backend: str = None, config: dict = None, **kwargs):
+def get_extractor(backend: str = None, model: str = None,
+                  config: dict = None, **kwargs):
     """The manager's front door: return a LocalExtractor-shaped backend by
     config (`text_intelligence_backend`, default "ollama" — byte-identical
-    to before). Unknown names fall back to ollama, loudly."""
+    to before). `backend`/`model` let a caller pin a pipeline (e.g. the RSS
+    ingester pins claude-haiku for cheap classification) without changing
+    the global default. Unknown names fall back to ollama, loudly."""
     cfg = config if config is not None else _config()
     name = (backend or cfg.get("text_intelligence_backend", DEFAULT_BACKEND)).lower()
     if name == "claude":
-        return ClaudeExtractor(model=cfg.get("text_intelligence_model"), **kwargs)
+        return ClaudeExtractor(
+            model=model or cfg.get("text_intelligence_model"), **kwargs)
     if name != "ollama":
         print(f"  (text_intelligence: unknown backend '{name}', using ollama)")
     from src.local_parser import LocalExtractor

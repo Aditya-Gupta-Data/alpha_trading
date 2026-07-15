@@ -35,6 +35,9 @@
 #  16. src.news_processor:    Daily 19:10 IST. Google-News RSS -> Gemini ->
 #                             data/news_sentiment.json (the Gemini path the VM
 #                             CAN reach). Was unscheduled; feeds forecast.py.
+#  17. src.ingestion.rss_ingester: Daily 18:50 IST. Publishers' own RSS feeds
+#                             -> dedup -> classify NEW via Text Intelligence
+#                             Manager. Cost-safe by default. Decision #75.
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -194,6 +197,15 @@ CRON_TZ=Asia/Kolkata
 #     paper trades (decision #72). Posts only once there are enough trades
 #     for an honest read; abstains silently below the floor. Read-only.
 5 10 * * 6 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.performance >> "$REPO_ROOT/logs/performance.log" 2>&1
+
+# 17. Official-RSS news pull (Daily 18:50 IST) — reads publishers' OWN RSS
+#     feeds (config/rss_feeds.json; Moneycontrol/ET/BS), dedups, classifies
+#     only NEW headlines via the Text Intelligence Manager (decision #75).
+#     COST-SAFE by default: rss_backend inherits the global "ollama" backend,
+#     so on the VM classification just skips (zero API spend) until the owner
+#     enables the cloud backend after confirming API credits. RSS only — no
+#     scraping, so no IP ban.
+50 18 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.rss_ingester >> "$REPO_ROOT/logs/rss_ingester.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

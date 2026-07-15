@@ -194,6 +194,18 @@ def test_consolidation_skips_when_fewer_than_two_recent_events():
     conn.close()
 
 
+def test_consolidation_defers_quietly_when_no_extractor_host():
+    # #C: on the VM (no Ollama) consolidation must short-circuit ONCE, not
+    # attempt an LLM call and log a failure — even with events to cluster.
+    conn = fresh_conn()
+    _seed_events(conn, 3)
+    ex = fake_extractor(clusters={"clusters": []}, reachable=False)
+    stats = sleep_phase.consolidate_recent(conn, extractor=ex, today=TODAY)
+    assert stats["skipped_no_llm"] == 3 and stats["clusters_created"] == 0
+    ex.chat_json.assert_not_called()  # the whole point — no per-item call
+    conn.close()
+
+
 # --------------------------------------------------------------- C. decay
 
 def _seed_node(conn, tag, score, last_reinforced, last_decayed=None):

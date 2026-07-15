@@ -158,6 +158,20 @@ def _journal_text(entry: dict) -> str:
 
 # ------------------------------------------------------------ A. ingest
 
+def _extractor_reachable(extractor) -> bool:
+    """True if the LLM endpoint answers; False (defer, never fail) on any
+    error. THE shared guard for every LLM sleep-phase task: the VM runs no
+    Ollama by design, so a task must short-circuit ONCE up front rather
+    than attempt each item and log a per-item 'Ollama call failed' line
+    (that spam read as breakage on the nightly card — 2026-07-12 fix,
+    extended to consolidation + causal links 2026-07-15). A host that IS
+    reachable but returns junk still counts genuine per-item failures."""
+    try:
+        return bool(extractor.is_reachable())
+    except Exception:
+        return False
+
+
 def ingest_journal(conn, journal_entries=None, extractor=None,
                    today: str = None) -> dict:
     """Task A: journal.jsonl free text -> EEF events, hash-deduped.
@@ -168,19 +182,7 @@ def ingest_journal(conn, journal_entries=None, extractor=None,
     today = today or date.today().isoformat()
     stats = {"ingested": 0, "skipped_duplicate": 0, "skipped_empty": 0, "failed": 0}
 
-    # One reachability check before the loop (2026-07-12, ops-card noise
-    # fix): on a host with no Ollama AT ALL — the VM, by design — every
-    # attempt below is doomed, so N rows would count as "failed" and read
-    # as breakage on the nightly health card. Check once, defer quietly
-    # with an explicit reason; the rows stay un-ingested and the Mac's
-    # next pass (which HAS Ollama) picks them up unchanged. A server that
-    # IS reachable but returns unusable output still counts per-row
-    # "failed" below — that case is genuinely retryable and worth seeing.
-    try:
-        reachable = bool(extractor.is_reachable())
-    except Exception:
-        reachable = False
-    if not reachable:
+    if not _extractor_reachable(extractor):
         stats["skipped_no_llm"] = sum(1 for e in journal_entries
                                       if _journal_text(e))
         print(f"  (ingestion: no reachable extractor on this host — "
@@ -235,6 +237,12 @@ def consolidate_recent(conn, extractor=None, window_hours: float = None,
              "links_added": 0, "events_considered": len(rows)}
     if len(rows) < 2:
         return stats  # nothing to cluster
+
+    if not _extractor_reachable(extractor):  # #C: defer quietly on the VM
+        stats["skipped_no_llm"] = len(rows)
+        print(f"  (consolidation: no reachable extractor on this host — "
+              f"{len(rows)} event(s) deferred; not failures)")
+        return stats
 
     numbered = "\n".join(
         f"{i + 1}. [{r['ticker']}] {r['event_type']}: {r['tag']} "
@@ -382,6 +390,11 @@ def write_causal_links(conn, extractor=None, window_days: int = None,
         return stats  # nothing reviewed to learn from — no LLM call at all
 
     extractor = extractor or LocalExtractor()
+    if not _extractor_reachable(extractor):  # #C: defer quietly on the VM
+        stats["skipped_no_llm"] = len(rows)
+        print(f"  (causal links: no reachable extractor on this host — "
+              f"{len(rows)} outcome(s) deferred; not failures)")
+        return stats
     # Loss-permanence: extract win- and loss-derived triples SEPARATELY so
     # loss lessons can be written decay-exempt (lambda 0). Winners re-earn
     # their place in the active graph by being re-observed; a lesson paid
@@ -418,9 +431,11 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     results = {}
 
     print(f"Sleep phase — {today.isoformat()} (offline memory pass)")
-    if not extractor.is_reachable():
+    if not _extractor_reachable(extractor):
         print(f"  note: Ollama not reachable at {extractor.base_url} — "
-              "ingestion/consolidation will skip; decay still runs.")
+              "the LLM tasks (A ingestion, B consolidation, D causal links) "
+              "each defer quietly per their own guard; decay still runs. "
+              "This is EXPECTED on the VM (no Ollama by design).")
 
     try:
         results["ingestion"] = ingest_journal(conn, extractor=extractor,

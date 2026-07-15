@@ -86,9 +86,33 @@ def session_over(now: datetime) -> bool:
     return now.time() > MARKET_CLOSE
 
 
+def _unrealized_pnl() -> tuple:
+    """(unrealized_rs, marked_count, unmarked_count) for the open book,
+    marked on the latest available price via the SHARED snapshot ladder
+    (portfolio_report.get_live_marks — engine snapshot first, so this
+    costs no Dhan call when the loop just ran). Returns (None, 0, 0) when
+    no mark is available — fail-open, the CLOSED card then simply omits
+    the unrealized lines rather than guessing a book value."""
+    try:
+        from src.portfolio_report import get_live_marks
+        marks, _source = get_live_marks()
+        priced = [m["live_pnl_rs"] for m in marks
+                  if m.get("live_pnl_rs") is not None]
+        if not priced:
+            return None, 0, 0
+        return round(sum(priced), 2), len(priced), len(marks) - len(priced)
+    except Exception as e:
+        print(f"  (unrealized P&L unavailable: {e})")
+        return None, 0, 0
+
+
 def _account_lines() -> list:
     """The Phase 6G account, formatted for a bookend card. Fail-safe:
-    an unreadable capital layer reports itself instead of raising."""
+    an unreadable capital layer reports itself instead of raising.
+
+    Shows realized equity AND (new) the live Unrealized P&L on open
+    positions + Net Equity (realized + unrealized) — the true real-time
+    book value without waiting for a trade to close."""
     try:
         from src import brain_map, portfolio_manager as pm
         conn = brain_map.connect()
@@ -96,14 +120,25 @@ def _account_lines() -> list:
             s = pm.account_summary(conn)
         finally:
             conn.close()
-        return [
+        lines = [
             f"Equity Rs.{s['equity']:,.2f} "
-            f"(P&L Rs.{s['realized_pnl']:,.2f})",
+            f"(realized P&L Rs.{s['realized_pnl']:,.2f})",
+        ]
+        # New: unrealized P&L + net equity, from the live marks (fail-open —
+        # omitted, never guessed, when no snapshot mark exists).
+        unreal, marked, unmarked = _unrealized_pnl()
+        if unreal is not None:
+            cover = (f"{marked} marked"
+                     + (f", {unmarked} unmarked" if unmarked else ""))
+            lines.append(f"Unrealized P&L Rs.{unreal:+,.2f} ({cover})")
+            lines.append(f"**Net Equity Rs.{s['equity'] + unreal:,.2f}** "
+                         "(realized + unrealized — true book value)")
+        lines.append(
             f"Free cash Rs.{s['available_cash']:,.2f} | "
             f"locked Rs.{s['locked_margin']:,.2f} | "
-            f"{s['open_locks']} active trade(s)",
-        ] + (["⛔ RISK-OF-RUIN HALT ACTIVE — all entries blocked"]
-             if s["trading_halted"] else [])
+            f"{s['open_locks']} active trade(s)")
+        return lines + (["⛔ RISK-OF-RUIN HALT ACTIVE — all entries blocked"]
+                        if s["trading_halted"] else [])
     except Exception as e:
         return [f"(account snapshot unavailable: {e})"]
 

@@ -37,6 +37,9 @@ class FakeExtractor:
         self._triples = triples
         self.causal_calls = 0
 
+    def is_reachable(self):
+        return True   # a working stand-in — the #C guard must let it through
+
     def extract_causal_triples(self, summarized_text):
         self.causal_calls += 1
         self.last_text = summarized_text

@@ -130,6 +130,9 @@ def test_causal_encoding_from_simulated_outcomes():
         def __init__(self):
             self.texts = []
 
+        def is_reachable(self):
+            return True   # working stand-in — #C guard must let it through
+
         def extract_causal_triples(self, text):
             self.texts.append(text)
             return [{"subject": "iron_condor", "predicate": "RESULTS_IN",

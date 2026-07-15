@@ -426,6 +426,8 @@ def _format_proposal_alert(p: dict, action_note: str = None) -> str:
     skeptic_block = f"{skeptic}\n" if skeptic else ""
     alignment = p.get("alignment_line")
     alignment_block = f"{alignment}\n" if alignment else ""
+    book = p.get("book_line")
+    book_block = f"{book}\n" if book else ""
     return (
         f"🚨 **PROPOSAL ALERT: {s['strategy'].replace('_', ' ').title()}**\n"
         f"**Market Regime**: {p['view'].title()} view on {p['ticker']} | "
@@ -436,6 +438,7 @@ def _format_proposal_alert(p: dict, action_note: str = None) -> str:
         f"Max Loss Rs.{s['max_loss'] * lots:,.0f} | "
         f"Max Profit Rs.{s['max_profit'] * lots:,.0f} | "
         f"SPAN Margin Rs.{s['margin']['total_margin'] * lots:,.0f}\n"
+        f"{book_block}"
         f"{alignment_block}"
         f"{memory_block}"
         f"{skeptic_block}"
@@ -521,6 +524,16 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
             p, notify_fn=_notify_discord)
         if not allowed:
             return {"proposed": False, "reason": exp_reason, "entry": None}
+    # Book context (annotate-only, #63 stage 1): what the real book already
+    # holds and why, so the newcomer is judged in context. Sandbox books are
+    # exempt (their journal isn't their book); fail-open — a broken book
+    # read never touches the proposal.
+    if "book" not in state:
+        try:
+            from src.book_context import book_line
+            p["book_line"] = book_line(p.get("ticker"), result.get("view"))
+        except Exception:
+            p["book_line"] = None
     # Phase 6C: enrich the Discord rationale with linked historical patterns
     # from the knowledge graph (fail-safe: "" when the graph is empty).
     p["memory_context"] = _memory_context_for(_memory_seeds(p))

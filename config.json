@@ -25,5 +25,6 @@
   "portfolio_greeks_advisory": true,
   "greeks_vega_shock_points": 5.0,
   "greeks_vega_budget_pct": 15.0,
-  "greeks_delta_budget_pct": 30.0
+  "greeks_delta_budget_pct": 30.0,
+  "performance_min_trades": 20
 }

@@ -29,6 +29,9 @@
 #  14. src.portfolio_greeks:  every 2h at :30 IST (posts only during
 #                             market hours; self-gates like #7). Book-level
 #                             net-Vega/Delta budget advisory, decision #71.
+#  15. src.performance:       Saturday 10:05 IST (weekly). Sharpe/Sortino/
+#                             max-drawdown over the real paper track record;
+#                             abstains silently below the floor. Decision #72.
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -174,6 +177,12 @@ CRON_TZ=Asia/Kolkata
 #     ONE card/day only if a Vega or Delta budget breaches (OK = silent
 #     snapshot). Advisory-only, fail-open. Kill switch in config.json.
 30 */2 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.portfolio_greeks >> "$REPO_ROOT/logs/portfolio_greeks.log" 2>&1
+
+# 15. Weekly track-record metrics (Saturday 10:05 IST, just after the
+#     harness digest) — Sharpe/Sortino/max-drawdown over the REAL resolved
+#     paper trades (decision #72). Posts only once there are enough trades
+#     for an honest read; abstains silently below the floor. Read-only.
+5 10 * * 6 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.performance >> "$REPO_ROOT/logs/performance.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

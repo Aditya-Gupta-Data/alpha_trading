@@ -192,7 +192,10 @@ def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float) -> tupl
         exit_premium = _leg_model_premium(leg, spot_exit, entry_spot, frac_left)
         frictions += pf.calculate_trade_frictions("OPTION", entry_side, leg["premium"], qty)
         frictions += pf.calculate_trade_frictions("OPTION", exit_side, exit_premium, qty)
-        slippage += apply_slippage(leg["premium"], "OPTION") * qty
+        # #70: a "quoted" fill already crossed the bid-ask at entry (the
+        # premium IS the worse side) — the ladder would double-charge it.
+        if leg.get("fill_basis") != "quoted":
+            slippage += apply_slippage(leg["premium"], "OPTION") * qty
         slippage += apply_slippage(exit_premium, "OPTION") * qty
     return frictions, slippage
 
@@ -222,7 +225,9 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict) -> tuple:
                                                 leg["option_type"].upper())])
         frictions += pf.calculate_trade_frictions("OPTION", entry_side, leg["premium"], qty)
         frictions += pf.calculate_trade_frictions("OPTION", exit_side, exit_premium, qty)
-        slippage += apply_slippage(leg["premium"], "OPTION") * qty
+        # #70: same double-charge guard as _spread_exit_costs.
+        if leg.get("fill_basis") != "quoted":
+            slippage += apply_slippage(leg["premium"], "OPTION") * qty
         slippage += apply_slippage(exit_premium, "OPTION") * qty
     return frictions, slippage
 

@@ -87,14 +87,29 @@ def _strikes(chain: dict) -> list:
     return sorted(float(s) for s in (chain.get("oc") or {}))
 
 
-def _premium(chain: dict, strike: float, kind: str) -> float | None:
-    """Last traded premium for one leg (kind 'ce'/'pe'), or None. Tries
-    the exact key format Dhan uses (six decimals) then a plain match."""
+def _leg_fill(chain: dict, strike: float, kind: str, side: str) -> tuple:
+    """(fill_price, basis) for one leg (kind 'ce'/'pe') — the honest
+    paper fill (decision #70): a BUY crosses to the ask, a SELL hits the
+    bid, which is what a real fill pays on entry. Falls back to
+    last_price (basis "ltp") when the quoted side is missing/zero (thin
+    strike, closed market, simulator chains) or deviates >50% from a
+    live LTP (stale/crossed book — a data-quality refusal). (None, None)
+    means the leg is untradeable. Tries the exact key format Dhan uses
+    (six decimals) then a plain match."""
     oc = chain.get("oc") or {}
     node = oc.get(f"{strike:.6f}") or oc.get(str(strike)) or {}
     leg = node.get(kind) or {}
-    price = leg.get("last_price")
-    return float(price) if price else None  # 0/None -> untradeable leg
+    ltp = leg.get("last_price")
+    ltp = float(ltp) if ltp else None
+    quote = leg.get("top_ask_price" if side == "BUY" else "top_bid_price")
+    quote = float(quote) if quote else None
+    if quote is not None and ltp is not None and abs(quote - ltp) > 0.5 * ltp:
+        quote = None
+    if quote is not None:
+        return quote, "quoted"
+    if ltp is not None:
+        return ltp, "ltp"
+    return None, None
 
 
 def _nearest_strike(strikes: list, target: float) -> float:
@@ -156,15 +171,25 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
     lot_size = LOT_SIZES.get(underlying, 75)
     sc = StrategyConstructor(vix=vix, lot_size=lot_size)
 
+    fill_bases = {}
+
     def leg_premiums(pairs):
-        """[(strike, 'ce'/'pe'), ...] -> premiums, or None if any leg has
-        no tradeable quote (never build on a dead strike)."""
-        prems = [_premium(chain, s, k) for s, k in pairs]
-        return None if any(p is None for p in prems) else prems
+        """[(strike, 'ce'/'pe', 'BUY'/'SELL'), ...] -> fill premiums, or
+        None if any leg has no tradeable quote (never build on a dead
+        strike). Each leg's fill basis is recorded so the tracker knows
+        whether the spread was already crossed at entry (#70)."""
+        prems = []
+        for s, k, side in pairs:
+            price, basis = _leg_fill(chain, s, k, side)
+            if price is None:
+                return None
+            fill_bases[(s, k.upper(), side)] = basis
+            prems.append(price)
+        return prems
 
     if view == "bullish":
         lo, hi = atm, atm + WING_STEPS * step
-        prems = leg_premiums([(lo, "ce"), (hi, "ce")])
+        prems = leg_premiums([(lo, "ce", "BUY"), (hi, "ce", "SELL")])
         if prems is None:
             return {"proposal": None, "view": view, "vix": vix,
                     "reason": "no tradeable quotes at the chosen strikes"}
@@ -173,7 +198,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                   f"{lo:g}/{hi:g} CE, defined risk")
     elif view == "bearish":
         hi, lo = atm, atm - WING_STEPS * step
-        prems = leg_premiums([(hi, "pe"), (lo, "pe")])
+        prems = leg_premiums([(hi, "pe", "BUY"), (lo, "pe", "SELL")])
         if prems is None:
             return {"proposal": None, "view": view, "vix": vix,
                     "reason": "no tradeable quotes at the chosen strikes"}
@@ -188,8 +213,10 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         put_short = _nearest_strike(strikes, spot * (1 - _otm_pct / 100))
         call_short = _nearest_strike(strikes, spot * (1 + _otm_pct / 100))
         wing = WING_STEPS * step
-        prems = leg_premiums([(put_short, "pe"), (put_short - wing, "pe"),
-                              (call_short, "ce"), (call_short + wing, "ce")])
+        prems = leg_premiums([(put_short, "pe", "SELL"),
+                              (put_short - wing, "pe", "BUY"),
+                              (call_short, "ce", "SELL"),
+                              (call_short + wing, "ce", "BUY")])
         if prems is None:
             return {"proposal": None, "view": view, "vix": vix,
                     "reason": "no tradeable quotes at the chosen strikes"}
@@ -202,6 +229,11 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         return {"proposal": None, "view": view, "vix": vix,
                 "reason": "structure failed to build (regime gate or "
                           "incoherent strikes)"}
+
+    for leg in spread["legs"]:
+        leg["fill_basis"] = fill_bases.get(
+            (leg["strike"], leg["option_type"].upper(), leg["side"].upper()),
+            "ltp")
 
     if book is None:
         book = pf.load()

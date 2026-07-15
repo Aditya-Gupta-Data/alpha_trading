@@ -122,6 +122,73 @@ def test_dead_strike_quote_refuses_to_build():
     assert r["proposal"] is None and "quotes" in r["reason"]
 
 
+# ------------------------------------------- honest fills (decision #70)
+
+def add_bid_ask(chain, spread_pct=0.02):
+    """Give every strike a symmetric bid/ask around its last_price."""
+    for node in chain["oc"].values():
+        for leg in node.values():
+            ltp = leg["last_price"]
+            leg["top_bid_price"] = round(ltp * (1 - spread_pct), 2)
+            leg["top_ask_price"] = round(ltp * (1 + spread_pct), 2)
+    return chain
+
+
+def test_quoted_chain_fills_buy_at_ask_and_sell_at_bid():
+    chain = add_bid_ask(make_chain())
+    r = build(make_analysis(uptrend=True, rsi=25), chain=chain)
+    legs = {l["side"]: l for l in r["proposal"]["spread"]["legs"]}
+    buy_node = chain["oc"][f"{25000.0:.6f}"]["ce"]
+    sell_node = chain["oc"][f"{25200.0:.6f}"]["ce"]
+    assert legs["BUY"]["premium"] == buy_node["top_ask_price"]
+    assert legs["SELL"]["premium"] == sell_node["top_bid_price"]
+    assert all(l["fill_basis"] == "quoted"
+               for l in r["proposal"]["spread"]["legs"])
+
+
+def test_ltp_only_chain_is_byte_identical_and_flagged_ltp():
+    r = build(make_analysis(uptrend=True, rsi=25))  # make_chain has no bid/ask
+    legs = {l["side"]: l for l in r["proposal"]["spread"]["legs"]}
+    chain = make_chain()
+    assert legs["BUY"]["premium"] == chain["oc"][f"{25000.0:.6f}"]["ce"]["last_price"]
+    assert all(l["fill_basis"] == "ltp"
+               for l in r["proposal"]["spread"]["legs"])
+
+
+def test_stale_quote_far_from_ltp_falls_back_to_ltp():
+    chain = add_bid_ask(make_chain())
+    node = chain["oc"][f"{25000.0:.6f}"]["ce"]
+    node["top_ask_price"] = node["last_price"] * 2.0  # crossed/stale book
+    r = build(make_analysis(uptrend=True, rsi=25), chain=chain)
+    legs = {l["side"]: l for l in r["proposal"]["spread"]["legs"]}
+    assert legs["BUY"]["premium"] == node["last_price"]
+    assert legs["BUY"]["fill_basis"] == "ltp"
+    assert legs["SELL"]["fill_basis"] == "quoted"  # untouched leg still quoted
+
+
+def test_quoted_entry_legs_skip_the_entry_slippage_ladder():
+    spread = {"lot_size": 65, "lots": 1, "entry_spot": 25000.0,
+              "legs": [
+                  {"side": "BUY", "option_type": "CE", "strike": 25000.0,
+                   "premium": 100.0, "fill_basis": "quoted"},
+                  {"side": "SELL", "option_type": "CE", "strike": 25200.0,
+                   "premium": 60.0, "fill_basis": "quoted"}]}
+    legacy = {**spread, "legs": [dict(l, fill_basis="ltp")
+                                 for l in spread["legs"]]}
+    _, slip_quoted = plan_tracker._spread_exit_costs(spread, 25100.0, 0.5)
+    _, slip_legacy = plan_tracker._spread_exit_costs(legacy, 25100.0, 0.5)
+    # quoted fills already paid the spread at entry -> strictly less ladder
+    assert slip_quoted < slip_legacy
+    # exit side is still charged: quoted slippage stays positive
+    assert slip_quoted > 0
+    # and a legs dict WITHOUT the field (pre-#70 journal rows) behaves
+    # exactly like "ltp" — old entries never change economics
+    old = {**spread, "legs": [{k: v for k, v in l.items()
+                               if k != "fill_basis"} for l in spread["legs"]]}
+    _, slip_old = plan_tracker._spread_exit_costs(old, 25100.0, 0.5)
+    assert slip_old == slip_legacy
+
+
 # ------------------------------------------------------------- sizing
 
 def test_sizing_uses_options_risk_budget():

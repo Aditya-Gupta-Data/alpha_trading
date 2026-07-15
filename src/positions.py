@@ -158,3 +158,69 @@ def format_table(positions: list) -> str:
     out.append(sep)
     out.append(f"{len(positions)} open position(s) — paper only.")
     return "\n".join(out)
+
+
+# --- Discord code-block table (phone-scannable, monospace) ---------------
+# Discord does NOT render pipe-style Markdown tables — a fenced code block
+# with fixed-width columns is the clean aligned form. Compact by design so
+# it fits a phone screen: NIFTY BANK -> BNF, bear_put_spread -> BPS, rupee
+# amounts as 6.0k. Separate from format_table (terminal) on purpose — the
+# terminal has width to spare; the phone card does not.
+
+_DISCORD_TICKER_ABBR = {"NIFTY 50": "NIFTY", "NIFTY BANK": "BNF"}
+_DISCORD_STRAT_ABBR = {"bull_call_spread": "BCS", "bear_put_spread": "BPS",
+                       "iron_condor": "IC", "iron_butterfly": "IB"}
+_DISCORD_MAX_ROWS = 25
+
+
+def _compact_rs(v) -> str:
+    """795 -> '795', 6000 -> '6.0k', None -> '-'."""
+    if not isinstance(v, (int, float)):
+        return "-"
+    return f"{v / 1000:.1f}k" if abs(v) >= 1000 else str(int(round(v)))
+
+
+def _discord_row(p: dict) -> tuple:
+    ticker = _DISCORD_TICKER_ABBR.get(p.get("ticker"),
+                                      (p.get("ticker") or "?").replace(".NS", "")[:6])
+    if p.get("kind") == "spread":
+        strat = _DISCORD_STRAT_ABBR.get(p.get("strategy"),
+                                        (p.get("strategy") or "?")[:3].upper())
+        maxpl = f"+{_compact_rs(p.get('max_profit_rs'))}/-{_compact_rs(p.get('max_loss_rs'))}"
+        expiry = (p.get("expiry") or "-")[5:] or "-"   # YYYY-MM-DD -> MM-DD
+    else:
+        strat = "EQ"
+        maxpl = f"T{_compact_rs(p.get('target'))}/S{_compact_rs(p.get('stop_loss'))}"
+        expiry = "-"
+    entry = p.get("entry_price")
+    entry = f"{entry:g}" if isinstance(entry, (int, float)) else "-"
+    days = p.get("days_in_trade")
+    return (ticker, strat, entry, expiry, maxpl,
+            f"{days}d" if days is not None else "-")
+
+
+_DISCORD_HEADERS = ("UNDER", "STRAT", "ENTRY", "EXPIRY", "MAX P/L", "DAYS")
+
+
+def format_discord_table(positions: list) -> str:
+    """A fenced code-block table for the Discord /positions card — the
+    columns the owner asked for (Underlying, Strategy, Entry, Expiry, Max
+    Profit/Loss, Days), aligned and phone-compact. Pure string building."""
+    if not positions:
+        return "No open paper positions."
+    shown = positions[:_DISCORD_MAX_ROWS]
+    rows = [_discord_row(p) for p in shown]
+    widths = [max(len(h), *(len(r[i]) for r in rows))
+              for i, h in enumerate(_DISCORD_HEADERS)]
+
+    def line(cells):
+        # pad every column (last included) so the block is a clean rectangle
+        return "  ".join(c.ljust(w) for c, w in zip(cells, widths))
+
+    out = ["```", line(_DISCORD_HEADERS)] + [line(r) for r in rows] + ["```"]
+    footer = f"{len(positions)} open — paper only."
+    if len(positions) > len(shown):
+        footer = (f"{len(shown)} of {len(positions)} shown "
+                  "(Discord caps the card) — " + footer)
+    out.append(footer)
+    return "\n".join(out)

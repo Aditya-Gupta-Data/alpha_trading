@@ -273,37 +273,18 @@ def _fetch_positions() -> list:
 
 
 def _positions_embed(items: list) -> "discord.Embed":
-    """Open positions -> one embed, a field per position (Discord caps
-    embeds at 25 fields; the overflow is summarized in the footer)."""
-    embed = discord.Embed(
+    """Open positions -> one embed with a single scannable code-block table
+    (Underlying · Strategy · Entry · Expiry · Max P/L · Days). The table is
+    built by positions.format_discord_table (the department's own
+    formatter) so the columns stay consistent everywhere."""
+    from src.positions import format_discord_table
+    body = ("Live from the journal — the plan tracker manages every exit. "
+            "Paper only.\n" + format_discord_table(items))
+    return discord.Embed(
         title=f"📂 Open Paper Positions ({len(items)})",
         color=0x3498DB,
-        description="Live from the journal — the plan tracker manages "
-                    "every exit. Paper only.",
+        description=body,
     )
-    shown = items[:25]
-    for p in shown:
-        days = p.get("days_in_trade")
-        in_trade = f"{days}d in trade" if days is not None else "entry date unknown"
-        if p.get("kind") == "spread":
-            bounds = (f"max profit Rs.{p.get('max_profit_rs', 0):,.0f} / "
-                      f"max loss Rs.{p.get('max_loss_rs', 0):,.0f}")
-            entry = (f"entry {p.get('entry_price')} net/share, "
-                     f"{p.get('lots')} lot(s), expiry {p.get('expiry')}")
-        else:
-            bounds = (f"target Rs.{p.get('target')} / "
-                      f"stop Rs.{p.get('stop_loss')}")
-            entry = f"entry Rs.{p.get('entry_price')}"
-        strategy = (p.get("strategy") or p.get("kind") or "?").replace("_", " ")
-        embed.add_field(
-            name=f"{p.get('ticker')} — {strategy}",
-            value=f"{entry}\n{bounds}\n{in_trade}  •  id `{p.get('trade_id')}`",
-            inline=False,
-        )
-    if len(items) > len(shown):
-        embed.set_footer(text=f"+{len(items) - len(shown)} more — Discord "
-                              "caps an embed at 25 fields.")
-    return embed
 
 
 def _custom_id(action: str, trade_id: str) -> str:

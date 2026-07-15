@@ -161,31 +161,51 @@ def test_gateway_positions_endpoint_is_read_only_and_gated():
 
 # ------------------------------------------------------ Discord embed
 
-def test_positions_embed_formats_spread_and_equity_fields():
+def test_positions_embed_uses_one_codeblock_table():
     from src.discord_bot import _positions_embed
     items = active_positions([_equity_entry(), _spread_entry()], today=TODAY)
     embed = _positions_embed(items).to_dict()
     assert embed["title"] == "📂 Open Paper Positions (2)"
-    names = [f["name"] for f in embed["fields"]]
-    assert "NIFTY 50 — bear put spread" in names
-    assert "ONGC.NS — breakout" in names
-    spread_field = next(f for f in embed["fields"] if "NIFTY 50" in f["name"])
-    assert "max profit Rs.9,578" in spread_field["value"]
-    assert "expiry 2026-07-21" in spread_field["value"]
-    assert "2d in trade" in spread_field["value"]
-    equity_field = next(f for f in embed["fields"] if "ONGC.NS" in f["name"])
-    assert "target Rs.260.0" in equity_field["value"]
-    assert "stop Rs.235.0" in equity_field["value"]
+    assert not embed.get("fields")            # no more field-per-position
+    desc = embed["description"]
+    assert "```" in desc                      # the code-block table
+    assert "NIFTY" in desc and "ONGC" in desc
 
 
-def test_positions_embed_caps_at_discord_field_limit():
-    from src.discord_bot import _positions_embed
+# --------------------------------------------- format_discord_table (U3)
+
+def test_discord_table_abbreviates_and_aligns():
+    from src.positions import format_discord_table
+    items = active_positions([_equity_entry(), _spread_entry()], today=TODAY)
+    table = format_discord_table(items)
+    assert table.startswith("```") and table.rstrip().endswith("open — paper only.")
+    for col in ("UNDER", "STRAT", "ENTRY", "EXPIRY", "MAX P/L", "DAYS"):
+        assert col in table
+    assert "NIFTY" in table and "BPS" in table          # ticker + strat abbrev
+    assert "+9.6k/-5.4k" in table                        # compact max profit/loss
+    assert "07-21" in table                              # MM-DD expiry
+    assert "2d" in table and "7d" in table
+    # equity row: EQ strat, target/stop cell, no expiry
+    assert "EQ" in table and "T260/S235" in table
+    # every table row (between the fences) is equally wide — a real table
+    body = [l for l in table.splitlines()
+            if l and not l.startswith("```") and "open — paper" not in l]
+    assert len({len(l) for l in body}) == 1
+
+
+def test_discord_table_empty_state():
+    from src.positions import format_discord_table
+    assert format_discord_table([]) == "No open paper positions."
+
+
+def test_discord_table_caps_rows_with_footer():
+    from src.positions import format_discord_table
     items = active_positions(
         [_spread_entry(short_id=f"id{i:06d}") for i in range(30)],
         today=TODAY)
-    embed = _positions_embed(items).to_dict()
-    assert len(embed["fields"]) == 25
-    assert "+5 more" in embed["footer"]["text"]
+    table = format_discord_table(items)
+    assert table.count("\n") <= 30          # not 30 data rows
+    assert "25 of 30 shown" in table
 
 
 if __name__ == "__main__":

@@ -520,3 +520,33 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   (`f2b9edbd`, Jul 10) was found to have locked margin for ~2 minutes
   before releasing at Rs.0 — self-healed, logged here as a watch item on
   the reject path.
+
+## Issue 13 — stale NSE lot sizes in the live engine (2026-07-15, research-audit catch)
+
+- **Observed (verified 2026-07-15 against NSE lot-size bulletins):** the
+  SEBI Jan-2026 index-derivatives revision cut lot sizes — NIFTY 50 from
+  75 to **65**, NIFTY BANK from 35 to **30** — live since the Jan-2026
+  contract series. `LOT_SIZES` in `src/options_proposer.py` still held the
+  pre-revision `{"NIFTY 50": 75, "NIFTY BANK": 35}`, so for ~6 months the
+  live proposer priced `max_loss` / `max_profit` / SPAN margin / lot
+  sizing on contract sizes ~13–15% too large. Same-expiry defined-risk
+  structures only, so no naked exposure resulted; the error was in the
+  rupee economics and margin reservation, not in trade safety.
+- **Root cause:** lot sizes are a hardcoded contract-spec constant (Dhan's
+  option-chain payload carries no lot-size field to read dynamically), and
+  the constant was written before the Jan-2026 revision. Surfaced by the
+  Gemini deep-research regulatory audit (`docs/gemini_research_gap_analysis.md`
+  §3), then confirmed against primary sources before changing code.
+- **Fix (decision-free correctness patch, 2026-07-15):** `LOT_SIZES` →
+  `{"NIFTY 50": 65, "NIFTY BANK": 30}` with a dated provenance comment;
+  two `test_trade_planner.py` assertions updated (75→65, 35→30). Full
+  suite 970 green (the one unrelated `test_market_loop` failure predates
+  this change — separate task). The simulator uses the same current sizes
+  for historical replays; this only scales absolute-rupee P&L, never the
+  R-multiples/win-rates the validation harness scores (both lot-size-
+  invariant), so the learning corpus is unaffected.
+- **Also verified N/A in the same audit:** the 2% expiry-day ELM (we exit
+  ≥2 days before expiry, never hold 0-DTE shorts), calendar-spread margin
+  removal (we trade no calendar spreads), and BANKNIFTY weekly
+  discontinuation (`pick_expiry` adapts to whatever Dhan serves — now
+  monthlies for BANKNIFTY).

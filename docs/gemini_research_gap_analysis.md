@@ -37,17 +37,31 @@ exits; if mid-based, charge a per-leg slippage penalty (cross-the-spread fill
 model) so the stat harness validates NET edge. This multiplies the value of
 everything already built.
 
-### 3. Regulatory audit of margin/lot assumptions (VERIFY FIRST — see below)
-Claims to check against NSE/SEBI primary sources before recoding anything:
-- 2% expiry-day Extreme Loss Margin on short index options (Nov 2024 — real;
-  is our margin gate aware?).
-- Calendar-spread margin benefit removed on near-leg expiry day.
-- Lot sizes: report says NIFTY 75→65, BANKNIFTY 35→30 effective Dec 30 2025 —
-  UNVERIFIED; one of its own sources says "Monday expiry" elsewhere, so its
-  fine print is not fully trustworthy. Check NSE circulars, then confirm what
-  `SECURITY_ID_MAP`/margin gate/proposer assume.
-- BANKNIFTY weeklies dead since Nov 2024 → if any logic/mining assumes
-  BANKNIFTY weekly expiries, it must use monthlies only.
+### 3. Regulatory audit of margin/lot assumptions — VERIFIED 2026-07-15
+Checked every claim against NSE/broker sources. Results:
+
+- **Lot sizes — REAL BUG, NOW FIXED.** Current NSE sizes (Jan-2026 SEBI
+  revision): NIFTY 50 **65** (was 75), NIFTY BANK **30** (was 35), live since
+  the Jan-2026 contract series. The report's "Dec 30 2025" effective date was
+  wrong (it's Jan 2026) but the numbers are right. `LOT_SIZES` in
+  `options_proposer.py` still had the old 75/35, so the live engine was pricing
+  max_loss / max_profit / SPAN margin / lot sizing on stale contract sizes.
+  Fixed to 65/30 (single source; simulator uses it too — only scales
+  absolute-rupee P&L, not the R-multiples/win-rates the harness scores). Two
+  trade_planner test assertions updated.
+- **2% expiry-day ELM — CONFIRMED real (eff. Nov 20 2024) but DOES NOT APPLY
+  to us.** Entry needs ≥7 days to expiry (`MIN_DAYS_TO_EXPIRY=7`) and exit
+  fires at 2 days out (`PRE_EXPIRY_EXIT_DAYS=2`), so a short is never held into
+  expiry day (0 DTE). The peak-margin expiry-day surcharge never touches our
+  positions — no margin-gate change needed. (This structural exit rule is the
+  defense; if PRE_EXPIRY_EXIT_DAYS ever went to 0, revisit.)
+- **Calendar-spread margin removal — N/A.** We trade no calendar spreads; every
+  structure (bull call, bear put, iron condor/butterfly) is single-expiry.
+- **BANKNIFTY weeklies dead (Nov 2024) — no code assumption.** `pick_expiry`
+  takes whatever Dhan serves, sorted, first ≥7 days out — for BANKNIFTY that is
+  now always a monthly. No breakage; just note BANKNIFTY trades are now
+  longer-dated (different theta/gamma profile than the weekly era).
+- **Tuesday expiry — already handled** era-aware in `src/cycles.py`.
 
 ### 4. Pre-live infrastructure (build only when live trading is scheduled)
 - **Reconciliation daemon**: every few minutes compare internal book vs
@@ -87,8 +101,13 @@ forward-testing, ~1,000 trades before trusting Kelly math.
 
 ## Suggested order of work
 
-1. **Fill-honesty audit** (#2) — cheap, improves everything downstream.
-2. **Regulatory verification pass** (#3) — facts first, then margin-gate fixes.
-3. **Portfolio Greeks advisory ledger** (#1) — the next big build phase.
-4. Promotion-rationale gate (#5) — small registry change, do alongside 3.
+1. ~~**Fill-honesty audit** (#2)~~ — DONE 2026-07-15, decision #70 (entries
+   cross the bid-ask; pushed `412e57e`).
+2. ~~**Regulatory verification pass** (#3)~~ — DONE 2026-07-15. Lot sizes fixed
+   (75/35→65/30); 2% ELM / calendar-spread / BANKNIFTY-weekly all verified N/A.
+   No margin-gate change was needed after all.
+3. **Portfolio Greeks advisory ledger** (#1) — the next big build phase (next
+   week). Dhan's chain carries per-strike Greeks, so no pricing engine needed.
+4. Promotion-rationale gate (#5) — small registry change; candidate for the
+   Friday slot before the Saturday deploy.
 5. Pre-live infra (#4) + sizing (#6) — when a live date exists.

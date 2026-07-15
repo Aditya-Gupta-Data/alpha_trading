@@ -129,7 +129,7 @@ def test_explicit_trend_and_iv_override_the_raw_numbers():
 def test_condor_strikes_snap_to_the_bank_nifty_grid():
     plan = tp.map_technical_to_strategy(make_state())
     assert plan["atm"] == 52_300.0
-    assert plan["strike_step"] == 100.0 and plan["lot_size"] == 35
+    assert plan["strike_step"] == 100.0 and plan["lot_size"] == 30
     by_role = {l["role"]: l for l in plan["legs"]}
     # 2% OTM defaults: 52,340x0.98=51,293.2 -> 51,200; x1.02=53,386.8 -> 53,400
     assert by_role["short put (range floor)"]["strike"] == 51_200.0
@@ -186,7 +186,7 @@ def test_bear_put_spread_is_atm_minus_wing():
 def test_nifty_50_gets_its_own_grid_and_lot():
     plan = tp.map_technical_to_strategy(make_state(
         underlying="NIFTY 50", spot=25_432.0))
-    assert plan["strike_step"] == 50.0 and plan["lot_size"] == 75
+    assert plan["strike_step"] == 50.0 and plan["lot_size"] == 65
     assert plan["atm"] == 25_450.0
     for leg in plan["legs"]:
         assert leg["strike"] % 50.0 == 0

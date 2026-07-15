@@ -41,8 +41,14 @@ from src.strategy import StrategyConstructor
 from src.suggestions import analyze
 
 # NSE lot sizes for the option-enabled underlyings (contract spec, not
-# market data — revised rarely and loudly by the exchange).
-LOT_SIZES = {"NIFTY 50": 75, "NIFTY BANK": 35}
+# market data — revised rarely and loudly by the exchange). CURRENT as of
+# the Jan-2026 SEBI revision: NIFTY 50 75->65, NIFTY BANK 35->30 (verified
+# 2026-07-15 against NSE lot-size bulletins). The simulator replays history
+# with these current sizes; that only scales absolute-rupee P&L, never the
+# R-multiples or win-rates the validation harness actually scores (both are
+# lot-size-invariant), so the learning signal is unaffected. If a change is
+# announced, update HERE — it is the single source every consumer imports.
+LOT_SIZES = {"NIFTY 50": 65, "NIFTY BANK": 30}
 
 # Never open a position that the 2-days-before-expiry rule would
 # immediately close: skip expiries closer than this many days out.

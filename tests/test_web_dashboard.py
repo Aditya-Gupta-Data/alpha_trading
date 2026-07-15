@@ -129,6 +129,104 @@ def test_dashboard_page_propagates_the_key_to_both_endpoints():
     assert '"/api/web/events" + KEY_QS' in html
 
 
+# ------------------------------------------------------------- /api/web/pnl
+
+def test_web_pnl_composes_realized_open_and_net():
+    marked = [{"short_id": "sprd0001", "live_pnl_rs": 4200.0},
+              {"short_id": "sprd0002", "live_pnl_rs": -1200.0},
+              {"short_id": "sprd0003", "live_pnl_rs": None}]  # unpriced
+    exposure = {"locked_margin_rs": 20422.5, "equity_rs": 1_000_000.0,
+                "realized_pnl_rs": 15000.0, "exposure_pct": 2.04}
+    with _no_key_env(), \
+         mock.patch("src.api.journal.read_all", return_value=[]), \
+         mock.patch("src.portfolio_report.get_live_marks",
+                    return_value=(marked, "snapshot")), \
+         mock.patch("src.portfolio_report.read_exposure",
+                    return_value=exposure):
+        body = _client().get("/api/web/pnl").json()
+    assert body["ok"] is True
+    assert body["realized_pnl_rs"] == 15000.0
+    assert body["open_pnl_rs"] == 3000.0            # 4200 - 1200, unpriced excluded
+    assert body["net_pnl_rs"] == 18000.0            # realized + open
+    assert body["open_marked"] == 2
+    assert body["open_unmarked"] == 1
+    assert body["exposure"] == exposure
+
+
+def test_web_pnl_open_is_null_not_zero_when_nothing_priced():
+    """A book with positions but no live quotes must read open=null, not
+    a fake 0.0 — the strip must not imply a flat P&L it doesn't know."""
+    marked = [{"short_id": "sprd0001", "live_pnl_rs": None}]
+    with _no_key_env(), \
+         mock.patch("src.api.journal.read_all", return_value=[]), \
+         mock.patch("src.portfolio_report.get_live_marks",
+                    return_value=(marked, None)), \
+         mock.patch("src.portfolio_report.read_exposure",
+                    return_value={"realized_pnl_rs": 500.0,
+                                  "locked_margin_rs": 0.0, "equity_rs": 1.0,
+                                  "exposure_pct": 0.0}):
+        body = _client().get("/api/web/pnl").json()
+    assert body["open_pnl_rs"] is None
+    assert body["open_unmarked"] == 1
+    assert body["net_pnl_rs"] == 500.0              # realized only, open unknown
+
+
+def test_web_pnl_degrades_to_nulls_when_marks_and_exposure_fail():
+    with _no_key_env(), \
+         mock.patch("src.api.journal.read_all", return_value=[]), \
+         mock.patch("src.portfolio_report.get_live_marks",
+                    side_effect=RuntimeError("no token")), \
+         mock.patch("src.portfolio_report.read_exposure",
+                    side_effect=RuntimeError("db gone")):
+        resp = _client().get("/api/web/pnl")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["realized_pnl_rs"] is None
+    assert body["open_pnl_rs"] is None
+    assert body["net_pnl_rs"] is None
+
+
+# ------------------------------------------------------- /api/web/departments
+
+def test_web_departments_maps_signals_without_faking_greens():
+    """Real signals only: a silent scheduled log -> down, a problem line
+    today -> warn, a clean monitored dept -> up, an inline dept -> inline
+    (never a fabricated green), and Interfaces is up by answering."""
+    with _no_key_env(), \
+         mock.patch("src.ops_monitor.check_heartbeats",
+                    return_value=["sleep_phase.log — did not run today"]), \
+         mock.patch("src.ops_monitor.system_telemetry",
+                    return_value={"mem_used_pct": 41, "disk_free_gb": 88.0,
+                                  "load_1m": 0.7}):
+        body = _client().get("/api/web/departments").json()
+    by_name = {d["name"]: d for d in body["departments"]}
+    assert body["ok"] is True
+    assert len(body["departments"]) == 7
+    assert by_name["Memory & Learning"]["status"] == "down"   # its log is silent
+    assert by_name["Data"]["status"] == "up"                  # no silent log, no problems
+    assert by_name["Risk & Capital"]["status"] == "inline"    # no scheduled log
+    assert by_name["Validation"]["status"] == "inline"
+    assert by_name["Reporting"]["status"] == "inline"
+    assert by_name["Interfaces"]["status"] == "up"            # answered the request
+    assert body["host"]["mem_used_pct"] == 41
+
+
+def test_web_departments_reports_unknown_when_heartbeats_unavailable():
+    """If the heartbeat check itself blows up, monitored departments must
+    read 'unknown' — never a silent green that hides a broken monitor."""
+    with _no_key_env(), \
+         mock.patch("src.ops_monitor.check_heartbeats",
+                    side_effect=RuntimeError("logs dir gone")), \
+         mock.patch("src.ops_monitor.system_telemetry", return_value={}):
+        body = _client().get("/api/web/departments").json()
+    by_name = {d["name"]: d for d in body["departments"]}
+    assert by_name["Data"]["status"] == "unknown"
+    assert by_name["Decision"]["status"] == "unknown"
+    assert by_name["Interfaces"]["status"] == "up"     # still self-evident
+    assert by_name["Risk & Capital"]["status"] == "inline"
+
+
 # ------------------------------------------------------------- /dashboard
 
 def test_dashboard_route_serves_the_single_file_page():
@@ -149,6 +247,16 @@ def test_dashboard_frontend_honors_the_anti_polling_rule():
     assert "EventSource" in html             # Mechanism B present
     assert "/api/web/positions" in html      # Mechanism A fetch target
     assert "/api/web/events" in html
+
+
+def test_dashboard_frontend_has_the_single_pane_strips():
+    """The P&L and department strips live on the SAME page (single pane of
+    glass) and fetch their own read-only endpoints, propagating the key."""
+    html = STATIC_DASHBOARD.read_text()
+    assert 'id="pnl-strip"' in html
+    assert 'id="dept-strip"' in html
+    assert '"/api/web/pnl" + KEY_QS' in html
+    assert '"/api/web/departments" + KEY_QS' in html
 
 
 # ------------------------------------------------------------- SSE watcher

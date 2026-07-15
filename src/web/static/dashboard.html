@@ -45,6 +45,34 @@
   #refresh:hover { background: rgba(74, 222, 128, 0.12); }
   #refresh:active { transform: translateY(1px); }
   #asof { color: var(--dim); font-size: 12px; }
+  /* Single-pane strips: P&L summary + 7-department health, both above the
+     positions table. Same terminal palette, no framework, no build step. */
+  .strip {
+    display: flex; gap: 22px; flex-wrap: wrap; align-items: center;
+    margin-top: 16px; padding: 12px 16px;
+    border: 1px solid var(--grid); border-radius: 4px;
+    background: rgba(30, 42, 32, 0.22);
+  }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat-label {
+    color: var(--dim); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .stat-val { font-size: 15px; }
+  #dept-strip { gap: 16px; }
+  .dept { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+  .dept-num { color: var(--dim); }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%; flex: none;
+    background: var(--dim); color: var(--dim); box-shadow: 0 0 6px currentColor;
+  }
+  .dot.up   { background: var(--accent); color: var(--accent); }
+  .dot.warn { background: var(--amber);  color: var(--amber); }
+  .dot.down { background: var(--red);    color: var(--red); }
+  .dot.inline  { background: var(--dim); color: var(--dim); box-shadow: none; }
+  .dot.unknown { background: transparent; color: var(--dim);
+                 box-shadow: none; border: 1px solid var(--dim); }
+  .host-line { color: var(--dim); font-size: 11px; margin-left: auto; }
   #table-wrap { overflow-x: auto; margin-top: 18px; }
   table { border-collapse: collapse; width: 100%; }
   th, td {
@@ -82,6 +110,15 @@
   <span id="asof"></span>
   <button id="refresh" type="button">Manual Status Check ⟳</button>
 </header>
+
+<section id="pnl-strip" class="strip" aria-live="polite" aria-label="daily P&amp;L">
+  <div class="stat"><span class="stat-label">Net P&amp;L</span><span class="stat-val pnl-na" id="pnl-net">–</span></div>
+  <div class="stat"><span class="stat-label">Realized</span><span class="stat-val pnl-na" id="pnl-realized">–</span></div>
+  <div class="stat"><span class="stat-label">Open (marked)</span><span class="stat-val pnl-na" id="pnl-open">–</span></div>
+  <div class="stat"><span class="stat-label">Exposure</span><span class="stat-val" id="pnl-exposure">–</span></div>
+</section>
+
+<section id="dept-strip" class="strip" aria-live="polite" aria-label="department health"></section>
 
 <div id="table-wrap">
 <table id="positions" aria-live="polite">
@@ -177,6 +214,56 @@ function render(data) {
       : "exposure: n/a";
 }
 
+/* --- Single-pane strips: daily P&L + 7-department health --------------- */
+
+function renderPnl(d) {
+  const setSigned = (id, v) => {
+    const el = document.getElementById(id);
+    if (v === null || v === undefined) { el.textContent = "n/a"; el.className = "stat-val pnl-na"; return; }
+    el.textContent = rs(v, true);
+    el.className = "stat-val " + (v > 0 ? "pnl-pos" : v < 0 ? "pnl-neg" : "");
+  };
+  setSigned("pnl-net", d.net_pnl_rs);
+  setSigned("pnl-realized", d.realized_pnl_rs);
+
+  const openEl = document.getElementById("pnl-open");
+  if (d.open_pnl_rs === null || d.open_pnl_rs === undefined) {
+    openEl.textContent = "n/a" + (d.open_unmarked ? " (" + d.open_unmarked + " unpriced)" : "");
+    openEl.className = "stat-val pnl-na";
+  } else {
+    openEl.textContent = rs(d.open_pnl_rs, true)
+        + (d.open_unmarked ? " (" + d.open_unmarked + " unpriced)" : "");
+    openEl.className = "stat-val " + (d.open_pnl_rs >= 0 ? "pnl-pos" : "pnl-neg");
+  }
+
+  const e = d.exposure, expEl = document.getElementById("pnl-exposure");
+  expEl.textContent = e
+      ? rs(e.locked_margin_rs) + (e.exposure_pct !== null && e.exposure_pct !== undefined
+          ? " (" + e.exposure_pct.toFixed(1) + "%)" : "")
+      : "n/a";
+  expEl.className = "stat-val";
+  expEl.style.color = e ? "var(--amber)" : "var(--dim)";
+}
+
+function renderDepts(d) {
+  const strip = document.getElementById("dept-strip");
+  const depts = d.departments || [];
+  strip.innerHTML = depts.map(dep => `
+    <span class="dept" title="${escapeHtml(dep.detail || "")}">
+      <span class="dot ${escapeHtml(dep.status)}"></span>
+      <span class="dept-num">${escapeHtml(dep.n)}</span>${escapeHtml(dep.name)}
+    </span>`).join("");
+  const h = d.host;
+  if (h) {
+    const fmt = (v, s) => (v === null || v === undefined) ? "?" : v + (s || "");
+    const host = document.createElement("span");
+    host.className = "host-line";
+    host.textContent = "mem " + fmt(h.mem_used_pct, "%")
+        + " · disk " + fmt(h.disk_free_gb, "GB") + " free · load " + fmt(h.load_1m);
+    strip.appendChild(host);
+  }
+}
+
 /* Behind the Phase 9 gateway every route needs the API key, and
    EventSource cannot send headers — so the key rides as ?api_key=...
    on the page URL (open /dashboard?api_key=YOURKEY) and is propagated
@@ -194,6 +281,12 @@ async function refresh(reason) {
         ") — is the API running? Retry with the button.";
     errorMsg.style.display = "block";
   }
+  /* The P&L and department strips degrade independently: a failure in
+     either one must never blank the positions table above. */
+  fetch("/api/web/pnl" + KEY_QS, {cache: "no-store"})
+      .then(r => r.ok ? r.json() : Promise.reject()).then(renderPnl).catch(() => {});
+  fetch("/api/web/departments" + KEY_QS, {cache: "no-store"})
+      .then(r => r.ok ? r.json() : Promise.reject()).then(renderDepts).catch(() => {});
 }
 
 document.getElementById("refresh").addEventListener("click",

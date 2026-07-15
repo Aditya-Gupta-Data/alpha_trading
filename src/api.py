@@ -1163,6 +1163,161 @@ def web_positions():
             "mark_source": mark_source}
 
 
+@app.get("/api/web/pnl")
+def web_pnl():
+    """The dashboard's daily P&L strip: REALIZED (banked, from the capital
+    layer) + OPEN live-marked (the one shared mark ladder) + the honest
+    net, plus account exposure. Same read-only sources as
+    /api/web/positions (get_live_marks is snapshot-first — zero Dhan calls
+    in the common case, decision #48); every field degrades to null,
+    never an error, when a token / closed market / missing table makes it
+    unavailable. Reads only — no engine call, no write."""
+    entries = journal.read_all()
+
+    open_pnl = None
+    marked_count = 0
+    unmarked = 0
+    mark_source = None
+    try:
+        from src.portfolio_report import get_live_marks
+        marked, mark_source = get_live_marks(entries=entries)
+        priced = [m["live_pnl_rs"] for m in marked
+                  if m.get("live_pnl_rs") is not None]
+        marked_count = len(priced)
+        unmarked = len(marked) - marked_count
+        # None (not 0.0) when nothing could be priced — a real 0 P&L and
+        # "no quote available" must not read the same on the strip.
+        open_pnl = round(sum(priced), 2) if priced else None
+    except Exception as e:
+        print(f"  (dashboard: pnl marks unavailable: {e})")
+
+    exposure = None
+    try:
+        from src.portfolio_report import read_exposure
+        exposure = read_exposure()
+    except Exception as e:
+        print(f"  (dashboard: pnl exposure unavailable: {e})")
+
+    realized = exposure.get("realized_pnl_rs") if exposure else None
+    net = None
+    if realized is not None or open_pnl is not None:
+        net = round((realized or 0.0) + (open_pnl or 0.0), 2)
+
+    return {"ok": True,
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "realized_pnl_rs": realized,
+            "open_pnl_rs": open_pnl,
+            "net_pnl_rs": net,
+            "open_marked": marked_count,
+            "open_unmarked": unmarked,
+            "exposure": exposure,
+            "mark_source": mark_source}
+
+
+# The 7 Managers (MODULES.md department registry) mapped to the scheduled
+# job-logs ops_monitor actually watches. This map is Interfaces-side
+# PRESENTATION grouping — ops_monitor is untouched. Departments with an
+# EMPTY log list run INLINE inside another department's job (Risk's gates
+# fire inside the Decision cycle, Validation's court runs in the nightly
+# sleep phase, Reporting's notifier fires from within every job) — they
+# have no heartbeat of their own and are shown 'inline', NEVER a
+# fabricated green, so the strip reflects only signals ops_monitor emits.
+_DEPARTMENT_JOBS = [
+    (1, "Data", ["news_processor.log", "rss_ingester.log",
+                 "deals_tracker.log", "flows_tracker.log",
+                 "earnings_calendar.log", "daily_archiver.log",
+                 "chain_archiver.log", "renew_token.log"]),
+    (2, "Decision", ["master_scheduler.log", "main.log", "suggest.log"]),
+    (3, "Risk & Capital", []),      # inline — gates run inside the Decision cycle
+    (4, "Memory & Learning", ["sleep_phase.log"]),
+    (5, "Validation", []),          # inline — proving court runs in the sleep phase
+    (6, "Reporting", []),           # inline — the notifier fires from every job
+    (7, "Interfaces", ["__self__"]),  # this gateway, proven up by answering
+]
+
+
+@app.get("/api/web/departments")
+def web_departments():
+    """Read-only health strip for the 7 Managers, derived ONLY from what
+    ops_monitor already emits: today's heartbeats (which scheduled logs
+    were touched, weekday-aware) and the nightly problem ledger
+    (logs/problems.jsonl). A department with a silent scheduled log today
+    is 'down'; one with problem lines logged today is 'warn'; a clean one
+    is 'up'; a department that runs inline (no scheduled log) is 'inline'.
+    Pure file reads — this NEVER runs a sweep, posts to Discord, or
+    touches engine state."""
+    silent = None
+    try:
+        from src import ops_monitor
+        # check_heartbeats returns "name.log — did not run today" lines.
+        silent = {line.split(" — ")[0].strip()
+                  for line in ops_monitor.check_heartbeats()}
+    except Exception as e:
+        print(f"  (dashboard: heartbeats unavailable: {e})")
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    problems_by_log: dict = {}
+    try:
+        from src.ops_monitor import PROBLEMS_PATH
+        if PROBLEMS_PATH.exists():
+            for raw in PROBLEMS_PATH.read_text().splitlines():
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    continue
+                if str(rec.get("found", "")).startswith(today):
+                    log = rec.get("log", "?")
+                    problems_by_log[log] = (problems_by_log.get(log, 0)
+                                            + int(rec.get("count", 1)))
+    except Exception as e:
+        print(f"  (dashboard: problem ledger unavailable: {e})")
+
+    departments = []
+    for num, name, logs in _DEPARTMENT_JOBS:
+        if logs == ["__self__"]:
+            departments.append({"n": num, "name": name, "status": "up",
+                                "detail": "gateway serving this page"})
+            continue
+        if not logs:
+            departments.append(
+                {"n": num, "name": name, "status": "inline",
+                 "detail": "runs inside another job — no scheduled log"})
+            continue
+        if silent is None:
+            departments.append({"n": num, "name": name, "status": "unknown",
+                                "detail": "heartbeat check unavailable"})
+            continue
+        these_silent = [l for l in logs if l in silent]
+        problems = sum(problems_by_log.get(l, 0) for l in logs)
+        if these_silent:
+            status = "down"
+            detail = "silent today: " + ", ".join(
+                s.replace(".log", "") for s in these_silent)
+        elif problems:
+            status = "warn"
+            detail = f"{problems} problem line(s) logged today"
+        else:
+            status = "up"
+            detail = "all jobs ran, clean logs"
+        departments.append({"n": num, "name": name,
+                            "status": status, "detail": detail})
+
+    host = None
+    try:
+        from src.ops_monitor import system_telemetry
+        host = system_telemetry()
+    except Exception as e:
+        print(f"  (dashboard: host telemetry unavailable: {e})")
+
+    return {"ok": True,
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "departments": departments,
+            "host": host}
+
+
 @app.get("/api/web/events")
 async def web_events():
     """Server-Sent Events: tells connected dashboards WHEN to refetch

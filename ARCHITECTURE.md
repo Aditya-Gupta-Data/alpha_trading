@@ -74,7 +74,11 @@ engine's published marks — everyone else READS this so the live loop stays the
 
 **To change data handling, go to:** `dhan_guard` for live fetches;
 `market_snapshot` for the shared marks; the specific `ingestion/<x>.py` clerk
-for an archive feed.
+for an archive feed; **`text_intelligence` (decision #74) to change how raw
+text becomes a JSON signal** — one manager seam where the LLM backend
+(`ollama` local / `claude` cloud) is a config choice, with a daily budget cap
+and incremental de-dup. (News sentiment itself is `news_processor` → Gemini →
+`data/news_sentiment.json`, scheduled daily; it is NOT a DB table.)
 
 ---
 

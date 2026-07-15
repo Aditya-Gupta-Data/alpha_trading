@@ -26,5 +26,8 @@
   "greeks_vega_shock_points": 5.0,
   "greeks_vega_budget_pct": 15.0,
   "greeks_delta_budget_pct": 30.0,
-  "performance_min_trades": 20
+  "performance_min_trades": 20,
+  "text_intelligence_backend": "ollama",
+  "text_intelligence_model": "claude-opus-4-8",
+  "text_intelligence_daily_call_cap": 200
 }

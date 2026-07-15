@@ -175,21 +175,32 @@ def _coerce_signal(raw) -> dict | None:
     }
 
 
-def parse_headline(text, extractor: LocalExtractor = None) -> dict | None:
+def parse_headline(text, extractor=None) -> dict | None:
     """The Phase 7 entry point: raw text -> one validated signal frame, or
-    None when the text is empty, Ollama is unavailable, or the model's
-    answer can't be coerced into the schema. Never raises."""
+    None when the text is empty, the LLM is unavailable, or the answer
+    can't be coerced into the schema. Never raises.
+
+    The extractor now defaults to the Data Department's text-intelligence
+    MANAGER (decision #74) — a config choice between the local Ollama
+    backend and the cloud Claude backend the VM can reach. An injected
+    extractor (tests, an explicit LocalExtractor) is used as-is, so this
+    is byte-identical to the old direct-Ollama path when config says
+    "ollama" or a backend is passed."""
     if not text or not str(text).strip():
         return None
-    extractor = extractor or LocalExtractor()
+    if extractor is None:
+        from src.text_intelligence import get_extractor
+        extractor = get_extractor()
     raw = extractor.chat_json(_SIGNAL_PROMPT, str(text))
     return _coerce_signal(raw)
 
 
-def parse_many(texts, extractor: LocalExtractor = None) -> list:
+def parse_many(texts, extractor=None) -> list:
     """Batch convenience: a list of texts -> the list of frames that
     parsed (failures silently dropped — same contract per item)."""
-    extractor = extractor or LocalExtractor()
+    if extractor is None:
+        from src.text_intelligence import get_extractor
+        extractor = get_extractor()
     frames = []
     for text in texts or []:
         frame = parse_headline(text, extractor=extractor)

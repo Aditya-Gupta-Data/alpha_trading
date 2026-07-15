@@ -414,10 +414,27 @@ def run_advisory(*, entries=None, chain_fn=None, spot_fn=None,
 
 
 def main() -> None:
-    """CLI: `python3 -m src.portfolio_greeks` — run the advisory and print
-    the card. Posts to Discord too (via notifier) unless --quiet."""
+    """CLI / cron entry: `python3 -m src.portfolio_greeks`.
+
+    Self-gates on NSE market hours exactly like portfolio_report — the 2h
+    cron fires round the clock, but off-market runs exit quietly (Greeks
+    off a stale post-close chain are noise). `--force` runs regardless
+    (manual inspection); `--quiet` suppresses the Discord post (snapshot
+    only). On a breach it posts one card per day; on OK it stays silent
+    (snapshot_and_notify only cards un-carded breaches)."""
     import sys
+    force = "--force" in sys.argv
     quiet = "--quiet" in sys.argv
+
+    if not force:
+        try:
+            from src.market_loop import is_market_open, ist_now
+            if not is_market_open(ist_now()):
+                print("portfolio-greeks: market closed — skipping (use --force).")
+                return
+        except Exception:
+            pass  # clock unavailable -> fail open, run anyway
+
     notify_fn = None
     if not quiet:
         try:

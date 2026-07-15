@@ -26,6 +26,9 @@
 #  10. src.ingestion.daily_archiver: 19:45 IST daily (snapshot the
 #                             perishable news/macro artifacts into the
 #                             lake before the 20:00 sleep phase).
+#  14. src.portfolio_greeks:  every 2h at :30 IST (posts only during
+#                             market hours; self-gates like #7). Book-level
+#                             net-Vega/Delta budget advisory, decision #71.
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -163,6 +166,14 @@ CRON_TZ=Asia/Kolkata
 #     what validated/died this week, the placebo false-discovery rate.
 #     Read-only over brain_map.db; the owner's window on the harness.
 0 10 * * 6 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.validation.digest >> "$REPO_ROOT/logs/harness_digest.log" 2>&1
+
+# 14. Portfolio-Greeks advisory (decision #71) — cron fires every 2h at
+#     minute 30 (never the minute-0 report/renewal slots); the SCRIPT
+#     self-gates on market hours and exits quietly otherwise. Aggregates
+#     the open book's net delta/vega from the live chain Greeks and posts
+#     ONE card/day only if a Vega or Delta budget breaches (OK = silent
+#     snapshot). Advisory-only, fail-open. Kill switch in config.json.
+30 */2 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.portfolio_greeks >> "$REPO_ROOT/logs/portfolio_greeks.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

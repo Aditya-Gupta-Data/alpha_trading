@@ -196,3 +196,15 @@ if __name__ == "__main__":
         except AssertionError:
             print(f"FAIL  {t.__name__}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+def test_zero_valued_failure_stats_are_not_problems():
+    """2026-07-14 false alarm: a HEALTHY sleep-phase stats dict tripped
+    the card via the literal word 'failed' at count zero. Zero-valued
+    failure counters are scrubbed; any nonzero count still fires."""
+    from src.ops_monitor import is_problem_line
+    healthy = ("A. ingestion:     {'ingested': 2, 'skipped_duplicate': 5, "
+               "'skipped_empty': 0, 'failed': 0, 'skipped_no_llm': 18}")
+    assert not is_problem_line(healthy)
+    assert is_problem_line(healthy.replace("'failed': 0", "'failed': 3"))
+    assert is_problem_line("NSE fetch failed [HTTP Error 403: Forbidden]")

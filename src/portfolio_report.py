@@ -203,46 +203,79 @@ def _rs(v) -> str:
     return f"Rs.{v:+,.2f}" if v is not None else "n/a"
 
 
+# --- report-card presentation (Discord code-block table) -----------------
+# Discord does NOT render pipe-style Markdown tables — the clean, aligned
+# result is a fenced code block (monospace, fixed-width columns). Kept
+# self-contained to this report; the positions table (positions.py) owns
+# its own so the two departments stay independently changeable.
+
+_TICKER_ABBR = {"NIFTY 50": "NIFTY", "NIFTY BANK": "BNF"}
+_STRAT_ABBR = {"bull_call_spread": "BCS", "bear_put_spread": "BPS",
+               "iron_condor": "IC", "iron_butterfly": "IB"}
+
+
+def _abbr_ticker(t: str) -> str:
+    return _TICKER_ABBR.get(t, (t or "?").replace(".NS", "")[:6])
+
+
+def _abbr_strat(s: str) -> str:
+    return _STRAT_ABBR.get(s, (s or "EQ")[:3].upper())
+
+
+def _report_table(marked: list) -> str:
+    """A fenced code-block table of the marked positions, sorted best P&L
+    first (so the top row IS the winner and the last the loser). Columns:
+    ticker · strategy · live P&L · note."""
+    rows = [(_abbr_ticker(m["ticker"]), _abbr_strat(m.get("strategy")),
+             f"{m['live_pnl_rs']:+,.0f}", m.get("detail") or "")
+            for m in sorted(marked, key=lambda m: m["live_pnl_rs"],
+                            reverse=True)]
+    head = ("TICKER", "STRAT", "LIVE P&L", "NOTE")
+    w0 = max(len(head[0]), *(len(r[0]) for r in rows))
+    w1 = max(len(head[1]), *(len(r[1]) for r in rows))
+    w2 = max(len(head[2]), *(len(r[2]) for r in rows))
+    out = [f"{head[0]:<{w0}}  {head[1]:<{w1}}  {head[2]:>{w2}}  {head[3]}"]
+    for t, s, p, n in rows:
+        out.append(f"{t:<{w0}}  {s:<{w1}}  {p:>{w2}}  {n}")
+    return "```\n" + "\n".join(out) + "\n```"
+
+
 def build_report_payload(marked: list, open_count: int, unmarked: int,
                          exposure: dict | None, now) -> dict:
-    """The broadcast_alert payload — pure function, tests pin its shape."""
-    fields = [{"name": "Open Positions", "value": str(open_count),
-               "inline": True}]
+    """The broadcast_alert payload — pure function, tests pin its shape.
+
+    Presentation is a single code-block TABLE of the marked positions plus
+    one summary line, in the embed description (was: chunky stacked embed
+    fields). Marks are the caller's — run() sources them snapshot-first
+    (get_live_marks), so the table is the latest available price, never a
+    stale EOD fetch."""
+    summary_bits = [f"{open_count} open"]
     if marked:
-        winner = max(marked, key=lambda m: m["live_pnl_rs"])
-        loser = min(marked, key=lambda m: m["live_pnl_rs"])
         net = round(sum(m["live_pnl_rs"] for m in marked), 2)
-        fields.append({"name": "Net Live P&L (marked)",
-                       "value": _rs(net), "inline": True})
-        fields.append({"name": f"Top Winner — {winner['ticker']}",
-                       "value": f"{_rs(winner['live_pnl_rs'])} "
-                                f"({winner['detail']})", "inline": False})
-        if loser["short_id"] != winner["short_id"]:
-            fields.append({"name": f"Top Loser — {loser['ticker']}",
-                           "value": f"{_rs(loser['live_pnl_rs'])} "
-                                    f"({loser['detail']})", "inline": False})
+        summary_bits.append(f"net live P&L {_rs(net)}")
     if exposure is not None and exposure.get("realized_pnl_rs") is not None:
-        fields.append({"name": "Realized P&L (banked)",
-                       "value": _rs(exposure["realized_pnl_rs"]),
-                       "inline": True})
-    if exposure is not None:
-        value = (f"Rs.{exposure['locked_margin_rs']:,.0f} locked of "
-                 f"Rs.{exposure['equity_rs']:,.0f} equity")
-        if exposure["exposure_pct"] is not None:
-            value += f" ({exposure['exposure_pct']:.1f}%)"
-        fields.append({"name": "Exposure", "value": value, "inline": False})
+        summary_bits.append(f"realized {_rs(exposure['realized_pnl_rs'])}")
+    if exposure is not None and exposure.get("exposure_pct") is not None:
+        summary_bits.append(
+            f"exposure {exposure['exposure_pct']:.1f}% "
+            f"(Rs.{exposure['locked_margin_rs']:,.0f}/"
+            f"{exposure['equity_rs']:,.0f})")
     if unmarked:
-        fields.append({"name": "Unmarked",
-                       "value": f"{unmarked} position(s) had no live quote "
-                                "this cycle", "inline": False})
+        summary_bits.append(f"{unmarked} unmarked (no live quote)")
+
+    description = ("Automated 2-hourly snapshot — read-only; the plan "
+                  "tracker owns every exit. Paper only.\n"
+                  + " · ".join(summary_bits))
+    if marked:
+        description += "\n" + _report_table(marked)
+
     return {
         "event": "portfolio_report",
         "ticker": "paper book",
         "date": now.date().isoformat(),
         "time": now.strftime("%Y-%m-%d %H:%M IST"),
-        "description": "Automated 2-hourly snapshot — read-only; the plan "
-                       "tracker owns every exit. Paper only.",
-        "fields": fields,
+        "description": description,
+        "fields": [],
     }
 
 

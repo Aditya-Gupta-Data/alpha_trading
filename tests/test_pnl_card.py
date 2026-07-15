@@ -63,13 +63,11 @@ def test_report_payload_carries_realized_field():
                 "realized_pnl_rs": 4321.0, "exposure_pct": 26.01}
     payload = pr.build_report_payload(MARKS, open_count=13, unmarked=0,
                                       exposure=exposure, now=NOW)
-    names = [f["name"] for f in payload["fields"]]
-    assert "Realized P&L (banked)" in names
-    realized_field = next(f for f in payload["fields"]
-                          if f["name"] == "Realized P&L (banked)")
-    assert "4,321" in realized_field["value"]
-    # Old exposure field intact.
-    assert any("Exposure" == f["name"] for f in payload["fields"])
+    # Realized + exposure now ride the description summary line (the card is
+    # a single code-block table, not chunky fields — Discord UX update 2/3).
+    desc = payload["description"]
+    assert "realized Rs.+4,321.00" in desc
+    assert "exposure 26.0%" in desc
 
 
 def test_gateway_pnl_endpoint():

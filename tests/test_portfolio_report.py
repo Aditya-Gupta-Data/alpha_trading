@@ -130,34 +130,30 @@ def _mark(short_id, ticker, pnl):
             "live_pnl_rs": pnl, "detail": "detail"}
 
 
-def test_payload_names_winner_loser_net_and_exposure():
+def test_payload_table_shows_positions_sorted_and_summary():
     marked = [_mark("a", "NIFTY 50", 4200.0), _mark("b", "ONGC.NS", -795.0),
               _mark("c", "NIFTY BANK", 100.0)]
     exposure = {"locked_margin_rs": 40000.0, "equity_rs": 1_000_000.0,
-                "exposure_pct": 4.0}
+                "exposure_pct": 4.0, "realized_pnl_rs": 5000.0}
     payload = pr.build_report_payload(marked, 3, 0, exposure, MARKET_OPEN_NOW)
     assert payload["event"] == "portfolio_report"
-    names = [f["name"] for f in payload["fields"]]
-    values = {f["name"]: f["value"] for f in payload["fields"]}
-    assert values["Open Positions"] == "3"
-    assert values["Net Live P&L (marked)"] == "Rs.+3,505.00"
-    assert "Top Winner — NIFTY 50" in names
-    assert "Rs.+4,200.00" in values["Top Winner — NIFTY 50"]
-    assert "Top Loser — ONGC.NS" in names
-    assert "Rs.-795.00" in values["Top Loser — ONGC.NS"]
-    assert "4.0%" in values["Exposure"]
-    assert "Unmarked" not in names
+    assert payload["fields"] == []                       # no more chunky fields
+    desc = payload["description"]
+    # a fenced code-block table with a header row
+    assert "```" in desc and "TICKER" in desc and "LIVE P&L" in desc
+    # abbreviated tickers, sorted best-first (winner NIFTY row before loser)
+    assert desc.index("NIFTY  ") < desc.index("ONGC")
+    assert "+4,200" in desc and "-795" in desc
+    # summary line carries net / realized / exposure
+    assert "net live P&L Rs.+3,505.00" in desc
+    assert "realized Rs.+5,000.00" in desc and "exposure 4.0%" in desc
 
 
-def test_payload_single_position_has_no_loser_field_and_counts_unmarked():
-    payload = pr.build_report_payload([_mark("a", "NIFTY 50", 500.0)],
-                                      3, 2, None, MARKET_OPEN_NOW)
-    names = [f["name"] for f in payload["fields"]]
-    assert "Top Winner — NIFTY 50" in names
-    assert not any(n.startswith("Top Loser") for n in names)
-    assert not any(n == "Exposure" for n in names)
-    unmarked = next(f for f in payload["fields"] if f["name"] == "Unmarked")
-    assert "2 position(s)" in unmarked["value"]
+def test_payload_counts_unmarked_and_omits_table_when_none_marked():
+    payload = pr.build_report_payload([], 3, 2, None, MARKET_OPEN_NOW)
+    desc = payload["description"]
+    assert "3 open" in desc and "2 unmarked" in desc
+    assert "```" not in desc                              # no table with 0 marks
 
 
 def test_payload_renders_as_the_purple_report_embed():
@@ -167,7 +163,7 @@ def test_payload_renders_as_the_purple_report_embed():
     assert embed["title"].startswith("🗂️ Portfolio Report Card — ")
     assert "2026-07-10 11:00 IST" in embed["title"]
     assert embed["color"] == 0x9B59B6
-    assert embed["fields"] == payload["fields"]    # passthrough, untouched
+    assert "```" in embed["description"]                  # the table rides along
 
 
 # --------------------------------------------------------------- run cycle
@@ -182,8 +178,7 @@ def test_run_posts_during_market_hours_with_injected_seams():
     assert result["posted"] is True
     assert len(sent) == 1
     assert sent[0]["event"] == "portfolio_report"
-    values = {f["name"]: f["value"] for f in sent[0]["fields"]}
-    assert values["Open Positions"] == "2"
+    assert "2 open" in sent[0]["description"]
 
 
 def test_run_stays_silent_when_the_market_is_closed():
@@ -202,8 +197,7 @@ def test_run_force_posts_even_when_closed():
                     now_fn=lambda: MARKET_CLOSED_NOW,
                     notify_fn=sent.append, force=True)
     assert result["posted"] is True
-    values = {f["name"]: f["value"] for f in sent[0]["fields"]}
-    assert values["Open Positions"] == "0"
+    assert "0 open" in sent[0]["description"]
 
 
 def test_cli_force_flag_wires_through():

@@ -115,6 +115,95 @@ Success `200`: `{ "ok": true, ... }` · Failure `400`: `{ "ok": false, "error": 
 ### `DELETE /api/watchlist/{ticker}`
 E.g. `/api/watchlist/RELIANCE.NS`. `200 {"ok": true}` or `404 {"ok": false}`.
 
+### `GET /api/web/irr` — PLANNED (contract frozen 2026-07-15; backend NOT yet wired)
+
+> **Status: schema-only.** This shape is FROZEN and safe to build the "IRR
+> Performance" visual against right now (use placeholder data client-side).
+> The engine calculation is deliberately NOT implemented yet (deploy
+> freeze) — only the JSON contract below is banked. When the real IRR
+> engine is wired later, it will emit **exactly** this structure; the
+> frontend will not need to change. Do not compute IRR in the client
+> (ground rule #1) — the endpoint is the only source.
+
+Powers a single comparison chart: the paper portfolio's growth curve vs. a
+Nifty benchmark over time, with a headline return number per line.
+
+```json
+{
+  "ok": true,
+  "as_of": "2026-07-15T17:10:00",   // full ISO datetime the payload was built
+  "basis": "paper",                 // always "paper" — there is no broker
+  "currency": "INR",
+  "window": {
+    "from": "2026-01-02",           // first trading day in the series (IST date)
+    "to": "2026-07-15",             // last trading day in the series (IST date)
+    "granularity": "daily"          // "daily" for now; "weekly"/"monthly" reserved
+  },
+  "series": [
+    {
+      "id": "portfolio",
+      "role": "portfolio",          // "portfolio" | "benchmark" — for line styling
+      "label": "ADiTrader (paper)",
+      "symbol": null,               // portfolio has no ticker
+      "irr_pct": 18.4,              // HEADLINE: annualized MONEY-weighted IRR
+                                    //   over [from,to], %. null if the window
+                                    //   is too short / no cashflows yet.
+      "points": [                   // one point per trading day; [] when no history
+        { "t": "2026-01-02", "value": 0.0 },   // value ALWAYS 0.0 at window start
+        { "t": "2026-01-03", "value": 0.35 },  // cumulative return % since `from`
+        { "t": "2026-01-06", "value": 1.10 }
+      ]
+    },
+    {
+      "id": "benchmark",
+      "role": "benchmark",
+      "label": "NIFTY 50",
+      "symbol": "^NSEI",            // Yahoo-style index symbol (ground rule #3)
+      "irr_pct": 11.2,              // HEADLINE: annualized TIME-weighted return %
+                                    //   (an index has no cashflows). null if
+                                    //   the benchmark series is unavailable.
+      "points": [
+        { "t": "2026-01-02", "value": 0.0 },
+        { "t": "2026-01-03", "value": -0.20 },
+        { "t": "2026-01-06", "value": 0.55 }
+      ]
+    }
+  ]
+}
+```
+
+**Field semantics (read before rendering):**
+
+- **`series[].points[].value`** is **cumulative return in percent, rebased to
+  `0.0` at `window.from`** — i.e. "how far up/down since the start of the
+  window." Both lines share this rebasing so the portfolio and the index are
+  directly comparable on one Y-axis regardless of capital base. Plot `value`
+  as the Y-axis (a % axis); plot `t` as the X-axis.
+- **`series[].irr_pct`** is the single headline number for each line. The two
+  are intentionally different measures and that is correct: the **portfolio**
+  uses **money-weighted IRR** (it honours the timing of paper capital being
+  deployed), while the **benchmark** uses **time-weighted return** (an index
+  takes no deposits/withdrawals). Both are annualized percentages and are the
+  fair like-for-like "performance" figure for each. Label them "IRR" and
+  "Return" respectively if you want to be precise in the UI.
+- **`series` is an ARRAY, not a keyed object** — iterate it and branch on
+  `role`. This lets a second benchmark (e.g. `^NSEBANK`) be added later
+  without changing the shape.
+- The two series' `points` **share the same trading-day axis** (same `t`
+  values, same length) whenever both have data. Do not assume a fixed
+  calendar — non-trading days are simply absent.
+
+**Nullability / degradation (ground rule #4):** the endpoint always returns
+`200` with `ok: true`; an unavailable input degrades to `null`/`[]`, never a
+`500`. If the portfolio has no closed history yet, its `points` is `[]` and
+`irr_pct` is `null`. If the benchmark feed is down, the benchmark series is
+still present with `points: []` and `irr_pct: null` (the portfolio line still
+renders). Render every `null`/empty gracefully — no NaN axes.
+
+**Optional query param (reserved, not yet honoured):** `?range=` ∈
+`1m | 3m | 6m | 1y | all` (default `all` = since first paper trade). Documented
+now so the client can build the range selector against a stable param name.
+
 ---
 
 ## Part 2 — Engine artifacts NOT yet served over HTTP

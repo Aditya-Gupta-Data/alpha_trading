@@ -32,6 +32,9 @@
 #  15. src.performance:       Saturday 10:05 IST (weekly). Sharpe/Sortino/
 #                             max-drawdown over the real paper track record;
 #                             abstains silently below the floor. Decision #72.
+#  16. src.news_processor:    Daily 19:10 IST. Google-News RSS -> Gemini ->
+#                             data/news_sentiment.json (the Gemini path the VM
+#                             CAN reach). Was unscheduled; feeds forecast.py.
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -164,6 +167,14 @@ CRON_TZ=Asia/Kolkata
 # 12. FII/DII daily cash flows (Daily 19:35 IST) — who IS moving the
 #     indices; one row/day into data/ + the lake.
 35 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.flows_tracker >> "$REPO_ROOT/logs/flows_tracker.log" 2>&1
+
+# 16. News sentiment refresh (Daily 19:10 IST) — Google-News RSS -> Gemini
+#     -> data/news_sentiment.json (the CLOUD LLM the VM can reach; NOT the
+#     Ollama news_parser). Runs BEFORE daily_archiver (19:45) so the day's
+#     news is fresh when it's snapshotted into the lake. Was never
+#     scheduled — forecast.py consumed a stale/absent file. Gemini's 2k
+#     budget covers a daily watchlist pass; fails open to "none".
+10 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.news_processor >> "$REPO_ROOT/logs/news_processor.log" 2>&1
 
 # 13. Weekly proving-harness digest (Saturday 10:00 IST) — what's in trial,
 #     what validated/died this week, the placebo false-discovery rate.

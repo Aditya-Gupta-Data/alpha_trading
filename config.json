@@ -21,5 +21,9 @@
   "plan_max_days": 30,
   "tuner_min_samples": 5,
   "tuner_weight_sensitivity": 0.25,
-  "tuner_weight_bounds": [0.5, 1.5]
+  "tuner_weight_bounds": [0.5, 1.5],
+  "portfolio_greeks_advisory": true,
+  "greeks_vega_shock_points": 5.0,
+  "greeks_vega_budget_pct": 15.0,
+  "greeks_delta_budget_pct": 30.0
 }

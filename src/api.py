@@ -1221,7 +1221,30 @@ def web_pnl():
         except Exception as e:
             print(f"  (dashboard: stale-snapshot fallback failed: {e})")
 
-    realized = exposure.get("realized_pnl_rs") if exposure else None
+    # Realized (2026-07-16 fix): the capital layer's account_state only
+    # books settlements that went through the margin path (0 on a viewer
+    # Mac; misses pre-6G equity plans), so the TRUTH ledger — the journal —
+    # is the primary source: the sum of closed REAL outcomes' pnl_rs.
+    # HYPOTHETICAL outcomes (#31 — tracked for learning, never banked) are
+    # EXCLUDED from the headline and returned separately, labelled, so no
+    # surface can present un-banked money as realized profit.
+    j_real, j_hyp, n_real, n_hyp = 0.0, 0.0, 0, 0
+    for e in entries:
+        o = e.get("outcome") or {}
+        p = o.get("pnl_rs")
+        if isinstance(p, (int, float)):
+            if o.get("hypothetical"):
+                j_hyp += p
+                n_hyp += 1
+            else:
+                j_real += p
+                n_real += 1
+    if n_real:
+        realized = round(j_real, 2)
+    else:
+        realized = exposure.get("realized_pnl_rs") if exposure else None
+    realized_hypothetical = round(j_hyp, 2) if n_hyp else None
+
     net = None
     if realized is not None or open_pnl is not None:
         net = round((realized or 0.0) + (open_pnl or 0.0), 2)
@@ -1229,6 +1252,7 @@ def web_pnl():
     return {"ok": True,
             "as_of": datetime.now().isoformat(timespec="seconds"),
             "realized_pnl_rs": realized,
+            "realized_hypothetical_rs": realized_hypothetical,
             "open_pnl_rs": open_pnl,
             "net_pnl_rs": net,
             "open_marked": marked_count,
@@ -1236,6 +1260,53 @@ def web_pnl():
             "exposure": exposure,
             "mark_source": mark_source,
             "marks_as_of": marks_as_of}
+
+
+@app.get("/api/web/hypotheses")
+def web_hypotheses():
+    """Registered patterns + their out-of-sample shadow record for the
+    Hypothesis Lab panel. Read-only mode=ro over brain_map.db: one row per
+    candidate_patterns entry with its resolved shadow-trade count, wins,
+    and raw win rate (null below 1 resolved shadow — the panel shows the
+    n so nobody mistakes 2/2 for an edge; Wilson bounds stay the harness's
+    job, decision #44/#50). An empty registry returns [] honestly."""
+    rows = []
+    try:
+        db = Path(__file__).resolve().parent.parent / "data" / "brain_map.db"
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            for (pid, kind, desc, status, support_n, discovered_at,
+                 n_res, wins) in conn.execute(
+                    """SELECT p.pattern_id, p.kind, p.description, p.status,
+                              p.support_n, p.discovered_at,
+                              COALESCE(SUM(CASE WHEN s.resolved = 1
+                                          THEN 1 ELSE 0 END), 0),
+                              COALESCE(SUM(CASE WHEN s.result = 'win'
+                                          THEN 1 ELSE 0 END), 0)
+                       FROM candidate_patterns p
+                       LEFT JOIN shadow_trades s ON s.pattern_id = p.pattern_id
+                       GROUP BY p.pattern_id
+                       ORDER BY p.discovered_at DESC LIMIT 25"""):
+                rows.append({
+                    "pattern_id": pid,
+                    "kind": kind,
+                    "description": desc,
+                    "status": status,
+                    "support_n": support_n,
+                    "discovered_at": discovered_at,
+                    "shadow_resolved": n_res,
+                    "shadow_wins": wins,
+                    "win_rate_pct": (round(100.0 * wins / n_res, 1)
+                                     if n_res else None),
+                })
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  (dashboard: hypotheses unavailable: {e})")
+
+    return {"ok": True,
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "hypotheses": rows}
 
 
 @app.get("/api/web/market_status")

@@ -153,7 +153,21 @@ Bucket keys: `options_cash`, `options_margin`, `equity_cash`,
 }
 ```
 
-### `GET /api/web/pnl` — field added 2026-07-16: `marks_as_of`
+### `GET /api/web/hypotheses` — LIVE (added 2026-07-16, UI wiring sprint)
+
+Registry patterns + shadow-trade record for the Hypothesis Lab. Read-only
+mode=ro over brain_map.db; empty registry returns `"hypotheses": []`.
+Row shape: `{pattern_id, kind, description, status, support_n,
+discovered_at, shadow_resolved, shadow_wins, win_rate_pct}` —
+`win_rate_pct` is the RAW rate (null below 1 resolved shadow); Wilson
+bounds remain the validation harness's job, never computed client-side.
+
+### `GET /api/web/pnl` — fields added 2026-07-16: `marks_as_of`, `realized_hypothetical_rs`
+
+`realized_pnl_rs` is now the journal's closed REAL outcomes sum (falls back
+to the capital layer when the journal has no resolved trades);
+`realized_hypothetical_rs` carries the #31 hypothetical-outcome sum
+separately (null when none) and is NEVER included in realized or net.
 
 When the live mark ladder prices nothing, the endpoint now falls back to
 the last PUBLISHED engine snapshot at any age: `open_pnl_rs` is then the

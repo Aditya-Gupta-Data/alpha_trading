@@ -217,6 +217,67 @@ def test_web_pnl_degrades_to_nulls_when_marks_and_exposure_fail():
     assert body["net_pnl_rs"] is None
 
 
+def test_web_pnl_realized_comes_from_journal_real_outcomes_only():
+    """2026-07-16 fix: the headline Realized is the JOURNAL's closed REAL
+    outcomes (the capital layer misses pre-6G equity plans and reads 0 on
+    a viewer machine). Hypothetical outcomes (#31 — never banked) are
+    excluded from the headline and returned separately, labelled."""
+    entries = [
+        {"ticker": "TCS", "outcome": {"pnl_rs": -775.0}},
+        {"ticker": "NIFTY 50", "outcome": {"pnl_rs": 2000.0}},
+        {"ticker": "NIFTY 50", "outcome": {"pnl_rs": 9999.0,
+                                           "hypothetical": True}},
+        {"ticker": "ITC", "outcome": {}},          # unresolved — ignored
+    ]
+    with _no_key_env(), \
+         mock.patch("src.api.journal.read_all", return_value=entries), \
+         mock.patch("src.portfolio_report.get_live_marks",
+                    return_value=([], None)), \
+         mock.patch("src.market_snapshot.read", return_value=None), \
+         mock.patch("src.portfolio_report.read_exposure",
+                    return_value={"realized_pnl_rs": 0.0,
+                                  "locked_margin_rs": 0.0, "equity_rs": 1.0,
+                                  "exposure_pct": 0.0}):
+        body = _client().get("/api/web/pnl").json()
+    assert body["realized_pnl_rs"] == 1225.0        # -775 + 2000, hyp excluded
+    assert body["realized_hypothetical_rs"] == 9999.0
+    assert body["net_pnl_rs"] == 1225.0             # hyp never enters net
+
+
+def test_web_pnl_realized_falls_back_to_capital_layer_without_journal():
+    """No resolved journal outcomes -> the capital layer's number is still
+    served (the pre-fix behaviour, now the fallback)."""
+    with _no_key_env(), \
+         mock.patch("src.api.journal.read_all", return_value=[]), \
+         mock.patch("src.portfolio_report.get_live_marks",
+                    return_value=([], None)), \
+         mock.patch("src.market_snapshot.read", return_value=None), \
+         mock.patch("src.portfolio_report.read_exposure",
+                    return_value={"realized_pnl_rs": 15000.0,
+                                  "locked_margin_rs": 0.0, "equity_rs": 1.0,
+                                  "exposure_pct": 0.0}):
+        body = _client().get("/api/web/pnl").json()
+    assert body["realized_pnl_rs"] == 15000.0
+    assert body["realized_hypothetical_rs"] is None
+
+
+# ---------------------------------------------------- /api/web/hypotheses
+
+def test_web_hypotheses_serves_registry_rows_with_shadow_win_rates():
+    """Contract for the Hypothesis Lab: 200 + a list (possibly empty — an
+    empty registry is an honest zero, not an error); every row carries the
+    shadow record and a win rate that is null below 1 resolved shadow."""
+    with _no_key_env():
+        body = _client().get("/api/web/hypotheses").json()
+    assert body["ok"] is True
+    assert isinstance(body["hypotheses"], list)
+    for h in body["hypotheses"]:
+        assert {"pattern_id", "status", "shadow_resolved", "shadow_wins",
+                "win_rate_pct"} <= set(h)
+        if h["shadow_resolved"] == 0:
+            assert h["win_rate_pct"] is None
+
+
 # ------------------------- /api/web/market_status + /api/web/allocation
 
 def test_web_market_status_always_serves_lines_fail_open():

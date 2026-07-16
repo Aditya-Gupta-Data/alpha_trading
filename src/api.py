@@ -1236,6 +1236,44 @@ _DEPARTMENT_JOBS = [
 ]
 
 
+def _silent_jobs_intraday(now: datetime = None, logs_dir: Path = None,
+                          expected: dict = None) -> set:
+    """Which scheduled job-logs missed their most recent COMPLETED slot?
+
+    ops_monitor.check_heartbeats asks "was this log touched TODAY?" — the
+    right question for the 20:30 nightly sweep, and the WRONG one at
+    request time: viewed at midday, every evening job (deals 19:30, flows
+    19:35, news 19:10 ...) trivially "hasn't run today" and the health map
+    lights red over jobs whose slot simply hasn't arrived (the 2026-07-16
+    false 'all ingestion silent' scare). Presentation-side fix, ops_monitor
+    untouched: all daily slots complete by 20:00 IST, so before 20:00 the
+    accountable day is YESTERDAY (weekday-only jobs walk back over
+    weekends); a job is silent only if its log predates that day."""
+    from src import ops_monitor
+    now = now or datetime.now()
+    logs_dir = Path(logs_dir) if logs_dir is not None else (
+        ops_monitor.LOGS_DIR)
+    jobs = dict(expected if expected is not None
+                else (ops_monitor._expected_jobs_from_env()
+                      or ops_monitor.EXPECTED_JOBS))
+    silent = set()
+    for name, weekdays_only in jobs.items():
+        accountable = now.date()
+        if now.hour < 20:
+            accountable -= timedelta(days=1)
+        if weekdays_only:
+            while accountable.weekday() >= 5:
+                accountable -= timedelta(days=1)
+        try:
+            mtime = datetime.fromtimestamp(
+                (logs_dir / name).stat().st_mtime).date()
+        except OSError:
+            mtime = None
+        if mtime is None or mtime < accountable:
+            silent.add(name)
+    return silent
+
+
 @app.get("/api/web/departments")
 def web_departments():
     """Read-only health strip for the 7 Managers, derived ONLY from what
@@ -1248,10 +1286,7 @@ def web_departments():
     touches engine state."""
     silent = None
     try:
-        from src import ops_monitor
-        # check_heartbeats returns "name.log — did not run today" lines.
-        silent = {line.split(" — ")[0].strip()
-                  for line in ops_monitor.check_heartbeats()}
+        silent = _silent_jobs_intraday()
     except Exception as e:
         print(f"  (dashboard: heartbeats unavailable: {e})")
 

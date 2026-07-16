@@ -194,8 +194,8 @@ def test_web_departments_maps_signals_without_faking_greens():
     today -> warn, a clean monitored dept -> up, an inline dept -> inline
     (never a fabricated green), and Interfaces is up by answering."""
     with _no_key_env(), \
-         mock.patch("src.ops_monitor.check_heartbeats",
-                    return_value=["sleep_phase.log — did not run today"]), \
+         mock.patch.object(api_module, "_silent_jobs_intraday",
+                           return_value={"sleep_phase.log"}), \
          mock.patch("src.ops_monitor.system_telemetry",
                     return_value={"mem_used_pct": 41, "disk_free_gb": 88.0,
                                   "load_1m": 0.7}):
@@ -216,8 +216,8 @@ def test_web_departments_reports_unknown_when_heartbeats_unavailable():
     """If the heartbeat check itself blows up, monitored departments must
     read 'unknown' — never a silent green that hides a broken monitor."""
     with _no_key_env(), \
-         mock.patch("src.ops_monitor.check_heartbeats",
-                    side_effect=RuntimeError("logs dir gone")), \
+         mock.patch.object(api_module, "_silent_jobs_intraday",
+                           side_effect=RuntimeError("logs dir gone")), \
          mock.patch("src.ops_monitor.system_telemetry", return_value={}):
         body = _client().get("/api/web/departments").json()
     by_name = {d["name"]: d for d in body["departments"]}
@@ -225,6 +225,44 @@ def test_web_departments_reports_unknown_when_heartbeats_unavailable():
     assert by_name["Decision"]["status"] == "unknown"
     assert by_name["Interfaces"]["status"] == "up"     # still self-evident
     assert by_name["Risk & Capital"]["status"] == "inline"
+
+
+def test_silent_jobs_use_intraday_slot_semantics():
+    """The 2026-07-16 false-alarm fix: before 20:00 IST the accountable
+    day is YESTERDAY (an evening job whose slot hasn't arrived is NOT
+    silent); after 20:00 it is TODAY; weekday-only jobs walk the
+    accountable day back over weekends. A log missing entirely is always
+    silent."""
+    from datetime import datetime
+    with tempfile.TemporaryDirectory() as tmp:
+        logs = Path(tmp)
+        ran_yesterday = logs / "deals_tracker.log"       # daily job
+        ran_yesterday.write_text("ran\n")
+        wed_1000 = datetime(2026, 7, 15, 10, 0)          # a Wednesday, midday
+        yesterday = datetime(2026, 7, 14, 19, 30)
+        os.utime(ran_yesterday, (yesterday.timestamp(), yesterday.timestamp()))
+
+        # Midday: yesterday's success = healthy, today's slot still open.
+        silent = api_module._silent_jobs_intraday(
+            now=wed_1000, logs_dir=logs,
+            expected={"deals_tracker.log": False, "ghost.log": False})
+        assert silent == {"ghost.log"}                   # missing = silent
+
+        # After 20:00 the same log IS silent — today's slot has passed.
+        silent = api_module._silent_jobs_intraday(
+            now=datetime(2026, 7, 15, 20, 30), logs_dir=logs,
+            expected={"deals_tracker.log": False})
+        assert silent == {"deals_tracker.log"}
+
+        # Weekday-only job on a Monday MORNING answers for FRIDAY.
+        weekly = logs / "master_scheduler.log"
+        weekly.write_text("ran\n")
+        friday = datetime(2026, 7, 10, 9, 15)
+        os.utime(weekly, (friday.timestamp(), friday.timestamp()))
+        silent = api_module._silent_jobs_intraday(
+            now=datetime(2026, 7, 13, 8, 0), logs_dir=logs,   # Mon 08:00
+            expected={"master_scheduler.log": True})
+        assert silent == set()                           # Friday run counts
 
 
 # ------------------------------------------------------------- /dashboard

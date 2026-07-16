@@ -244,6 +244,30 @@ book was observed carrying NINE near-identical bear put spreads; a
 trend-flip exit advisory rides the live loop alongside it. Flip it back off by deleting the line and
 restarting `alpha-trading` — it is re-read per call, no code change.
 
+### Merge Protocol — "Unified Main" (standing Saturday-deploy rule, added 2026-07-16)
+
+No fragmented branches during a production push. Before the Fable
+Pre-Review and before any VM deployment:
+
+1. **Unified Main.** Every open **backend** side branch — including the
+   `market_loop` test-fix branch — is merged into `main` first, so the
+   thing that gets reviewed and deployed is one consolidated tree.
+   **Carve-out (non-negotiable, per [[project_branch_strategy]] and
+   [[project_lovable_terminal_ui]]):** the UI branches — `lovable-ui`
+   and the `Trading Terminal/` frontend — are NOT "side branches" for
+   this purpose and are NEVER merged into `main`. `main` stays the
+   framework-free Python backend; the React UI keeps its own branch.
+2. **Unified Test Run.** Post-merge, run the FULL suite locally against
+   the consolidated `main` (`python3 -m pytest`). Deploy only on 100%
+   green — a red or skipped test on unified `main` blocks the push.
+3. **VM Deployment from unified `main` only.** The live-VM deploy
+   (`git pull` + restart, per the checklist above) happens strictly from
+   this merged, fully tested `main` — never from a side branch and never
+   with a fix branch still outstanding.
+
+Order for a Saturday deploy: **merge backend branches → unified test run
+(100% green) → Fable Pre-Review → VM deploy.**
+
 ## ✅ Regime-Aware Memory — BUILT AND TESTED; skeptic hypothesis honestly NOT confirmed (2026-07-09)
 
 Roadmap item #4. Every trade the learning stack remembers now carries the

@@ -38,6 +38,17 @@
 #  17. src.ingestion.rss_ingester: Daily 18:50 IST. Publishers' own RSS feeds
 #                             -> dedup -> classify NEW via Text Intelligence
 #                             Manager. Cost-safe by default. Decision #75.
+#  18. src.discovery.nightly:  Daily 20:20 IST (decision #76). The GATED
+#                             Phase-5 miner pass: skips quietly (exit 0)
+#                             unless ops heartbeats are green, the latest
+#                             sweep shows no INGESTION problem lines, and
+#                             daily_context has >= 60 frames; every 7th
+#                             consecutive skip fires one Discord note.
+#                             Runs AFTER sleep_phase (20:00, drift monitor
+#                             Task H) and BEFORE the 20:30 ops sweep so
+#                             its heartbeat is checkable like every other
+#                             monitored job. Miners register CANDIDATEs
+#                             only — nothing surfaces without the harness.
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -206,6 +217,15 @@ CRON_TZ=Asia/Kolkata
 #     enables the cloud backend after confirming API credits. RSS only — no
 #     scraping, so no IP ban.
 50 18 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.rss_ingester >> "$REPO_ROOT/logs/rss_ingester.log" 2>&1
+
+# 18. Gated nightly discovery pass (Daily 20:20 IST, decision #76) — the
+#     Phase-5 miners behind three gates: ops heartbeats green + no INGESTION
+#     problem lines in the latest sweep + daily_context >= 60 frames. A skip
+#     is exit 0 + one log line; every 7th consecutive skip fires one Discord
+#     note (the gate can never die silently). After sleep_phase (20:00),
+#     before the 20:30 ops sweep (heartbeat convention). CANDIDATEs only —
+#     the proving harness still owns every promotion.
+20 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.discovery.nightly >> "$REPO_ROOT/logs/discovery_nightly.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

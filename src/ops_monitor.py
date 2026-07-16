@@ -79,6 +79,11 @@ EXPECTED_JOBS = {
     "flows_tracker.log": False,      # daily 19:35 IST (FII/DII cash flows)
     "news_processor.log": False,     # daily 19:10 IST (Gemini news sentiment)
     "rss_ingester.log": False,       # daily 18:50 IST (official-RSS news pull)
+    "discovery_nightly.log": False,  # daily 20:20 IST (gated miner pass #76,
+                                     # pre-sweep like every job here — the log
+                                     # is touched even on a gate-skip, so
+                                     # silence means the CRON died, not that
+                                     # the gate held)
 }
 
 

@@ -127,7 +127,13 @@ def test_missing_state_and_crashes_never_kill_the_loop():
     fetch = mock.Mock(side_effect=[None, RuntimeError("dhan down"),
                                    {"vix": 13.0}])
     propose = mock.Mock(return_value={"proposed": True, "reason": "ok"})
-    run_cycles([ist(10, 0), ist(10, 15), ist(10, 30)], fetch, propose)
+    # Inject the cooldown so the loop stays hermetic (docstring contract):
+    # an un-injected registry seeds from the LIVE journal, whose real
+    # entries are dated after this test's fixed 2026-07-06 clock, arming a
+    # spurious cooldown that would silence every cycle.
+    cd = ml.CooldownRegistry(seconds=7200)
+    run_cycles([ist(10, 0), ist(10, 15), ist(10, 30)], fetch, propose,
+               cooldown=cd)
     assert propose.call_count == 1
 
 

@@ -41,6 +41,7 @@ import asyncio
 import json
 import os
 import secrets
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1198,6 +1199,28 @@ def web_pnl():
     except Exception as e:
         print(f"  (dashboard: pnl exposure unavailable: {e})")
 
+    # Stale-snapshot fallback (2026-07-16 UI wiring): when the live ladder
+    # priced NOTHING (closed market + aged snapshot + no token — the
+    # Mac-viewer case), fall back to the LAST PUBLISHED engine snapshot at
+    # ANY age rather than a blank strip. Honesty preserved by stamping
+    # marks_as_of + a "stale" mark_source so the UI can label the age —
+    # a stale number wearing its timestamp beats an n/a. Read-only.
+    marks_as_of = None
+    if open_pnl is None:
+        try:
+            from src import market_snapshot
+            snap = market_snapshot.read(max_age_seconds=None)
+            stale_priced = [m.get("live_pnl_rs")
+                            for m in (snap or {}).get("marks", [])
+                            if m.get("live_pnl_rs") is not None]
+            if stale_priced:
+                open_pnl = round(sum(stale_priced), 2)
+                marked_count = len(stale_priced)
+                marks_as_of = snap.get("as_of")
+                mark_source = "snapshot (stale)"
+        except Exception as e:
+            print(f"  (dashboard: stale-snapshot fallback failed: {e})")
+
     realized = exposure.get("realized_pnl_rs") if exposure else None
     net = None
     if realized is not None or open_pnl is not None:
@@ -1211,7 +1234,131 @@ def web_pnl():
             "open_marked": marked_count,
             "open_unmarked": unmarked,
             "exposure": exposure,
-            "mark_source": mark_source}
+            "mark_source": mark_source,
+            "marks_as_of": marks_as_of}
+
+
+@app.get("/api/web/market_status")
+def web_market_status():
+    """1-2 plain-English lines for the dashboard's Market Status panel,
+    composed from artifacts the ingestion layer ALREADY writes:
+    data/news_sentiment.json (the 19:10 Gemini pass) and the macro
+    directional matrix's hand-editable snapshot. Pure file reads — no LLM
+    call, no Dhan call, no write. Doubling as a live UI test that the news
+    pipeline is producing: an empty/absent file yields an honest
+    "no read yet" line, never fabricated colour."""
+    lines, news_as_of, macro_as_of = [], None, None
+
+    try:
+        news_path = Path(__file__).resolve().parent.parent / "data" / "news_sentiment.json"
+        news = json.loads(news_path.read_text())
+        news_as_of = news.get("generated")
+        scores = {t: v.get("sentiment_score")
+                  for t, v in (news.get("tickers") or {}).items()
+                  if isinstance(v, dict)
+                  and isinstance(v.get("sentiment_score"), (int, float))}
+        if scores:
+            top = max(scores, key=lambda t: scores[t])
+            low = min(scores, key=lambda t: scores[t])
+            pos = sum(1 for s in scores.values() if s > 0)
+            neg = sum(1 for s in scores.values() if s < 0)
+            lines.append(
+                f"News read ({len(scores)} names): {pos} positive / {neg} negative. "
+                f"Strongest: {top} ({scores[top]:+g}), weakest: {low} ({scores[low]:+g}).")
+    except Exception as e:
+        print(f"  (dashboard: market_status news unavailable: {e})")
+    if not lines:
+        lines.append("No news-sentiment read yet today — the 19:10 IST pass "
+                     "hasn't produced a file this session.")
+
+    try:
+        from src.ingestion.macro_tracker import _load_snapshot
+        snap = _load_snapshot()
+        macro_as_of = (snap or {}).get("as_of")
+        bits = []
+        for name in ("CRUDE", "GOLD_INDIA", "USDINR"):
+            m = (snap or {}).get("metrics", {}).get(name) or {}
+            d = (m.get("directions") or {}).get("MEDIUM", "unknown")
+            if d and d != "unknown":
+                bits.append(f"{name.replace('_', ' ').title()} {d}")
+        if bits:
+            lines.append("Macro (medium horizon): " + ", ".join(bits) + ".")
+        else:
+            lines.append("Macro matrix: no directional reads "
+                         "(snapshot empty — honest unknown, not neutral).")
+    except Exception as e:
+        print(f"  (dashboard: market_status macro unavailable: {e})")
+
+    return {"ok": True,
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "lines": lines[:2],
+            "news_as_of": news_as_of,
+            "macro_as_of": macro_as_of}
+
+
+@app.get("/api/web/allocation")
+def web_allocation():
+    """Capital-distribution buckets for the dashboard's allocation donut.
+    Composed read-only from the two REAL pools plus the advisory sweep
+    ledger: the Phase-6G options account (brain_map.db account_state +
+    active margin_locks, mode=ro), the Phase-3 paper equity book
+    (data/portfolio.json, holdings valued AT COST — no quote fetches from
+    a viewer endpoint, decision #48), and the wealth-lock GOLDBEES ledger
+    when it exists. Buckets label their pool + basis so the pie can't
+    silently mix apples and oranges. Never raises — absent sources just
+    drop their bucket."""
+    buckets = []
+
+    try:
+        db = Path(__file__).resolve().parent.parent / "data" / "brain_map.db"
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT starting_capital, realized_pnl FROM account_state "
+                "ORDER BY id DESC LIMIT 1").fetchone()
+            locked = conn.execute(
+                "SELECT COALESCE(SUM(margin_rs), 0) FROM margin_locks "
+                "WHERE released_at IS NULL").fetchone()[0] or 0.0
+            if row:
+                free_cash = row[0] + (row[1] or 0.0) - locked
+                buckets.append({"key": "options_cash", "label": "Options a/c · free cash",
+                                "value_rs": round(free_cash, 2)})
+                if locked:
+                    buckets.append({"key": "options_margin", "label": "Options a/c · locked margin",
+                                    "value_rs": round(locked, 2)})
+            try:
+                gold = conn.execute(
+                    "SELECT COALESCE(SUM(swept_rs), 0) FROM wealth_lock_ledger"
+                ).fetchone()[0] or 0.0
+                if gold:
+                    buckets.append({"key": "gold_etf", "label": "GOLDBEES sweep (advisory ledger)",
+                                    "value_rs": round(gold, 2)})
+            except sqlite3.OperationalError:
+                pass    # no sweeps yet — table doesn't exist; omit honestly
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  (dashboard: allocation account unavailable: {e})")
+
+    try:
+        pf_path = Path(__file__).resolve().parent.parent / "data" / "portfolio.json"
+        pf = json.loads(pf_path.read_text())
+        if pf.get("cash") is not None:
+            buckets.append({"key": "equity_cash", "label": "Equity book · cash",
+                            "value_rs": round(float(pf["cash"]), 2)})
+        at_cost = sum(h.get("shares", 0) * h.get("avg_price", 0.0)
+                      for h in (pf.get("holdings") or {}).values())
+        if at_cost:
+            buckets.append({"key": "equity_holdings", "label": "Equity holdings (at cost)",
+                            "value_rs": round(at_cost, 2)})
+    except Exception as e:
+        print(f"  (dashboard: allocation portfolio unavailable: {e})")
+
+    total = round(sum(b["value_rs"] for b in buckets), 2)
+    return {"ok": True,
+            "as_of": datetime.now().isoformat(timespec="seconds"),
+            "buckets": buckets,
+            "total_rs": total}
 
 
 # The 7 Managers (MODULES.md department registry) mapped to the scheduled

@@ -154,13 +154,16 @@ def test_web_pnl_composes_realized_open_and_net():
 
 
 def test_web_pnl_open_is_null_not_zero_when_nothing_priced():
-    """A book with positions but no live quotes must read open=null, not
-    a fake 0.0 — the strip must not imply a flat P&L it doesn't know."""
+    """A book with positions but no live quotes AND no published snapshot
+    must read open=null, not a fake 0.0 — the strip must not imply a flat
+    P&L it doesn't know. (The stale-snapshot fallback is mocked away here;
+    its own behaviour is pinned by the test below.)"""
     marked = [{"short_id": "sprd0001", "live_pnl_rs": None}]
     with _no_key_env(), \
          mock.patch("src.api.journal.read_all", return_value=[]), \
          mock.patch("src.portfolio_report.get_live_marks",
                     return_value=(marked, None)), \
+         mock.patch("src.market_snapshot.read", return_value=None), \
          mock.patch("src.portfolio_report.read_exposure",
                     return_value={"realized_pnl_rs": 500.0,
                                   "locked_margin_rs": 0.0, "equity_rs": 1.0,
@@ -171,11 +174,38 @@ def test_web_pnl_open_is_null_not_zero_when_nothing_priced():
     assert body["net_pnl_rs"] == 500.0              # realized only, open unknown
 
 
+def test_web_pnl_falls_back_to_stale_snapshot_with_honest_stamp():
+    """2026-07-16 UI wiring: when the live ladder prices NOTHING, the last
+    published engine snapshot is used at ANY age — but only wearing its
+    timestamp (marks_as_of) and a 'snapshot (stale)' source, so the UI can
+    label the age instead of showing n/a."""
+    snap = {"as_of": "2026-07-10T15:14:44+05:30",
+            "marks": [{"short_id": "a", "live_pnl_rs": -100.0},
+                      {"short_id": "b", "live_pnl_rs": 40.0},
+                      {"short_id": "c", "live_pnl_rs": None}]}
+    with _no_key_env(), \
+         mock.patch("src.api.journal.read_all", return_value=[]), \
+         mock.patch("src.portfolio_report.get_live_marks",
+                    return_value=([], None)), \
+         mock.patch("src.market_snapshot.read", return_value=snap) as rd, \
+         mock.patch("src.portfolio_report.read_exposure",
+                    return_value={"realized_pnl_rs": 0.0,
+                                  "locked_margin_rs": 0.0, "equity_rs": 1.0,
+                                  "exposure_pct": 0.0}):
+        body = _client().get("/api/web/pnl").json()
+    rd.assert_called_once_with(max_age_seconds=None)
+    assert body["open_pnl_rs"] == -60.0             # -100 + 40, None excluded
+    assert body["open_marked"] == 2
+    assert body["mark_source"] == "snapshot (stale)"
+    assert body["marks_as_of"] == "2026-07-10T15:14:44+05:30"
+
+
 def test_web_pnl_degrades_to_nulls_when_marks_and_exposure_fail():
     with _no_key_env(), \
          mock.patch("src.api.journal.read_all", return_value=[]), \
          mock.patch("src.portfolio_report.get_live_marks",
                     side_effect=RuntimeError("no token")), \
+         mock.patch("src.market_snapshot.read", return_value=None), \
          mock.patch("src.portfolio_report.read_exposure",
                     side_effect=RuntimeError("db gone")):
         resp = _client().get("/api/web/pnl")
@@ -185,6 +215,34 @@ def test_web_pnl_degrades_to_nulls_when_marks_and_exposure_fail():
     assert body["realized_pnl_rs"] is None
     assert body["open_pnl_rs"] is None
     assert body["net_pnl_rs"] is None
+
+
+# ------------------------- /api/web/market_status + /api/web/allocation
+
+def test_web_market_status_always_serves_lines_fail_open():
+    """The Market Status panel's contract: 200 + 1-2 plain-English lines
+    on ANY machine — a missing news file yields an honest 'no read yet'
+    line, never an error or fabricated colour."""
+    with _no_key_env():
+        body = _client().get("/api/web/market_status").json()
+    assert body["ok"] is True
+    assert isinstance(body["lines"], list)
+    assert 1 <= len(body["lines"]) <= 2
+    assert all(isinstance(l, str) and l for l in body["lines"])
+
+
+def test_web_allocation_buckets_shape_and_total_consistency():
+    """Allocation donut contract: 200 + well-formed buckets whose values
+    sum to total_rs (empty buckets on a data-less machine is valid — the
+    endpoint drops absent sources, never fabricates)."""
+    with _no_key_env():
+        body = _client().get("/api/web/allocation").json()
+    assert body["ok"] is True
+    assert isinstance(body["buckets"], list)
+    for b in body["buckets"]:
+        assert set(b) == {"key", "label", "value_rs"}
+        assert isinstance(b["value_rs"], (int, float))
+    assert body["total_rs"] == round(sum(b["value_rs"] for b in body["buckets"]), 2)
 
 
 # ------------------------------------------------------- /api/web/departments

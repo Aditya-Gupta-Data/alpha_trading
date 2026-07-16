@@ -115,6 +115,52 @@ Success `200`: `{ "ok": true, ... }` · Failure `400`: `{ "ok": false, "error": 
 ### `DELETE /api/watchlist/{ticker}`
 E.g. `/api/watchlist/RELIANCE.NS`. `200 {"ok": true}` or `404 {"ok": false}`.
 
+### `GET /api/web/market_status` — LIVE (added 2026-07-16, UI wiring sprint)
+
+1-2 plain-English lines for the dashboard's Market Status panel, composed
+read-only from `data/news_sentiment.json` and the macro snapshot. Fail-open:
+an absent/empty source yields an honest "no read yet" line, never an error.
+
+```json
+{
+  "ok": true,
+  "as_of": "2026-07-16T16:45:18",
+  "lines": ["News read (10 names): 4 positive / 5 negative. ...",
+            "Macro (medium horizon): Crude down, Gold India up."],
+  "news_as_of": "2026-07-05T12:02:44+00:00",   // null when no news file
+  "macro_as_of": "2026-07-10"                  // null when no macro snapshot
+}
+```
+
+### `GET /api/web/allocation` — LIVE (added 2026-07-16, UI wiring sprint)
+
+Capital-distribution buckets for the allocation donut. Read-only over the
+Phase-6G account tables (mode=ro), `data/portfolio.json` (holdings AT COST —
+no quote fetches) and the GOLDBEES sweep ledger when it exists. Absent
+sources drop their bucket; `total_rs` is always the exact bucket sum.
+Bucket keys: `options_cash`, `options_margin`, `equity_cash`,
+`equity_holdings`, `gold_etf`.
+
+```json
+{
+  "ok": true,
+  "as_of": "2026-07-16T16:45:18",
+  "buckets": [
+    { "key": "options_cash",   "label": "Options a/c · free cash",     "value_rs": 739869.75 },
+    { "key": "options_margin", "label": "Options a/c · locked margin", "value_rs": 260130.25 }
+  ],
+  "total_rs": 1000000.0
+}
+```
+
+### `GET /api/web/pnl` — field added 2026-07-16: `marks_as_of`
+
+When the live mark ladder prices nothing, the endpoint now falls back to
+the last PUBLISHED engine snapshot at any age: `open_pnl_rs` is then the
+stale sum, `mark_source` reads `"snapshot (stale)"`, and `marks_as_of`
+carries the snapshot's own timestamp so the UI labels the age. When marks
+are live, `marks_as_of` is `null` and nothing else changed.
+
 ### `GET /api/web/irr` — PLANNED (contract frozen 2026-07-15; backend NOT yet wired)
 
 > **Status: schema-only.** This shape is FROZEN and safe to build the "IRR

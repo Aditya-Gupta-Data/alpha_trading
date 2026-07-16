@@ -199,6 +199,64 @@ def evaluate_trial(conn, pattern_id: str, windows: dict,
     return verdict
 
 
+def sim_evidence_in_window(conn, windows: dict, strategy: str = None) -> dict:
+    """Resolved `simulated_trades` rows inside the validation window as the
+    SIM stratum for evaluate_trial ({n, wins}). Keyed by `proposed_on` —
+    the MARKET date the simulated decision was made, never run/exit date —
+    so re-running a trial next week over the same window counts the same
+    evidence, not more. Scratches count toward n but never wins (same
+    conservative arithmetic as shadow_evidence). Optional `strategy`
+    restricts to the pattern's matched family. Missing table -> {0, 0}."""
+    try:
+        sql = "SELECT proposed_on, result FROM simulated_trades"
+        params: list = []
+        if strategy:
+            sql += " WHERE strategy = ?"
+            params.append(strategy)
+        rows = conn.execute(sql, params).fetchall()
+    except Exception:
+        return {"n": 0, "wins": 0}
+    n = wins = 0
+    for r in rows:
+        if not in_validation(r["proposed_on"], windows):
+            continue
+        n += 1
+        if r["result"] == "win":
+            wins += 1
+    return {"n": n, "wins": wins}
+
+
+def generate_window_b_evidence(conn, windows: dict, end: str,
+                               underlyings=("NIFTY 50",), *,
+                               strategy: str = None,
+                               bars_by_underlying: dict = None,
+                               vix_by_date: dict = None,
+                               eod_signal_days=None,
+                               eod_signal_layer: str = "deals",
+                               opens_by_date: dict = None) -> dict:
+    """Self-produce a trial's out-of-discovery SIM evidence: run the REAL
+    simulator (src.simulator.run_simulation, §5.5 T+1-open contract
+    forwarded verbatim for EOD-sourced patterns) over the validation
+    window [validation_start, end] on THIS conn, then count the resulting
+    rows via sim_evidence_in_window. Salvaged (2026-07-16) from the
+    discarded parallel-session trial_runner, re-targeted at the canonical
+    API: the caller passes the result as evaluate_trial(sim_evidence=...),
+    so the locked promotion policy is untouched — sim supports, never
+    solely justifies (promotable still requires >= 1 REAL resolution).
+    No usable validation window -> {0, 0} without simulating."""
+    vs = windows.get("validation_start")
+    if not vs or not end or end < vs:
+        return {"n": 0, "wins": 0}
+    from src.simulator import run_simulation
+    run_simulation(vs, end, underlyings, conn=conn,
+                   bars_by_underlying=bars_by_underlying,
+                   vix_by_date=vix_by_date,
+                   eod_signal_days=eod_signal_days,
+                   eod_signal_layer=eod_signal_layer,
+                   opens_by_date=opens_by_date)
+    return sim_evidence_in_window(conn, windows, strategy=strategy)
+
+
 def learning_corpus_filter(refs) -> list:
     """The self-poisoning guard as a reusable filter: drop every sim:/
     shadow:/trial:/placebo: ref before any tuner/skeptic/miner consumes a

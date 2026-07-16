@@ -131,6 +131,87 @@ def test_shadow_tracking_never_writes_journal_or_portfolio():
     assert calls == []                                    # journal untouched
 
 
+# ------------------------------------ window-B sim evidence (salvage #1)
+
+def _seed_sim_row(conn, ref, proposed_on, strategy, result):
+    from src import simulator
+    simulator.ensure_schema(conn)
+    conn.execute(
+        "INSERT OR IGNORE INTO simulated_trades (journal_ref, underlying, "
+        "strategy, proposed_on, expiry, resolution, exit_date, pnl_net, "
+        "frictions_rs, slippage_rs, result) "
+        "VALUES (?, 'NIFTY 50', ?, ?, '2026-03-30', 'target', ?, 0, 0, 0, ?)",
+        (ref, strategy, proposed_on, proposed_on, result))
+    conn.commit()
+
+
+def test_sim_evidence_counts_only_validation_window_by_market_date():
+    conn = brain_map.connect(":memory:")
+    w = {"validation_start": "2026-03-10"}
+    _seed_sim_row(conn, "sim:a", "2026-03-05", "iron_condor", "win")   # pre-window
+    _seed_sim_row(conn, "sim:b", "2026-03-11", "iron_condor", "win")
+    _seed_sim_row(conn, "sim:c", "2026-03-12", "iron_condor", "loss")
+    _seed_sim_row(conn, "sim:d", "2026-03-13", "iron_condor", "scratch")
+    _seed_sim_row(conn, "sim:e", "2026-03-14", "bull_call_spread", "win")
+    ev = tr.sim_evidence_in_window(conn, w)
+    assert ev == {"n": 4, "wins": 2}          # scratch in n, never wins
+    fam = tr.sim_evidence_in_window(conn, w, strategy="iron_condor")
+    assert fam == {"n": 3, "wins": 1}         # family-restricted
+    # Missing table degrades to zero evidence, never raises.
+    bare = brain_map.connect(":memory:")
+    bare.execute("DROP TABLE IF EXISTS simulated_trades")
+    assert tr.sim_evidence_in_window(bare, w) == {"n": 0, "wins": 0}
+
+
+def test_generate_window_b_forwards_t1_open_params_and_counts():
+    """The salvage contract: generation runs the REAL simulator over
+    [validation_start, end] on this conn, forwarding the §5.5 T+1-open
+    params verbatim, then counts what landed in the window."""
+    from unittest import mock
+    conn = brain_map.connect(":memory:")
+    w = {"validation_start": "2026-03-10"}
+    seen = {}
+
+    def fake_sim(start, end, underlyings, *, conn=None, **kw):
+        seen.update(start=start, end=end, underlyings=underlyings, **kw)
+        _seed_sim_row(conn, "sim:gen1", "2026-03-11", "iron_condor", "win")
+        return {"resolved": 1}
+
+    with mock.patch("src.simulator.run_simulation", side_effect=fake_sim):
+        ev = tr.generate_window_b_evidence(
+            conn, w, "2026-03-20", ("NIFTY 50",),
+            eod_signal_days=["2026-03-11"], eod_signal_layer="flows",
+            opens_by_date={"2026-03-12": 22000.0})
+    assert ev == {"n": 1, "wins": 1}
+    assert seen["start"] == "2026-03-10" and seen["end"] == "2026-03-20"
+    assert seen["eod_signal_days"] == ["2026-03-11"]      # §5.5 forwarded
+    assert seen["eod_signal_layer"] == "flows"
+    assert seen["opens_by_date"] == {"2026-03-12": 22000.0}
+    # No usable window -> zero evidence, simulator never invoked.
+    with mock.patch("src.simulator.run_simulation") as sim:
+        assert tr.generate_window_b_evidence(
+            conn, {"validation_start": None}, "2026-03-20") == {"n": 0, "wins": 0}
+        assert tr.generate_window_b_evidence(
+            conn, w, "2026-03-01") == {"n": 0, "wins": 0}  # end before start
+        sim.assert_not_called()
+
+
+def test_generated_sim_evidence_cannot_promote_alone():
+    """The locked policy survives self-generation: sim supports, never
+    solely justifies — all-sim evidence with zero real resolutions must
+    NOT promote, no matter how good it looks."""
+    conn = brain_map.connect(":memory:")
+    pid = _register(conn)
+    w = {"validation_start": "2026-03-10"}
+    for i in range(30):                                    # a stellar sim run
+        _seed_sim_row(conn, f"sim:w{i}", "2026-03-11", "iron_condor", "win")
+    ev = tr.sim_evidence_in_window(conn, w)
+    assert ev["n"] == 30 and ev["wins"] == 30
+    verdict = tr.evaluate_trial(conn, pid, w, sim_evidence=ev)
+    assert verdict["promote"] is False
+    assert "sim-only" in verdict["reason"] or "no real" in verdict["reason"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

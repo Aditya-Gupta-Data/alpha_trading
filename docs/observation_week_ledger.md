@@ -550,3 +550,42 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   removal (we trade no calendar spreads), and BANKNIFTY weekly
   discontinuation (`pick_expiry` adapts to whatever Dhan serves — now
   monthlies for BANKNIFTY).
+
+## Issue 14 — market-loop test read the REAL journal; live data (not a code merge) broke it (2026-07-15, pytest-failure triage)
+
+- **Observed (verified both directions at HEAD `9d1447e`, clean tree):**
+  `tests/test_market_loop.py::test_missing_state_and_crashes_never_kill_the_loop`
+  failed in the main working tree — `assert propose.call_count == 1` saw `0`
+  — while the **same commit** passed in a fresh git worktree. The only
+  difference was on-disk data. The failing run printed the tell:
+  `[Market Loop] cooldown restored from the journal for: NIFTY 50`.
+- **Root cause — a test-isolation defect, NOT a code regression:** the
+  `run_cycles` helper left `cooldown=None`, so `run_market_loop` took its
+  `cooldown is None` branch and called `CooldownRegistry.seed_from_journal()`,
+  which reads the real `data/journal.jsonl` (the test never mocks it, despite
+  the module docstring's "time, market state, the proposer, Discord, and the
+  journal are all mocked/injected"). Three live `NIFTY 50` proposals carry
+  `created_at` = `2026-07-13`, which is *after* this suite's hardcoded July-6
+  2026 clock, so `(now - created)` is **negative**, trivially `< 7200 s`; the
+  seed arms the cooldown and `ready()` returns `False`, silencing the healthy
+  cycle-3 proposal → `call_count == 0`.
+- **The suspected "recent merge" (PR #10 / pnl_card) is a red herring:** the
+  seeding path predates all of them — `git log -- src/market_loop.py` shows
+  the file untouched since `14ec203` (cooldown-persistence, phase 2), and no
+  recent commit changed it. The variable that flipped the test was live
+  journal **data** reaching a non-hermetic test, not code. It only began
+  failing once a `NIFTY 50` line dated after 2026-07-06 landed on disk (the
+  Jul-13 entries). Sibling `test_cooldown_persistence.py` never tripped
+  because it always passes `entries=` explicitly.
+- **No product bug:** in production `now = ist_now()` (wall clock) is always
+  ≥ journal timestamps, so the negative-elapsed path cannot occur; the
+  seeding is correct as written. Fix is test-only.
+- **Fix (2026-07-15, test-only):** `run_cycles` now injects a fresh
+  `ml.CooldownRegistry()` whenever the caller supplies none, so no
+  cycle-driven test can reach the real journal. This also closes the same
+  latent leak in `test_closed_market_never_fetches_or_proposes` (it too
+  omitted a cooldown; it just never manifested because the market is shut).
+  Seeding stays covered hermetically in `test_cooldown_persistence.py`.
+  **Verified:** pointing `journal.JOURNAL_PATH` at the real main-repo
+  `data/journal.jsonl`, the test failed before the change and passed after;
+  full worktree suite 1010 green.

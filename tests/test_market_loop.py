@@ -61,6 +61,16 @@ def run_cycles(now_values, fetch_fn, propose_fn, cooldown=None,
                underlyings=("NIFTY 50",)):
     """Drive run_market_loop through len(now_values) cycles: each sleep
     advances to the next now; the last sleep cancels the loop."""
+    # Always inject a cool-down. Left as None, run_market_loop takes its
+    # "seed the cooldown from the journal" branch, which reads the REAL
+    # on-disk data/journal.jsonl — breaking this module's promise that the
+    # journal is mocked/injected. A live proposal timestamped AFTER these
+    # fake `now`s then makes the seed compute a NEGATIVE elapsed time, read
+    # it as "still cooling down", and silence the proposal (real 2026-07-13
+    # NIFTY 50 lines vs. this suite's July-6 clock did exactly that). The
+    # seeding path itself is covered hermetically in test_cooldown_persistence.
+    if cooldown is None:
+        cooldown = ml.CooldownRegistry()
     times = list(now_values)
     idx = {"i": 0}
 

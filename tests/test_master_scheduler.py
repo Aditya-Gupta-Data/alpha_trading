@@ -192,6 +192,66 @@ def test_playbook_reports_a_dead_feed_without_raising():
     assert lines == ["NIFTY BANK: no live read this minute"]
 
 
+# --- Update 1: Unrealized P&L + Net Equity on the CLOSED card ------------
+
+_FAKE_ACCT = {"equity": 1_000_000.0, "realized_pnl": 5_000.0,
+              "available_cash": 800_000.0, "locked_margin": 200_000.0,
+              "open_locks": 3, "trading_halted": False}
+
+
+def _patch_account(marks):
+    from unittest import mock
+
+    class _Conn:
+        def close(self):
+            pass
+    return (mock.patch("src.brain_map.connect", return_value=_Conn()),
+            mock.patch("src.portfolio_manager.account_summary",
+                       return_value=dict(_FAKE_ACCT)),
+            mock.patch("src.portfolio_report.get_live_marks",
+                       return_value=(marks, "engine_snapshot")))
+
+
+def test_account_lines_add_unrealized_and_net_equity():
+    from unittest import mock
+    marks = [{"live_pnl_rs": 1500.0}, {"live_pnl_rs": -400.0},
+             {"live_pnl_rs": None}]  # one unmarked
+    p1, p2, p3 = _patch_account(marks)
+    with p1, p2, p3:
+        lines = ms._account_lines()
+    text = "\n".join(lines)
+    assert "Unrealized P&L Rs.+1,100.00 (2 marked, 1 unmarked)" in text
+    # net equity = 1,000,000 realized + 1,100 unrealized
+    assert "Net Equity Rs.1,001,100.00" in text
+    assert "realized P&L Rs.5,000.00" in text
+
+
+def test_account_lines_omit_unrealized_when_no_marks_fail_open():
+    p1, p2, p3 = _patch_account([])   # no marks at all
+    with p1, p2, p3:
+        lines = ms._account_lines()
+    text = "\n".join(lines)
+    assert "Unrealized" not in text and "Net Equity" not in text
+    assert "Equity Rs.1,000,000.00" in text   # realized line still there
+
+
+def test_account_lines_survive_a_broken_marks_read():
+    from unittest import mock
+
+    class _Conn:
+        def close(self):
+            pass
+    with mock.patch("src.brain_map.connect", return_value=_Conn()), \
+         mock.patch("src.portfolio_manager.account_summary",
+                    return_value=dict(_FAKE_ACCT)), \
+         mock.patch("src.portfolio_report.get_live_marks",
+                    side_effect=RuntimeError("snapshot boom")):
+        lines = ms._account_lines()
+    # the card still renders — marks failure is swallowed, realized shown
+    assert any("Equity Rs.1,000,000.00" in l for l in lines)
+    assert not any("Net Equity" in l for l in lines)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

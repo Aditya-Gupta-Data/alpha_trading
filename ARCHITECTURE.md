@@ -1,179 +1,263 @@
-# ARCHITECTURE.md — System Flow
+# ARCHITECTURE.md — The Department Map
 
-Text-based system diagram + component map. For "why" behind each choice, see
-`DECISIONS.md`. For a per-file index, see `MODULES.md`. This file describes
-architecture as of the 2026-07-06 milestone (post Dhan migration).
+**Read this first, before any file.** The system is organized as **7
+departments**. Each department has ONE **Manager** — the single file/seam you
+approach to change how that department behaves. You should never have to dig
+through 50 files: find the department, go to its manager.
 
-> Superseded content warning: an earlier version of this file (pre-2026-07)
-> described yfinance, Zerodha Kite Connect, Oracle Cloud, and a PWA — none of
-> that is current. This is the authoritative rewrite.
+- **Why** behind each choice → `DECISIONS.md` (numbered).
+- **Per-file** one-liners → `MODULES.md` (grouped by these same departments).
+- **The rules** the code may never break → `OVERVIEW.md`.
 
-## 1. High-level flow
+Written for the strategic brain, not the compiler: every department below says,
+in plain English, what it does, what goes in, what comes out, and the ONE place
+to change it. Current as of `dbd531f` (2026-07-15), suite 1006 green.
 
-```
-                         ┌───────────────────────────────┐
-                         │         DhanHQ Data API        │
-                         │  (market quotes + daily OHLC +  │
-                         │   option chain — READ ONLY)     │
-                         └───────────────┬─────────────────┘
-                                         │
-                                         ▼
-                         ┌───────────────────────────────┐
-                         │   src/dhan_client.py            │
-                         │   (single data-fetch layer)     │
-                         └───────────────┬─────────────────┘
-                                         │
-              ┌──────────────────────────┼──────────────────────────┐
-              ▼                          ▼                          ▼
-   src/data_fetcher.py         src/suggestions.py           src/plan_tracker.py
-   (quotes for alerts/         (SMA/RSI trend read           (resolves OPEN paper
-    watchlist)                  for suggestions/forecast)     trades vs daily OHLC)
-              │                          │                          │
-              ▼                          ▼                          │
-      src/main.py (alerts)      src/forecast.py                     │
-      src/rules.py               (technicals + news                 │
-                                  -> bias/confidence)                │
-              │                          │                          │
-              │                  src/news_processor.py               │
-              │                  (Google News RSS -> Gemini           │
-              │                   -> data/news_sentiment.json)        │
-              │                          │                          │
-              └──────────────┬───────────┴──────────────────────────┘
-                             ▼
-                    src/strategy.py (trade PLANS: entry/stop/
-                      target/rationale, risk-based sizing)
-                             │
-                             ▼
-              ┌──────────────┴───────────────┐
-              ▼                              ▼
-     src/trade.py (terminal,        src/api.py (POST /api/chat,
-      interactive y/n session)       POST /api/decision — same
-              │                      propose_plans() core)
-              │                              │
-              └──────────────┬───────────────┘
-                             ▼
-              src/portfolio.py + src/journal.py
-              (data/portfolio.json, data/journal.jsonl —
-               paper-only state, git-ignored)
-                             │
-                             ▼
-                    src/tuner.py (learns per-archetype
-                     weights from resolved outcomes
-                     -> data/brain_weights.json, fed
-                     back into forecast.py)
-```
+---
 
-## 2. Two front doors into the engine
+## The whole system in one breath
 
 ```
-┌─────────────────────┐        ┌──────────────────────────┐
-│  Discord             │        │  lovable-frontend/         │
-│  (src/discord_bot.py) │        │  React + TanStack Start     │
-│  /analyze slash cmd,  │        │  (gitignored on `main`,     │
-│  chat replies via     │        │  lives on `lovable-ui`      │
-│  Gemini               │        │  branch only)               │
-└──────────┬───────────┘        └────────────┬─────────────────┘
-           │  reads forecast.py directly       │  HTTP Public / Tunnel
-           ▼                                   ▼
-                         ┌──────────────────────────────┐
-                         │   Cloudflare Tunnel (Public) │
-                         └──────────────┬───────────────┘
-                                        │
-                                        ▼
-                         ┌──────────────────────────────┐
-                         │ src/api_server.py (Gateway)  │
-                         │ - Strict fail-closed API key │
-                         │ - Discord action bridge      │
-                         └──────────────┬───────────────┘
-                                        │ localhost (port 8000)
-                                        ▼
-                         ┌──────────────────────────────┐
-                         │ src/api.py (FastAPI unified) │
-                         │ GET/POST /api/*              │
-                         └──────────────────────────────┘
+   ┌── 1. DATA ─────────┐   market quotes, chains, news, deals, flows
+   │  come IN here      │   → cleaned, archived
+   └─────────┬──────────┘
+             ▼
+   ┌── 2. DECISION ─────┐   "should we open a spread, and which one?"
+   │  the live engine   │   → a PENDING proposal
+   └─────────┬──────────┘
+             ▼
+   ┌── 3. RISK & CAPITAL┐   "are we allowed? size it. when do we exit?"
+   │  the gatekeeper    │   → approved / blocked; exits & settlement
+   └─────────┬──────────┘
+             ▼
+   ┌── 4. MEMORY ───────┐   every trade + everything learned is recorded
+   │  the ledger+brain  │   → journal, knowledge graph, tuned weights
+   └─────────┬──────────┘
+             ▼
+   ┌── 5. VALIDATION ───┐   "does this pattern REALLY have an edge?"
+   │  the proving court │   → patterns earn (or lose) authority
+   └─────────┬──────────┘
+             ▼
+   ┌── 6. REPORTING ────┐   tells the human what happened & what's at risk
+   │  the announcer     │   → Discord cards, CLIs, weekly digests
+   └─────────┬──────────┘
+             ▼
+   ┌── 7. INTERFACES ───┐   how a human (you) sees it and taps approve/reject
+   │  the front doors   │   → dashboard, Discord buttons, gateway
+   └────────────────────┘
 ```
-- **Discord bot**: read-only on the engine internals (imports only
-  `src.forecast`) — it never touches portfolio/trade/strategy modules and
-  places no real orders (paper-only holds). Chat replies go to Gemini
-  directly. For the **two-way bridge**, approve/reject actions are sent to the
-  gated `POST /api/discord/action` endpoint; that endpoint (not the bot) then
-  updates a `pending_approval` journal entry to approved-on-paper or rejected.
-  So the only state the bot can change is a paper journal decision, and only
-  through the authenticated gateway.
-- **React dashboard**: talks to `src/api_server.py` via public HTTPS forwarded
-  through the Cloudflare Tunnel, attaching the mandatory `X-API-Key` or
-  `Authorization: Bearer` token.
-- **src/api_server.py**: The strict fail-closed API-key gateway (Phase 9 backend)
-  that mounts `src/api.py` internally on `localhost:8000`. It ensures no
-  unauthenticated traffic can access any endpoints, and includes a direct bridge
-  `POST /api/discord/action` to decide `pending_approval` entries from Discord webhooks.
-- **src/api.py** is the single unified backend (the old separate
-  `src/web/api.py` dashboard app was merged in and deleted 2026-07-06). It
-  imports engine modules directly; it does not duplicate their logic.
-  Endpoints: `/api/watchlist`, `/api/alerts`, `/api/chat`, `/api/decision`,
-  `/api/scorecard`, `/api/review`, `/api/sync-market`, `/api/health`. It also
-  runs an hourly background `asyncio` loop (FastAPI `lifespan`) that
-  resolves OPEN paper trades and refreshes the watchlist price cache.
 
-## 3. Hosting (current + roadmap)
+Rule of the whole design (**decision #63, the composition law**): only ONE
+department (Decision) proposes, and only Risk can block. Every other layer may
+only *annotate* — state facts, never silently change a trade. Authority is
+*earned* through Validation, never hand-wired.
 
-- **Cloud VM** (rebuilt 2026-07-06): GCP Compute Engine, `alpha-trading-vm`,
-  project `project-37632031-10d0-47dd-b6f`, `us-central1-a`, `e2-micro`,
-  Debian 13, Python 3.13. Runs the FastAPI server as a systemd service
-  (`alpha-trading`, `Restart=always`, enabled on boot). Deployed by `git clone`
-  of `main` into `~/alpha_trading` with a venv; updates via `git pull` +
-  `systemctl restart`. Scheduled cron jobs (`src.renew_token`,
-  `src.main` at 15:35 IST, `src.suggest` at 08:00 IST, `src.master_scheduler`
-  at 09:10 IST, `src.sleep_phase` at 20:00 IST, `src.ops_monitor` at
-  20:30 IST) are deployed via `scripts/setup_cron.sh`. (Token renewal is at
-  07:00 IST by design, but is on an INTERIM 06:30/18:30 IST root-cron
-  cadence as of the 2026-07-10 hotfix — see `docs/token_renewal_cadence.md`;
-  a mint inside 09:15–15:30 blinds the running loop.)
-- **API Server & Cloudflare Tunnel**: All inbound internet traffic reaches the VM
-  only via `cloudflared` dialing out to form a Cloudflare Tunnel, which forwards
-  public HTTPS traffic to the internal port 8000. On `localhost:8000`, the strict
-  gateway `src/api_server.py` listens, requiring an API key. No firewall port is
-  ever opened on the GCP VM.
-- **Local (Mac)**: paper trading (`src/trade.py`), the FastAPI server
-  (`src/api.py`), the Discord bot (`src/discord_bot.py`), the React
-  dashboard dev server, and local Ollama + `llama3` for news extraction/the sleep
-  phase run locally today. Interactive/stateful pieces (anything touching
-  `data/portfolio.json`) stay local on the Mac—the VM only hosts read-only-on-portfolio
-  tasks.
-- **Roadmap**: Continue migrating frontend integrations to the public Cloudflare
-  Tunnel URL, so the dashboard and Discord webhook actions work fully end-to-end
-  without local Mac hosting.
+---
 
-## 4. State & storage
+## Department 1 — DATA (market data in)
 
-- **All engine state is local, file-based JSON/JSONL under `data/`**
-  (git-ignored — see `OVERVIEW.md` / `DECISIONS.md` for why, no cloud DB):
-  `portfolio.json`, `journal.jsonl`, `news_sentiment.json`,
-  `brain_weights.json`, plus `brain_map.db` (sqlite knowledge graph) and
-  `market_snapshot.json` (the engine's published live-marks read-model —
-  the live loop writes it, viewers read it so the loop stays the single
-  Dhan quote consumer; decision #56). Config (non-secret, versioned) lives
-  in `config.json` (root), `config/watchlist.yaml`, and
-  `config/macro_securities.json` (verified Dhan ids for the Phase 7 macro
-  tracker).
-- **Advisory analytics layers (Phase 7–8, all read-only on live state,
-  see `MODULES.md` for the module list):** `src/ingestion/` (macro matrix
-  + local-LLM news parsing), `src/knowledge_graph/resonance.py`
-  (macro/news vs open positions → CONFLICT/RESONANCE/NEUTRAL advisories),
-  and the `/api/web/*` event-driven dashboard. None of these place,
-  modify, or gate a trade — they emit advisories and read-models only.
-- **Secrets**: `.env` (git-ignored, `.env.example` is the versioned
-  template) — `DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN`, `GEMINI_API_KEY`,
-  `DISCORD_BOT_TOKEN`, `ALERT_EMAIL_*`. See `HANDOVER.md`.
-- **Frontend**: `lovable-frontend/` is gitignored on `main` entirely — it is
-  version-controlled only on the separate `lovable-ui` branch. Never commit
-  it to `main`.
+**Manager:** `src/dhan_guard.py` (`SafeDhanClient`) — the one hardened door to
+all market data. Token lives behind `src/token_provider.py` (the single token
+seam). Nothing else constructs a Dhan client.
 
-## 5. Non-negotiables enforced by this architecture
+**What it does (plain English):** brings the outside market into the system —
+live prices, daily history, and option chains (with per-strike Greeks) — and
+does it *safely*: it classifies failures (auth vs data outage), retries once on
+a rate-limit, and voids stale quotes. Separately, the `ingestion/` clerks
+capture end-of-day data that can never be re-bought later (option chains, bulk
+deals, FII/DII flows, earnings dates, macro, news) into a `lake/` archive.
 
-See `OVERVIEW.md` for the full list. Structurally enforced here:
-- No broker/order-placement import exists anywhere in `src/`.
-- `src/dhan_client.py` only calls Dhan's data endpoints (quote/historical/
-  option-chain) — never order/fund/trade endpoints.
-- `/api/decision` refuses `APPROVE_REAL` at the API layer (403), regardless
-  of what the frontend sends.
+**Inputs:** DhanHQ Data API (read-only), NSE end-of-day reports, Google-News RSS.
+**Outputs:** clean quotes/chains on demand; `data/market_snapshot.json` (the
+engine's published marks — everyone else READS this so the live loop stays the
+*single* Dhan consumer); dated archives under `data/lake/`.
+
+**To change data handling, go to:** `dhan_guard` for live fetches;
+`market_snapshot` for the shared marks; the specific `ingestion/<x>.py` clerk
+for an archive feed.
+
+---
+
+## Department 2 — DECISION (the live trading engine)
+
+**Manager:** `src/options_proposer.py` (`run_headless`) — the one place a spread
+proposal is born, enriched, and journaled. Composed each day by
+`src/master_scheduler.py`; driven cycle-to-cycle by `src/market_loop.py`.
+
+**What it does (plain English):** during market hours it reads the trend (SMA
+cross + RSI) and India VIX, decides a bullish / bearish / neutral view, and
+builds the matching defined-risk spread (bull-call / bear-put / iron-condor) via
+`src/strategy.py`. It then attaches *context annotations* to the proposal —
+Book Context (#73: what we already hold and why), Memory (linked past patterns),
+Skeptic, Alignment — and writes the proposal to the journal as PENDING. **The
+one decision seam is `decide_pending()`** — terminal, Discord button, and
+auto-approve all converge there; nothing approves a trade any other way.
+
+**Inputs:** trend/VIX read, an option chain, the current book.
+**Outputs:** a PENDING_APPROVAL journal entry + a rich Discord proposal card.
+
+**To change what/how we propose, go to:** `options_proposer` (pipeline +
+`decide_pending`), `strategy` (the leg math), `trade_planner` (view→structure
+routing). Annotations are their own modules but only *decorate* here.
+
+---
+
+## Department 3 — RISK & CAPITAL (the gatekeeper)
+
+**Manager (entry side):** `src/portfolio_manager.py` — the capital pool, margin
+locks, and the 10% drawdown halt. **Manager (exit side):**
+`src/plan_tracker.py` — THE one settlement path (no other code closes a trade).
+
+**What it does (plain English):** stands between a proposal and the book. On the
+way IN: `exposure_gate` (#68) blocks a duplicate (one spread per
+underlying+direction), then the margin gate checks the capital pool can afford
+it. While positions are OPEN: `portfolio_greeks` (#71) watches the *whole book's*
+net Vega/Delta against equity budgets and warns if ten "neutral" condors have
+quietly become one big volatility bet. On the way OUT: `plan_tracker` resolves
+every trade against real prices — take profit at 65%, never hold into the last
+2 days to expiry, close as one atomic basket, settle the cash once.
+
+**Inputs:** a proposal (entry); open positions + live/EOD prices (exit).
+**Outputs:** allowed/blocked verdict + margin lock; resolved outcomes with P&L;
+book-level Greek advisories.
+
+**To change risk behavior, go to:** `exposure_gate` (duplicates),
+`portfolio_manager` (margin/drawdown), `portfolio_greeks` (book budgets),
+`plan_tracker` (exits/settlement). Exits are advisory-to-the-human by rule
+(#41/#11) except the one sanctioned intraday square-off (#69).
+
+---
+
+## Department 4 — MEMORY & LEARNING (the ledger + brain)
+
+**Manager (truth):** `src/journal.py` (`data/journal.jsonl` — the source of
+truth for every decision). **Manager (learning):** `src/brain_map.py`
+(`data/brain_map.db` — everything the system has learned). **Nightly
+orchestrator:** `src/sleep_phase.py`.
+
+**What it does (plain English):** remembers. The journal is the immutable record
+of every trade and why it was taken. The brain map is the knowledge store —
+events, outcomes, a causal knowledge graph, regime tags, the daily market
+frame, and evidence snapshots — with one iron rule: **losses are never deleted**
+(deleting losers would fake every win-rate). Each night the sleep phase
+consolidates memory, applies decay to stale links (losses exempt), and folds the
+day's context. `src/tuner.py` is the *only* sanctioned way learned weights
+change; `src/book_context.py` reads the journal to answer "what do we hold and
+why" at any hour.
+
+**Inputs:** resolved outcomes, daily market context, deal/flow history.
+**Outputs:** the trade ledger; queryable pattern memory; tuned weights fed back
+into the forecast.
+
+**To change memory/learning, go to:** `journal` (the record), `brain_map`
+(the store + queries), `sleep_phase` (nightly tasks), `tuner` (weight learning).
+
+---
+
+## Department 5 — VALIDATION HARNESS (the proving court)
+
+**Manager:** `src/validation/registry.py` — the pattern lifecycle
+(CANDIDATE → TRIAL → VALIDATED → LIVE_ADVISORY → QUARANTINED/DEAD). **The one
+statistics rulebook:** `src/validation/stat_gates.py`.
+
+**What it does (plain English):** this is what keeps the system honest and stops
+it fooling itself. Every mined pattern is registered with a frozen definition,
+then must *earn* its way up: tested out-of-sample on data it never saw
+(`trial`, walk-forward with an embargo), watched for decay after going live
+(`monitor`, auto-quarantines a bleeding pattern), and measured against
+information-free decoys (`placebo`, the false-discovery meter). The
+`discovery/` miners propose candidates; `shadow_runner` fires them on live
+trades without touching real money; `digest` reports the weekly state. Nothing
+gets authority to influence a real decision without passing through here.
+
+**Inputs:** resolved outcomes + daily context (to mine and test on).
+**Outputs:** patterns with a governed status; the honest win-rates and
+false-discovery rate; `auto:` tags the miners then exclude.
+
+**To change validation, go to:** `registry` (lifecycle/authority),
+`stat_gates` (the thresholds — no miner defines its own), `trial`/`monitor`/
+`placebo` (the proving mechanics), `discovery/` (the miners).
+
+---
+
+## Department 6 — REPORTING & ADVISORY (the announcer)
+
+**Manager:** `src/notifier.py` (`fire_broadcast`) — the ONE door to Discord.
+Every card, from every department, leaves through here.
+
+**What it does (plain English):** tells you what's happening without you reading
+code or logs. Scheduled read-only cards: `portfolio_report` (every 2h during
+market hours), `eod_summary` (end of day), `performance` (#72, weekly
+Sharpe/Sortino/drawdown over the real track record), `ops_monitor` (nightly
+health + job heartbeats), `validation/digest` (weekly harness state). On-demand
+CLIs: `explain <id>` (reconstruct any one trade end-to-end), `book_context`
+(the whole book with reasons), `view_positions`, `graph_viz`.
+
+**Inputs:** the journal, brain map, and live marks (read-only).
+**Outputs:** Discord cards + terminal reports. Never places or changes a trade.
+
+**To change reporting, go to:** `notifier` (the delivery mechanism), or the
+specific report module for its content.
+
+---
+
+## Department 7 — INTERFACES (the front doors)
+
+**Manager:** `src/api_server.py` — the strict fail-closed gateway (every request
+needs the API key). It mounts the unified `src/api.py` app.
+
+**What it does (plain English):** how a human sees the system and taps a
+decision. The dashboard (served through a Cloudflare Tunnel) and the Discord bot
+buttons both come in through the gateway, which forwards approve/reject to the
+same `decide_pending()` seam Department 2 owns — so the button and the terminal
+can never disagree. `APPROVE_REAL` is refused at the API layer (403): paper
+only, structurally.
+
+**Inputs:** authenticated HTTP (dashboard, Discord actions).
+**Outputs:** read views of the engine; paper approve/reject decisions routed to
+the one decision seam.
+
+**To change interfaces, go to:** `api_server` (auth/gateway), `api` (endpoints),
+`discord_bot` (bot commands). None of them duplicate engine logic — they call it.
+
+---
+
+## How a single trade flows through all 7 (the canonical path)
+
+1. **DATA** serves a fresh option chain + trend read.
+2. **DECISION** builds a bear-put spread, annotates it with book context, writes
+   it PENDING, fires the proposal card.
+3. **RISK** checks the exposure gate + margin, approves it (auto or human tap),
+   locks margin; later `plan_tracker` takes profit at 65% and settles the cash.
+4. **MEMORY** records the outcome + a post-mortem; the tuner learns from it.
+5. **VALIDATION** lets any registered pattern that fired shadow-score this
+   outcome, out-of-sample.
+6. **REPORTING** shows it on the 2h card + the weekly performance/digest.
+7. **INTERFACES** is where you saw the proposal and tapped approve.
+
+---
+
+## Infrastructure (where the departments physically run)
+
+- **The VM (`alpha-trading-vm`, GCP) is the sole live engine.** It runs the
+  decision loop, risk gates, reporting cards, and the gateway via `systemd`
+  services + a cron block (`scripts/setup_cron.sh` — 15 jobs; the token renews
+  once at 07:00 IST). It mints its Dhan token from GCP Secret Manager. See
+  `docs/gcp_vm_deployment` context / `HANDOVER.md` for the deploy checklist.
+- **The Mac** runs only what needs a local Ollama or interactive state: the
+  evolution agent and edge miner. It is NOT the engine; closing it doesn't stop
+  trading.
+- **State** is file-based under `data/` (git-ignored): `journal.jsonl`,
+  `brain_map.db`, `market_snapshot.json`, `brain_weights.json`, plus the
+  `lake/`. Config (versioned, non-secret) in `config.json` + `config/`. Secrets
+  in `.env` (git-ignored). The `lovable-frontend/` UI lives only on the
+  `lovable-ui` branch, never on `main`.
+
+## Structural non-negotiables (enforced by this architecture)
+
+- No broker/order-placement import exists anywhere in `src/` — paper only.
+- `dhan_client` calls Dhan's *data* endpoints only, never order/fund endpoints.
+- One decision seam (`decide_pending`), one settlement path (`plan_tracker`),
+  one Discord door (`fire_broadcast`), one market-data door (`dhan_guard`).
+- Losses are append-only in the ledger; only Validation grants authority;
+  every non-Decision layer is annotate-only until it earns more (#63).

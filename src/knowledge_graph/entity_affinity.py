@@ -498,6 +498,191 @@ def evaluate_distribution_signals(readmodel: dict, today: date = None) -> list:
     return advisories
 
 
+# ------------------------------------------------- specialist vehicles
+#
+# Owner thesis (2026-07-17): the nastiest footprint isn't "60% of a
+# client's deals in one promoter group" — it's the vehicle that exists
+# FOR one or two listed names at all: it appears from nowhere, trades
+# them in size, and vanishes ("ekdum aayegi fir gayab"). That pattern
+# needs NO group mapping and NO percentage lens — just ticker
+# cardinality, gross size, and the shape of its activity window. This
+# detector runs on the raw disclosure tape alongside (not instead of)
+# the group-concentration link above, which keeps feeding the
+# concentrates_in edges (#61's strict thresholds unchanged).
+
+SPECIALIST_MAX_TICKERS = 2          # "one or a few listed companies"
+SPECIALIST_MIN_DEALS = 2            # below this, one disclosure = noise
+SPECIALIST_MIN_VALUE_RS = 5e7       # ₹5 cr gross — "trades in volume"
+SPECIALIST_BURST_SPAN_DAYS = 45     # whole footprint inside ~6 weeks = burst
+SPECIALIST_DORMANT_DAYS = 30        # silent this long after a burst = gone
+SPECIALIST_PATH = ROOT / "data" / "specialist_entities.json"
+SPECIALIST_ALERTS_PATH = ROOT / "logs" / "specialist_alerts.jsonl"
+
+
+def find_specialist_entities(history: list, aliases: dict = None,
+                             today: date = None,
+                             max_tickers: int = SPECIALIST_MAX_TICKERS,
+                             min_deals: int = SPECIALIST_MIN_DEALS,
+                             min_value_rs: float = SPECIALIST_MIN_VALUE_RS,
+                             burst_span_days: int = SPECIALIST_BURST_SPAN_DAYS,
+                             dormant_days: int = SPECIALIST_DORMANT_DAYS) -> list:
+    """Raw deal tape -> the narrow-focus vehicles. A client qualifies when
+    its ENTIRE disclosed footprint spans <= max_tickers distinct names,
+    with >= min_deals rows and >= min_value_rs gross traded value.
+    Status reads the activity window's shape:
+
+      active_burst           appeared recently, whole footprint inside the
+                             burst window, still (or just) trading — the
+                             live "ekdum aayi hai" case
+      vanished               burst-shaped footprint, silent past the
+                             dormancy threshold — came, traded, gone
+      persistent_specialist  narrow forever (a vehicle living on one name)
+
+    Pure function, advisory-only, public-disclosure inference. The tape is
+    censored (>0.5%-of-equity disclosures only), so absence of deals is
+    NEVER evidence of absence — each row carries its n inline."""
+    today = today or date.today()
+    if aliases is None:
+        aliases = load_entity_groups()["client_aliases"]
+    per: dict = {}
+    for d in history or []:
+        client = canonicalize_client(d.get("client"), aliases)
+        ticker, day = d.get("ticker"), d.get("as_of")
+        side = d.get("side")
+        if not client or not ticker or not day or side not in ("buy", "sell"):
+            continue
+        s = per.setdefault(client, {"tickers": set(), "deals": 0,
+                                    "buy_v": 0.0, "sell_v": 0.0,
+                                    "first": day, "last": day})
+        s["tickers"].add(ticker)
+        s["deals"] += 1
+        try:
+            v = float(d.get("value_rs") or 0.0)
+        except (TypeError, ValueError):
+            v = 0.0
+        s["buy_v" if side == "buy" else "sell_v"] += v
+        s["first"], s["last"] = min(s["first"], day), max(s["last"], day)
+
+    out = []
+    for client, s in per.items():
+        gross = s["buy_v"] + s["sell_v"]
+        if (len(s["tickers"]) > max_tickers or s["deals"] < min_deals
+                or gross < min_value_rs):
+            continue
+        try:
+            span = (date.fromisoformat(s["last"])
+                    - date.fromisoformat(s["first"])).days
+            dormant = (today - date.fromisoformat(s["last"])).days
+        except ValueError:
+            continue
+        if span <= burst_span_days:
+            status = ("vanished" if dormant > dormant_days
+                      else "active_burst")
+        else:
+            status = "persistent_specialist"
+        out.append({
+            "client": client,
+            "tickers": sorted(s["tickers"]),
+            "n_deals": s["deals"],
+            "gross_value_rs": round(gross, 2),
+            "net_value_rs": round(s["buy_v"] - s["sell_v"], 2),
+            "first_seen": s["first"], "last_seen": s["last"],
+            "span_days": span, "dormant_days": max(0, dormant),
+            "status": status,
+        })
+    out.sort(key=lambda r: -r["gross_value_rs"])
+    return out
+
+
+def write_specialists(rows: list, today: date = None, path=None) -> None:
+    """Persist the specialist read-model (advisory artifact class, muzzled
+    under tests like write_readmodel). Carries the censoring caveat in the
+    header so no consumer forgets what this tape can't see."""
+    if path is None and _default_writes_muzzled():
+        return
+    path = Path(path) if path is not None else SPECIALIST_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "as_of": (today or date.today()).isoformat(),
+            "caveat": ("public bulk/block disclosures only (>0.5% of equity "
+                       "prints); absence of deals is never evidence of "
+                       "absence"),
+            "entities": rows}, indent=2))
+    except OSError as exc:
+        print(f"  (entity affinity: could not write {path} [{exc}])")
+
+
+def _notify_new_specialists(rows: list, ledger_path=None,
+                            notify_fn=None) -> int:
+    """Owner directive 2026-07-16: review-worthy findings reach Discord in
+    REAL TIME. One card per run for never-before-announced specialists
+    (hash of client+tickers in an append-only ledger — announce once, not
+    daily), active bursts first. Fail-open; a failed send does NOT mark
+    rows seen, so they re-announce when Discord is back."""
+    if not rows:
+        return 0
+    if ledger_path is None and _default_writes_muzzled():
+        return 0
+    ledger_path = Path(ledger_path) if ledger_path is not None \
+        else SPECIALIST_ALERTS_PATH
+    try:
+        import hashlib
+        seen = set()
+        if ledger_path.exists():
+            for raw in ledger_path.read_text().splitlines():
+                try:
+                    seen.add(json.loads(raw)["key"])
+                except (ValueError, KeyError):
+                    continue
+        new = []
+        for r in rows:
+            key = hashlib.sha1(
+                (r["client"] + "|" + "|".join(r["tickers"])).encode()
+            ).hexdigest()[:16]
+            if key not in seen:
+                new.append((key, r))
+        if not new:
+            return 0
+        order = {"active_burst": 0, "vanished": 1, "persistent_specialist": 2}
+        new.sort(key=lambda kr: (order.get(kr[1]["status"], 9),
+                                 -kr[1]["gross_value_rs"]))
+        icon = {"active_burst": "🔥", "vanished": "👻",
+                "persistent_specialist": "🎯"}
+        lines = [f"🕵️ **Specialist vehicles: {len(new)} narrow-focus "
+                 "entity(ies) on the deals tape** — clients whose entire "
+                 "disclosed footprint is 1-2 names. Advisory inference from "
+                 "public disclosures; review, don't assume."]
+        for _, r in new[:6]:
+            cr = r["gross_value_rs"] / 1e7
+            lines.append(
+                f"{icon.get(r['status'], '•')} {r['client']} — "
+                f"{'/'.join(r['tickers'])}: ₹{cr:,.1f} cr gross over "
+                f"{r['n_deals']} deal(s) in {r['span_days']}d "
+                f"[{r['status'].replace('_', ' ')}"
+                + (f", silent {r['dormant_days']}d" if r["status"] == "vanished"
+                   else "") + "]")
+        if len(new) > 6:
+            lines.append(f"…and {len(new) - 6} more — see "
+                         "data/specialist_entities.json")
+        if notify_fn is None:
+            from src.notifier import fire_broadcast
+            notify_fn = lambda text: fire_broadcast({"text": text})
+        notify_fn("\n".join(lines))
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(ledger_path, "a") as f:
+            for key, r in new:
+                f.write(json.dumps({"key": key, "client": r["client"],
+                                    "tickers": r["tickers"],
+                                    "status": r["status"],
+                                    "first_announced": date.today().isoformat()})
+                        + "\n")
+        return len(new)
+    except Exception as exc:
+        print(f"  (entity affinity: specialist notify skipped [{exc}])")
+        return 0
+
+
 def _default_writes_muzzled() -> bool:
     """True inside a test run (the decision-#43 muzzle rule, applied to
     file artifacts): a test that didn't pass its OWN path must never write
@@ -562,10 +747,19 @@ def run(conn=None, db_path=None, history_path=None, groups_path=None,
         advisories = evaluate_distribution_signals(readmodel, today=today)
         if emit_advisories and advisories:
             log_affinity_advisories(advisories, path=advisory_path)
+        # Specialist vehicles (owner thesis 2026-07-17): narrow-focus
+        # entities straight off the raw tape — no group map, no % lens.
+        specialists = find_specialist_entities(
+            history, aliases=groups["client_aliases"], today=today)
+        write_specialists(specialists, today=today)
+        announced = _notify_new_specialists(specialists) if emit_advisories \
+            else 0
         return {"folded": acc["folded"], "new_days": acc["new_days"],
                 "edges": acc["edges"],
                 "linked_groups": len(readmodel["groups"]),
-                "advisories": len(advisories)}
+                "advisories": len(advisories),
+                "specialists": len(specialists),
+                "new_specialists_announced": announced}
     finally:
         if own:
             conn.close()

@@ -237,6 +237,94 @@ def test_history_ledger_append_dedup_and_read():
         assert dt.read_deal_history(Path(tmp) / "gone.jsonl") == []
 
 
+# ------------------------------------------- specialist vehicles (2026-07-17)
+
+def test_specialist_detector_flags_narrow_burst_vehicles():
+    """The owner's 'ekdum aayegi fir gayab' pattern: one ticker, big
+    volume, short window — flagged; a diversified fund is NOT, no matter
+    its size; a tiny narrow client stays under the value floor."""
+    history = (
+        # The nasty one: ₹9 cr on ONE name inside 8 days, then silence.
+        [_deal("OBSCURE.NS", "SHELL VENTURES LLP", "buy", 10000,
+               "2026-06-01", value=4.5e7),
+         _deal("OBSCURE.NS", "SHELL VENTURES LLP", "sell", 10000,
+               "2026-06-09", value=4.5e7)]
+        # Diversified: 4 tickers -> not a specialist.
+        + [_deal(t, "BIG DIVERSIFIED MF", "buy", 1000, "2026-06-05",
+                 value=9e7)
+           for t in ("A.NS", "B.NS", "C.NS", "D.NS")]
+        # Narrow but tiny: under the ₹5 cr gross floor.
+        + [_deal("SMALL.NS", "TINY TRADER", "buy", 10, "2026-06-05",
+                 value=1e5),
+           _deal("SMALL.NS", "TINY TRADER", "sell", 10, "2026-06-06",
+                 value=1e5)])
+    rows = ea.find_specialist_entities(history, aliases={},
+                                       today=date(2026, 7, 17))
+    assert [r["client"] for r in rows] == ["SHELL VENTURES"]  # canonicalized
+    r = rows[0]
+    assert r["tickers"] == ["OBSCURE.NS"]
+    assert r["status"] == "vanished"            # silent 38d > 30d threshold
+    assert r["span_days"] == 8 and r["n_deals"] == 2
+    assert r["gross_value_rs"] == 9e7
+
+
+def test_specialist_status_reads_the_window_shape():
+    today = date(2026, 7, 17)
+    burst_now = [_deal("X.NS", "FRESH LLP", "buy", 1, "2026-07-10", value=6e7),
+                 _deal("X.NS", "FRESH LLP", "buy", 1, "2026-07-16", value=6e7)]
+    assert ea.find_specialist_entities(burst_now, aliases={}, today=today)[0][
+        "status"] == "active_burst"
+    lifer = [_deal("Y.NS", "ONE NAME FUND", "buy", 1, d, value=6e7)
+             for d in ("2025-01-10", "2025-08-10", "2026-07-01")]
+    assert ea.find_specialist_entities(lifer, aliases={}, today=today)[0][
+        "status"] == "persistent_specialist"
+
+
+def test_specialist_notify_dedups_and_fails_open():
+    rows = ea.find_specialist_entities(
+        [_deal("X.NS", "FRESH LLP", "buy", 1, "2026-07-10", value=6e7),
+         _deal("X.NS", "FRESH LLP", "buy", 1, "2026-07-16", value=6e7)],
+        aliases={}, today=date(2026, 7, 17))
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp) / "specialist_alerts.jsonl"
+        cards = []
+        assert ea._notify_new_specialists(rows, ledger_path=ledger,
+                                          notify_fn=cards.append) == 1
+        assert len(cards) == 1
+        assert "FRESH" in cards[0]  # canonicalized and "active burst" in cards[0]
+        # Same specialist tomorrow -> already announced, no respam.
+        assert ea._notify_new_specialists(rows, ledger_path=ledger,
+                                          notify_fn=cards.append) == 0
+        assert len(cards) == 1
+        # Dead notifier: no raise AND no seen-marking (re-announces later).
+        ledger2 = Path(tmp) / "l2.jsonl"
+        def boom(text):
+            raise RuntimeError("webhook down")
+        assert ea._notify_new_specialists(rows, ledger_path=ledger2,
+                                          notify_fn=boom) == 0
+        assert not ledger2.exists()
+
+
+def test_specialist_scan_is_wired_into_the_run_pass():
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = brain_map.connect(":memory:")
+        hist = Path(tmp) / "hist.jsonl"
+        with open(hist, "w") as f:
+            for d in (_deal("OBSCURE.NS", "SHELL VENTURES LLP", "buy", 1,
+                            "2026-06-01", value=6e7),
+                      _deal("OBSCURE.NS", "SHELL VENTURES LLP", "sell", 1,
+                            "2026-06-05", value=6e7)):
+                f.write(json.dumps(d) + "\n")
+        groups_path = Path(tmp) / "groups.json"
+        groups_path.write_text(json.dumps(GROUPS))
+        summary = ea.run(conn=conn, history_path=hist,
+                         groups_path=groups_path, today=date(2026, 7, 17),
+                         emit_advisories=False)
+        conn.close()
+    assert summary["specialists"] == 1
+    assert summary["new_specialists_announced"] == 0   # advisories off
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

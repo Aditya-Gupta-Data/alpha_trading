@@ -195,6 +195,7 @@ approach its **Manager** — don't dig through files.
 | `DECISIONS.md` | Log of locked architectural decisions + why. |
 | `HANDOVER.md` | Cold-start: credentials, env vars, boot commands, current state. |
 | `DATA_CONTRACT.md` | Exact JSON schemas + API contract for the frontend. |
+| `docs/SYSTEM_MAP_AND_AUDIT.md` | Evidence-based (import/data-path) Mermaid map of all 7 departments + the Orphan/Redundancy audit. Generated 2026-07-16 for the Saturday Fable pre-review; flags the `dhan_guard` Manager bypass and the `tuner`/`resonance`/`decay_engine` orphans to resolve before the unified push. |
 | `PLAN.md` | Phase 4 (4A-4F) build plan and status — historical build log. |
 | `VISION_PLAN.md` | User's Phase 5+ master blueprint (Discord, Brain Map, simulator, event ingestion). |
 | `DECISIONS.md`, `PLAN.md`, `VISION_PLAN.md` are historical/planning docs and are NOT rewritten at every milestone the way `OVERVIEW`/`ARCHITECTURE`/`MODULES`/`HANDOVER` are — they're appended to as new phases/decisions land. |

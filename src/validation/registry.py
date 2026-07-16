@@ -227,6 +227,39 @@ def mint_tag(pattern_id: str) -> str:
     return f"auto:{pattern_id[:8]}"
 
 
+def states_for_tags(conn, tags: list) -> dict:
+    """For the existing #26/#33 surfaces (HOLY_GRAIL §7.2: "stamped with
+    registry state inline — shipped functionality is not silenced"): given
+    the pattern tags active on a proposal/forecast, return {tag: status}
+    for every tag some registered pattern's frozen definition names.
+    Newest registration wins per tag. A rendering nicety, never
+    load-bearing: nothing here gates, and ANY problem (no table yet, a
+    malformed definition, a closed conn) degrades to {} rather than
+    raising — a forecast must never depend on the registry existing."""
+    if not tags:
+        return {}
+    try:
+        ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT definition, status FROM candidate_patterns "
+            "ORDER BY id DESC").fetchall()
+    except Exception:
+        return {}
+    wanted, out = set(tags), {}
+    for row in rows:
+        try:
+            definition = json.loads(row["definition"])
+        except (ValueError, TypeError):
+            continue
+        def_tags = list(definition.get("tags") or [])
+        if definition.get("tag"):
+            def_tags.append(definition["tag"])
+        for t in def_tags:
+            if t in wanted and t not in out:
+                out[t] = row["status"]
+    return out
+
+
 def audit_trail(conn, pattern_id: str) -> list:
     ensure_schema(conn)
     return [dict(r) for r in conn.execute(

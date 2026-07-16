@@ -106,6 +106,32 @@ def test_oos_stats_accumulate_monotonically():
     assert rg.update_oos_stats(conn, "ghost", {}) is False
 
 
+# --------------------------------- states_for_tags stamp (salvage #2)
+
+def test_states_for_tags_maps_active_tags_to_pattern_status():
+    conn = brain_map.connect(":memory:")
+    a = rg.register(conn, "cooccurrence",
+                    {"kind": "cooccurrence",
+                     "tags": ["golden_cross", "fii_buying"]})["pattern_id"]
+    rg.register(conn, "sequence", {"kind": "sequence", "tag": "hammer"})
+    rg.transition(conn, a, "TRIAL", "test")
+    states = rg.states_for_tags(
+        conn, ["golden_cross", "hammer", "unregistered_tag"])
+    assert states == {"golden_cross": "TRIAL", "hammer": "CANDIDATE"}
+    # newest registration wins per tag
+    rg.register(conn, "cooccurrence",
+                {"kind": "cooccurrence", "tags": ["golden_cross"], "v": 2})
+    assert rg.states_for_tags(conn, ["golden_cross"])["golden_cross"] == "CANDIDATE"
+
+
+def test_states_for_tags_is_fail_open_never_load_bearing():
+    conn = brain_map.connect(":memory:")
+    assert rg.states_for_tags(conn, []) == {}              # no tags
+    assert rg.states_for_tags(conn, ["x"]) == {}           # empty registry
+    conn.close()
+    assert rg.states_for_tags(conn, ["x"]) == {}           # closed conn
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

@@ -124,6 +124,30 @@ def test_memory_lookup_reports_missing_avg_r_as_na():
     assert "Avg R-Multiple: n/a over 1 historical trades" in memory["context"]
 
 
+# --------------------------------- registry-state stamp (salvage #2)
+
+def test_memory_line_carries_registry_state_stamp_when_registered():
+    """§7.2: existing surfaces keep rendering, stamped with registry state
+    inline. A registered pattern naming an active tag adds the advisory
+    [registry: ...] suffix + registry_states — gating nothing."""
+    from src.validation import registry as rg
+    conn = seeded_brain()
+    rg.register(conn, "cooccurrence",
+                {"kind": "cooccurrence", "tags": ["golden_cross"]})
+    memory = _memory_lookup(["golden_cross"], brain=conn)
+    assert memory["registry_states"] == {"golden_cross": "CANDIDATE"}
+    assert "[registry: golden_cross=CANDIDATE]" in memory["context"]
+    assert "Historical Performance" in memory["context"]   # line still leads
+
+
+def test_memory_line_unstamped_when_nothing_registered():
+    """No registered patterns -> the memory line reads exactly as before
+    the stamp existed (registry_states None, no suffix)."""
+    memory = _memory_lookup(["golden_cross"], brain=seeded_brain())
+    assert memory["registry_states"] is None
+    assert "[registry:" not in memory["context"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

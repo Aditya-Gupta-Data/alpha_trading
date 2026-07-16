@@ -231,6 +231,13 @@ def _memory_lookup(tags: list, brain=None):
         if brain is None:
             brain = brain_map.connect()
         stats = query_similar_events(brain, tags)
+        # Phase 4 (§7.2): stamp registry lifecycle state inline when any
+        # active tag has a registered pattern. Looked up HERE, inside the
+        # connection's lifetime (the finally below closes an opened-here
+        # conn); states_for_tags is fail-open ({} on any problem) and
+        # advisory-only -- it never gates this memory line.
+        from src.validation import registry as _rg
+        registry_states = _rg.states_for_tags(brain, tags)
     except Exception:
         return None
     finally:
@@ -245,8 +252,12 @@ def _memory_lookup(tags: list, brain=None):
         f"Avg R-Multiple: {f'{avg:+.2f}' if avg is not None else 'n/a'} "
         f"over {stats['count']} historical trades."
     )
+    if registry_states:
+        context += " [registry: " + ", ".join(
+            f"{t}={s}" for t, s in sorted(registry_states.items())) + "]"
     return {"tags": tags, "count": stats["count"], "win_rate": stats["win_rate"],
-            "avg_r_multiple": avg, "context": context}
+            "avg_r_multiple": avg, "context": context,
+            "registry_states": registry_states or None}
 
 
 def forecast(ticker: str, news_by_ticker: dict = None, weights: dict = None,

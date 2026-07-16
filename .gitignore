@@ -31,3 +31,6 @@ data/
 # strategy). It must never be committed to `main`, so `main` ignores it
 # entirely. See DATA_CONTRACT.md "Branch strategy".
 lovable-frontend/
+# The current Lovable app (TanStack Start terminal UI) lives here. Same rule:
+# framework code never pollutes the Python engine on `main`.
+Trading Terminal/

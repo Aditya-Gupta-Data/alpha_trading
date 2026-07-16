@@ -87,3 +87,127 @@ watchlist:
   - ticker: TMPV.NS
     condition: percent_down
     value: 3
+  - ticker: M&M.NS
+    condition: percent_up
+    value: 3
+  - ticker: M&M.NS
+    condition: percent_down
+    value: 3
+
+  # ---- Cash-equity universe expansion (2026-07-16) ----
+  # Top-liquid NIFTY 50 names added for daily OHLC + news-sentiment
+  # tracking (correlation substrate for future cash-equity swing trades).
+  # Every ticker below has a scrip-master-verified id in dhan_client's
+  # SECURITY_ID_MAP — the two files move together.
+
+  # ---- Banking / Financials ----
+  - ticker: SBIN.NS
+    condition: percent_up
+    value: 3
+  - ticker: SBIN.NS
+    condition: percent_down
+    value: 3
+  - ticker: AXISBANK.NS
+    condition: percent_up
+    value: 3
+  - ticker: AXISBANK.NS
+    condition: percent_down
+    value: 3
+  - ticker: KOTAKBANK.NS
+    condition: percent_up
+    value: 3
+  - ticker: KOTAKBANK.NS
+    condition: percent_down
+    value: 3
+  - ticker: BAJFINANCE.NS
+    condition: percent_up
+    value: 3
+  - ticker: BAJFINANCE.NS
+    condition: percent_down
+    value: 3
+
+  # ---- IT ----
+  - ticker: WIPRO.NS
+    condition: percent_up
+    value: 3
+  - ticker: WIPRO.NS
+    condition: percent_down
+    value: 3
+  - ticker: HCLTECH.NS
+    condition: percent_up
+    value: 3
+  - ticker: HCLTECH.NS
+    condition: percent_down
+    value: 3
+
+  # ---- Telecom / Infra ----
+  - ticker: BHARTIARTL.NS
+    condition: percent_up
+    value: 3
+  - ticker: BHARTIARTL.NS
+    condition: percent_down
+    value: 3
+  - ticker: LT.NS
+    condition: percent_up
+    value: 3
+  - ticker: LT.NS
+    condition: percent_down
+    value: 3
+  - ticker: NTPC.NS
+    condition: percent_up
+    value: 3
+  - ticker: NTPC.NS
+    condition: percent_down
+    value: 3
+  - ticker: POWERGRID.NS
+    condition: percent_up
+    value: 3
+  - ticker: POWERGRID.NS
+    condition: percent_down
+    value: 3
+
+  # ---- Metals / Materials ----
+  - ticker: TATASTEEL.NS
+    condition: percent_up
+    value: 3
+  - ticker: TATASTEEL.NS
+    condition: percent_down
+    value: 3
+  - ticker: HINDALCO.NS
+    condition: percent_up
+    value: 3
+  - ticker: HINDALCO.NS
+    condition: percent_down
+    value: 3
+  - ticker: JSWSTEEL.NS
+    condition: percent_up
+    value: 3
+  - ticker: JSWSTEEL.NS
+    condition: percent_down
+    value: 3
+  - ticker: ULTRACEMCO.NS
+    condition: percent_up
+    value: 3
+  - ticker: ULTRACEMCO.NS
+    condition: percent_down
+    value: 3
+
+  # ---- Consumer / Pharma ----
+  - ticker: ASIANPAINT.NS
+    condition: percent_up
+    value: 3
+  - ticker: ASIANPAINT.NS
+    condition: percent_down
+    value: 3
+  - ticker: TITAN.NS
+    condition: percent_up
+    value: 3
+  - ticker: TITAN.NS
+    condition: percent_down
+    value: 3
+  - ticker: SUNPHARMA.NS
+    condition: percent_up
+    value: 3
+  - ticker: SUNPHARMA.NS
+    condition: percent_down
+    value: 3

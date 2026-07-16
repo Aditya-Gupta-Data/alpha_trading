@@ -67,6 +67,28 @@ SECURITY_ID_MAP = {
     "ITC.NS":        {"id": "1660",  "seg": "NSE_EQ", "inst": "EQUITY"},
     "MARUTI.NS":     {"id": "10999", "seg": "NSE_EQ", "inst": "EQUITY"},
     "TMPV.NS":       {"id": "3456",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    # Cash-equity universe expansion (2026-07-16): ids verified against
+    # api-scrip-master-detailed.csv via the FUTSTK UNDERLYING_SECURITY_ID
+    # link + a segment-E equity-row cross-check; the method reproduced all
+    # 9 previously hand-verified equity ids exactly before being trusted.
+    "SBIN.NS":       {"id": "3045",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BHARTIARTL.NS": {"id": "10604", "seg": "NSE_EQ", "inst": "EQUITY"},
+    "LT.NS":         {"id": "11483", "seg": "NSE_EQ", "inst": "EQUITY"},
+    "AXISBANK.NS":   {"id": "5900",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "KOTAKBANK.NS":  {"id": "1922",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BAJFINANCE.NS": {"id": "317",   "seg": "NSE_EQ", "inst": "EQUITY"},
+    "ASIANPAINT.NS": {"id": "236",   "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TITAN.NS":      {"id": "3506",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "SUNPHARMA.NS":  {"id": "3351",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TATASTEEL.NS":  {"id": "3499",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "NTPC.NS":       {"id": "11630", "seg": "NSE_EQ", "inst": "EQUITY"},
+    "POWERGRID.NS":  {"id": "14977", "seg": "NSE_EQ", "inst": "EQUITY"},
+    "ULTRACEMCO.NS": {"id": "11532", "seg": "NSE_EQ", "inst": "EQUITY"},
+    "WIPRO.NS":      {"id": "3787",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "HCLTECH.NS":    {"id": "7229",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "M&M.NS":        {"id": "2031",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "HINDALCO.NS":   {"id": "1363",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    "JSWSTEEL.NS":   {"id": "11723", "seg": "NSE_EQ", "inst": "EQUITY"},
     "NIFTY 50":      {"id": "13",    "seg": "IDX_I",  "inst": "INDEX"},
     "NIFTY BANK":    {"id": "25",    "seg": "IDX_I",  "inst": "INDEX"},
     # id 21 verified against api-scrip-master-detailed.csv on 2026-07-06

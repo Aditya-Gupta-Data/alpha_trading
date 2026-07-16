@@ -325,6 +325,67 @@ def test_fetch_historical_parses_csv_and_tags_deal_type():
     assert dt.normalize_deal(rows[0])["ticker"] == "TCS.NS"
 
 
+# --------------------------- review items -> Discord (2026-07-16 directive)
+
+def _census_with_groups(*groups):
+    return {"as_of": "2026-07-16",
+            "alias_candidates": [{"prefix": g[0].split()[0], "names": list(g)}
+                                 for g in groups]}
+
+
+def test_new_alias_groups_fire_one_discord_card_and_ledger():
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp) / "census_alerts.jsonl"
+        cards = []
+        n = dt._notify_review_items(
+            _census_with_groups(("SBI MUTUAL FUND", "SBI MUTUAL FUNDS LTD")),
+            ledger_path=ledger, notify_fn=cards.append)
+        assert n == 1
+        assert len(cards) == 1                       # ONE card per run
+        assert "human review" in cards[0]
+        assert "SBI MUTUAL FUND" in cards[0]
+        assert "client_aliases" in cards[0]          # tells the owner WHERE
+        assert len(ledger.read_text().splitlines()) == 1
+
+
+def test_already_announced_groups_never_respam():
+    """The ledger is the memory: the same near-dup pair trading every day
+    alerts exactly once, not daily."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp) / "census_alerts.jsonl"
+        cards = []
+        census = _census_with_groups(("GRAVITON RESEARCH", "GRAVITON RESRCH"))
+        assert dt._notify_review_items(census, ledger_path=ledger,
+                                       notify_fn=cards.append) == 1
+        assert dt._notify_review_items(census, ledger_path=ledger,
+                                       notify_fn=cards.append) == 0
+        assert len(cards) == 1
+        # A genuinely NEW group still gets through alongside the old one.
+        census2 = _census_with_groups(("GRAVITON RESEARCH", "GRAVITON RESRCH"),
+                                      ("AXIS MF", "AXIS MF A/C 2"))
+        assert dt._notify_review_items(census2, ledger_path=ledger,
+                                       notify_fn=cards.append) == 1
+        assert "AXIS MF" in cards[-1] and "GRAVITON" not in cards[-1]
+
+
+def test_review_notify_is_fail_open():
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp) / "census_alerts.jsonl"
+        def boom(text):
+            raise RuntimeError("webhook down")
+        # A dead notifier must not raise — and must NOT mark groups as seen
+        # (no ledger write), so they re-announce once Discord is back.
+        n = dt._notify_review_items(
+            _census_with_groups(("A B", "A B C")),
+            ledger_path=ledger, notify_fn=boom)
+        assert n == 0
+        assert not ledger.exists()
+        # No candidates at all -> quiet no-op.
+        assert dt._notify_review_items({"alias_candidates": []},
+                                       ledger_path=ledger,
+                                       notify_fn=lambda t: None) == 0
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

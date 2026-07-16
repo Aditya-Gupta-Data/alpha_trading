@@ -50,6 +50,7 @@ Manual check:  python3 -m src.ingestion.deals_tracker
 """
 
 import http.cookiejar
+import hashlib
 import json
 import ssl
 import urllib.error
@@ -513,6 +514,65 @@ def _alias_candidates(deals: list, limit: int = 10) -> list:
     return out
 
 
+ALIAS_ALERTS_PATH = ROOT / "logs" / "census_alerts.jsonl"
+
+
+def _notify_review_items(census: dict, ledger_path=None,
+                         notify_fn=None) -> int:
+    """Owner directive (2026-07-16): anything flagged for HUMAN REVIEW must
+    reach Discord in real time — never only a log line. Fires ONE card per
+    run listing the NEW alias-candidate groups (a stable hash of each
+    group's sorted names is remembered in an append-only ledger, so the
+    same near-dup pair trading every day alerts exactly once, not daily —
+    the exposure-gate convention: the ledger IS the memory). Fail-open;
+    returns how many new groups were announced."""
+    candidates = (census or {}).get("alias_candidates") or []
+    if not candidates:
+        return 0
+    ledger_path = Path(ledger_path) if ledger_path is not None \
+        else ALIAS_ALERTS_PATH
+    try:
+        seen = set()
+        if ledger_path.exists():
+            for raw in ledger_path.read_text().splitlines():
+                try:
+                    seen.add(json.loads(raw)["key"])
+                except (ValueError, KeyError):
+                    continue
+        new = []
+        for group in candidates:
+            key = hashlib.sha1(
+                "|".join(sorted(group.get("names") or [])).encode()
+            ).hexdigest()[:16]
+            if key not in seen:
+                new.append((key, group))
+        if not new:
+            return 0
+        lines = [f"🔎 **Deals census: {len(new)} NEW client-name alias "
+                 "group(s) need human review** — near-duplicate disclosed "
+                 "names that are probably one entity spelled two ways. "
+                 "NOTHING auto-merges (a false merge fakes concentration); "
+                 "if two names are the same entity, add them to "
+                 "`config/entity_groups.json` → `client_aliases`."]
+        for _, group in new[:6]:
+            lines.append("• " + "  ⇄  ".join(group["names"][:3]))
+        if len(new) > 6:
+            lines.append(f"…and {len(new) - 6} more — see the census lake row.")
+        if notify_fn is None:
+            from src.notifier import fire_broadcast
+            notify_fn = lambda text: fire_broadcast({"text": text})
+        notify_fn("\n".join(lines))
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(ledger_path, "a") as f:
+            for key, group in new:
+                f.write(json.dumps({"key": key, "as_of": census.get("as_of"),
+                                    "names": group["names"]}) + "\n")
+        return len(new)
+    except Exception as exc:
+        print(f"  (deals tracker: review-item notify skipped [{exc}])")
+        return 0
+
+
 def build_census(deals: list, raw_rows: list, source: str,
                  as_of: str) -> dict:
     """One per-day data-quality row for the census lake dataset: is the
@@ -591,6 +651,10 @@ def run(output_path=None, snapshot_path=None, watchlist_path=None,
         if census["alias_candidates"]:
             print(f"  (deals tracker: {len(census['alias_candidates'])} "
                   "alias candidate group(s) for human review — see census)")
+            new = _notify_review_items(census)
+            if new:
+                print(f"  (deals tracker: {new} NEW group(s) announced on "
+                      "Discord)")
     except Exception as exc:
         print(f"  (deals tracker: census/archive skipped [{exc}])")
     return matrix

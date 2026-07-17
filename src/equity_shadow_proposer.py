@@ -1,0 +1,345 @@
+"""
+src/equity_shadow_proposer.py — the Shadow Equity Engine (PAPER_TELEMETRY)
+==========================================================================
+
+Owner directive 2026-07-17: cash-equity signals are worth LOGGING in the
+live market even at flat/negative expected value — paper costs nothing,
+and the recorded false positives are training data for a better model.
+This module paper-tracks the block-VWAP pullback setup over the
+deal-covered equity universe and writes every entry/exit WITH ITS FULL
+RATIONALE to the knowledge-graph telemetry ledger
+(logs/equity_shadow_journal.jsonl via src/knowledge_graph_logger.py).
+
+THE SETUP (the owner's "block VWAP pullback", built from the committed and
+sim-tested smart-money scaffold src/analysis/smart_money_trend.py): price
+has pulled back to sit just above the 6-month block-deal VWAP — the
+smart-money floor. Entry = live price inside [floor, floor*(1+PULLBACK
+BAND)]. Stop = floor*(1-STOP_PCT) — the thesis break is THE FLOOR FAILING,
+which is exactly the falsification we want in the ledger. Target =
+entry + REWARD_RISK * risk. TIME_STOP_DAYS force-resolves stale theses so
+every line eventually yields an outcome row.
+
+DELIBERATELY WIDE GATE (telemetry calibration, 2026-07-17): 90-day net
+accumulation/distribution is RECORDED in the rationale, not required —
+measured on the real ledger, requiring it left ~0 qualifying names (large
+caps run value-negative on constant institutional profit-taking; the sim
+already showed "required confirmation hurts, data-sparse"). Logging
+floor-holds WITH the accumulation flag lets the outcome analysis decide
+whether it matters — which is the whole point of a telemetry engine.
+
+HARD TELEMETRY CONTRACT:
+  * every event carries mode="PAPER_TELEMETRY" and capital_allocated=0;
+  * this module never imports journal / portfolio_manager /
+    options_proposer / notifier — no margin, no capital, no Discord, no
+    real-book writes of any kind, ever;
+  * one open shadow per ticker; no same-day re-entry after an exit;
+  * fail-open per ticker: a quote/data outage skips that ticker silently.
+
+WIRED AT THE COMPOSITION ROOT ONLY: master_scheduler (and market_loop's
+__main__) pass shadow_fn=run_cycle into run_market_loop. Direct callers of
+run_market_loop — tests, the Phase 7 simulator — get shadow_fn=None and
+the shadow stays OFF; nothing here can leak into a backtest.
+"""
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+from src import knowledge_graph_logger as kg
+from src.analysis import sector_trend, smart_money_trend
+
+IST = timezone(timedelta(hours=5, minutes=30))
+ROOT = Path(__file__).resolve().parent.parent
+
+MODE = "PAPER_TELEMETRY"
+PULLBACK_BAND_PCT = 5.0   # entry zone: floor .. floor*(1+5%)
+STOP_PCT = 2.0            # stop 2% below the block-VWAP floor
+REWARD_RISK = 2.0         # target = entry + 2 * (entry - stop)
+TIME_STOP_DAYS = 10       # calendar days before a stale thesis is closed
+GAP_SHOCK_PCT = 2.0       # exit this far below the stop = gapped through it
+
+
+def _ist_today() -> str:
+    return datetime.now(IST).date().isoformat()
+
+
+def candidate_tickers(deals_by_ticker) -> list:
+    """Deal-covered NSE equities we can actually quote: the deals ledger's
+    tickers ∩ the verified SECURITY_ID_MAP equity rows. Bounding the scan
+    to deal-covered names keeps the throttled quote cost proportional to
+    where the signal can even exist."""
+    from src.dhan_client import SECURITY_ID_MAP
+    eq = {t for t, m in SECURITY_ID_MAP.items()
+          if m.get("inst") == "EQUITY" and t.endswith(".NS")}
+    return sorted(set(deals_by_ticker) & eq)
+
+
+def _ticker_sector(ticker: str, universe: dict) -> str | None:
+    for name, meta in universe.items():
+        if ticker in (meta.get("constituents") or []):
+            return name
+    return None
+
+
+def _sector_verdict(ticker: str, universe: dict) -> dict:
+    """Recorded context, deliberately NOT an entry gate: for a
+    failure-knowledge ledger the sector read is a feature to correlate
+    against outcomes, not a filter that hides the failures."""
+    sector = _ticker_sector(ticker, universe)
+    if sector is None:
+        return {"sector": None, "bullish": None}
+    try:
+        v = sector_trend.is_sector_bullish(sector, universe=universe)
+        return {"sector": sector, "bullish": v.get("bullish"),
+                "detail": {k: v[k] for k in ("close", "sma50", "sma200")
+                           if k in v}}
+    except Exception:
+        return {"sector": sector, "bullish": None}
+
+
+def evaluate_entry(ticker: str, price: float, deals: list, as_of: str,
+                   vix, sector_verdict: dict, nifty_trend=None) -> dict | None:
+    """The block-VWAP pullback read for one ticker. Returns a ready-to-log
+    entry event in the owner's four-question learning frame (2026-07-17):
+    kyu_trigger (WHY the signal fired) / kaise_context (HOW the market
+    stood) / kya_kara_action (WHAT we did); the exit tracker later adds
+    kya_sikha_autopsy (what we LEARNED). Returns None when the setup isn't
+    there."""
+    if price is None or not deals:
+        return None
+    smart = smart_money_trend.smart_money_ok(deals, as_of, price)
+    floor = smart.get("block_vwap")
+    if not floor:
+        return None  # no block floor = no thesis to falsify
+    if not (floor <= price <= floor * (1 + PULLBACK_BAND_PCT / 100)):
+        return None  # not a pullback: below the floor, or too far above it
+    stop = round(floor * (1 - STOP_PCT / 100), 2)
+    target = round(price + REWARD_RISK * (price - stop), 2)
+    trigger = [d for d in deals
+               if d.get("deal_type") == "block" and d.get("side") == "buy"
+               and d.get("as_of", "") < as_of][-3:]
+    top = max(trigger, key=lambda d: d.get("value_rs") or 0) if trigger else None
+    signal = (f"block-VWAP floor ₹{floor} held: price ₹{price} within "
+              f"+{PULLBACK_BAND_PCT:g}% of the floor")
+    if top:
+        signal += (f"; anchor block: {top.get('client')} "
+                   f"₹{(top.get('value_rs') or 0) / 1e7:.1f}cr "
+                   f"{top.get('side')} on {top.get('as_of')}")
+    return {
+        "event": "entry", "id": kg.new_id(), "mode": MODE,
+        "capital_allocated": 0, "ticker": ticker, "as_of": as_of,
+        "kyu_trigger": {                       # WHY: the exact alpha signal
+            "setup": "block_vwap_pullback",
+            "signal": signal,
+            "block_vwap": floor,
+            "accumulation": smart.get("accumulation"),
+            "net_value_rs": smart.get("net_value_rs"),
+            "n_recent_deals": smart.get("n_recent_deals"),
+            "trigger_deals": [
+                {k: d.get(k) for k in
+                 ("as_of", "client", "qty", "price", "value_rs")}
+                for d in trigger],
+        },
+        "kaise_context": {                     # HOW: the market at entry
+            "vix": vix,
+            "sector": sector_verdict,
+            "nifty_trend": nifty_trend,
+        },
+        "kya_kara_action": {                   # WHAT we did (paper)
+            "side": "long",
+            "entry_price": price,
+            "stop": stop,
+            "target": target,
+            "simulated_risk_pct": round((price - stop) / price * 100, 2),
+        },
+    }
+
+
+def propose_shadow_entries(deals_by_ticker=None, quote_fn=None, vix_fn=None,
+                           universe=None, path=None, as_of=None,
+                           sector_fn=None, nifty_trend_fn=None) -> list:
+    """Scan the candidate universe and log new PAPER_TELEMETRY entries.
+    Returns the entry events logged this call."""
+    if deals_by_ticker is None:
+        deals_by_ticker = smart_money_trend.load_deals_by_ticker()
+    if not deals_by_ticker:
+        return []
+    if quote_fn is None:
+        from src.dhan_client import get_live_price as quote_fn
+    if vix_fn is None:
+        from src.dhan_client import get_india_vix as vix_fn
+    universe = universe if universe is not None else sector_trend.load_universe()
+    if sector_fn is None:
+        sector_fn = lambda t: _sector_verdict(t, universe)  # noqa: E731
+    if nifty_trend_fn is None:
+        nifty_trend_fn = _nifty_trend
+    as_of = as_of or _ist_today()
+
+    events = kg.read_events(path)
+    open_now = kg.open_positions(events=events)
+    exited_today = {e.get("ticker") for e in events
+                    if e.get("event") == "exit"
+                    and str(e.get("ts", "")).startswith(as_of)}
+    try:
+        vix = vix_fn()
+    except Exception:
+        vix = None
+    try:
+        nifty_trend = nifty_trend_fn()
+    except Exception:
+        nifty_trend = None
+
+    logged = []
+    for ticker in candidate_tickers(deals_by_ticker):
+        if ticker in open_now or ticker in exited_today:
+            continue
+        try:
+            price = quote_fn(ticker)
+            entry = evaluate_entry(ticker, price, deals_by_ticker[ticker],
+                                   as_of, vix, sector_fn(ticker),
+                                   nifty_trend=nifty_trend)
+        except Exception:
+            continue  # one ticker's outage never voids the scan
+        if entry is not None:
+            logged.append(kg.log_event(entry, path=path))
+    return logged
+
+
+def _nifty_trend() -> dict | None:
+    """The broad-market read for kaise_context, from the same SMA/RSI
+    analyzer the options loop trusts. Fail-open: None when unavailable
+    (offline, short history) — recorded as unknown, never guessed."""
+    try:
+        from src.suggestions import analyze
+        a = analyze("NIFTY 50")
+        if a is None:
+            return None
+        return {"uptrend": a.get("uptrend"), "rsi": a.get("rsi"),
+                "fresh_cross": a.get("fresh_cross")}
+    except Exception:
+        return None
+
+
+def categorize_failure(reason: str, exit_price: float, entry: dict,
+                       sector_bullish_at_exit) -> str:
+    """kya_sikha_autopsy's headline: WHY did the thesis break? Rule-based
+    and honest — categories only claim what the recorded facts support.
+    GAP_SHOCK_PCT below the stop means the exit gapped through the level
+    (we never got the orderly stop the plan assumed)."""
+    action = entry.get("kya_kara_action") or {}
+    floor = (entry.get("kyu_trigger") or {}).get("block_vwap")
+    stop = action.get("stop")
+    if reason == "target":
+        return "Target hit: the block-VWAP floor defense held"
+    if reason == "time_stop":
+        return "Time stop: thesis never resolved either way"
+    # stop_loss taxonomies, most specific first
+    if stop and exit_price <= stop * (1 - GAP_SHOCK_PCT / 100):
+        return "Gap-down shock: price gapped through the stop"
+    if sector_bullish_at_exit is False:
+        return "Stop-loss hit: sector dragged it down"
+    if floor and exit_price < floor:
+        return "VWAP defense failed: institutional floor broke (trap)"
+    return "Stop-loss hit: idiosyncratic (sector intact, floor intact at category time)"
+
+
+def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
+                       now=None, sector_fn=None) -> list:
+    """Resolve open shadows against live prices: stop_loss / target /
+    time_stop. Every exit logs kya_sikha_autopsy — an automatic,
+    rule-based categorization of WHY the thesis resolved the way it did
+    (especially the failures; the failure rows are the point)."""
+    if quote_fn is None:
+        from src.dhan_client import get_live_price as quote_fn
+    if vix_fn is None:
+        from src.dhan_client import get_india_vix as vix_fn
+    now = now or datetime.now(IST)
+    open_now = kg.open_positions(path=path)
+    if not open_now:
+        return []
+    universe = universe if universe is not None else sector_trend.load_universe()
+    if sector_fn is None:
+        sector_fn = lambda t: _sector_verdict(t, universe)  # noqa: E731
+    try:
+        vix_exit = vix_fn()
+    except Exception:
+        vix_exit = None
+
+    logged = []
+    for ticker, entry in open_now.items():
+        action = entry.get("kya_kara_action") or {}
+        stop, target = action.get("stop"), action.get("target")
+        entry_price = action.get("entry_price")
+        if stop is None or target is None or entry_price is None:
+            continue  # malformed line — leave it for manual review
+        try:
+            price = quote_fn(ticker)
+        except Exception:
+            price = None
+        if price is None:
+            continue
+        reason = None
+        if price <= stop:
+            reason = "stop_loss"
+        elif price >= target:
+            reason = "target"
+        else:
+            try:
+                opened = date.fromisoformat(entry["as_of"])
+                if (now.date() - opened).days >= TIME_STOP_DAYS:
+                    reason = "time_stop"
+            except (ValueError, TypeError, KeyError):
+                pass
+        if reason is None:
+            continue
+        try:
+            sector_at_exit = sector_fn(ticker)
+        except Exception:
+            sector_at_exit = {"sector": None, "bullish": None}
+        risk = entry_price - stop
+        r_mult = round((price - entry_price) / risk, 2) if risk else None
+        floor = (entry.get("kyu_trigger") or {}).get("block_vwap")
+        held = None
+        try:
+            held = (now.date() - date.fromisoformat(entry["as_of"])).days
+        except (ValueError, TypeError, KeyError):
+            pass
+        logged.append(kg.log_event({
+            "event": "exit", "id": entry["id"], "mode": MODE,
+            "capital_allocated": 0, "ticker": ticker,
+            "exit_price": price, "reason": reason,
+            "kya_sikha_autopsy": {          # what we LEARNED
+                "category": categorize_failure(
+                    reason, price, entry, sector_at_exit.get("bullish")),
+                "r_multiple": r_mult,
+                "held_days": held,
+                "below_block_vwap": (price < floor) if floor else None,
+                "sector_at_exit": sector_at_exit,
+                "vix_at_exit": vix_exit,
+            },
+        }, path=path))
+    return logged
+
+
+def run_cycle(deals_by_ticker=None, quote_fn=None, vix_fn=None,
+              universe=None, path=None, sector_fn=None,
+              nifty_trend_fn=None) -> dict:
+    """One shadow cycle: resolve open positions first (an exit today frees
+    nothing — same-day re-entry is blocked), then scan for new entries.
+    The market_loop seam; the caller wraps it fail-open."""
+    exits = track_open_shadows(quote_fn=quote_fn, vix_fn=vix_fn,
+                               universe=universe, path=path,
+                               sector_fn=sector_fn)
+    entries = propose_shadow_entries(deals_by_ticker=deals_by_ticker,
+                                     quote_fn=quote_fn, vix_fn=vix_fn,
+                                     universe=universe, path=path,
+                                     sector_fn=sector_fn,
+                                     nifty_trend_fn=nifty_trend_fn)
+    return {"entries": entries, "exits": exits}
+
+
+if __name__ == "__main__":
+    # Manual smoke test: python3 -m src.equity_shadow_proposer
+    res = run_cycle()
+    print(f"shadow cycle — {len(res['entries'])} entries, "
+          f"{len(res['exits'])} exits (mode={MODE})")
+    for e in res["entries"] + res["exits"]:
+        print(" ", e)

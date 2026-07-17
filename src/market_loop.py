@@ -162,12 +162,20 @@ async def run_market_loop(underlyings=UNDERLYINGS,
                           cooldown: CooldownRegistry = None,
                           fetch_fn=fetch_market_state,
                           propose_fn=None,
-                          now_fn=ist_now) -> None:
+                          now_fn=ist_now,
+                          shadow_fn=None) -> None:
     """The daemon. Every `interval` seconds during market hours: fetch
     each index's state, and when the engine likes the setup, trigger the
     headless proposer (Discord alert + PENDING_APPROVAL journal entry).
     Everything is injectable: the simulator swaps fetch_fn/now_fn, tests
-    swap all of it."""
+    swap all of it.
+
+    `shadow_fn` (2026-07-17, Shadow Equity Engine): an optional zero-arg
+    telemetry cycle run once per open-market poll AFTER the options pass.
+    Default None = OFF — only the composition roots (master_scheduler,
+    __main__) wire the real equity_shadow_proposer.run_cycle in, so direct
+    callers (tests, the simulator) never touch live telemetry. Strictly
+    fail-open: a shadow failure is printed and the loop continues."""
     if cooldown is None:
         # Rebuild persisted cooldown state so a mid-session restart cannot
         # double-enter (Issue 8). Injected registries (tests, simulator)
@@ -210,11 +218,24 @@ async def run_market_loop(underlyings=UNDERLYINGS,
                 except Exception as e:
                     print(f"[Market Loop] {underlying}: cycle failed ({e}) — "
                           "loop continues.", flush=True)
+            if shadow_fn is not None:
+                try:
+                    res = await asyncio.to_thread(shadow_fn)
+                    n_in = len(res.get("entries") or [])
+                    n_out = len(res.get("exits") or [])
+                    if n_in or n_out:
+                        print(f"[Shadow Equity] PAPER_TELEMETRY logged: "
+                              f"{n_in} entry(ies), {n_out} exit(s).",
+                              flush=True)
+                except Exception as e:
+                    print(f"[Shadow Equity] cycle failed ({e}) — "
+                          "loop continues.", flush=True)
         await asyncio.sleep(interval)
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run_market_loop())
+        from src.equity_shadow_proposer import run_cycle as _shadow_cycle
+        asyncio.run(run_market_loop(shadow_fn=_shadow_cycle))
     except KeyboardInterrupt:
         print("\n[Market Loop] stopped.")

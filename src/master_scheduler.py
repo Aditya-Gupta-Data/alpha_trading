@@ -70,6 +70,18 @@ from src.market_loop import MARKET_CLOSE, MARKET_OPEN, UNDERLYINGS, ist_now
 SESSION_POLL_SECONDS = 30    # how often the supervisor rechecks the clock
 
 
+def _shadow_cycle_fn():
+    """The Shadow Equity telemetry cycle (2026-07-17), resolved lazily and
+    fail-open — a broken/absent shadow module must never stop the options
+    engine. This is the composition root that turns the shadow ON in prod;
+    run_market_loop's own default stays None (tests/simulator unaffected)."""
+    try:
+        from src.equity_shadow_proposer import run_cycle
+        return run_cycle
+    except Exception:
+        return None
+
+
 def seconds_until_open(now: datetime) -> float:
     """Seconds from `now` to today's 09:15 IST; 0 when already open or
     past close (the caller decides what past-close means)."""
@@ -226,7 +238,8 @@ async def run_trading_session(underlyings=UNDERLYINGS, *, now_fn=ist_now,
 
     entry_loop = entry_loop or (lambda: market_loop.run_market_loop(
         underlyings=underlyings,
-        fetch_fn=live_bridge.fetch_live_market_state))
+        fetch_fn=live_bridge.fetch_live_market_state,
+        shadow_fn=_shadow_cycle_fn()))
     exit_loop = exit_loop or (lambda: live_bridge.run_live_loop(
         underlyings=underlyings))
     tasks = [asyncio.create_task(entry_loop(), name="entry-loop"),

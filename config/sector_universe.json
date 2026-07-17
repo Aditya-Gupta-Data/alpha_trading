@@ -1,0 +1,38 @@
+{
+  "_note": "Top-Down Sectoral universe (owner directive 2026-07-16): major NSE sectors -> parent index (Yahoo symbol for the yfinance fallback; Dhan id TBD when the scrip master / token is available) + ~10 prominent large/mid-cap constituents each ('.NS' Yahoo tickers). Feeds src/analysis/sector_trend.py (is_sector_bullish / get_relative_strength) and the fundamental+price vacuum. A stock may appear in >1 sector (e.g. COALINDIA in METAL+ENERGY); primary_sector picks its home for relative-strength. Constituents are real currently-listed names but membership drifts — validate before any live use.",
+  "sectors": {
+    "IT": {
+      "yahoo_index": "^CNXIT", "nse_index": "NIFTY IT",
+      "constituents": ["TCS.NS","INFY.NS","HCLTECH.NS","WIPRO.NS","TECHM.NS","MPHASIS.NS","PERSISTENT.NS","COFORGE.NS","LTTS.NS"]
+    },
+    "FINANCIALS": {
+      "yahoo_index": "^NSEBANK", "nse_index": "NIFTY BANK",
+      "constituents": ["HDFCBANK.NS","ICICIBANK.NS","SBIN.NS","KOTAKBANK.NS","AXISBANK.NS","BAJFINANCE.NS","BAJAJFINSV.NS","INDUSINDBK.NS","PNB.NS","BANKBARODA.NS"]
+    },
+    "PHARMA": {
+      "yahoo_index": "^CNXPHARMA", "nse_index": "NIFTY PHARMA",
+      "constituents": ["SUNPHARMA.NS","DRREDDY.NS","CIPLA.NS","DIVISLAB.NS","LUPIN.NS","AUROPHARMA.NS","TORNTPHARM.NS","ALKEM.NS","BIOCON.NS","ZYDUSLIFE.NS"]
+    },
+    "AUTO": {
+      "yahoo_index": "^CNXAUTO", "nse_index": "NIFTY AUTO",
+      "constituents": ["MARUTI.NS","TMPV.NS","TMCV.NS","M&M.NS","BAJAJ-AUTO.NS","EICHERMOT.NS","HEROMOTOCO.NS","TVSMOTOR.NS","ASHOKLEY.NS","BOSCHLTD.NS","BALKRISIND.NS"]
+    },
+    "FMCG": {
+      "yahoo_index": "^CNXFMCG", "nse_index": "NIFTY FMCG",
+      "constituents": ["HINDUNILVR.NS","ITC.NS","NESTLEIND.NS","BRITANNIA.NS","DABUR.NS","GODREJCP.NS","MARICO.NS","COLPAL.NS","TATACONSUM.NS","VBL.NS"]
+    },
+    "METAL": {
+      "yahoo_index": "^CNXMETAL", "nse_index": "NIFTY METAL",
+      "constituents": ["TATASTEEL.NS","JSWSTEEL.NS","HINDALCO.NS","VEDL.NS","COALINDIA.NS","JINDALSTEL.NS","SAIL.NS","NMDC.NS","HINDZINC.NS","ADANIENT.NS"]
+    },
+    "ENERGY": {
+      "yahoo_index": "^CNXENERGY", "nse_index": "NIFTY ENERGY",
+      "constituents": ["RELIANCE.NS","NTPC.NS","POWERGRID.NS","ONGC.NS","IOC.NS","BPCL.NS","GAIL.NS","TATAPOWER.NS","HINDPETRO.NS","ADANIGREEN.NS"]
+    },
+    "BATTERY_EV": {
+      "yahoo_index": "^CNXAUTO", "nse_index": "NIFTY AUTO (PROXY)",
+      "_index_caveat": "No dedicated 10yr EV/battery index with a clean Yahoo symbol exists; ^CNXAUTO used as the parent-trend PROXY (EV/battery are auto-adjacent). Relative-strength vs AUTO is approximate for pure-chemistry names (TATACHEM/GRAPHITE).",
+      "constituents": ["EXIDEIND.NS","ARE&M.NS","TATACHEM.NS","OLECTRA.NS","SONACOMS.NS","HBLENGINE.NS","KPITTECH.NS","UNOMINDA.NS","MOTHERSON.NS","GRAPHITE.NS"]
+    }
+  }
+}

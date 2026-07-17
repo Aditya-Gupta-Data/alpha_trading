@@ -211,3 +211,364 @@ watchlist:
   - ticker: SUNPHARMA.NS
     condition: percent_down
     value: 3
+
+  # ============================================================
+  # Sector-universe expansion (2026-07-16, Top-Down Sectoral)
+  # ============================================================
+  # ---- IT (NIFTY IT) ----
+  - ticker: TECHM.NS
+    condition: percent_up
+    value: 3
+  - ticker: TECHM.NS
+    condition: percent_down
+    value: 3
+  # LTIM removed 2026-07-17: no NSE EQ listing in Dhan's current scrip
+  # master (unresolvable — caught by test_watchlist_universe).
+  - ticker: MPHASIS.NS
+    condition: percent_up
+    value: 3
+  - ticker: MPHASIS.NS
+    condition: percent_down
+    value: 3
+  - ticker: PERSISTENT.NS
+    condition: percent_up
+    value: 3
+  - ticker: PERSISTENT.NS
+    condition: percent_down
+    value: 3
+  - ticker: COFORGE.NS
+    condition: percent_up
+    value: 3
+  - ticker: COFORGE.NS
+    condition: percent_down
+    value: 3
+  - ticker: LTTS.NS
+    condition: percent_up
+    value: 3
+  - ticker: LTTS.NS
+    condition: percent_down
+    value: 3
+  # ---- FINANCIALS (NIFTY BANK) ----
+  - ticker: BAJAJFINSV.NS
+    condition: percent_up
+    value: 3
+  - ticker: BAJAJFINSV.NS
+    condition: percent_down
+    value: 3
+  - ticker: INDUSINDBK.NS
+    condition: percent_up
+    value: 3
+  - ticker: INDUSINDBK.NS
+    condition: percent_down
+    value: 3
+  - ticker: PNB.NS
+    condition: percent_up
+    value: 3
+  - ticker: PNB.NS
+    condition: percent_down
+    value: 3
+  - ticker: BANKBARODA.NS
+    condition: percent_up
+    value: 3
+  - ticker: BANKBARODA.NS
+    condition: percent_down
+    value: 3
+  # ---- PHARMA (NIFTY PHARMA) ----
+  - ticker: DRREDDY.NS
+    condition: percent_up
+    value: 3
+  - ticker: DRREDDY.NS
+    condition: percent_down
+    value: 3
+  - ticker: CIPLA.NS
+    condition: percent_up
+    value: 3
+  - ticker: CIPLA.NS
+    condition: percent_down
+    value: 3
+  - ticker: DIVISLAB.NS
+    condition: percent_up
+    value: 3
+  - ticker: DIVISLAB.NS
+    condition: percent_down
+    value: 3
+  - ticker: LUPIN.NS
+    condition: percent_up
+    value: 3
+  - ticker: LUPIN.NS
+    condition: percent_down
+    value: 3
+  - ticker: AUROPHARMA.NS
+    condition: percent_up
+    value: 3
+  - ticker: AUROPHARMA.NS
+    condition: percent_down
+    value: 3
+  - ticker: TORNTPHARM.NS
+    condition: percent_up
+    value: 3
+  - ticker: TORNTPHARM.NS
+    condition: percent_down
+    value: 3
+  - ticker: ALKEM.NS
+    condition: percent_up
+    value: 3
+  - ticker: ALKEM.NS
+    condition: percent_down
+    value: 3
+  - ticker: BIOCON.NS
+    condition: percent_up
+    value: 3
+  - ticker: BIOCON.NS
+    condition: percent_down
+    value: 3
+  - ticker: ZYDUSLIFE.NS
+    condition: percent_up
+    value: 3
+  - ticker: ZYDUSLIFE.NS
+    condition: percent_down
+    value: 3
+  # ---- AUTO (NIFTY AUTO) ----
+  # TATAMOTORS demerged (2025): NSE now lists TMPV (passenger vehicles /
+  # EV story, kept the old security id 3456) and TMCV (commercial
+  # vehicles). TMPV tracked here per the EV-sector thesis; ids verified
+  # against Dhan's scrip master 2026-07-17.
+  - ticker: TMPV.NS
+    condition: percent_up
+    value: 3
+  - ticker: TMPV.NS
+    condition: percent_down
+    value: 3
+  - ticker: BAJAJ-AUTO.NS
+    condition: percent_up
+    value: 3
+  - ticker: BAJAJ-AUTO.NS
+    condition: percent_down
+    value: 3
+  - ticker: EICHERMOT.NS
+    condition: percent_up
+    value: 3
+  - ticker: EICHERMOT.NS
+    condition: percent_down
+    value: 3
+  - ticker: HEROMOTOCO.NS
+    condition: percent_up
+    value: 3
+  - ticker: HEROMOTOCO.NS
+    condition: percent_down
+    value: 3
+  - ticker: TVSMOTOR.NS
+    condition: percent_up
+    value: 3
+  - ticker: TVSMOTOR.NS
+    condition: percent_down
+    value: 3
+  - ticker: ASHOKLEY.NS
+    condition: percent_up
+    value: 3
+  - ticker: ASHOKLEY.NS
+    condition: percent_down
+    value: 3
+  - ticker: BOSCHLTD.NS
+    condition: percent_up
+    value: 3
+  - ticker: BOSCHLTD.NS
+    condition: percent_down
+    value: 3
+  - ticker: BALKRISIND.NS
+    condition: percent_up
+    value: 3
+  - ticker: BALKRISIND.NS
+    condition: percent_down
+    value: 3
+  # ---- FMCG (NIFTY FMCG) ----
+  - ticker: NESTLEIND.NS
+    condition: percent_up
+    value: 3
+  - ticker: NESTLEIND.NS
+    condition: percent_down
+    value: 3
+  - ticker: BRITANNIA.NS
+    condition: percent_up
+    value: 3
+  - ticker: BRITANNIA.NS
+    condition: percent_down
+    value: 3
+  - ticker: DABUR.NS
+    condition: percent_up
+    value: 3
+  - ticker: DABUR.NS
+    condition: percent_down
+    value: 3
+  - ticker: GODREJCP.NS
+    condition: percent_up
+    value: 3
+  - ticker: GODREJCP.NS
+    condition: percent_down
+    value: 3
+  - ticker: MARICO.NS
+    condition: percent_up
+    value: 3
+  - ticker: MARICO.NS
+    condition: percent_down
+    value: 3
+  - ticker: COLPAL.NS
+    condition: percent_up
+    value: 3
+  - ticker: COLPAL.NS
+    condition: percent_down
+    value: 3
+  - ticker: TATACONSUM.NS
+    condition: percent_up
+    value: 3
+  - ticker: TATACONSUM.NS
+    condition: percent_down
+    value: 3
+  - ticker: VBL.NS
+    condition: percent_up
+    value: 3
+  - ticker: VBL.NS
+    condition: percent_down
+    value: 3
+  # ---- METAL (NIFTY METAL) ----
+  - ticker: VEDL.NS
+    condition: percent_up
+    value: 3
+  - ticker: VEDL.NS
+    condition: percent_down
+    value: 3
+  - ticker: COALINDIA.NS
+    condition: percent_up
+    value: 3
+  - ticker: COALINDIA.NS
+    condition: percent_down
+    value: 3
+  - ticker: JINDALSTEL.NS
+    condition: percent_up
+    value: 3
+  - ticker: JINDALSTEL.NS
+    condition: percent_down
+    value: 3
+  - ticker: SAIL.NS
+    condition: percent_up
+    value: 3
+  - ticker: SAIL.NS
+    condition: percent_down
+    value: 3
+  - ticker: NMDC.NS
+    condition: percent_up
+    value: 3
+  - ticker: NMDC.NS
+    condition: percent_down
+    value: 3
+  - ticker: HINDZINC.NS
+    condition: percent_up
+    value: 3
+  - ticker: HINDZINC.NS
+    condition: percent_down
+    value: 3
+  - ticker: ADANIENT.NS
+    condition: percent_up
+    value: 3
+  - ticker: ADANIENT.NS
+    condition: percent_down
+    value: 3
+  # ---- ENERGY (NIFTY ENERGY) ----
+  - ticker: IOC.NS
+    condition: percent_up
+    value: 3
+  - ticker: IOC.NS
+    condition: percent_down
+    value: 3
+  - ticker: BPCL.NS
+    condition: percent_up
+    value: 3
+  - ticker: BPCL.NS
+    condition: percent_down
+    value: 3
+  - ticker: GAIL.NS
+    condition: percent_up
+    value: 3
+  - ticker: GAIL.NS
+    condition: percent_down
+    value: 3
+  - ticker: TATAPOWER.NS
+    condition: percent_up
+    value: 3
+  - ticker: TATAPOWER.NS
+    condition: percent_down
+    value: 3
+  - ticker: HINDPETRO.NS
+    condition: percent_up
+    value: 3
+  - ticker: HINDPETRO.NS
+    condition: percent_down
+    value: 3
+  - ticker: ADANIGREEN.NS
+    condition: percent_up
+    value: 3
+  - ticker: ADANIGREEN.NS
+    condition: percent_down
+    value: 3
+
+  # ---- BATTERY_EV (thematic, 2026-07-16) ----
+  - ticker: ARE&M.NS
+    condition: percent_up
+    value: 3
+  - ticker: ARE&M.NS
+    condition: percent_down
+    value: 3
+  - ticker: OLECTRA.NS
+    condition: percent_up
+    value: 3
+  - ticker: OLECTRA.NS
+    condition: percent_down
+    value: 3
+  - ticker: HBLENGINE.NS
+    condition: percent_up
+    value: 3
+  - ticker: HBLENGINE.NS
+    condition: percent_down
+    value: 3
+  - ticker: UNOMINDA.NS
+    condition: percent_up
+    value: 3
+  - ticker: UNOMINDA.NS
+    condition: percent_down
+    value: 3
+  - ticker: TATACHEM.NS
+    condition: percent_up
+    value: 3
+  - ticker: TATACHEM.NS
+    condition: percent_down
+    value: 3
+  - ticker: MOTHERSON.NS
+    condition: percent_up
+    value: 3
+  - ticker: MOTHERSON.NS
+    condition: percent_down
+    value: 3
+  - ticker: SONACOMS.NS
+    condition: percent_up
+    value: 3
+  - ticker: SONACOMS.NS
+    condition: percent_down
+    value: 3
+  - ticker: GRAPHITE.NS
+    condition: percent_up
+    value: 3
+  - ticker: GRAPHITE.NS
+    condition: percent_down
+    value: 3
+  - ticker: EXIDEIND.NS
+    condition: percent_up
+    value: 3
+  - ticker: EXIDEIND.NS
+    condition: percent_down
+    value: 3
+  - ticker: KPITTECH.NS
+    condition: percent_up
+    value: 3
+  - ticker: KPITTECH.NS
+    condition: percent_down
+    value: 3

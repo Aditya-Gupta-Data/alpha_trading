@@ -81,6 +81,18 @@ def fetch_market_state(underlying: str) -> dict | None:
             state["vol_overrides"] = vol_overrides
     except Exception:
         pass  # bridge unavailable — run with default params
+    # Advisory regime radars (Task 1 smart-money/sector veto + Task 2 war
+    # playbook). Fail-open: any failure leaves `advisory` unset -> proposer
+    # unchanged. Loaded here (once per cycle) so build_proposal never touches
+    # the deals ledger itself.
+    try:
+        from src.analysis import regime_filters
+        from src.analysis import smart_money_trend
+        deals = smart_money_trend.load_deals_by_ticker()
+        state["advisory"] = regime_filters.advise(
+            underlying, vix=state["vix"], deals_by_ticker=deals)
+    except Exception:
+        pass  # radar data unavailable — proposer runs without the advisory
     return state
 
 

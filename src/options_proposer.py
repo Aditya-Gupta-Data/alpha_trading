@@ -93,7 +93,8 @@ def _strikes(chain: dict) -> list:
     return sorted(float(s) for s in (chain.get("oc") or {}))
 
 
-def _leg_fill(chain: dict, strike: float, kind: str, side: str) -> tuple:
+def _leg_fill(chain: dict, strike: float, kind: str, side: str,
+              lots: int = 1) -> tuple:
     """(fill_price, basis) for one leg (kind 'ce'/'pe') — the honest
     paper fill (decision #70): a BUY crosses to the ask, a SELL hits the
     bid, which is what a real fill pays on entry. Falls back to
@@ -101,7 +102,11 @@ def _leg_fill(chain: dict, strike: float, kind: str, side: str) -> tuple:
     strike, closed market, simulator chains) or deviates >50% from a
     live LTP (stale/crossed book — a data-quality refusal). (None, None)
     means the leg is untradeable. Tries the exact key format Dhan uses
-    (six decimals) then a plain match."""
+    (six decimals) then a plain match.
+
+    P1 book-depth: `lots` > 1 walks the book — a synthetic +0.05%/10-lots
+    penalty worsens the fill (BUY pays up, SELL receives less). Default
+    lots=1 => no penalty (byte-identical to the pre-P1 fill)."""
     oc = chain.get("oc") or {}
     node = oc.get(f"{strike:.6f}") or oc.get(str(strike)) or {}
     leg = node.get(kind) or {}
@@ -111,11 +116,12 @@ def _leg_fill(chain: dict, strike: float, kind: str, side: str) -> tuple:
     quote = float(quote) if quote else None
     if quote is not None and ltp is not None and abs(quote - ltp) > 0.5 * ltp:
         quote = None
-    if quote is not None:
-        return quote, "quoted"
-    if ltp is not None:
-        return ltp, "ltp"
-    return None, None
+    price, basis = (quote, "quoted") if quote is not None else \
+        ((ltp, "ltp") if ltp is not None else (None, None))
+    if price is not None and lots > 1:
+        depth_pen = (max(0, int(lots) - 1) / 10.0) * 0.0005
+        price = price * (1 + depth_pen) if side == "BUY" else price * (1 - depth_pen)
+    return (price, basis) if price is not None else (None, None)
 
 
 def _nearest_strike(strikes: list, target: float) -> float:
@@ -132,7 +138,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                    vix: float = None, expiry: str = None, chain: dict = None,
                    book: dict = None, prices: dict = None,
                    risk_pct: float = None,
-                   short_strike_otm_pct: float = None) -> dict:
+                   short_strike_otm_pct: float = None,
+                   advisory: dict = None) -> dict:
     """The full pipeline, every input injectable for offline tests.
 
     `risk_pct` overrides OPTIONS_RISK_PER_TRADE_PCT (e.g. vol_bridge may
@@ -155,6 +162,21 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
 
     if vix is None:
         vix = get_india_vix()
+
+    # --- Advisory regime radars (regime_filters; composed in fetch_market_state,
+    # fail-open). Task 1: veto a BULLISH index spread when the index's heavyweights
+    # show institutional distribution or the sector trend is bearish. Task 2 (War
+    # Playbook): in a crisis/VIX-spike regime, disable SHORT-premium (iron condor)
+    # so only defined-risk long-premium debit spreads ride the fat tail. ---
+    if advisory:
+        if view == "bullish" and advisory.get("block_bullish"):
+            return {"proposal": None, "view": view, "vix": vix,
+                    "reason": advisory.get("bullish_reason", "smart-money/sector veto")}
+        if view == "neutral" and advisory.get("crisis"):
+            return {"proposal": None, "view": view, "vix": vix,
+                    "reason": "war playbook — short-premium (iron condor) disabled in "
+                              f"crisis regime ({advisory.get('crisis_reason', '')})"}
+
     if expiry is None:
         expiry = pick_expiry(get_expiry_list(underlying))
     if expiry is None:

@@ -66,20 +66,36 @@ def _get_instrument_type(ticker: str) -> str:
     return "STOCK"
 
 
-def apply_slippage(price: float, instrument_type: str) -> float:
-    """Calculate the bid-ask slippage amount based on instrument type and liquidity."""
+def _vix_slippage_mult(vix: float) -> float:
+    """P1 fix — the crisis bid-ask BLOWOUT. Calm VIX (<15) = 1x (normal book).
+    Ramps 1x->2x across VIX 15-25, then NON-LINEARLY +0.3x per point above 25
+    (VIX 30 -> 3.5x, 40 -> 5.5x, capped 6x) — a wide, panicked book you cannot
+    escape cheaply. None -> 1x (the pre-P1 behaviour)."""
+    if vix is None:
+        return 1.0
+    if vix >= 25:
+        return min(6.0, 2.0 + 0.3 * (vix - 25))
+    if vix > 15:
+        return 1.0 + (vix - 15) / 10.0
+    return 1.0
+
+
+def apply_slippage(price: float, instrument_type: str,
+                   vix: float = None, lots: int = 1) -> float:
+    """Bid-ask slippage in Rs. per unit. `vix` scales OPTION slippage to model
+    the crisis blowout (see _vix_slippage_mult); deep-OTM legs (lowest premium,
+    0.50% base) suffer that multiple off the worst base, so a panicked wing is
+    savaged. `lots` adds a synthetic book-depth penalty (+~0.05% per 10 lots) —
+    no infinite top-of-book liquidity. vix=None + lots<=1 reproduces the
+    original ladder byte-for-byte (backward compatible)."""
     instr_upper = instrument_type.upper()
     if instr_upper == "INDEX":
         return price * 0.0005  # 0.05%
-    elif instr_upper == "OPTION":
-        # Liquidity dummy lookup: lower premium option is assumed less liquid
-        if price < 50:
-            return price * 0.0050  # 0.50% (OTM/Illiquid option)
-        elif price < 150:
-            return price * 0.0030  # 0.30%
-        else:
-            return price * 0.0010  # 0.10% (Liquid/Near ATM option)
-    return 0.0  # STOCK trades have 0.0% slippage under this rule
+    if instr_upper != "OPTION":
+        return 0.0             # STOCK: 0.0% under this rule
+    base = 0.0050 if price < 50 else 0.0030 if price < 150 else 0.0010
+    size_frac = (max(0, int(lots) - 1) / 10.0) * 0.0005   # +0.05% per 10 lots
+    return price * (base * _vix_slippage_mult(vix) + size_frac)
 
 
 # --- Phase 5: options spread tracking ---------------------------------
@@ -176,7 +192,8 @@ def _resolve_spread(entry: dict, bars: list):
     return None
 
 
-def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float) -> tuple:
+def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float,
+                       vix: float = None) -> tuple:
     """(total_frictions, total_slippage) across ALL legs, both ends of the
     trade, priced per leg: entry legs pay their side's 2026 frictions on
     the entry premium; the atomic basket exit flips each side (short legs
@@ -185,6 +202,10 @@ def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float) -> tupl
     ladder (0.10%-0.50%, cheap OTM legs get the worst fill)."""
     qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
     entry_spot = spread.get("entry_spot")
+    # P1: size/VIX penalties activate ONLY when a `vix` is supplied (the
+    # crisis-aware path). Every legacy caller (vix=None) keeps lots=1 -> the
+    # exact pre-P1 slippage, so nothing downstream changes.
+    lots = int(spread.get("lots", 1)) if vix is not None else 1
     frictions = slippage = 0.0
     for leg in spread["legs"]:
         entry_side = leg["side"].upper()
@@ -195,8 +216,9 @@ def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float) -> tupl
         # #70: a "quoted" fill already crossed the bid-ask at entry (the
         # premium IS the worse side) — the ladder would double-charge it.
         if leg.get("fill_basis") != "quoted":
-            slippage += apply_slippage(leg["premium"], "OPTION") * qty
-        slippage += apply_slippage(exit_premium, "OPTION") * qty
+            slippage += apply_slippage(leg["premium"], "OPTION", lots=lots) * qty
+        # The EXIT crossing pays the CRISIS blowout at the exit-day VIX (P1).
+        slippage += apply_slippage(exit_premium, "OPTION", vix=vix, lots=lots) * qty
     return frictions, slippage
 
 

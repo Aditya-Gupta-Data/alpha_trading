@@ -550,3 +550,38 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   removal (we trade no calendar spreads), and BANKNIFTY weekly
   discontinuation (`pick_expiry` adapts to whatever Dhan serves — now
   monthlies for BANKNIFTY).
+
+## Issue 14 — no proactive pacing on Dhan data calls ("DH-905 rate-limit", 2026-07-17, owner-reported)
+
+- **Observed (code-verified 2026-07-17):** every Dhan API call site in
+  `src/dhan_client.py` (`_fetch_daily`, `_quote_sec`, `get_expiry_list`,
+  `get_option_chain`) fired back-to-back with no spacing between
+  consecutive calls — the only defence was a retry-once after a 1.1s
+  pause *inside* each call. With the tracked universe now at 18+ cash
+  equities, watchlist loops hit Dhan's ~1/sec data-API limit on the
+  first attempt of nearly every call, burning a rejection + 1.1s retry
+  per instrument. Owner reported this as "DH-905" from a parallel
+  session; note the DH-905 code itself is classed as auth/input in
+  `src/dhan_guard.py` — the live symptom (blocked fetches during
+  session) is what was fixed, the label is unconfirmed.
+- **Fix (2026-07-17, pre-deploy):** module-level `_throttle()` in
+  `src/dhan_client.py` — enforces a minimum `_RATE_PAUSE` (1.1s) gap
+  since the previous Dhan call, process-wide, called in front of all
+  four API call sites. Retry-once kept as the recovery layer.
+
+## Issue 15 — stale symbols in the sector-expansion watchlist (2026-07-17, test-suite catch, deploy-blocking)
+
+- **Observed (verified 2026-07-17 against Dhan's live scrip master):** the
+  2026-07-16 sector-universe expansion added `LTIM.NS` and
+  `TATAMOTORS.NS` to `config/watchlist.yaml` + `config/sector_universe.json`
+  without SECURITY_ID_MAP entries. `test_every_watchlist_ticker_resolves...`
+  failed (the only red in an otherwise 1087-green suite). Scrip-master
+  lookup showed BOTH symbols no longer exist on NSE: Tata Motors demerged
+  into TMPV (passenger vehicles, kept old id 3456) + TMCV (commercial
+  vehicles, id 759782), and LTIM has no NSE EQ listing at all in the
+  current scrip master.
+- **Fix (2026-07-17, pre-deploy):** LTIM removed from both configs;
+  TATAMOTORS → TMPV in the watchlist (EV-sector thesis), TMPV+TMCV in the
+  AUTO sector basket; TMCV.NS added to SECURITY_ID_MAP with the verified
+  id. Had this shipped, the live engine would have burned two unresolvable
+  fetch slots every loop all session.

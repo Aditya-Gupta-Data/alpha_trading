@@ -40,6 +40,21 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 # transient "too many requests" without failing the whole refresh.
 _RATE_PAUSE = 1.1
 
+# DH-905 live fix (2026-07-17): the retry above only RECOVERS from a limit
+# hit — with 18+ tracked equities the market loop fires calls back-to-back,
+# so every first attempt burned a rejection before the retry landed. Pace
+# calls proactively instead: every Dhan API call goes through _throttle(),
+# which enforces a minimum gap since the previous call process-wide.
+_last_api_call = 0.0
+
+
+def _throttle() -> None:
+    global _last_api_call
+    wait = _RATE_PAUSE - (time.monotonic() - _last_api_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_api_call = time.monotonic()
+
 
 def _load_env() -> None:
     if not ENV_PATH.exists():
@@ -67,6 +82,9 @@ SECURITY_ID_MAP = {
     "ITC.NS":        {"id": "1660",  "seg": "NSE_EQ", "inst": "EQUITY"},
     "MARUTI.NS":     {"id": "10999", "seg": "NSE_EQ", "inst": "EQUITY"},
     "TMPV.NS":       {"id": "3456",  "seg": "NSE_EQ", "inst": "EQUITY"},
+    # Tata Motors demerger sibling (CV entity) — id verified against the
+    # scrip master 2026-07-17 alongside the LTIM/TATAMOTORS watchlist fix.
+    "TMCV.NS":       {"id": "759782", "seg": "NSE_EQ", "inst": "EQUITY"},
     # Cash-equity universe expansion (2026-07-16): ids verified against
     # api-scrip-master-detailed.csv via the FUTSTK UNDERLYING_SECURITY_ID
     # link + a segment-E equity-row cross-check; the method reproduced all
@@ -89,6 +107,66 @@ SECURITY_ID_MAP = {
     "M&M.NS":        {"id": "2031",  "seg": "NSE_EQ", "inst": "EQUITY"},
     "HINDALCO.NS":   {"id": "1363",  "seg": "NSE_EQ", "inst": "EQUITY"},
     "JSWSTEEL.NS":   {"id": "11723", "seg": "NSE_EQ", "inst": "EQUITY"},
+    # --- Sector-universe expansion (2026-07-16, Top-Down Sectoral)
+    # 46 ids verified against api-scrip-master-detailed.csv (NSE, INSTRUMENT=EQUITY).
+    # DEFERRED (symbol drift, Yahoo-only until re-checked): LTIM, TATAMOTORS.
+    "ADANIENT.NS":   {"id": "25"    , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "ADANIGREEN.NS": {"id": "3563"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "ALKEM.NS":      {"id": "11703" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "ASHOKLEY.NS":   {"id": "212"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "AUROPHARMA.NS": {"id": "275"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BAJAJ-AUTO.NS": {"id": "16669" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BAJAJFINSV.NS": {"id": "16675" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BALKRISIND.NS": {"id": "335"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BANKBARODA.NS": {"id": "4668"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BIOCON.NS":     {"id": "11373" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BOSCHLTD.NS":   {"id": "2181"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BPCL.NS":       {"id": "526"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "BRITANNIA.NS":  {"id": "547"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "CIPLA.NS":      {"id": "694"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "COALINDIA.NS":  {"id": "20374" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "COFORGE.NS":    {"id": "11543" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "COLPAL.NS":     {"id": "15141" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "DABUR.NS":      {"id": "772"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "DIVISLAB.NS":   {"id": "10940" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "DRREDDY.NS":    {"id": "881"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "EICHERMOT.NS":  {"id": "910"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "GAIL.NS":       {"id": "4717"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "GODREJCP.NS":   {"id": "10099" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "HEROMOTOCO.NS": {"id": "1348"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "HINDPETRO.NS":  {"id": "1406"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "HINDZINC.NS":   {"id": "1424"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "INDUSINDBK.NS": {"id": "5258"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "IOC.NS":        {"id": "1624"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "JINDALSTEL.NS": {"id": "6733"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "LTTS.NS":       {"id": "18564" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "LUPIN.NS":      {"id": "10440" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "MARICO.NS":     {"id": "4067"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "MPHASIS.NS":    {"id": "4503"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "NESTLEIND.NS":  {"id": "17963" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "NMDC.NS":       {"id": "15332" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "PERSISTENT.NS": {"id": "18365" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "PNB.NS":        {"id": "10666" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "SAIL.NS":       {"id": "2963"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TATACONSUM.NS": {"id": "3432"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TATAPOWER.NS":  {"id": "3426"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TECHM.NS":      {"id": "13538" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TORNTPHARM.NS": {"id": "3518"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TVSMOTOR.NS":   {"id": "8479"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "VBL.NS":        {"id": "18921" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "VEDL.NS":       {"id": "3063"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "ZYDUSLIFE.NS":  {"id": "7929"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    # --- BATTERY_EV thematic (2026-07-16), ids from scrip master ---
+    "ARE&M.NS":      {"id": "100"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "EXIDEIND.NS":   {"id": "676"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "GRAPHITE.NS":   {"id": "592"   , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "HBLENGINE.NS":  {"id": "13966" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "KPITTECH.NS":   {"id": "9683"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "MOTHERSON.NS":  {"id": "4204"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "OLECTRA.NS":    {"id": "10637" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "SONACOMS.NS":   {"id": "4684"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "TATACHEM.NS":   {"id": "3405"  , "seg": "NSE_EQ", "inst": "EQUITY"},
+    "UNOMINDA.NS":   {"id": "14154" , "seg": "NSE_EQ", "inst": "EQUITY"},
     "NIFTY 50":      {"id": "13",    "seg": "IDX_I",  "inst": "INDEX"},
     "NIFTY BANK":    {"id": "25",    "seg": "IDX_I",  "inst": "INDEX"},
     # id 21 verified against api-scrip-master-detailed.csv on 2026-07-06
@@ -186,6 +264,7 @@ def _fetch_daily(instr: dict, from_date: str, to_date: str) -> list:
         return []
     resp = None
     for attempt in range(2):
+        _throttle()
         try:
             resp = client.historical_daily_data(
                 instr["id"], instr["seg"], instr["inst"], from_date, to_date
@@ -276,6 +355,7 @@ def _quote_sec(ticker: str) -> dict | None:
         return None
     resp = None
     for attempt in range(2):
+        _throttle()
         try:
             resp = client.quote_data({instr["seg"]: [int(instr["id"])]})
         except Exception as e:
@@ -344,6 +424,7 @@ def get_expiry_list(index_ticker: str) -> list:
     client = _get_client()
     if instr is None or client is None:
         return []
+    _throttle()
     try:
         resp = client.expiry_list(int(instr["id"]), instr["seg"])
     except Exception as e:
@@ -364,6 +445,7 @@ def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:
     client = _get_client()
     if instr is None or client is None:
         return None
+    _throttle()
     try:
         resp = client.option_chain(int(instr["id"]), instr["seg"], expiry_date)
     except Exception as e:

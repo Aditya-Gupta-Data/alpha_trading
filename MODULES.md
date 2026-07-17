@@ -202,6 +202,12 @@ approach its **Manager** — don't dig through files.
 | `tests/test_forecast.py` | Forecast checklist scoring, offline (monkeypatches `suggestions.analyze`). |
 | `tests/test_tuner.py` | Tuner weight learning, offline (fake journal entries). |
 
+## Staging (NOT live architecture)
+
+| Folder | Purpose |
+|---|---|
+| `next_gen_engine/` | Stage 4/5 institutional-maturity build (2026-07-17 Build Day), **local staging only — nothing here is imported by `src/`, scheduled, or deployed.** 7 modules across 4 blueprint phases (risk: daily circuit breaker / GOLDBEES flywheel / ATR trailing stops; execution: limit-chase + protective-leg sequencing; wisdom: text→backtestable-JSON via `text_intelligence`; scaling: redis EDA + Dhan WebSocket drafts, both with OPTIONAL deps kept out of `requirements.txt`). Each module's header + `next_gen_engine/README.md` name the CANONICAL `src/` merge target (anti-orphan rule). Tests: `tests/test_next_gen_engine.py` (29 hermetic). Move logic INTO the named target at deploy; never let this become a second implementation. |
+
 ## Documentation suite (this file's siblings)
 
 | File | Purpose |

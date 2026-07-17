@@ -124,6 +124,7 @@ _COLOUR = {
     "eod":              0x3498DB,   # blue   — end-of-day summary card
     "wealth_sweep":     0xF1C40F,   # gold   — paper profit locked into GOLDBEES
     "portfolio_report": 0x9B59B6,   # purple — intraday portfolio report card
+    "ceo_brief":        0x1ABC9C,   # teal   — daily cross-department CEO brief
 }
 _COLOUR_WIN  = 0x2ECC71   # green override: winning closed trade
 _COLOUR_LOSS = 0xE74C3C   # red override:   losing closed trade
@@ -153,6 +154,7 @@ def _build_embed(payload: dict) -> dict:
                  days_in_trade, [frictions_rs], [strategy], [short_id]
       stop_loss: same as closed
       eod:       date, description, fields (pre-built list of Discord field dicts)
+      ceo_brief: date, description, fields (pre-built — see ceo_brief.py)
       wealth_sweep: ticker, date, description, sweep_rs, trade_pnl,
                  sweep_pct, [mock_units], [short_id]
     """
@@ -167,6 +169,7 @@ def _build_embed(payload: dict) -> dict:
         "eod":              f"📋 End-of-Day Summary — {today}",
         "wealth_sweep":     f"🔒 Paper Wealth Sweep — {ticker}",
         "portfolio_report": f"🗂️ Portfolio Report Card — {payload.get('time', today)}",
+        "ceo_brief":        f"🧭 Daily CEO Brief — {today}",
     }
     title = titles.get(event, f"📌 {event.title()} — {ticker}")
 
@@ -209,9 +212,9 @@ def _build_embed(payload: dict) -> dict:
         if payload.get("short_id"):
             fields.append({"name": "Trade ID", "value": f"`{payload['short_id']}`", "inline": True})
 
-    elif event in ("eod", "portfolio_report"):
+    elif event in ("eod", "portfolio_report", "ceo_brief"):
         # Fields are pre-built by the summary job (eod_summary.py /
-        # portfolio_report.py) and passed directly.
+        # portfolio_report.py / ceo_brief.py) and passed directly.
         fields = list(payload.get("fields") or [])
 
     elif event == "wealth_sweep":

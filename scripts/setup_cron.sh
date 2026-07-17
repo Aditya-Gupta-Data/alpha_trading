@@ -49,6 +49,30 @@
 #                             its heartbeat is checkable like every other
 #                             monitored job. Miners register CANDIDATEs
 #                             only — nothing surfaces without the harness.
+#  20. src.eod_summary:     Mon-Fri 15:45 IST. Daily MTM P&L + active
+#                             positions + net delta card. Was DOCUMENTED at
+#                             15:30 in its own docstring but was NEVER IN THIS
+#                             SCRIPT and is called by no module — i.e. it has
+#                             never fired in production. 15:45 not 15:30: the
+#                             master_scheduler self-terminates AT 15:30, so a
+#                             15:30 card can read the book mid-shutdown and
+#                             miss a last-minute exit. 15:45 also clears main
+#                             (15:35) and chain_archiver (15:40). Reads only
+#                             journal.jsonl + brain_map.db (no Dhan calls), so
+#                             it never contends for the token.
+#
+#  19. src.ceo_brief:       Mon-Fri 16:30 IST. The Daily CEO Brief — ONE
+#                             cross-department card (operations / issues /
+#                             deployments / risk) through notifier.fire_broadcast.
+#                             16:30 NOT 16:00: main (15:35) and chain_archiver
+#                             (15:40) are still inside their 30-min heartbeat
+#                             grace at 16:00, so a 16:00 card could judge only
+#                             3 of 13 jobs. Sits BEFORE the 18:50-20:30 evening
+#                             block on purpose — those show as "not due yet"
+#                             and the 20:30 ops sweep judges them. Read-only;
+#                             keeps its OWN log-sweep offset so it never
+#                             consumes ops_monitor's findings (#6).
+#
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -226,6 +250,22 @@ CRON_TZ=Asia/Kolkata
 #     before the 20:30 ops sweep (heartbeat convention). CANDIDATEs only —
 #     the proving harness still owns every promotion.
 20 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.discovery.nightly >> "$REPO_ROOT/logs/discovery_nightly.log" 2>&1
+
+# 20. EOD summary card (Mon-Fri 15:45 IST) — today's MTM P&L, active
+#     positions, net delta. Its docstring has claimed "15:30 IST" since it
+#     was written, but the job was never installed here and nothing imports
+#     it: the card has never actually fired. Scheduled at 15:45 so it reads
+#     the book AFTER master_scheduler's 15:30 self-termination rather than
+#     during it. Journal + brain_map only — no Dhan token needed.
+45 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.eod_summary >> "$REPO_ROOT/logs/eod_summary.log" 2>&1
+
+# 19. Daily CEO Brief (Mon-Fri 16:30 IST) — the owner's one card: did
+#     everything run, what broke (bucketed: dead ticker / margin / token /
+#     Dhan API), what code is live on this box + what was built today, and
+#     one line of open exposure + realized P&L (every number reused from
+#     eod_summary, never recomputed). Weekdays only: on a weekend there is
+#     no session to report and the evening jobs are the ops sweep's business.
+30 16 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ceo_brief >> "$REPO_ROOT/logs/ceo_brief.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

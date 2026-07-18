@@ -132,14 +132,18 @@ PAGE_SIGNALS = (
 SECTION_RUN_CAP = {"auditor": 15, "contingent": 6, "related": 10,
                    "notes": 80, "directors": 25, "mda": 35}
 
-EXTRACTION_SYSTEM_PROMPT = """You are a forensic financial analyst reading pages of an Indian company's annual report. Report BOTH directions with equal rigor: genuine operational wins AND structural risks. Rules:
+EXTRACTION_SYSTEM_PROMPT = """You are a Senior Forensic Auditor reading pages of an Indian company's annual report. Report BOTH directions with equal rigor: genuine operational wins AND structural risks.
+
+MATERIALITY CAP (v1.1 — the measured v1 failure was 96-178 indiscriminate flags per report): you are STRICTLY CAPPED at a MAXIMUM of 2 high-conviction findings per response, across all three categories combined. Do NOT flag boilerplate: routine accounting-policy text, generic risk-factor language, standard regulatory declarations, and table-of-contents matter are NOT findings. If nothing on these pages is deeply material, return the three empty lists. Quality over quantity.
+
+Rules:
 1. Output STRICT JSON only, exactly: {"operational_wins": [], "shareholder_returns": [], "hidden_risks_and_flags": []}
-2. Every item: {"finding": "<one plain-English sentence>", "quote": "<VERBATIM text copied from the page>", "page": <the [PAGE n] number the quote is under>}
+2. Every item: {"finding": "<one plain-English sentence with the specific amount>", "quote": "<VERBATIM text copied from the page>", "page": <the [PAGE n] number the quote is under>}
 3. The quote must be copied character-for-character from the text. If you cannot quote it, do not report it.
-4. hidden_risks_and_flags: hidden/contingent debt, related-party loans or fees, auditor qualifications or Key Audit Matters, guarantees, disputed receivables, impairments deferred.
-5. operational_wins: production/volume records, market-share gains, deleveraging, capex fully funded from cash flow, credible forward guidance.
+4. hidden_risks_and_flags (material only): hidden/contingent debt, related-party loans or fees, auditor qualifications or Key Audit Matters, guarantees, disputed receivables, impairments deferred, costs capitalised to the balance sheet, unbilled revenue outgrowing revenue.
+5. operational_wins (material only): production/volume records with numbers, market-share gains, deleveraging, order-book figures, credible forward guidance.
 6. shareholder_returns: dividends/buybacks with amounts.
-7. Nothing on these pages worth reporting -> return the three empty lists. Never invent."""
+7. Never invent."""
 
 
 # ------------------------------------------------------ 1. page extraction
@@ -318,6 +322,42 @@ def validate_findings(findings: list, pages: list) -> dict:
     return {"kept": kept, "dropped_unverified": dropped}
 
 
+# ------------------------------------- 4b. report-level reduction (v1.2)
+
+MAX_FINDINGS_PER_REPORT = 10   # per category-group; see reduce_findings
+
+def reduce_findings(findings: list, cap: int = MAX_FINDINGS_PER_REPORT) -> dict:
+    """The v1.1 measurement's lesson, mechanized: a PER-CHUNK cap cannot
+    reach analyst selectivity by construction (~2 findings x ~68 chunks
+    still lands ~136 per report — measured: 61 kept flags on eMudhra even
+    with the prompt cap). So after validation, reduce per report:
+      * dedupe near-identical findings (same normalized quote, or one
+        quote containing the other) — chunk overlap repeats needles;
+      * keep the top `cap` by forensic weight of the QUOTE itself (heavy
+        transactional phrases 4x, then general vocabulary, then quote
+        length as the tiebreak).
+    Mechanical and documented, like the score: selection bias toward the
+    needle vocabulary is a stated property, not a hidden one."""
+    deduped = []
+    seen = []
+    for f in findings or []:
+        q = _norm(f.get("quote"))
+        if not q or any(q in s or s in q for s in seen):
+            continue
+        seen.append(q)
+        deduped.append(f)
+
+    def weight(f):
+        q = _clean(f.get("quote") or "")
+        return (HEAVY_WEIGHT * len(FORENSIC_HEAVY.findall(q))
+                + len(FORENSIC_DENSITY.findall(q)), len(q))
+
+    ranked = sorted(deduped, key=weight, reverse=True)
+    return {"kept": ranked[:cap],
+            "reduced_away": max(0, len(deduped) - cap),
+            "duplicates_removed": len(findings or []) - len(deduped)}
+
+
 # --------------------------------------------- 3+5. extraction + scoring
 
 def _merge(dst: dict, src: dict) -> None:
@@ -364,26 +404,47 @@ def analyze(pdf_path, ticker: str, fiscal_year: str,
                 failed_chunks += 1
         except Exception:
             failed_chunks += 1          # one bad call never kills the doc
+        # v1.1 memory hygiene: keep Python's footprint flat on the 8GB
+        # box. (Honest note: Python holds little here — the real RAM
+        # lever is the model server, unloaded below after the report.)
+        import gc
+        gc.collect()
+    # Flush the model out of Ollama's memory before the next report —
+    # a batch over many PDFs must not leave 2GB resident between docs.
+    # Best-effort: extractors without an unload seam (fakes, claude) skip.
+    try:
+        getattr(extractor, "unload", lambda: None)()
+    except Exception:
+        pass
 
     wins = validate_findings(raw["operational_wins"], pages)
     rets = validate_findings(raw["shareholder_returns"], pages)
     flags = validate_findings(raw["hidden_risks_and_flags"], pages)
+    r_wins = reduce_findings(wins["kept"])
+    r_rets = reduce_findings(rets["kept"])
+    r_flags = reduce_findings(flags["kept"])
 
     result = {
         "ticker": ticker,
         "fiscal_year": fiscal_year,
         "source_file": str(pdf_path),
-        "operational_wins": wins["kept"],
-        "shareholder_returns": rets["kept"],
-        "hidden_risks_and_flags": flags["kept"],
-        "net_conviction_score": score(len(wins["kept"]), len(rets["kept"]),
-                                      len(flags["kept"])),
-        "score_method": "mechanical_v1 (validated finding counts; "
-                        "flags weighted 2x wins)",
+        "operational_wins": r_wins["kept"],
+        "shareholder_returns": r_rets["kept"],
+        "hidden_risks_and_flags": r_flags["kept"],
+        "net_conviction_score": score(len(r_wins["kept"]), len(r_rets["kept"]),
+                                      len(r_flags["kept"])),
+        "score_method": "mechanical_v1.2 (validated findings, deduped + "
+                        "reduced to the top 10 per category by forensic "
+                        "weight; flags weighted 2x wins)",
         "evidence_discipline": {
             "findings_dropped_unverified": (wins["dropped_unverified"]
                                             + rets["dropped_unverified"]
                                             + flags["dropped_unverified"]),
+            "duplicates_removed": (r_wins["duplicates_removed"]
+                                   + r_rets["duplicates_removed"]
+                                   + r_flags["duplicates_removed"]),
+            "reduced_away": (r_wins["reduced_away"] + r_rets["reduced_away"]
+                             + r_flags["reduced_away"]),
             "chunks_total": len(chunks),
             "chunks_failed": failed_chunks,
         },

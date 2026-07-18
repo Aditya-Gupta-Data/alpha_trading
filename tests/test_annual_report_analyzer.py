@@ -102,6 +102,53 @@ def test_audit_trail_exception_page_is_tagged_auditor_without_a_header():
     assert tags[1] == "auditor"
 
 
+def test_extraction_prompt_carries_the_materiality_cap():
+    """v1.1: the measured v1 failure was 96-178 indiscriminate flags per
+    report — the cap directive must stay in the prompt."""
+    assert "MAXIMUM of 2" in A.EXTRACTION_SYSTEM_PROMPT
+    assert "boilerplate" in A.EXTRACTION_SYSTEM_PROMPT
+    assert "VERBATIM" in A.EXTRACTION_SYSTEM_PROMPT     # evidence rule stays
+
+
+def test_analyze_unloads_the_model_after_the_report(tmp_path):
+    class Fake:
+        def __init__(self):
+            self.unloaded = False
+
+        def chat_json(self, system, text):
+            return {"operational_wins": [], "shareholder_returns": [],
+                    "hidden_risks_and_flags": []}
+
+        def unload(self):
+            self.unloaded = True
+
+    fake = Fake()
+    A.analyze("fake.pdf", ticker="T", fiscal_year="FY1", extractor=fake,
+              pages=["Independent Auditor's Report\n" + "loan guarantee " * 50],
+              out_dir=tmp_path)
+    assert fake.unloaded is True
+
+
+def test_reduce_findings_dedupes_caps_and_ranks_by_forensic_weight():
+    heavy = {"finding": "parent loan", "page": 1,
+             "quote": "loan to holding company at a reduced interest rate"}
+    light = {"finding": "policy note", "page": 2,
+             "quote": "the accounting policy was consistently applied"}
+    dupe = {"finding": "parent loan again", "page": 1,
+            "quote": "LOAN to holding   company at a reduced interest rate"}
+    contained = {"finding": "fragment", "page": 1,
+                 "quote": "loan to holding company"}
+    r = A.reduce_findings([light, heavy, dupe, contained], cap=1)
+    assert r["kept"] == [heavy]              # forensic weight outranks
+    assert r["duplicates_removed"] == 2      # dupe + contained fragment
+    assert r["reduced_away"] == 1            # light fell to the cap
+
+
+def test_reduce_findings_is_honest_on_empty_input():
+    r = A.reduce_findings([])
+    assert r == {"kept": [], "reduced_away": 0, "duplicates_removed": 0}
+
+
 def test_revenue_recognition_kam_vocabulary_counts():
     kam = ("Key Audit Matter: revenue recognition — the risk that revenue "
            "is overstated given management incentives.")

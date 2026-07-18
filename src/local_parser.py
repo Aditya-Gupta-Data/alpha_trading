@@ -146,6 +146,23 @@ class LocalExtractor:
         except Exception:
             return False
 
+    def unload(self) -> bool:
+        """Flush this model out of Ollama's memory NOW (keep_alive=0 on
+        the native endpoint — the documented unload mechanism). Batch
+        jobs (annual_report_analyzer) call this after each document so
+        the 8GB Mac never holds model weights between reports. Never
+        raises; False on any failure."""
+        try:
+            import httpx
+            native = self.base_url[:-3] if self.base_url.endswith("/v1") \
+                else self.base_url
+            resp = httpx.post(f"{native}/api/generate",
+                              json={"model": self.model, "keep_alive": 0},
+                              timeout=10)
+            return resp.status_code < 300
+        except Exception:
+            return False
+
     def _chat(self, text_payload: str, system_prompt: str = None) -> str:
         """One chat-completions call; returns the raw content string, or
         None on any failure (server down, HTTP error, unexpected shape)."""

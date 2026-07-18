@@ -237,15 +237,27 @@ def test_pm_peak_ratchets_and_drawdown_trails_from_it():
     assert not pm.trading_halted(conn)                # 9.52% < 10%
 
 
+def _backdate_settlement(conn, ref):
+    """Move a settled lock to a past day: the LIFETIME drawdown persists
+    across days while the daily circuit breaker (merged 2026-07-19, a
+    tighter same-day fuse) resets at the IST day boundary — backdating
+    isolates the lifetime halt this test is about."""
+    conn.execute("UPDATE margin_locks SET released_at = "
+                 "'2000-01-01T10:00:00' WHERE journal_ref = ?", (ref,))
+    conn.commit()
+
+
 def test_pm_consecutive_losses_trip_the_risk_of_ruin_halt():
     conn = pm_conn()
-    # three consecutive Rs.40,000 losses: the third one carries the
-    # account through the 10% line (Rs.1.2L down = 12% drawdown).
+    # three consecutive Rs.40,000 losses (each settled on its own past
+    # day — same-day they'd trip the DAILY breaker first, by design): the
+    # third carries the account through the 10% line (Rs.1.2L = 12%).
     for i, pnl in enumerate((-40_000.0, -40_000.0, -40_000.0)):
         ref = f"loss{i}"
         assert pm.request_entry(conn, ref, 50_000.0)["approved"], \
             f"entry {i} should still be allowed"
         pm.release_margin(conn, ref, pnl)
+        _backdate_settlement(conn, ref)
     assert pm.drawdown_pct(conn) == 12.0
     assert pm.trading_halted(conn)
     # the halt was logged the moment the breach happened
@@ -267,6 +279,7 @@ def test_pm_drawdown_boundary_is_inclusive_at_ten_percent():
     conn = pm_conn()
     pm.request_entry(conn, "a", 200_000.0)
     pm.release_margin(conn, "a", -99_900.0)           # 9.99% — still trading
+    _backdate_settlement(conn, "a")   # isolate the lifetime halt (see above)
     assert not pm.trading_halted(conn)
     assert pm.request_entry(conn, "b", 1_000.0)["approved"]
     pm.release_margin(conn, "b", -100.0)              # exactly 10.00% — halted

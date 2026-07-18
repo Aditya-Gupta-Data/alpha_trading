@@ -607,3 +607,13 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   IST-yesterday deal that a UTC clock would miss) alongside the new
   58-test Department 8 coverage (`test_regime_filters.py` +
   `test_analysis_signals.py`).
+
+- **Issue 16 addendum (2026-07-19, same bug class, second module):** the
+  merge of the daily circuit breaker exposed that
+  `src/portfolio_manager.py`'s `_now_iso()` also stamped host-timezone
+  wall-clock (`datetime.now()`) into `margin_locks.locked_at/released_at`
+  and `account_events.ts` — and the breaker's "today" boundary reads
+  `released_at` back, so on the UTC VM a post-19:30-IST settlement would
+  have landed on the wrong day. Fixed with the merge: `_now_iso()` now
+  stamps IST wall-clock (naive format unchanged); test-pinned in
+  `tests/test_margin_stress.py` (stamp prefix must equal the IST date).

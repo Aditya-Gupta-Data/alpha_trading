@@ -10,45 +10,10 @@ import pytest
 
 from next_gen_engine import dhan_websocket as ws
 from next_gen_engine import execution_algo as ex
-from next_gen_engine import portfolio_risk_manager as prm
 from next_gen_engine import redis_pubsub as rp
 from next_gen_engine import trailing_stops as ts
 from next_gen_engine import wealth_flywheel as wf
 from next_gen_engine import wisdom_extractor as wis
-
-
-# ----------------------------------------------------- daily circuit breaker
-
-def test_breaker_trips_at_the_daily_loss_limit():
-    v = prm.check_daily_breaker(1_000_000, pnl_today=-30_000)  # exactly 3%
-    assert v["halted"] is True
-    assert v["daily_loss_pct"] == 3.0
-    assert "TRIPPED" in v["reason"]
-
-
-def test_breaker_stays_open_within_budget_and_on_profit():
-    assert prm.check_daily_breaker(1_000_000, -29_999)["halted"] is False
-    ok = prm.check_daily_breaker(1_000_000, +50_000)
-    assert ok["halted"] is False and ok["daily_loss_pct"] == 0.0
-
-
-def test_breaker_abstains_without_equity_but_says_so():
-    v = prm.check_daily_breaker(0, -50_000)
-    assert v["halted"] is False and "abstains" in v["error"]
-
-
-def test_realized_pnl_counts_only_today():
-    rows = [
-        {"resolved_at": "2026-07-17T10:00:00+05:30", "pnl_net": -1000.0},
-        {"closed_at": "2026-07-17T11:00:00+05:30", "pnl": -500.0},
-        {"resolved_at": "2026-07-16T14:00:00+05:30", "pnl_net": -9999.0},
-        {"resolved_at": "2026-07-17T12:00:00+05:30"},          # no pnl: skip
-        {"pnl_net": -400.0},                                   # no stamp: skip
-    ]
-    assert prm.realized_pnl_today(rows, today="2026-07-17") == -1500.0
-    v = prm.gate_entry(100_000, rows, today="2026-07-17",
-                       max_daily_loss_pct=1.0)
-    assert v["halted"] is True                                 # 1.5% >= 1%
 
 
 # ------------------------------------------------------------ wealth flywheel

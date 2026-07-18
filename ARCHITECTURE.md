@@ -243,23 +243,34 @@ the cash once. On profitable settlement, `wealth_lock` records the advisory 50%
 GOLDBEES sweep (paper ledger + card, never a cash movement), hooked from
 `portfolio_manager.release_entry`.
 
-**The halt-stack rule (review #2 ruling):** entry halts COMPOSE at one point.
-`gate_headless_entry` evaluates a single ordered list of halt checks, each
-answering (halted?, reason) — the 10% trailing-drawdown halt today, the staged
-daily realized-loss circuit breaker (`portfolio_risk_manager`, 3%, entries
-only, IST-day reset) when it merges. No halt is ever called from anywhere
-else; a new halt is a new entry in the list, not a new call site. Two halts is
-a stack; five halts scattered across call sites would be a bug farm.
+**The halt-stack rule (review #2 ruling — REALIZED 2026-07-19):** entry halts
+COMPOSE at one point. `request_entry` evaluates the single ordered
+`ENTRY_HALT_CHECKS` list, each check answering (halted?, reason): (1) the 10%
+trailing-drawdown risk-of-ruin halt, (2) the daily 3% realized-loss circuit
+breaker (merged from staging — entries only, resets at the IST day boundary
+by construction, fires one de-duped Discord review card per day when it
+rejects). No halt is ever called from anywhere else; a new halt is a new
+entry in the list, not a new call site.
 
-**Staged merge targets:** `portfolio_risk_manager` → the halt list above;
-`wealth_flywheel` → `wealth_lock.sweep_on_settlement` (advisory sweep becomes a
-concrete PAPER order — **blocked until GOLDBEES's security id is
-scrip-master-verified**, the Issue-15 lesson); `trailing_stops` → its `atr()`
-math goes to `indicators.py` (the shared, department-neutral math library:
-SMA/RSI today), its advisory ratchet loop goes to `live_bridge` beside the
-existing exit alerts. That split is clean because it separates a *formula*
-from an *advisory process* — the stop is one more advisory alert, and the
-actual close still lands through `plan_tracker` like every other exit.
+**Entry-time VIX stress (owner decision 2026-07-19):** the margin a proposal
+reserves is the SPAN total times `portfolio.span_stress_factor` at the
+proposal's own VIX (1.0 calm / 1.15 at VIX≥16 / 1.30 at VIX≥25 — a simple
+paper model of exchange stress hikes, to be recalibrated against NSE
+circulars). In a panic the reservation grows upfront, so the existing
+margin-exhaustion check naturally chokes how many trades fit — no forced
+closes, no second settlement path. `margin_audit` (report-only CLI) replays
+the journal under these factors and cross-checks recorded margins for drift.
+
+**Staged merge targets:** `wealth_flywheel` → `wealth_lock.sweep_on_settlement`
+(advisory sweep becomes a concrete PAPER order — **blocked until GOLDBEES's
+security id is scrip-master-verified**, the Issue-15 lesson);
+`trailing_stops` → its `atr()` math goes to `indicators.py` (the shared,
+department-neutral math library: SMA/RSI today), its advisory ratchet loop
+goes to `live_bridge` beside the existing exit alerts. That split is clean
+because it separates a *formula* from an *advisory process* — the stop is one
+more advisory alert, and the actual close still lands through `plan_tracker`
+like every other exit. (`portfolio_risk_manager` completed this path
+2026-07-19 — merged into the halt list, staging file deleted.)
 
 **Inputs:** a proposal (entry); open positions + live/EOD prices (exit).
 **Outputs:** allowed/blocked verdict + margin lock; resolved outcomes with P&L;
@@ -419,11 +430,13 @@ main suite so it can't silently rot. The rules for LEAVING it:
    event bus does not merge until it has its own manager and written
    subscriber rules; the WebSocket feed merges only BEHIND `dhan_guard`.
 
-Current residents and their targets: `portfolio_risk_manager` → Dept 3 halt
-list; `wealth_flywheel` → Dept 3 `wealth_lock` (GOLDBEES id verification
-blocker); `trailing_stops` → `indicators` + `live_bridge`; `execution_algo` →
-Dept 2 `_leg_fill`; `wisdom_extractor` → Dept 1 ingestion (text_intelligence
-client); `redis_pubsub` + `dhan_websocket` → deferred drafts.
+Current residents and their targets: `wealth_flywheel` → Dept 3 `wealth_lock`
+(GOLDBEES id verification blocker); `trailing_stops` → `indicators` +
+`live_bridge`; `execution_algo` → Dept 2 `_leg_fill`; `wisdom_extractor` →
+Dept 1 ingestion (text_intelligence client); `redis_pubsub` +
+`dhan_websocket` → deferred drafts. First graduation: `portfolio_risk_manager`
+merged into Dept 3's halt list 2026-07-19 (file deleted, tests migrated) —
+the anti-orphan rule working as written.
 
 ---
 

@@ -44,12 +44,19 @@ Inspect the account from the project folder:
     python3 -m src.portfolio_manager
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from src import brain_map
+from src.portfolio import span_stress_factor
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 STARTING_CAPITAL = 1_000_000.0   # Rs.10,00,000 simulated allocation pool
 MAX_DRAWDOWN_PCT = 10.0          # hard-coded risk-of-ruin parameter
+MAX_DAILY_LOSS_PCT = 3.0         # daily circuit breaker (merged from
+                                 # next_gen_engine 2026-07-19): realized loss
+                                 # today >= 3% of session-open equity halts
+                                 # NEW entries for the rest of the IST day
 
 # Owned by this module — additive to brain_map's tables, same .db file.
 _SCHEMA = """
@@ -82,7 +89,15 @@ CREATE TABLE IF NOT EXISTS account_events (
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    """IST wall-clock, naive-formatted (unchanged shape, correct date).
+    Issue-16 discipline: stamps must never follow the host timezone — the
+    VM runs UTC, and the daily circuit breaker's "today" boundary reads
+    these stamps back."""
+    return datetime.now(IST).replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def ist_today() -> str:
+    return datetime.now(IST).date().isoformat()
 
 
 def ensure_schema(conn) -> None:
@@ -156,12 +171,138 @@ def _snapshot_equity(conn) -> dict:
     return {"equity": eq, "peak_equity": peak, "drawdown_pct": dd}
 
 
-def required_margin_for(proposal: dict) -> float:
+def required_margin_for(proposal: dict, vix: float = None) -> float:
     """What a build_proposal() result blocks: the SPAN total (already
-    hedge-offset by portfolio.calculate_span_margin) times the lots."""
+    hedge-offset by portfolio.calculate_span_margin) times the lots, times
+    the ENTRY-TIME VIX-stress factor (owner decision 2026-07-19): in a
+    panicky market the reservation grows upfront, so the margin-exhaustion
+    check naturally chokes off how many trades fit. `vix` defaults to the
+    proposal's own recorded VIX; calm/unknown VIX means factor 1.0 — the
+    pre-stress number, byte-identical."""
     spread = proposal["spread"]
-    return round(float(spread["margin"]["total_margin"])
-                 * int(spread.get("lots", proposal.get("lots", 1))), 2)
+    base = (float(spread["margin"]["total_margin"])
+            * int(spread.get("lots", proposal.get("lots", 1))))
+    factor = span_stress_factor(vix if vix is not None else proposal.get("vix"))
+    return round(base * factor, 2)
+
+
+# --- the daily circuit breaker (merged from next_gen_engine/
+# --- portfolio_risk_manager.py, its canonical target, 2026-07-19) --------
+
+def realized_pnl_today(resolved_entries: list, today: str = None) -> float:
+    """Sum of net P&L across journal-shaped rows RESOLVED today (IST).
+    Rows without a resolution date or P&L are skipped — unknown is not a
+    loss. Kept pure/journal-shaped so the simulator can replay the breaker;
+    the LIVE gate reads the DB via daily_realized_pnl instead."""
+    today = today or ist_today()
+    total = 0.0
+    for e in resolved_entries or []:
+        stamp = e.get("resolved_at") or e.get("closed_at") or ""
+        if not str(stamp).startswith(today):
+            continue
+        pnl = e.get("pnl_net", e.get("pnl"))
+        if isinstance(pnl, (int, float)):
+            total += float(pnl)
+    return round(total, 2)
+
+
+def check_daily_breaker(session_open_equity: float,
+                        pnl_today: float,
+                        max_daily_loss_pct: float = MAX_DAILY_LOSS_PCT) -> dict:
+    """The verdict. `halted=True` means NO NEW ENTRIES today.
+
+    Fail-safe posture: an unusable equity figure (None/0/negative) returns
+    halted=False with an explicit `error` — the daily breaker refusing to
+    guess must not freeze the engine, because the lifetime drawdown halt
+    is still armed underneath it."""
+    if not session_open_equity or session_open_equity <= 0:
+        return {"halted": False, "daily_loss_pct": None,
+                "error": "no usable session-open equity — breaker abstains "
+                         "(lifetime drawdown halt still active)"}
+    loss_pct = max(0.0, -pnl_today) / session_open_equity * 100
+    # compare UNROUNDED (a 2.9999% loss must not round-trip into a trip),
+    # report rounded
+    halted = loss_pct >= max_daily_loss_pct
+    loss_pct = round(loss_pct, 3)
+    return {
+        "halted": halted,
+        "daily_loss_pct": loss_pct,
+        "limit_pct": max_daily_loss_pct,
+        "pnl_today": round(pnl_today, 2),
+        "session_open_equity": round(session_open_equity, 2),
+        "reason": (f"daily circuit breaker TRIPPED: realized "
+                   f"{-pnl_today:,.0f} = {loss_pct}% of session-open equity "
+                   f"(limit {max_daily_loss_pct}%) — entries halted until "
+                   f"tomorrow" if halted else "within daily loss budget"),
+    }
+
+
+def daily_realized_pnl(conn, today: str = None) -> float:
+    """Today's realized P&L straight from the locks this module settled —
+    no journal read, no second source of truth. Resets by construction at
+    the IST day boundary because released_at stamps are IST."""
+    ensure_schema(conn)
+    today = today or ist_today()
+    row = conn.execute("SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks "
+                       "WHERE released_at LIKE ?", (f"{today}%",)).fetchone()
+    return round(float(row[0]), 2)
+
+
+def daily_breaker_status(conn, today: str = None) -> dict:
+    """The LIVE breaker verdict: session-open equity is current equity
+    minus what settled today (both from this module's own tables)."""
+    pnl_today = daily_realized_pnl(conn, today)
+    return check_daily_breaker(equity(conn) - pnl_today, pnl_today)
+
+
+def _daily_breaker_card(conn, verdict: dict) -> None:
+    """One Discord card per IST day when the breaker is the thing
+    rejecting entries (owner rule: a halt needing human awareness must
+    never be log-only). De-duped via account_events; fail-open — a broken
+    card never blocks the gate's verdict."""
+    try:
+        today = ist_today()
+        seen = conn.execute(
+            "SELECT 1 FROM account_events WHERE event_type = "
+            "'daily_breaker_card' AND ts LIKE ?", (f"{today}%",)).fetchone()
+        if seen:
+            return
+        log_event(conn, "daily_breaker_card", verdict["reason"])
+        from src.notifier import fire_broadcast
+        fire_broadcast({
+            "event": "daily_breaker", "ticker": "ACCOUNT", "date": today,
+            "description": (f"🛑 {verdict['reason']}\n"
+                            f"Realized today: Rs.{verdict['pnl_today']:+,.2f} "
+                            f"on session-open equity "
+                            f"Rs.{verdict['session_open_equity']:,.2f}. "
+                            "Exits and tracking continue — only NEW entries "
+                            "are halted, and the halt clears at the IST day "
+                            "boundary."),
+        })
+    except Exception as e:
+        print(f"  (daily breaker card skipped: {e})")
+
+
+# --- the composed entry-halt list (review #2 halt-stack rule) ------------
+# EVERY account-level entry halt lives in this one ordered list; a new halt
+# is a new entry here, never a new call site. Each check returns
+# {halted, event, reason} and may attach extras (the breaker's verdict).
+
+def _risk_of_ruin_check(conn) -> dict:
+    halted = trading_halted(conn)
+    return {"halted": halted, "event": "risk_of_ruin_halt",
+            "reason": (f"risk-of-ruin halt: drawdown {drawdown_pct(conn):.2f}% "
+                       f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked"
+                       if halted else "drawdown within limits")}
+
+
+def _daily_breaker_check(conn) -> dict:
+    v = daily_breaker_status(conn)
+    return {"halted": v["halted"], "event": "daily_breaker_halt",
+            "reason": v["reason"], "verdict": v}
+
+
+ENTRY_HALT_CHECKS = (_risk_of_ruin_check, _daily_breaker_check)
 
 
 def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
@@ -170,9 +311,10 @@ def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
     without double-locking). Reject = nothing is locked and the reason is
     logged to `account_events`.
 
-    Order of the guards matters: the risk-of-ruin halt beats everything
-    (even a tiny trade is blocked once the account is down 10%), then the
-    margin-exhaustion check against available liquid cash."""
+    Order of the guards matters: the composed halt list first (lifetime
+    risk-of-ruin, then the daily circuit breaker — even a tiny trade is
+    blocked once a halt is up), then the margin-exhaustion check against
+    available liquid cash."""
     ensure_schema(conn)
     get_account(conn)
 
@@ -181,12 +323,14 @@ def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
     if active:
         return {"approved": True, "reason": "margin already locked for this entry"}
 
-    if trading_halted(conn):
-        reason = (f"risk-of-ruin halt: drawdown {drawdown_pct(conn):.2f}% >= "
-                  f"{MAX_DRAWDOWN_PCT:g}% — all entries blocked")
-        log_event(conn, "risk_of_ruin_halt",
-                  f"entry {journal_ref} rejected ({reason})")
-        return {"approved": False, "reason": reason}
+    for check in ENTRY_HALT_CHECKS:
+        halt = check(conn)
+        if halt["halted"]:
+            log_event(conn, halt["event"],
+                      f"entry {journal_ref} rejected ({halt['reason']})")
+            if halt["event"] == "daily_breaker_halt":
+                _daily_breaker_card(conn, halt["verdict"])
+            return {"approved": False, "reason": halt["reason"]}
 
     cash = available_cash(conn)
     margin = round(float(required_margin), 2)

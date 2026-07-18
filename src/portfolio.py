@@ -93,6 +93,34 @@ GST_RATE = 0.18                 # 18% on brokerage + exchange + SEBI
 # the whole point of the offset math is that defined-risk spreads escape it.
 NAKED_SHORT_MARGIN_PCT = 0.15
 
+# VIX-stress margin model (Task 2 of the 2026-07-19 SPAN work): a
+# conservative paper model of the exchange RAISING margin requirements when
+# volatility expands — NSE/SEBI hike F&O margins in stress windows, so a
+# panicky market must reserve more upfront and naturally take fewer trades.
+# NOT the real SPAN engine: two flat bands, deliberately simple, meant to be
+# recalibrated against actual NSE circulars (treat any research-report
+# number as a lead, never a source). Thresholds reuse the repo's regime
+# vocabulary: 16 is the high-vol band boundary (src/regime.py), 25 is
+# VIX_PANIC (src/analysis/regime_filters.py).
+VIX_STRESS_BANDS = (
+    (25.0, 1.30),   # panic: +30% reservation add-on
+    (16.0, 1.15),   # elevated: +15%
+)
+
+
+def span_stress_factor(vix) -> float:
+    """Entry-time margin multiplier for the given VIX. 1.0 when VIX is calm,
+    unknown, or unparseable — stress must fail toward the pre-stress
+    behavior, never invent a bigger reservation from bad data."""
+    try:
+        v = float(vix)
+    except (TypeError, ValueError):
+        return 1.0
+    for threshold, factor in VIX_STRESS_BANDS:
+        if v >= threshold:
+            return factor
+    return 1.0
+
 
 def calculate_trade_frictions(instrument_type: str, side: str, premium: float, quantity: int) -> float:
     """The 2026 cost of one executed leg: STT (sell side ONLY), Stamp Duty

@@ -791,7 +791,12 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
         per_lot = (spread.get("margin") or {}).get("total_margin")
         if per_lot is not None:
             from src import portfolio_manager as pm
-            required = float(per_lot) * int(spread.get("lots", 1))
+            # Same reservation math as the headless gate (incl. the
+            # entry-time VIX-stress factor) — the entry's receipt carries
+            # the VIX it was born under; None degrades to factor 1.0.
+            required = pm.required_margin_for(
+                {"spread": spread,
+                 "vix": (target.get("receipt") or {}).get("vix")})
             allowed, gate_reason = pm.gate_headless_entry(trade_id, required)
             if not allowed:
                 return {"status": "margin_blocked", "entry": target,

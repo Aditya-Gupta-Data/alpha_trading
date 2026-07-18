@@ -34,3 +34,4 @@ lovable-frontend/
 # The current Lovable app (TanStack Start terminal UI) lives here. Same rule:
 # framework code never pollutes the Python engine on `main`.
 Trading Terminal/
+archive/

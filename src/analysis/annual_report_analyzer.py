@@ -51,17 +51,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 LAKE_DIR = ROOT / "data" / "lake" / "fundamental_reports"
 
-CONDENSE_CHAR_BUDGET = 400_000     # ~100k tokens of dense corpus; the model
+CONDENSE_CHAR_BUDGET = 480_000     # ~120k tokens of dense corpus; the model
                                    # reads it in ~8k-char chunks, so this
-                                   # caps CALL COUNT (~60/report), not context.
-                                   # Measured on 3 real reports against the
-                                   # 12 hand-verified needle pages: 11/12
-                                   # kept (92%). The known residual: a
-                                   # needle sentence on a page with almost
+                                   # caps CALL COUNT (~70/report), not
+                                   # context. Chosen by MEASUREMENT, not
+                                   # taste: recall vs budget over 6 real
+                                   # reports x 29 hand-verified needle pages
+                                   # plateaus at 28/29 (97%) from 480k up.
+                                   # The one permanent residual no budget
+                                   # buys: a needle on a page with almost
                                    # no forensic vocabulary (VEDL FY25
-                                   # p291) can evade lexical ranking —
-                                   # raise the budget or run full-notes
-                                   # passes on the claude backend to close.
+                                   # p291). Closing it needs the claude
+                                   # backend reading MORE pages, not more
+                                   # regex.
 CHUNK_CHARS = 8_000                # one extraction call's working size
 MIN_PAGE_CHARS = 40                # below this a page is "unreadable"
 PAGE_CHAR_CAP = 12_000             # one monster table-page can't eat a section
@@ -81,7 +83,11 @@ FORENSIC_DENSITY = re.compile(
     r"related part|loan|guarantee|contingent|holding company|promoter|"
     r"brand fee|impair|disput|qualifi|key audit matter|emphasis of matter|"
     r"interest rate|receivable|write[- ]?off|deferred tax|"
-    r"dividend|buy[- ]?back|net debt|highest ever", re.I)
+    r"dividend|buy[- ]?back|net debt|highest ever|"
+    # quality-of-earnings vocabulary (the eMudhra/Jupiter lesson, 2026-07-19):
+    # costs moving to the balance sheet and revenue booked before billing
+    # are needles too, and so is the order book the bulls lean on
+    r"order book|capitali[sz]|unbilled|revenue recognition", re.I)
 # The transactional needle phrases — the vocabulary of money actually
 # moving toward a related party — count 4x in the ranking: one loan-terms
 # sentence buried in a page of regulatory boilerplate must outrank a page
@@ -89,7 +95,8 @@ FORENSIC_DENSITY = re.compile(
 FORENSIC_HEAVY = re.compile(
     r"loans? (?:to|from|given)|interest rate|brand fee|"
     r"guarantees? (?:given|issued|provided)|key audit matter|"
-    r"emphasis of matter|qualifi", re.I)
+    r"emphasis of matter|qualifi|unbilled revenue|capitali[sz]ed|"
+    r"audit trail", re.I)
 HEAVY_WEIGHT = 4
 
 # Section header patterns, matched on the top of each page. Order = the
@@ -115,8 +122,9 @@ BOILERPLATE = re.compile(
 # and cross-references don't false-positive.
 PAGE_SIGNALS = (
     ("auditor", re.compile(
-        r"(?:key audit matter|basis for opinion|auditor'?s? responsibilit)",
-        re.I)),
+        r"(?:key audit matter|basis for opinion|auditor'?s? responsibilit|"
+        r"audit trail)",   # the post-2023 Rule 11(g) exception lives in
+        re.I)),            # CARO annexure pages with no header of their own
     ("contingent", re.compile(r"contingent liabilities", re.I)),
 )
 # How many pages a section run may continue past its header before we stop

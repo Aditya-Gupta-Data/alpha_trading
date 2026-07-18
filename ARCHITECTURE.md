@@ -162,6 +162,8 @@ annual-report reader: section-aware condensation → LLM extraction through
 `text_intelligence` → a verbatim-quote validator that DROPS any finding whose
 quote isn't on the cited page — so a weak local model yields fewer findings,
 never fabricated evidence; conviction JSONs land in the lake, advisory-only),
+`cohort_comparator` (the side-by-side matrix of human deep-read scores and
+machine scores — two instruments, never rescaled into one number),
 plus two **research-stage orphans**:
 `institutional_alpha` (VWAP-pullback entry primitives — signal source for the
 Shadow Equity Engine's thesis) and `conviction` (a 0–1 multi-factor score that

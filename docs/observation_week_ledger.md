@@ -730,11 +730,12 @@ deploy time went unrecorded, which is precisely the gap this log closes.
 ## Issue 20 — RD-404 stale-symbol outages during the owner's small/micro-cap diligence run (2026-07-18)
 
 - **Observed (verified 2026-07-18, `logs/report_downloader.jsonl`):** while
-  fetching annual reports for two owner-supplied small/micro-cap ticker
+  fetching annual reports for three owner-supplied small/micro-cap ticker
   lists, `report_downloader` returned honest RD-404 ("no usable
-  annual-report rows") for 5 symbols: `PREVEST`, `COOLCAPS`, `SIKA`,
-  `CHEMTECH` (first list), and `LGBROSLTD` (second list, first ticker
-  attempted). Per the LTIM/TATAMOTORS lesson (Issue 15), this means NSE's
+  annual-report rows") for 9 symbols across two batches: `PREVEST`,
+  `COOLCAPS`, `SIKA`, `CHEMTECH` (batch 2), and `LGBROSLTD`, `NITTAGELA`,
+  `SAVAITAOIL`, `RPITECH`, `HAWKINCOOK` (batch 3). Per the LTIM/TATAMOTORS
+  lesson (Issue 15), this means NSE's
   annual-reports API has nothing filed under exactly that symbol — not
   necessarily that the company doesn't exist, since small/SME-listed
   names are more prone to symbol drift (BSE-vs-NSE listing, SME-platform

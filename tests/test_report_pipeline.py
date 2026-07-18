@@ -32,6 +32,28 @@ def test_latest_report_picks_newest_pdf_only():
     assert RD.latest_report(None) is None
 
 
+def test_latest_report_fiscal_picks_exact_year_not_newest():
+    row = RD.latest_report(LISTING, fiscal="2024")
+    assert row["fromYr"] == "2023" and row["toYr"] == "2024"
+    # a year with no usable row is an honest None, never a fallback
+    assert RD.latest_report(LISTING, fiscal="2019") is None
+
+
+def test_fetch_one_honours_fiscal_year(tmp_path):
+    r = RD.fetch_one("RELIANCE.NS", fetch_json_fn=lambda u: LISTING,
+                     fetch_bytes_fn=lambda u: b"%PDF-1.7 fake",
+                     out_dir=tmp_path, log_path=tmp_path / "out.jsonl",
+                     sleep_fn=lambda s: None, fiscal="2024")
+    assert r["status"] == "downloaded"
+    assert (tmp_path / "RELIANCE" / "AR_RELIANCE_2023_2024.pdf").exists()
+
+    miss = RD.fetch_one("RELIANCE.NS", fetch_json_fn=lambda u: LISTING,
+                        fetch_bytes_fn=lambda u: b"%PDF-1.7 fake",
+                        out_dir=tmp_path, log_path=tmp_path / "out.jsonl",
+                        sleep_fn=lambda s: None, fiscal="2019")
+    assert miss["status"] == "outage" and miss["code"] == "RD-404"
+
+
 def test_fetch_one_downloads_and_is_idempotent(tmp_path):
     calls = []
 

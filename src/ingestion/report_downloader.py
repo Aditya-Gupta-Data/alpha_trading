@@ -31,7 +31,11 @@ Outage codes:  RD-401 handshake/auth refused   RD-404 no reports listed
 CLI, from the project folder (Mac):
 
     python3 -m src.ingestion.report_downloader [--tickers RELIANCE TCS]
-        [--limit N] [--dry-run]
+        [--limit N] [--fiscal YYYY] [--dry-run]
+
+`--fiscal YYYY` picks the listing row whose `toYr` matches YYYY instead
+of the newest — Dept 8's back-year fetches (the on-disk nine need more
+than one year each). Omit it for the default newest-year behaviour.
 """
 import json
 import random
@@ -134,10 +138,15 @@ def _fetch_bytes(url: str) -> bytes:
         return resp.read()
 
 
-def latest_report(listing: dict) -> dict | None:
+def latest_report(listing: dict, fiscal: str = None) -> dict | None:
     """NSE's listing -> the newest usable row: needs a PDF url in
     `fileName` and a `toYr`. Returns None (RD-404 upstream) when the
-    listing is empty or shapeless — never a guessed URL."""
+    listing is empty or shapeless — never a guessed URL.
+
+    `fiscal`: pick the row whose `toYr` matches this year exactly instead
+    of the max — the Dept 8 back-year fetch (e.g. --fiscal 2024 for
+    eMudhra's FY24 report). No match is honest None, never a fallback to
+    the newest row."""
     rows = (listing or {}).get("data") or []
     usable = [r for r in rows
               if isinstance(r, dict) and r.get("fileName")
@@ -145,6 +154,9 @@ def latest_report(listing: dict) -> dict | None:
               and str(r.get("toYr", "")).isdigit()]
     if not usable:
         return None
+    if fiscal is not None:
+        matches = [r for r in usable if str(r["toYr"]) == str(fiscal)]
+        return max(matches, key=lambda r: int(r["toYr"])) if matches else None
     return max(usable, key=lambda r: int(r["toYr"]))
 
 
@@ -156,9 +168,12 @@ def target_path(ticker: str, row: dict, out_dir=None) -> Path:
 
 def fetch_one(ticker: str, fetch_json_fn=_fetch_json,
               fetch_bytes_fn=_fetch_bytes, out_dir=None,
-              log_path=None, sleep_fn=time.sleep) -> dict:
+              log_path=None, sleep_fn=time.sleep, fiscal: str = None) -> dict:
     """One ticker, never raises. Returns {ticker, status, ...} where
-    status is downloaded | already_have | outage."""
+    status is downloaded | already_have | outage.
+
+    `fiscal`: fetch that specific fiscal year's row (toYr match) instead
+    of the listing's newest — see `latest_report`."""
     sym = _nse_symbol(ticker)
 
     def _attempt():
@@ -170,10 +185,11 @@ def fetch_one(ticker: str, fetch_json_fn=_fetch_json,
         except Exception:
             sleep_fn(RETRY_PAUSE)          # one polite retry, then honest
             listing = _attempt()
-        row = latest_report(listing)
+        row = latest_report(listing, fiscal=fiscal)
         if row is None:
-            _log_outage(sym, "RD-404", "no usable annual-report rows",
-                        log_path)
+            detail = (f"no report for fiscal {fiscal}" if fiscal
+                      else "no usable annual-report rows")
+            _log_outage(sym, "RD-404", detail, log_path)
             return {"ticker": sym, "status": "outage", "code": "RD-404"}
         dest = target_path(ticker, row, out_dir)
         if dest.exists():
@@ -202,9 +218,12 @@ def fetch_one(ticker: str, fetch_json_fn=_fetch_json,
 def run(tickers: list = None, limit: int = None, queue_path=None,
         fetch_json_fn=_fetch_json, fetch_bytes_fn=_fetch_bytes,
         out_dir=None, log_path=None, sleep_fn=time.sleep,
-        throttle=THROTTLE_RANGE) -> dict:
+        throttle=THROTTLE_RANGE, fiscal: str = None) -> dict:
     """The loop: queue (or explicit tickers) -> fetch_one each, jittered
-    pause between tickers, one summary dict out. Never raises."""
+    pause between tickers, one summary dict out. Never raises.
+
+    `fiscal`: applied to every ticker in this run — a specific back-year
+    batch, not a per-ticker mix."""
     todo = [t for t in (tickers if tickers is not None
                         else load_queue(queue_path))]
     if limit:
@@ -212,7 +231,7 @@ def run(tickers: list = None, limit: int = None, queue_path=None,
     results = []
     for i, ticker in enumerate(todo):
         results.append(fetch_one(ticker, fetch_json_fn, fetch_bytes_fn,
-                                 out_dir, log_path, sleep_fn))
+                                 out_dir, log_path, sleep_fn, fiscal=fiscal))
         if i < len(todo) - 1:
             sleep_fn(random.uniform(*throttle))
     by = {}
@@ -229,6 +248,9 @@ if __name__ == "__main__":
     ap.add_argument("--tickers", nargs="*", default=None,
                     help="override the screening queue")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--fiscal", type=str, default=None,
+                    help="fetch the report whose toYr matches this year "
+                         "(e.g. 2024) instead of the newest")
     ap.add_argument("--dry-run", action="store_true",
                     help="show what would be fetched; no network")
     args = ap.parse_args()
@@ -236,7 +258,7 @@ if __name__ == "__main__":
     if args.dry_run:
         print(json.dumps({"would_fetch": queue[:args.limit]}, indent=2))
     else:
-        out = run(tickers=args.tickers, limit=args.limit)
+        out = run(tickers=args.tickers, limit=args.limit, fiscal=args.fiscal)
         print(json.dumps({k: out[k] for k in ("as_of", "attempted",
                                               "summary")}, indent=2))
         for r in out["results"]:

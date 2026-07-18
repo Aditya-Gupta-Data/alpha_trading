@@ -644,3 +644,52 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   corrected to extracted 154-158; saved bench outputs re-graded
   offline (verdict unchanged — llama3.2:3b's YES strengthens: it had
   validated findings ON extracted p156; phi3/qwen still zero there).
+
+## Issue 18 — Issue 17's root cause also broke the human lake JSON itself, not just the benchmarker's grading window (2026-07-18, Chief Forensic Auditor acid test)
+
+- **Observed (verified 2026-07-18):** Issue 17 fixed `model_benchmarker`'s
+  grading window but never touched `data/lake/fundamental_reports/EMUDHRA/FY26.json`
+  (analyst `claude-fable-5`) — the file the ledger entry itself was diagnosing.
+  Running the mandated acid test (condense the eMudhra FY26 PDF, verify every
+  citation's quote against the raw extracted page it names) found the
+  contamination was worse than the one known page: of 6 checkable findings,
+  only 1 (`Total Borrowings`, p344) had a citation that actually verified.
+  The other 5: the capitalized-development flag cites p154 (real page 156 —
+  Issue 17's exact bug, still live in the file); the unbilled-revenue flag
+  cites p331 with an ellipsis-joined, non-verbatim "quote" (real sentence is
+  on p268); the DSO flag cites p101 (real page 154 — ironically the SAME
+  page number Issue 17 flagged as wrong for a *different* finding); the
+  revenue-growth quote doesn't appear verbatim anywhere in the document at
+  all (real page 55, but the JSON's exact text — hyphen instead of em-dash,
+  "diversified" instead of the ligature-broken "diversifi ed" — was
+  retyped, not copied); the director-resignation flag cites p310 (real page
+  124). Method: `extract_pages()` on the source PDF + exact substring
+  search against the RAW per-page text (not the condensed corpus) for every
+  finding's `quote` field, cross-checked by re-running all 7 corrected
+  findings through the pipeline's own `validate_findings()` guard (0 dropped).
+- **Root cause:** unconfirmed for certain, but consistent with Issue 17's
+  standing hypothesis — a manual read that tracked printed footer numbers
+  rather than the extracted-page index pypdf actually assigns (this report's
+  offset is not even constant: p154-printed→p156-extracted for one finding,
+  p101-printed→p154-extracted for another, suggesting hand-transcription
+  error compounded the footer/index mismatch, not a single fixed offset).
+- **Impact:** advisory-only research lake data, never touched a live
+  decision (Dept 8 iron rule) — no trading impact. But it is exactly the
+  failure mode this department's "a finding without a quote does not
+  exist" rule exists to prevent, and it was sitting in a file another
+  session had already labeled an acid-test reference case.
+- **Resolution (2026-07-18):** per the standing hard rule (never overwrite
+  another session's lake JSON), wrote
+  `data/lake/fundamental_reports/EMUDHRA/FY26.v2.json` — same substantive
+  thesis (fast grower, QoE concern from capitalized development + rising
+  unbilled revenue) preserved, all citations independently re-verified,
+  plus one new finding (management's own "Organic IP Investment" framing
+  of the identical ₹601 Mn capitalised spend on the FY26 highlights page,
+  p55) that strengthens the existing thesis rather than changing it. Both
+  files now coexist; `FY26.v2.json` carries a `conflict_note` field
+  documenting the discrepancy for whoever reconciles them.
+- **Follow-up:** triage should decide which file is canonical (or merge),
+  and whether the SAME citation-integrity check (re-verify every existing
+  lake JSON's quotes against `extract_pages()`) is worth running across
+  the other three on-disk benchmarks (AZAD, JWL, VEDL FY25) before they're
+  trusted as ground truth for future model-benchmarker runs.

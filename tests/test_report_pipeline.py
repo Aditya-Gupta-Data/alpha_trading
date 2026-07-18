@@ -123,6 +123,27 @@ def test_load_queue_reads_step1_output_and_fails_honest(tmp_path):
     assert RD.load_queue(tmp_path / "missing.json") == []
 
 
+def test_extract_pages_strips_nul_bytes(monkeypatch):
+    """A corrupted font/encoding table in some real filings makes pypdf
+    emit NUL bytes in extract_text() — left in, a single NUL anywhere in
+    the condensed corpus file makes grep (and other line-based text
+    tools) silently treat the whole file as binary and match nothing.
+    Real incident, 2026-07-18 (a small-cap filing)."""
+    class FakePage:
+        def extract_text(self_):
+            return "loan to holding\x00 company at 13.5% interest"
+
+    class FakeReader:
+        def __init__(self_, path):
+            self_.pages = [FakePage()]
+
+    import pypdf
+    monkeypatch.setattr(pypdf, "PdfReader", FakeReader)
+    pages = A.extract_pages("fake.pdf")
+    assert "\x00" not in pages[0]
+    assert pages[0] == "loan to holding company at 13.5% interest"
+
+
 # ------------------------------------------------- section-aware condenser
 
 def _page(header, body_words=200, filler="operations continued steadily "):

@@ -150,13 +150,18 @@ Rules:
 
 def extract_pages(pdf_path) -> list:
     """One string per page. Lazy pypdf import; a page pypdf cannot read
-    becomes "" (counted as unreadable downstream, never guessed)."""
+    becomes "" (counted as unreadable downstream, never guessed). NUL
+    bytes stripped: some PDFs' embedded font/encoding tables make pypdf
+    emit them, and a NUL anywhere in the condensed corpus file makes
+    grep (and some other line-based text tools) silently treat the whole
+    file as binary and match nothing — a real incident on a small-cap
+    filing, 2026-07-18."""
     from pypdf import PdfReader
     pages = []
     reader = PdfReader(str(pdf_path))
     for pg in reader.pages:
         try:
-            pages.append(pg.extract_text() or "")
+            pages.append((pg.extract_text() or "").replace("\x00", ""))
         except Exception:
             pages.append("")
     return pages

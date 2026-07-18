@@ -693,3 +693,36 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   lake JSON's quotes against `extract_pages()`) is worth running across
   the other three on-disk benchmarks (AZAD, JWL, VEDL FY25) before they're
   trusted as ground truth for future model-benchmarker runs.
+
+## Issue 19 — the citation rot is ALL FOUR manual benchmarks, not just eMudhra (2026-07-18, triage of Issue 18's follow-up)
+
+- **Observed (verified 2026-07-18):** ran Issue 18's citation-integrity
+  method (every finding's `quote` substring-checked, whitespace/ligature-
+  normalized, against the RAW `extract_pages()` text of the source PDF)
+  across every human-authored benchmark lake JSON. Verify rates:
+  AZAD/FY25 2/5, JWL/FY25 3/6, VEDL/FY25 2/11, EMUDHRA/FY26 1/6. Only
+  `EMUDHRA/FY26.v2.json` — the condenser+`validate_findings`-assisted
+  rebuild — passed clean (7/7). The failure modes mix: some cite the
+  wrong extracted page (EMUDHRA p154→156, JWL p30→73), most have quotes
+  that appear NOWHERE verbatim (VEDL 9/11), i.e. hand-transcribed
+  summaries typed as if they were copied quotes.
+- **Root pattern:** all four originals were MANUAL reads (a human/chat
+  session reading the PDF and typing JSON). The single clean file is the
+  one built THROUGH the coded pipeline's quote-validator. This is direct
+  evidence for consolidating onto the automated read — hand-transcription
+  is the contamination source, and `validate_findings` structurally
+  cannot emit an unquotable citation.
+- **Impact (bounded):** advisory-only research data — never touched a
+  live trade (Dept 8 iron rule). BUT it is trusted as GROUND TRUTH by
+  (a) `tests/test_annual_report_analyzer.py`, which reads needle pages
+  dynamically from these JSONs to assert condenser recall, and (b) the
+  `model_matchup.md` "analyst benchmark" row (built on the contaminated
+  EMUDHRA/FY26). Neither is corrected yet — flagged here.
+- **Ruling (triage):** (1) `EMUDHRA/FY26.v2.json` is CANONICAL; the
+  original `FY26.json` is superseded (retain for provenance, mark
+  deprecated). (2) AZAD/JWL/VEDL FY25 are NOT trustworthy as ground
+  truth until regenerated the same machine-assisted way v2 was —
+  condense → read → every citation `validate_findings`-checked before
+  write. Do NOT let the 50-company parallel run anchor on them meanwhile.
+- **Resolution:** pending — regeneration folds into the Gemini-synthesis
+  pipeline consolidation (the automated read replaces the manual one).

@@ -168,3 +168,51 @@ def test_news_parser_uses_injected_backend_unchanged():
 if __name__ == "__main__":
     import subprocess
     raise SystemExit(subprocess.call(["python", "-m", "pytest", __file__, "-q"]))
+
+
+# ------------------------------------------------- gemini backend (2026-07-19)
+
+def _gemini_reply(text):
+    return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+
+
+def test_get_extractor_routes_gemini():
+    from src.text_intelligence import GeminiExtractor, get_extractor
+    ex = get_extractor("gemini", config={})
+    assert isinstance(ex, GeminiExtractor)
+
+
+def test_gemini_chat_json_parses_and_sends_key_in_header():
+    from src.text_intelligence import GeminiExtractor
+    seen = {}
+
+    def fake_post(url, body):
+        seen["url"] = url
+        seen["body"] = body
+        return _gemini_reply('{"figure": "INR 476.38 million"}')
+
+    ex = GeminiExtractor(api_key="k", model="gemini-flash-lite-latest",
+                         post_fn=fake_post)
+    out = ex.chat_json("system rules", "page text")
+    assert out == {"figure": "INR 476.38 million"}
+    assert "key=" not in seen["url"]          # never in the query string
+    assert "gemini-flash-lite-latest" in seen["url"]
+    assert seen["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert "system rules" in seen["body"]["systemInstruction"]["parts"][0]["text"]
+
+
+def test_gemini_fails_open_without_key_input_or_network():
+    from src.text_intelligence import GeminiExtractor
+    assert GeminiExtractor(api_key="", post_fn=lambda u, b: {}).chat_json("s", "u") is None
+    ex = GeminiExtractor(api_key="k", post_fn=lambda u, b: None)
+    assert ex.chat_json("s", "u") is None     # HTTP/network failure
+    assert ex.chat_json("s", "  ") is None    # empty input never calls out
+    assert GeminiExtractor(api_key="k").is_reachable() is True
+    assert GeminiExtractor(api_key="").is_reachable() is False
+
+
+def test_gemini_strips_fences_like_the_other_backends():
+    from src.text_intelligence import GeminiExtractor
+    ex = GeminiExtractor(api_key="k", post_fn=lambda u, b: _gemini_reply(
+        '```json\n{"ok": true}\n```'))
+    assert ex.chat_json("s", "u") == {"ok": True}

@@ -65,6 +65,14 @@ PROCESSED_LEDGER = ROOT / "logs" / "text_intel_processed.jsonl"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+# Gemini (2026-07-19, the hybrid-pipeline synthesis layer): same endpoint
+# family news_processor has used in production. ALIAS not a pinned name —
+# the repo's lesson is that pinned Gemini models rot and 404
+# (gemini-2.0-flash did, ledger-noted in news_processor). Key travels in
+# the x-goog-api-key HEADER, never the URL query string.
+GEMINI_URL_TMPL = ("https://generativelanguage.googleapis.com/v1beta/"
+                   "models/{model}:generateContent")
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 ANTHROPIC_BATCH_URL = "https://api.anthropic.com/v1/messages/batches"
 ANTHROPIC_VERSION = "2023-06-01"
 
@@ -254,6 +262,72 @@ def _json_line(line) -> dict | None:
         return None
 
 
+class GeminiExtractor:
+    """LocalExtractor-shaped Gemini client (raw httpx — no SDK, the house
+    convention shared by the Claude and Ollama backends). The hybrid
+    pipeline's SYNTHESIS layer (owner decision 2026-07-19): the local 3B
+    collects quote-verified evidence; accounting inference — the measured
+    'synthesis wall', e.g. investing-outflow-on-development = capitalized
+    R&D — is delegated here. Budget: the owner's Gemini key carries its
+    own monthly cap; flash-lite is the cheap default, `gemini_model` in
+    config (or the model= arg) escalates to a pro-class alias."""
+
+    def __init__(self, api_key: str = None, model: str = None,
+                 post_fn=None):
+        self.api_key = api_key if api_key is not None else _env("GEMINI_API_KEY")
+        self.model = model or _config().get("gemini_model",
+                                            DEFAULT_GEMINI_MODEL)
+        self._post_fn = post_fn
+
+    def is_reachable(self) -> bool:
+        """Key presence — same honest cheap check as ClaudeExtractor."""
+        return bool(self.api_key)
+
+    def _post(self, url: str, body: dict) -> dict | None:
+        if self._post_fn is not None:
+            return self._post_fn(url, body)
+        try:
+            import httpx
+            resp = httpx.post(url, json=body, timeout=HTTP_TIMEOUT,
+                              headers={"x-goog-api-key": self.api_key or "",
+                                       "content-type": "application/json"})
+            if resp.status_code >= 300:
+                print(f"  (text_intelligence/gemini: HTTP {resp.status_code})")
+                return None
+            return resp.json()
+        except Exception as e:
+            print(f"  (text_intelligence/gemini: request failed: {e})")
+            return None
+
+    def _params(self, system: str, user: str) -> dict:
+        return {
+            "systemInstruction": {"parts": [{"text": (system or "")
+                                             + " Return ONLY one JSON object "
+                                               "— no prose, no markdown "
+                                               "fences."}]},
+            "contents": [{"role": "user", "parts": [{"text": str(user)}]}],
+            "generationConfig": {"temperature": 0, "maxOutputTokens": 2048,
+                                 "responseMimeType": "application/json"},
+        }
+
+    @staticmethod
+    def _text_of(data: dict) -> str | None:
+        for cand in (data or {}).get("candidates") or []:
+            for part in ((cand.get("content") or {}).get("parts")) or []:
+                if isinstance(part.get("text"), str):
+                    return part["text"]
+        return None
+
+    def chat_json(self, system: str, user: str) -> dict | None:
+        if not self.api_key or not user or not str(user).strip():
+            return None
+        data = self._post(GEMINI_URL_TMPL.format(model=self.model),
+                          self._params(system, user))
+        if not isinstance(data, dict):
+            return None
+        return _extract_json(self._text_of(data))
+
+
 # ------------------------------------------------- backend selection
 
 def get_extractor(backend: str = None, model: str = None,
@@ -268,6 +342,9 @@ def get_extractor(backend: str = None, model: str = None,
     if name == "claude":
         return ClaudeExtractor(
             model=model or cfg.get("text_intelligence_model"), **kwargs)
+    if name == "gemini":
+        return GeminiExtractor(
+            model=model or cfg.get("gemini_model"), **kwargs)
     if name != "ollama":
         print(f"  (text_intelligence: unknown backend '{name}', using ollama)")
     from src.local_parser import LocalExtractor

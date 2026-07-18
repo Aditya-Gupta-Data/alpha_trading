@@ -726,3 +726,27 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   write. Do NOT let the 50-company parallel run anchor on them meanwhile.
 - **Resolution:** pending — regeneration folds into the Gemini-synthesis
   pipeline consolidation (the automated read replaces the manual one).
+
+## Issue 20 — RD-404 stale-symbol outages during the owner's small/micro-cap diligence run (2026-07-18)
+
+- **Observed (verified 2026-07-18, `logs/report_downloader.jsonl`):** while
+  fetching annual reports for two owner-supplied small/micro-cap ticker
+  lists, `report_downloader` returned honest RD-404 ("no usable
+  annual-report rows") for 5 symbols: `PREVEST`, `COOLCAPS`, `SIKA`,
+  `CHEMTECH` (first list), and `LGBROSLTD` (second list, first ticker
+  attempted). Per the LTIM/TATAMOTORS lesson (Issue 15), this means NSE's
+  annual-reports API has nothing filed under exactly that symbol — not
+  necessarily that the company doesn't exist, since small/SME-listed
+  names are more prone to symbol drift (BSE-vs-NSE listing, SME-platform
+  vs mainboard, a recent rename/relisting) than the large-cap watchlist
+  this clerk was originally built against.
+- **Not investigated further this session** (out of scope for a Dept 8
+  research pass — this is a data-availability gap, not a code bug): each
+  symbol was logged and skipped per the downloader's fail-open design;
+  the owner was told inline which tickers had no report available rather
+  than the loop silently omitting them from the forensic batch.
+- **Follow-up (if this recurs on the next batch):** worth a quick manual
+  NSE-symbol-search check on 1-2 of these to confirm whether it's a true
+  gap or a symbol variant (e.g. `SIKA` vs `SIKAINTER`, `CHEMTECH` vs a
+  different exchange code) before assuming the company has no annual
+  report filed at all.

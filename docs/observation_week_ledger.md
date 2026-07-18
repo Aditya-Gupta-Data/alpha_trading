@@ -585,3 +585,25 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   AUTO sector basket; TMCV.NS added to SECURITY_ID_MAP with the verified
   id. Had this shipped, the live engine would have burned two unresolvable
   fetch slots every loop all session.
+
+## Issue 16 — analysis decision-day derived from host timezone (2026-07-19, review-#2 follow-up, code-verified)
+
+- **Observed (code-verified 2026-07-19):** `src/analysis/regime_filters.py`'s
+  `_distribution()` computed its decision day with `datetime.date.today()` —
+  the HOST timezone's date. The live engine runs on the GCP VM, which keeps
+  UTC: between midnight IST and 05:30 IST, `date.today()` there returns
+  *yesterday's* IST date, shifting the smart-money veto's 90-day deals window
+  by one day. Materiality is low during market hours (the loop runs
+  09:15–15:30 IST, when the two dates agree) — but the repo's own rule is
+  that all timing is IST regardless of host (`market_loop`'s design note),
+  and the analysis package claims strict point-in-time discipline. Found
+  while writing the Department 8 test coverage mandated by review #2 —
+  the package had ZERO dedicated tests when this shipped live in `6d89eb4`.
+- **Fix (2026-07-19):** `_distribution()` now derives its default decision
+  day from the shared IST clock (`market_loop.ist_now`), and `advise()`
+  threads its existing `as_of` parameter through to `_distribution` so
+  point-in-time callers pin the date explicitly. Pinned by
+  `tests/test_analysis_signals.py` (a 01:00-IST clock must see an
+  IST-yesterday deal that a UTC clock would miss) alongside the new
+  58-test Department 8 coverage (`test_regime_filters.py` +
+  `test_analysis_signals.py`).

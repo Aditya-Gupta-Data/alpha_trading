@@ -132,9 +132,10 @@ approach its **Manager** — don't dig through files.
 ## Analysis (top-down sectoral)
 
 Department 8 (the research desk). Read-only, strict point-in-time, NULL-honest,
-fail-open; the one live seam out is `regime_filters.advise()`. **Known debt
-(review #2): no dedicated test file covers this package — the options suite
-proves only the fail-open path.**
+fail-open; the one live seam out is `regime_filters.advise()`. The review #2
+zero-coverage debt is CLOSED (2026-07-19): `tests/test_regime_filters.py`
+covers the manager seam + proposer contract, `tests/test_analysis_signals.py`
+covers all five signal/research modules.
 
 | File | Purpose |
 |---|---|
@@ -199,6 +200,8 @@ proves only the fail-open path.**
 | `tests/test_live_bridge.py` | Phase 6H live bridge: packet parsing, candle-bucket playback, live fetch_market_state contract (hours gate, dead quote, vol_overrides), intraday profit-take/pre-expiry/clamp arithmetic, alert de-dup, read-only sandbox spy — 19 tests, offline. |
 | `tests/test_trade_planner.py` | Phase 6I planner: routing matrix, trend/IV classifier boundaries, Bank Nifty strike snapping, support/resistance overrides, VIX-gate consistency, purity + import guard — 21 tests, offline. |
 | `tests/test_train_skeptic.py` | Phase 7b trainer: frozen feature-order contract, scratch dropping, thin-data refusals, separable-pattern learning, ship-gate refusal of coin-flip models + `--force` override, trained pickle waking the skeptic from abstain — 12 tests, offline (temp-dir model files only). |
+| `tests/test_analysis_signals.py` | Dept 8 signal modules (closes the rest of the review #2 coverage gap): smart_money_trend value-weighted NIV + STRICT point-in-time boundary (decision-day deal excluded) + block-only/side-filtered VWAP + smart_money_ok honest abstain + load_deals_by_ticker grouping/junk-skip via a tmp ledger; sector_trend bullish above/below both SMAs + NULL-honest short-history error + relative-strength leader/laggard/no-bars/short-history; macro_shocks.active_shock inclusive window boundaries; conviction factor functions (pristine=1.0, value-trap ×0.25 crush, roe-None neutral, sector half-credit) + 40/40/20 weighting + the exactly-0.40-is-not-a-veto boundary; institutional_alpha accumulation thresholds (2-deal minimum, 0.20 net ratio, decision-day exclusion) + pullback_trigger hold/invalidation/from-above/no-vwap; **the IST decision-day fix** (default date from `market_loop.ist_now`, not host tz; explicit `as_of` threads `advise()` → `_distribution`) — 33 tests, offline. |
+| `tests/test_regime_filters.py` | Dept 8 manager seam (the review #2 zero-coverage finding, closed 2026-07-19): every crisis trigger (VIX≥25 panic, ≥15% d/d spike, macro-shock window) + calm/None/zero-prev fail-opens; the ≥2-of-top-3 distribution veto incl. the 90d window boundary and no-deals/no-mapping fail-opens; the sector veto with injected `is_sector_bullish` (bearish/bullish/exploding/no-mapping); `advise()` verdict shape + permissive fail-open on a radar exception; the PROPOSER CONTRACT (veto blocks ONLY bullish, crisis blocks ONLY neutral short-premium, permissive advisory byte-identical to none — all via injected analysis/vix/expiry/empty-chain, zero network); `fetch_market_state` composes the advisory and an unreadable deals ledger costs the advisory, never the cycle — 25 tests, offline. |
 | `tests/test_ceo_brief.py` | CEO Brief: issue bucketing + most-specific-first precedence, a guard that every bucket pattern matches text `ops_monitor` actually flags (no dead patterns), heartbeat green/silent/fail-open, **the anti-theft pair — the brief's sweep leaves `ops_monitor`'s state intact and never writes the problem ledger**, own-offset advance, corrupt-state recovery, deploy-log latest-per-service + split-sha shout + torn-line tolerance + host stamp, risk reuse of `eod_summary`, card render through the REAL `_build_embed` (colour + 4 fields survive), `fire_broadcast`-only routing, dry-run sends nothing — 37 tests, offline. |
 | `tests/test_ops_monitor.py` | Ops sweep: problem-pattern matching, incremental offsets, rotation recovery, dedupe counts, self-log exclusion, weekday-aware heartbeats, jsonl ledger, card formatting, broken-notifier safety — 10 tests, offline. |
 | `tests/test_master_scheduler.py` | Phase 7A scheduler: session-window math, past-close misfire exit, loops armed + self-close at 15:30, stop-event (signal) shutdown, pre-open wait cancellation, dying-loop safety, planner playbook lines — 8 tests, offline (hand-wound IST clock). |

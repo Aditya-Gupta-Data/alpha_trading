@@ -173,10 +173,12 @@ Shadow Equity Engine's thesis) and `conviction` (a 0–1 multi-factor score that
   imports analysis modules directly, and the deals ledger is loaded once per
   cycle in `market_loop` — never inside `build_proposal`.
 
-**Known debts (review #2):** the package has **no dedicated tests** — the 56
-options tests prove only the fail-open path (advisory absent = engine
-unchanged), not the veto/crisis logic itself, and that logic is LIVE on the VM.
-Closing that is the top post-review task. The veto's supporting evidence is
+**Known debts (review #2):** the package shipped with ZERO tests while its
+veto logic was LIVE on the VM — closed 2026-07-19 by
+`tests/test_regime_filters.py` (the manager seam + the proposer contract) and
+`tests/test_analysis_signals.py` (all five signal/research modules, plus the
+IST decision-day fix: the default `as_of` now comes from the shared IST clock,
+never the host timezone). The veto's supporting evidence is
 the simulator, whose P&L is known-inflated — acceptable for a
 conservative veto, not transferable to anything that adds risk.
 

@@ -31,15 +31,18 @@ VIX_SPIKE_PCT = 0.15     # abrupt day-over-day VIX jump -> crisis
 VIX_PANIC = 25.0         # absolute panic level
 
 
-def _distribution(underlying, deals_by_ticker):
+def _distribution(underlying, deals_by_ticker, as_of=None):
     """>=2 of the index's top-3 constituents in net institutional distribution
-    over the last 90d. Returns (bool, detail). Fail-open (None deals -> False)."""
+    over the last 90d. Returns (bool, detail). Fail-open (None deals -> False).
+    The default decision day comes from the shared IST clock, never the host's
+    timezone — on a UTC box, date.today() lags IST until 05:30."""
     from src.analysis import smart_money_trend as SM
     tickers = INDEX_CONSTITUENTS.get(underlying, [])
     if not tickers or deals_by_ticker is None:
         return False, "no constituent/deals data"
-    from datetime import date
-    as_of = date.today().isoformat()
+    if as_of is None:
+        from src.market_loop import ist_now
+        as_of = ist_now().date().isoformat()
     distributing = []
     for t in tickers:
         niv = SM.net_institutional_volume(deals_by_ticker.get(t, []), as_of, 90)
@@ -87,7 +90,7 @@ def advise(underlying, vix=None, prev_vix=None, as_of=None, deals_by_ticker=None
     """VIEW-INDEPENDENT verdict the proposer applies by view. Fail-open: any
     failure -> a permissive verdict (no block)."""
     try:
-        dist, dist_why = _distribution(underlying, deals_by_ticker)
+        dist, dist_why = _distribution(underlying, deals_by_ticker, as_of)
         secb, sec_why = _sector_bearish(underlying)
         crisis = crisis_regime(vix, prev_vix, as_of)
         return {

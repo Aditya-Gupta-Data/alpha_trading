@@ -84,8 +84,10 @@ archive: option chains, bulk deals, FII/DII flows (`flows_tracker` forward,
 `flows_backfill` for owner-supplied history), earnings dates, macro, news
 (`rss_ingester`, decision #75 — publishers' OWN feeds, never scrapes),
 corporate announcements (`corporate_events` — catalyst/expansion/risk
-classified), full fundamental statements (`fundamental_parser`, yfinance), and
-15-minute intraday snapshots (`intraday_tracker`). `config/sector_universe.json`
+classified), full fundamental statements (`fundamental_parser`, yfinance), 15-minute
+intraday snapshots (`intraday_tracker`), and annual-report PDFs
+(`report_downloader` — NSE's filings archive, Mac-only, throttled,
+honest outage codes; feeds Department 8's forensic reader). `config/sector_universe.json`
 (7 NSE sectors → parent index + ~70 constituents) is this department's map of
 the market's structure.
 
@@ -155,7 +157,12 @@ SMAs; stock vs sector relative strength), `macro_shocks` (the War Playbook —
 known crisis windows and which sectors historically survive them),
 `regime_filters` (the manager — composes those into the two live radars: the
 smart-money/sector VETO on bullish index spreads, and the CRISIS regime that
-disables short-premium structures), plus two **research-stage orphans**:
+disables short-premium structures), `annual_report_analyzer` (the forensic
+annual-report reader: section-aware condensation → LLM extraction through
+`text_intelligence` → a verbatim-quote validator that DROPS any finding whose
+quote isn't on the cited page — so a weak local model yields fewer findings,
+never fabricated evidence; conviction JSONs land in the lake, advisory-only),
+plus two **research-stage orphans**:
 `institutional_alpha` (VWAP-pullback entry primitives — signal source for the
 Shadow Equity Engine's thesis) and `conviction` (a 0–1 multi-factor score that
 *aspires* to drive position sizing).

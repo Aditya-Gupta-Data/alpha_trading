@@ -617,3 +617,30 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   have landed on the wrong day. Fixed with the merge: `_now_iso()` now
   stamps IST wall-clock (naive format unchanged); test-pinned in
   `tests/test_margin_stress.py` (stamp prefix must equal the IST date).
+
+## Issue 17 — needle grading aimed at printed page numbers, not extracted indices (2026-07-19, sniper-recon catch)
+
+- **Observed (verified 2026-07-19):** the model-matchup benchmark graded
+  "caught the eMudhra R&D needle" against pages 153-155 because the
+  human benchmark JSON cites "page 154" — but that is the report's
+  PRINTED page number. The ₹476.38 Mn product-development sentence
+  lives on EXTRACTED page 156 (pypdf indexing; offset 2 from cover
+  inserts). All three models were graded against a window two pages
+  left of the target. Scope: confirmed for EMUDHRA FY26; the other
+  benchmark reports' cited pages were content-verified against
+  extracted indices during condenser tuning (VEDL 289/291, AZAD 120,
+  NALCO 34-71) and matched.
+- **Also established by the same sniper test:** the needle is NOT in a
+  table — it is clean MD&A cash-flow prose with no "capitalised"
+  keyword nearby. Layout-preserving extraction tripled the text and
+  blew the 4096-token context; aimed at the single page with a
+  targeted forensic-accountant prompt, llama3.2:3b quoted the correct
+  sentence region verbatim but chose the headline cash-outflow figure
+  — the analyst's finding requires the inference "investing outflow on
+  product development = capitalized R&D," which is a synthesis step a
+  3B does not make. The "synthesis wall" is real and now precisely
+  located; the aim bug was ours.
+- **Fix (2026-07-19):** `model_benchmarker.needle_checks` window
+  corrected to extracted 154-158; saved bench outputs re-graded
+  offline (verdict unchanged — llama3.2:3b's YES strengthens: it had
+  validated findings ON extracted p156; phi3/qwen still zero there).

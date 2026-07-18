@@ -75,9 +75,13 @@ def ensure_model(model: str) -> float:
 
 
 def needle_checks(result: dict) -> dict:
+    """Sniper-recon correction (2026-07-19, ledger Issue 17): the
+    benchmark's 'page 154' is the report's PRINTED page number; the
+    Rs.476 Mn sentence lives on EXTRACTED page 156 (offset 2). The
+    window is extracted 154-158 so printed-page cites land inside it."""
     every = (result["operational_wins"] + result["shareholder_returns"]
              + result["hidden_risks_and_flags"])
-    caught = any(f.get("page") in (153, 154, 155) for f in every)
+    caught = any(f.get("page") in (154, 155, 156, 157, 158) for f in every)
     crisp = any("476" in (f.get("quote") or "") for f in every)
     return {"caught_154": caught, "crisp_476": crisp}
 

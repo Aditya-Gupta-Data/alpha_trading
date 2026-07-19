@@ -44,7 +44,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-QUEUE_PATH = ROOT / "data" / "screening_queue.json"
+# The Darling Pipeline queue (owner directive 2026-07-19): the Dept-8
+# fundamental_screener writes darlings_queue.json; this clerk listens to
+# it. screening_queue.json is the legacy name, kept as a fallback so old
+# hand-written queues still work — ONE queue is canonical, never both.
+QUEUE_PATH = ROOT / "data" / "darlings_queue.json"
+LEGACY_QUEUE_PATH = ROOT / "data" / "screening_queue.json"
 REPORTS_DIR = ROOT / "data" / "fundamental_reports"
 OUTAGE_LOG = ROOT / "logs" / "report_downloader.jsonl"
 WATCHLIST_PATH = ROOT / "config" / "watchlist.yaml"
@@ -89,15 +94,20 @@ def _nse_symbol(ticker: str) -> str:
 
 
 def load_queue(queue_path=None) -> list:
-    """data/screening_queue.json ({"tickers": [...]}) — the Step-1
-    screener's output. Missing/broken file returns [] (the CLI then
-    requires --tickers; nothing is guessed)."""
-    path = Path(queue_path) if queue_path else QUEUE_PATH
-    try:
-        data = json.loads(path.read_text())
-        return [t for t in data.get("tickers", []) if isinstance(t, str)]
-    except (OSError, ValueError):
-        return []
+    """The darlings queue ({"tickers": [...]}, fundamental_screener's
+    output), falling back to the legacy screening_queue.json name.
+    Missing/broken file returns [] (the CLI then requires --tickers;
+    nothing is guessed)."""
+    candidates = ([Path(queue_path)] if queue_path
+                  else [QUEUE_PATH, LEGACY_QUEUE_PATH])
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text())
+            return [t for t in data.get("tickers", [])
+                    if isinstance(t, str)]
+        except (OSError, ValueError):
+            continue
+    return []
 
 
 # ----------------------------------------------------- the network seams

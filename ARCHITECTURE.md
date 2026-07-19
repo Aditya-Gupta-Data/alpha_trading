@@ -85,9 +85,11 @@ archive: option chains, bulk deals, FII/DII flows (`flows_tracker` forward,
 (`rss_ingester`, decision #75 — publishers' OWN feeds, never scrapes),
 corporate announcements (`corporate_events` — catalyst/expansion/risk
 classified), full fundamental statements (`fundamental_parser`, yfinance), 15-minute
-intraday snapshots (`intraday_tracker`), and annual-report PDFs
+intraday snapshots (`intraday_tracker`), annual-report PDFs
 (`report_downloader` — NSE's filings archive, Mac-only, throttled,
-honest outage codes; feeds Department 8's forensic reader). `config/sector_universe.json`
+honest outage codes; feeds Department 8's forensic reader), and
+exchange-filed quarterly results (`nse_results` — the Darling
+Pipeline's quant feed, same safe-crawl doctrine). `config/sector_universe.json`
 (7 NSE sectors → parent index + ~70 constituents) is this department's map of
 the market's structure.
 
@@ -164,6 +166,10 @@ quote isn't on the cited page — so a weak local model yields fewer findings,
 never fabricated evidence; conviction JSONs land in the lake, advisory-only),
 `cohort_comparator` (the side-by-side matrix of human deep-read scores and
 machine scores — two instruments, never rescaled into one number),
+`fundamental_screener` (the Darling screen: mechanical pass rule over
+exchange-filed numbers + the forensic trust gate; writes every passer to
+`darlings_queue.json`, which the report_downloader consumes — quant finds
+the darlings, the deep-read tells us if they're genuine),
 plus two **research-stage orphans**:
 `institutional_alpha` (VWAP-pullback entry primitives — signal source for the
 Shadow Equity Engine's thesis) and `conviction` (a 0–1 multi-factor score that

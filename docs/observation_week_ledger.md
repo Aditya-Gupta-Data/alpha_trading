@@ -766,3 +766,39 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   ... [--fiscal YYYY]` re-fills them into data/fundamental_reports/; the
   corpus tests' glob then needs updating from the Desktop path to the
   dropzone path (they were written against the Desktop location).
+
+## Issue 21 — NSE results-comparision API serves a FROZEN window (ends Q3 FY25) for every symbol (2026-07-19 night, caught by the staleness guard on the valuation engine's FIRST live run)
+
+- **Observed (verified):** every capture in data/lake/financial_results/
+  holds exactly 5 filed quarters ending 31-Dec-2024 — TCS, MARUTI,
+  KPITTECH, ANANDRATHI, ASHOKLEY, RPPINFRA all identical windows. The
+  results-comparision endpoint returns a stale fixed comparison set,
+  ~18 months behind, uniformly. Discovery chain: first valuation run
+  printed BAJFINANCE P/E 4.05 (fake-cheap: pre-split Dec-2024 EPS vs
+  today's post-split price) -> staleness guard added -> guard zeroed
+  the ENTIRE universe -> stored windows inspected -> frozen API window
+  established as fact.
+- **Consequences, owned in full:**
+  (a) the 73-darling QUANT screen ran on Dec-2024-vintage growth — it
+  is a consistent cross-section (same as-of for everyone, so relative
+  filtering retains meaning) but it is NOT "current growth" as
+  reported earlier tonight;
+  (b) tonight's first valuation scores AND the 8-name RIPE card are
+  WITHDRAWN (erratum card fired); the corrected basket now honestly
+  shows no_valuation for all until a fresh source lands;
+  (c) UNAFFECTED and still current: the forensic deep-reads (FY25/FY26
+  documents), the pricer levels (Friday's bhavcopy bars), the zones/
+  stops/extension states, the VM deploy.
+- **Fix path (next session):** (1) probe the corporates-financial-
+  results LISTING sorted by broadcast date for 2026 filings and crack
+  the -data detail endpoint params (the site itself uses it — current
+  data exists behind it); (2) pragmatic fallback: ANNUAL results
+  (FY26 annuals filed ~Apr-May 2026, well inside any staleness bound)
+  for TTM valuation inputs; (3) re-label the darlings queue criteria
+  with its data vintage either way.
+- **The system-design vindication worth recording:** the guard built
+  from the FIRST anomaly (one fake-cheap P/E) caught a dataset-wide
+  integrity failure on the same night it shipped, and the basket
+  self-corrected to zero rather than keep advertising stale ripeness.
+  NULL-honesty extended to TIME is now a standing rule: no valuation
+  without a freshness check on the inputs.

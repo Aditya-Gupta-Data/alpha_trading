@@ -18,7 +18,8 @@ def _capture(eps=(10.0, 9.0, 8.5, 8.0, 8.0), sales=1000.0,
         periods.append({"eps_basic": eps[i],
                         "net_sale": None if bank else sales,
                         "interest_earned": sales if bank else None,
-                        "face_value": face, "paidup_capital": paidup})
+                        "face_value": face, "paidup_capital": paidup,
+                        "to": "31-Mar-2026"})
     return {"is_bank": bank, "periods": periods}
 
 
@@ -104,3 +105,23 @@ def test_run_scores_only_queued_darlings(tmp_path):
     written = json.loads((tmp_path / "val.json").read_text())
     assert written["universe_n"] >= 26
     assert "ADVISORY-ONLY" in written["advisory_note"]
+
+
+def test_stale_filings_window_is_insufficient_never_scored():
+    """The BAJFINANCE lesson: a 19-month-old trailing window against
+    today's price manufactures fake-cheap multiples."""
+    cap = _capture()
+    for i, p in enumerate(cap["periods"]):
+        p["to"] = f"31-Dec-{2024 - (i // 4)}"       # newest ends Dec-2024
+    from datetime import date
+    m = VS.ttm_metrics(cap, close=100.0, today=date(2026, 7, 19))
+    assert m["status"] == "insufficient_data" and "stale" in m["reason"]
+
+
+def test_corporate_action_scar_is_insufficient():
+    cap = _capture(eps=(90.0, 85.0, 20.0, 18.0, 17.0))   # split scar >4x
+    for p in cap["periods"]:
+        p["to"] = "31-Mar-2026"
+    from datetime import date
+    m = VS.ttm_metrics(cap, close=100.0, today=date(2026, 7, 19))
+    assert m["status"] == "insufficient_data" and "corporate action" in m["reason"]

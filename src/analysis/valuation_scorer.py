@@ -57,15 +57,48 @@ WINSOR_FRAC = 0.01
 
 # ------------------------------------------------- per-symbol raw metrics
 
-def ttm_metrics(capture: dict, close):
+STALE_DAYS = 200          # newest filed quarter older than this -> unusable
+EPS_STEP_MAX = 4.0        # a >4x jump inside 5 quarters = split/bonus scar
+
+
+def _period_end(p: dict):
+    """'31-DEC-2024' / '31-Dec-2024' -> date, or None."""
+    from datetime import datetime as _dt
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return _dt.strptime(str(p.get("to", "")).title(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def ttm_metrics(capture: dict, close, today=None):
     """One results capture + latest close -> {"pe","peg","ps"} or a veto/
-    insufficient marker. NULL-honest and veto-honest throughout."""
+    insufficient marker. NULL-honest and veto-honest throughout.
+
+    The BAJFINANCE lesson (2026-07-19 first live run): the API can serve
+    a STALE trailing window (19 months old) and EPS series that straddle
+    a split/bonus — summing those against today's price manufactures a
+    fake-cheap P/E of 4. Two guards, both on already-stored data:
+    staleness (newest quarter must be < STALE_DAYS old) and a
+    corporate-action scar check (no >4x step inside the EPS series)."""
     periods = (capture or {}).get("periods") or []
     if close is None or len(periods) < 5:
         return {"status": "insufficient_data"}
+    from datetime import date as _date, timedelta as _td
+    end = _period_end(periods[0])
+    today = today or _date.today()
+    if end is None or (today - end) > _td(days=STALE_DAYS):
+        return {"status": "insufficient_data",
+                "reason": f"stale filings window (ends {periods[0].get('to')})"}
     eps = [p.get("eps_basic") for p in periods[:5]]
     if any(e is None for e in eps):
         return {"status": "insufficient_data"}
+    pos = [abs(e) for e in eps if e]
+    if pos and max(pos) / min(pos) > EPS_STEP_MAX:
+        return {"status": "insufficient_data",
+                "reason": "suspected corporate action in EPS series "
+                          "(>4x step)"}
     ttm_eps = sum(eps[:4])
     if ttm_eps <= 0:
         return {"status": "veto", "reason": "negative TTM EPS"}

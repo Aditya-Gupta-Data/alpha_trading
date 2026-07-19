@@ -802,3 +802,12 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   self-corrected to zero rather than keep advertising stale ripeness.
   NULL-honesty extended to TIME is now a standing rule: no valuation
   without a freshness check on the inputs.
+
+- **Issue 21 RESOLUTION (2026-07-20 pre-dawn):** the missing river found —
+  post-Jan-2025 filings live in SEBI's INTEGRATED-FILING regime
+  (`/api/integrated-filing-results` + per-row filed XBRL XML). New clerk
+  `integrated_results.py` parses the primary documents directly
+  (validated live on TCS: 30-Jun-2026 quarter, broadcast 09-Jul-2026 —
+  ten days old — rev/PAT/EPS/share-count all matching reality). Fresh
+  sweep of the 91 queued darlings launched; valuation + basket re-run
+  on landing. The old results-comparision path stays only as history.

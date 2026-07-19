@@ -75,3 +75,17 @@ def test_bars_for_reads_chronologically_and_honestly(tmp_path):
     assert bars[1]["close"] == 2960.00
     assert BC.bars_for("NOSUCHNAME", lake_dir=tmp_path) == []
     assert BC.bars_for("RELIANCE", lake_dir=tmp_path / "empty") == []
+
+
+def test_bars_for_many_single_pass_batch(tmp_path):
+    day1 = CSV
+    day2 = CSV.replace("17-Jul-2026", "18-Jul-2026")
+    (tmp_path / "2026-07-16.csv").write_text(day1)
+    (tmp_path / "2026-07-17.csv").write_text(day2)
+    out = BC.bars_for_many(["RELIANCE.NS", "NOVOLTY", "GHOST"],
+                           lake_dir=tmp_path)
+    assert len(out["RELIANCE"]) == 2
+    assert [b["session"] for b in out["RELIANCE"]] == ["2026-07-16",
+                                                       "2026-07-17"]
+    assert len(out["NOVOLTY"]) == 2
+    assert out["GHOST"] == []                   # honest empty

@@ -191,6 +191,30 @@ def bars_for(symbol: str, days: int = 90, lake_dir=None) -> list:
     return bars
 
 
+def bars_for_many(symbols: list, days: int = 250, lake_dir=None) -> dict:
+    """{symbol: chronological bars} for MANY symbols in ONE pass over the
+    day files — the batch loader the dynamic pricer uses (91 darlings x
+    218 files re-parsed per symbol would be quadratic; this parses each
+    file exactly once). Same honesty rules as bars_for."""
+    root = Path(lake_dir) if lake_dir else BHAVCOPY_LAKE
+    syms = {s.split(".")[0].strip().upper() for s in symbols or []}
+    out = {s: [] for s in syms}
+    if not root.is_dir():
+        return out
+    for f in sorted(root.glob("????-??-??.csv"))[-days:]:
+        try:
+            rows = parse_bhavcopy(f.read_text())
+        except OSError:
+            continue
+        for s in syms:
+            bar = rows.get(s)
+            if bar:
+                bar = dict(bar)
+                bar["session"] = f.stem
+                out[s].append(bar)
+    return out
+
+
 if __name__ == "__main__":
     import argparse
 

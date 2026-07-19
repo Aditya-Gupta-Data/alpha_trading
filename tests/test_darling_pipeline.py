@@ -26,7 +26,8 @@ RAW = {"resCmpData": [
     {"re_from_dt": "01-Oct-2024", "re_to_dt": "31-Dec-2024",
      "re_create_dt": "09-JAN-2025", "re_net_sale": "1000",
      "re_net_profit": None, "re_con_pro_loss": "120",
-     "re_basic_eps_for_cont_dic_opr": "3.30", "re_debt_eqt_rat": "-"},
+     "re_basic_eps_for_cont_dic_opr": "3.30", "re_debt_eqt_rat": "-",
+     "re_face_val": "1", "re_pdup": "100"},
     {"re_net_sale": "950", "re_con_pro_loss": "110",
      "re_basic_eps_for_cont_dic_opr": "3.10"},
     {"re_net_sale": "930", "re_con_pro_loss": "105",
@@ -46,6 +47,7 @@ def test_normalize_is_null_honest_and_typed():
     assert p0["net_profit"] is None          # filed null stays None
     assert p0["debt_equity"] is None         # '-' stays None, never 0
     assert p0["net_profit_consolidated"] == 120.0
+    assert p0["face_value"] == 1.0 and p0["paidup_capital"] == 100.0
     assert NR.normalize({}) == {"is_bank": False, "periods": []}
 
 

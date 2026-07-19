@@ -58,6 +58,11 @@ _FIELDS = {
     "re_int_earned": "interest_earned",       # banks file this, not net_sale
     "re_grs_npa_per": "gross_npa_pct",
     "re_cap_ade_rat": "capital_adequacy",
+    # valuation_scorer needs shares outstanding: paid-up capital / face
+    # value (both filed). Added 2026-07-19 (the P/S leg) — captures made
+    # before this date lack them; the re-sweep refreshes the lake.
+    "re_face_val": "face_value",
+    "re_pdup": "paidup_capital",
 }
 
 

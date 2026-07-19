@@ -751,3 +751,18 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   gap or a symbol variant (e.g. `SIKA` vs `SIKAINTER`, `CHEMTECH` vs a
   different exchange code) before assuming the company has no annual
   report filed at all.
+
+## Observation — benchmark PDFs removed from the Mac (2026-07-19 night, data note, not a bug)
+
+- **Verified:** the Desktop "annual reports" folder is empty and none of
+  the 16 benchmark PDFs (VEDL/RELIANCE/NALCO/ADANIPORTS/AZAD/JWL/EMUDHRA
+  FY24-FY26) exist anywhere on the Mac — removed outside the build
+  sessions (Desktop cleanup, presumably). Effect: the 4 benchmark-corpus
+  tests in tests/test_annual_report_analyzer.py now SKIP (cleanly, by
+  their design — they gate on file presence). The lake deep-reads are
+  intact; no pipeline is affected.
+- **Restore path (queued for tonight, after the results re-sweep):** the
+  originals are all NSE-archive fetches — `report_downloader --tickers
+  ... [--fiscal YYYY]` re-fills them into data/fundamental_reports/; the
+  corpus tests' glob then needs updating from the Desktop path to the
+  dropzone path (they were written against the Desktop location).

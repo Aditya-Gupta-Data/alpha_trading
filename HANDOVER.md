@@ -40,9 +40,16 @@ pushback #4, applied during build) mirrored by the VM's
 double-spends it; next run reconciles E_vm := E_mac. Unreachable VM =
 frozen split, 3rd consecutive night = one warning card. Ledger
 `logs/treasury_ledger.jsonl`; kill switch `treasury_enabled`.
-**Session 2 (NOT started): `adaptive_sizing.py`** — Bayesian/Wilson
-autopsy-driven sizing (penalty floor 0.25x fast, veto ≥8 resolved,
-boost ≥10, gap-shocks half-weight, neutral priors until evidence).
+**Session 2 ✅ BUILT (decision #81): `adaptive_sizing.py`** — the
+autopsy-driven sizing feedback loop is LIVE on both desks (equity
+fund_entry risk-budget multiplier; options lots penalty/veto after
+size_lots). Break-even-centered priors = 1.0x until each key's own
+record earns otherwise; penalties fast (≥4n, floor 0.25x), vetoes
+earned (≥8n, Wilson UPPER bound under break-even, telemetry row kept),
+boosts slow (≥10n, LOWER bound clear, cap 1.5x inside existing caps),
+gap-shocks half-weight, ticker veto overlay (≥5n). Ledger
+`logs/sizing_adjustments.jsonl`, one card per key state-change; kill
+switch `adaptive_sizing_enabled`; CLI `python3 -m src.adaptive_sizing`.
 Also tonight: the desk's FIRST LIVE FUNDED RUN — 5 darling entries,
 ₹1,77,540 locked at the 19:15 chain.
 

@@ -24,6 +24,7 @@
   "tuner_weight_bounds": [0.5, 1.5],
   "equity_desk_enabled": true,
   "treasury_enabled": true,
+  "adaptive_sizing_enabled": true,
   "treasury_equity_min_pct": 15.0,
   "treasury_equity_max_pct": 60.0,
   "treasury_deadband_rs": 50000,

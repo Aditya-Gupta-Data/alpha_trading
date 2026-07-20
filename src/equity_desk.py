@@ -104,13 +104,19 @@ def delivery_frictions(side: str, price: float, qty: int) -> float:
     return round(stt + stamp + services * (1 + GST_RATE) + dp, 2)
 
 
-def size_entry(entry_price: float, stop: float, desk_equity: float) -> dict:
+def size_entry(entry_price: float, stop: float, desk_equity: float,
+               risk_pct: float = None) -> dict:
     """Whole-share qty from the risk budget, capped by the notional
-    ceiling. qty 0 (with the reason) when nothing responsibly fits."""
+    ceiling. qty 0 (with the reason) when nothing responsibly fits.
+    `risk_pct` overrides the config default (the adaptive-sizing seam) —
+    the notional ceiling below binds regardless, so no boost can escape
+    the desk's max risk cap."""
     risk_per_share = float(entry_price) - float(stop)
     if risk_per_share <= 0:
         return {"qty": 0, "notional": 0.0, "reason": "non-positive risk"}
-    risk_budget = desk_equity * EQUITY_DESK_RISK_PER_TRADE_PCT / 100.0
+    if risk_pct is None:
+        risk_pct = EQUITY_DESK_RISK_PER_TRADE_PCT
+    risk_budget = desk_equity * risk_pct / 100.0
     qty = int(risk_budget // risk_per_share)
     cap = desk_equity * EQUITY_DESK_MAX_NOTIONAL_PCT / 100.0
     qty = min(qty, int(cap // float(entry_price)))
@@ -132,21 +138,37 @@ def fund_entry(entry: dict, db_path=None) -> dict:
     price, stop = action.get("entry_price"), action.get("stop")
     if price is None or stop is None:
         return {"funded": False, "reason": "entry missing price/stop"}
+    # Adaptive sizing consult (Directive 2, decision #81): the feedback
+    # layer fails OPEN to neutral inside itself; a veto here still lets
+    # the caller log the telemetry row — only the money stays home.
+    mult = 1.0
+    try:
+        from src import adaptive_sizing
+        verdict = adaptive_sizing.equity_verdict(entry)
+        if verdict.get("action") == "veto":
+            return {"funded": False,
+                    "reason": f"vetoed_by adaptive_sizing: "
+                              f"{verdict.get('detail')}"}
+        mult = float(verdict.get("multiplier", 1.0)) or 1.0
+    except Exception:
+        mult = 1.0
     try:
         conn = connect(db_path)
         try:
-            sized = size_entry(price, stop, pm.equity(conn))
+            sized = size_entry(price, stop, pm.equity(conn),
+                               risk_pct=EQUITY_DESK_RISK_PER_TRADE_PCT * mult)
             if sized["qty"] <= 0:
                 pm.log_event(conn, "sizing_zero",
                              f"{entry.get('ticker')}: {sized['reason']}")
                 return {"funded": False, "reason": sized["reason"]}
             ref = LOCK_PREFIX + str(entry.get("id"))
-            verdict = pm.request_entry(conn, ref, sized["notional"])
-            if not verdict["approved"]:
-                return {"funded": False, "reason": verdict["reason"]}
+            gate = pm.request_entry(conn, ref, sized["notional"])
+            if not gate["approved"]:
+                return {"funded": False, "reason": gate["reason"]}
             return {"funded": True, "qty": sized["qty"],
                     "notional": sized["notional"], "lock_ref": ref,
-                    "reason": "funded"}
+                    "reason": ("funded" if mult == 1.0
+                               else f"funded (sizing x{mult})")}
         finally:
             conn.close()
     except Exception as exc:

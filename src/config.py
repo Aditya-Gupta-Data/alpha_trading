@@ -121,3 +121,8 @@ TREASURY_MAX_STEP_RS = float(_CONFIG.get("treasury_max_step_rs", 100000.0))
 # three-unpinned-interpreter lesson applies to gcloud too).
 GCLOUD_PATH = str(_CONFIG.get(
     "gcloud_path", "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"))
+
+# Adaptive sizing (owner Directive 2, 2026-07-20): the autopsy-driven
+# sizing feedback loop. Optional key; code default OFF — a stale config
+# copy must never start resizing trades on its own.
+ADAPTIVE_SIZING_ENABLED = bool(_CONFIG.get("adaptive_sizing_enabled", False))

@@ -273,6 +273,18 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                 "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot doesn't fit "
                            f"the {_risk_pct:g}% options risk "
                            f"budget (or SPAN margin exceeds cash)")}
+    # Adaptive sizing feedback (Directive 2, decision #81): the real
+    # resolved record may shrink (floor 1 lot) or veto this archetype.
+    # Fails open inside the module; a crashed layer changes nothing.
+    try:
+        from src.adaptive_sizing import adjust_option_lots
+        lots, _sizing = adjust_option_lots(spread["strategy"], lots)
+    except Exception:
+        _sizing = None
+    if lots <= 0:
+        return {"proposal": None, "view": view, "vix": vix,
+                "reason": ("adaptive sizing veto: "
+                           + (_sizing or {}).get("detail", "earned veto"))}
 
     net = spread["net_credit"] if spread["net_credit"] is not None else -spread["net_debit"]
     proposal = {

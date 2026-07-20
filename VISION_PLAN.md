@@ -13,16 +13,11 @@ from a time-travel backtesting simulator.
 
 ### 🛑 CRITICAL STRICT GUARDRAILS (Read First)
 
-1. **STRICTLY PAPER TRADING:** For at least the next 30 days, **ZERO real
-   broker execution**. The final output of an approved trade must *always*
-   route to `data/portfolio.json`. Do not import or write any code that
-   attempts to place real orders.
-2. **No Token Bloat:** The system remains heavily modular. The chatbot
-   interface, data scrapers, and execution engine must remain separate files
-   that communicate via local databases/JSON.
-3. **No Heavy Databases:** Do not suggest Postgres or MongoDB. The "Brain
-   Map" will be built using Python's native `sqlite3` to keep the project
-   portable and free.
+The project non-negotiables are canonical in `OVERVIEW.md` — **paper-only** (zero
+broker execution code; approved trades route to `data/portfolio.json`),
+human-in-the-loop, and **file-based local state** (heavily modular, native
+`sqlite3` — no Postgres/Mongo). This blueprint inherits them; see `OVERVIEW.md`
+for the full list.
 
 ---
 

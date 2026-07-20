@@ -6,7 +6,11 @@ approach to change how that department behaves. You should never have to dig
 through 50 files: find the department, go to its manager.
 
 - **Why** behind each choice → `DECISIONS.md` (numbered).
-- **Per-file** one-liners → `MODULES.md` (grouped by these same departments).
+- **Per-file** one-liners and module *specifics* (config keys, thresholds,
+  verification state) → `MODULES.md` (grouped by these same departments). This
+  file states each department's design role and its one seam; it does NOT
+  restate those specifics — they have a single home in `MODULES.md` so they
+  can't drift out of sync.
 - **The rules** the code may never break → `OVERVIEW.md`.
 
 Written for the strategic brain, not the compiler: every department below says,

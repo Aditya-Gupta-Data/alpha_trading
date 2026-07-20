@@ -44,6 +44,21 @@ def eod_chain() -> dict:
               "card_fired": tiers.get("card_fired"),
               "pins_cleared": tiers.get("pins_cleared"),
               "bhavcopy": day, "fo_snapshot_as_of": fo.get("snapshot_as_of")}
+    # Firm treasury (owner Directive 1, decision #80): rotate capital
+    # AFTER grading (freshest Buy-tier demand read) and BEFORE the shadow
+    # leg spends. Fail-open: an unreachable VM keeps the current split.
+    try:
+        from src import firm_treasury
+        if firm_treasury.TREASURY_ENABLED:
+            t = firm_treasury.run_rotation()
+            report["treasury"] = {"rotated": t.get("rotated"),
+                                  "reason": (t.get("move") or {}).get(
+                                      "reason") or t.get("reason")}
+        else:
+            report["treasury"] = None
+    except Exception as exc:
+        print(f"  (firm treasury failed — split unchanged [{exc}])")
+        report["treasury"] = None
     # The darling shadow leg (F&O tranche step 5, re-wired to tiers
     # 2026-07-20): Strong-Sell forced exits + Buy-family entries.
     # Fail-open: telemetry can never break the chain.

@@ -293,16 +293,29 @@ closes, no second settlement path. `margin_audit` (report-only CLI) replays
 the journal under these factors and cross-checks recorded margins for drift.
 
 **The equity desk (decision #79, owner ruling 2026-07-20):** the firm's 10L now
-funds TWO desks. `src/equity_desk.py` carves a slice (default Rs.3,00,000) for
-the darling shadow book: a standing `equity_desk_allocation` lock in the VM's
-options account keeps the total honest, and the Mac-side desk ledger
-(`data/equity_desk.db`) runs the SAME portfolio_manager machinery — same halt
-list, same drawdown math, same exhaustion doctrine — against that slice. The
-desk funds darling entries (1% risk / 15% notional cap, whole shares, delivery
-frictions on settlement) through injected seams at the patience_basket
-composition root; funding fails CLOSED while the telemetry ledger keeps every
-row. The Dept-5-first rule was explicitly waived by the owner for this wiring;
-the desk's own equity curve is the evidence a later Dept-5 review judges.
+funds TWO desks. `src/equity_desk.py` runs the darling shadow book's capital on
+the Mac-side desk ledger (`data/equity_desk.db`) with the SAME
+portfolio_manager machinery — same halt list, same drawdown math, same
+exhaustion doctrine. The desk funds darling entries (1% risk / 15% notional
+cap, whole shares, delivery frictions on settlement) through injected seams at
+the patience_basket composition root; funding fails CLOSED while the telemetry
+ledger keeps every row. The Dept-5-first rule was explicitly waived by the
+owner for this wiring; the desk's own equity curve is the evidence a later
+Dept-5 review judges.
+
+**The firm treasury (decision #80, owner Directive 1):** the split between the
+desks is DYNAMIC. `src/firm_treasury.py` re-routes capital nightly inside the
+Mac EOD chain — after tier grading (freshest demand read), before the shadow
+leg spends — using a mechanical regime router (NIFTY trend, Buy-tier depth,
+valuations, VIX, options-desk margin demand; bounds 15–60% equity share,
+₹50k deadband, ₹1L max step). The desk's account base IS its allocation
+(subscribe/redeem shift `starting_capital` + peak together, so the ruin halt
+keeps measuring real rupees against current capital); the VM options account
+mirrors it as the `equity_desk_allocation` reservation lock. The two-phase
+RAISE-FIRST rule keeps the invariant E_vm ≥ E_mac through any mid-move crash:
+a partial failure can only idle capital for a night, never double-spend it,
+and the next run's reconcile (E_vm := E_mac) converges every failure mode.
+P&L stays with the earning desk — winners compound their own buying power.
 
 **Staged merge targets:** ~~`wealth_flywheel`~~ **MERGED 2026-07-20** — the
 scrip clerk verified GOLDBEES as NSE_EQ id **14428** (NIP IND ETF GOLD BEES,

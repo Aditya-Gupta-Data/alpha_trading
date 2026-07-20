@@ -108,3 +108,16 @@ EQUITY_DESK_RISK_PER_TRADE_PCT = float(
     _CONFIG.get("equity_desk_risk_per_trade_pct", 1.0))
 EQUITY_DESK_MAX_NOTIONAL_PCT = float(
     _CONFIG.get("equity_desk_max_notional_pct", 15.0))
+
+# Firm treasury (owner Directive 1, 2026-07-20): dynamic capital routing
+# between the desks. Optional keys; code default DISABLED — a stale config
+# copy must never start moving capital on its own.
+TREASURY_ENABLED = bool(_CONFIG.get("treasury_enabled", False))
+TREASURY_EQUITY_MIN_PCT = float(_CONFIG.get("treasury_equity_min_pct", 15.0))
+TREASURY_EQUITY_MAX_PCT = float(_CONFIG.get("treasury_equity_max_pct", 60.0))
+TREASURY_DEADBAND_RS = float(_CONFIG.get("treasury_deadband_rs", 50000.0))
+TREASURY_MAX_STEP_RS = float(_CONFIG.get("treasury_max_step_rs", 100000.0))
+# Absolute path because the 19:15 cron's PATH is minimal (the standing
+# three-unpinned-interpreter lesson applies to gcloud too).
+GCLOUD_PATH = str(_CONFIG.get(
+    "gcloud_path", "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"))

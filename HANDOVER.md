@@ -20,6 +20,32 @@ For anything in that window, trust `git log --oneline` + those three files
 over this brief's silence. Not reconstructed here rather than risk a
 plausible-sounding but unverified summary.
 
+## 🟢 THE FIRM TREASURY — the 7L/3L split is now DYNAMIC (decision #80, 2026-07-20 night, owner Directive 1)
+
+**#79's static split lasted about two hours** — the owner ruled it
+capital-inefficient (correct: options' stress-adjusted peak margin use is
+~₹1.9L) and green-lit dynamic routing with three pre-agreed pushbacks
+(nightly cadence not intraday; evidence-bar learning deferred to
+Session 2 `adaptive_sizing`; gap-shock down-weighting). `src/firm_treasury.py`:
+mechanical regime router (base 30% equity share; tilts for NIFTY trend,
+Buy-tier depth, deep value, high VIX, options margin demand; clamp
+15–60%, ₹50k deadband, ₹1L/night max step), runs inside the 19:15 EOD
+chain between tier grading and the shadow leg. Capital moves =
+subscribe/redeem on the desk's `starting_capital` (peak shifts with base
+— the ruin halt stays rupee-honest; NOT the originally-planned 10L
+re-init, which would have diluted the desk's 10% halt to ~0.3% —
+pushback #4, applied during build) mirrored by the VM's
+`equity_desk_allocation` lock under the RAISE-FIRST invariant
+**E_vm ≥ E_mac**: any mid-move crash idles capital for a night, never
+double-spends it; next run reconciles E_vm := E_mac. Unreachable VM =
+frozen split, 3rd consecutive night = one warning card. Ledger
+`logs/treasury_ledger.jsonl`; kill switch `treasury_enabled`.
+**Session 2 (NOT started): `adaptive_sizing.py`** — Bayesian/Wilson
+autopsy-driven sizing (penalty floor 0.25x fast, veto ≥8 resolved,
+boost ≥10, gap-shocks half-weight, neutral priors until evidence).
+Also tonight: the desk's FIRST LIVE FUNDED RUN — 5 darling entries,
+₹1,77,540 locked at the 19:15 chain.
+
 ## 🟢 THE EQUITY DESK — the darling book now trades PAPER CAPITAL (decision #79, 2026-07-20 night)
 
 **Owner ruling ("10,00,000 of paper money only buddy — let's see how

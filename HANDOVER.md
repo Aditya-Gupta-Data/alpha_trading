@@ -20,116 +20,54 @@ For anything in that window, trust `git log --oneline` + those three files
 over this brief's silence. Not reconstructed here rather than risk a
 plausible-sounding but unverified summary.
 
-## 🟢 THE FIRM TREASURY — the 7L/3L split is now DYNAMIC (decision #80, 2026-07-20 night, owner Directive 1)
+## 🟢 THE FIRM TREASURY — the 7L/3L split is now DYNAMIC (decision #80, 2026-07-20 night)
 
-**#79's static split lasted about two hours** — the owner ruled it
-capital-inefficient (correct: options' stress-adjusted peak margin use is
-~₹1.9L) and green-lit dynamic routing with three pre-agreed pushbacks
-(nightly cadence not intraday; evidence-bar learning deferred to
-Session 2 `adaptive_sizing`; gap-shock down-weighting). `src/firm_treasury.py`:
-mechanical regime router (base 30% equity share; tilts for NIFTY trend,
-Buy-tier depth, deep value, high VIX, options margin demand; clamp
-15–60%, ₹50k deadband, ₹1L/night max step), runs inside the 19:15 EOD
-chain between tier grading and the shadow leg. Capital moves =
-subscribe/redeem on the desk's `starting_capital` (peak shifts with base
-— the ruin halt stays rupee-honest; NOT the originally-planned 10L
-re-init, which would have diluted the desk's 10% halt to ~0.3% —
-pushback #4, applied during build) mirrored by the VM's
-`equity_desk_allocation` lock under the RAISE-FIRST invariant
-**E_vm ≥ E_mac**: any mid-move crash idles capital for a night, never
-double-spends it; next run reconciles E_vm := E_mac. Unreachable VM =
-frozen split, 3rd consecutive night = one warning card. Ledger
-`logs/treasury_ledger.jsonl`; kill switch `treasury_enabled`.
-**Session 2 (NOT started): `adaptive_sizing.py`** — Bayesian/Wilson
-autopsy-driven sizing (penalty floor 0.25x fast, veto ≥8 resolved,
-boost ≥10, gap-shocks half-weight, neutral priors until evidence).
-Also tonight: the desk's FIRST LIVE FUNDED RUN — 5 darling entries,
-₹1,77,540 locked at the 19:15 chain.
+**Live.** `src/firm_treasury.py` replaced #79's static split (owner ruled it
+capital-inefficient — options' stress-adjusted peak margin is only ~₹1.9L) with
+a mechanical nightly regime router that moves capital between the equity and
+options desks, run inside the 19:15 EOD chain. Kill switch `treasury_enabled`;
+ledger `logs/treasury_ledger.jsonl`. Router tilts, the 15–60% clamp, and the
+RAISE-FIRST **E_vm ≥ E_mac** invariant that makes the two-machine transfer
+crash-safe: `DECISIONS.md` #80.
+**Not started — Session 2 `adaptive_sizing.py`:** Bayesian/Wilson autopsy-driven
+sizing. **First live funded run tonight:** 5 darling entries, ₹1,77,540 locked.
 
 ## 🟢 THE EQUITY DESK — the darling book now trades PAPER CAPITAL (decision #79, 2026-07-20 night)
 
-**Owner ruling ("10,00,000 of paper money only buddy — let's see how
-efficiently our system runs the 10 lakhs"), issued AFTER the recorded
-pushback; supersedes #77's zero-capital clause for the darling leg only.**
-`src/equity_desk.py` (Dept 3): a Rs.3,00,000 slice of the firm's 10L funds
-darling Buy-tier entries — 1% risk / 15% notional cap, whole shares,
-delivery-friction-net settlement — through portfolio_manager reused
-conn-generic against `data/equity_desk.db` (Mac). Same halts (10% ruin,
-daily 3%), same silent exhaustion, zero re-implemented risk rules. The VM's
-options account carries the matching standing lock `equity_desk_allocation`
-(**run once on the VM:** `python3 -m src.equity_desk --reserve-firm-slice`)
-so the firm total stays one honest 10L. Funded entries stamp
-`mode="PAPER_CAPITAL"`; funding failures keep the telemetry row with the
-reason (the learning ledger never loses a line); the proposer's Dept-3
-import ban still holds — seams injected only at `patience_basket.eod_chain`.
-One Discord card per EOD run, only when money moved. Kill switch
-`equity_desk_enabled` (code default OFF). Desk summary:
-`python3 -m src.equity_desk`; crash reconciler: `--sweep`. The block-VWAP
-leg stays pure telemetry. The desk's equity curve starts at zero history —
-judge it like performance.py judges everything: no verdicts on thin samples.
+**Live.** `src/equity_desk.py` (Dept 3): a Rs.3,00,000 slice of the firm's 10L
+paper pool funds darling Buy-tier entries on the Mac (`data/equity_desk.db`),
+superseding #77's zero-capital clause for the darling leg only. Reuses
+portfolio_manager's risk rules wholesale (same 10% ruin + daily 3% halts, zero
+re-implemented risk code). **Run once on the VM:**
+`python3 -m src.equity_desk --reserve-firm-slice` (places the matching
+`equity_desk_allocation` lock so the firm total stays one honest 10L). Kill
+switch `equity_desk_enabled` (code default OFF). Desk summary
+`python3 -m src.equity_desk`; crash reconciler `--sweep`. Sizing (1% risk / 15%
+notional cap), delivery-friction settlement, and the telemetry-vs-funded
+contract: `DECISIONS.md` #79.
 
-## 🟢 THE DARLING LIFECYCLE IS LIVE — 7-tier grading + the two-clock architecture; both Mac crons INSTALLED (updated 2026-07-20 evening)
+## 🟢 THE DARLING LIFECYCLE IS LIVE — 7-tier grading + two-clock architecture (decision #77, updated 2026-07-20)
 
-**Decision #77, commits `5c326a3` + `1629bc8`, pushed; suite 1373 green.**
-The binary RIPE/waiting basket is SCRAPPED. Dept 8 now runs a lifecycle
-system: every darling is graded EVERY EOD into one of seven tiers
-(`strong_buy` / `weak_buy` / `strong_hold` / `weak_hold` / `weak_sell` /
-`strong_sell` / `watch`) plus an honest Tier-0 `ungraded` for names whose
-data can't support a grade. A name is never "done" after entry — the same
-table that says BUY also says HOLD and SELL for what the paper book holds.
+**Live.** Commits `5c326a3` + `1629bc8`, pushed; suite 1373 green. The binary
+RIPE/waiting basket is scrapped: Dept 8 now grades every darling EVERY EOD into
+7 tiers (`strong_buy`…`strong_sell` + `watch`, plus honest Tier-0 `ungraded`) —
+a name is never "done" after entry. Two clocks, both Mac-cron (exact times in
+`CRON_SETUP.md`): the DAILY `patience_basket --eod` re-grades on price; the
+WEEKLY `weekly_recalibration` re-judges fundamentals and overrides the daily
+grade via pins. Tier/near-zone/momentum definitions, the No-Orphan pin rule,
+shadow-book wiring and card logic: `DECISIONS.md` #77 + `MODULES.md`.
 
-**The two clocks (do not collapse them into one):**
-- **DAILY** — `patience_basket --eod`, **Mac cron 19:15 Mon–Fri**: bhavcopy
-  → F&O bundle → pricer → valuation → tier grading → shadow leg. Re-grades
-  on PRICE, because prices move daily. This half already existed and was
-  already dynamic; a weekly-only recalibration would have made it WORSE.
-- **WEEKLY** — `weekly_recalibration`, **Mac cron 10:00 Saturday**: refresh
-  quarterly filings → re-screen → No-Orphan pins → rebuild → one card.
-  Re-judges FUNDAMENTALS, which only change when filings arrive, and
-  OVERRIDES the daily grade through pins.
+**First live grading, 105 darlings:** 0 strong_buy (nothing in-zone AND ≤25 — an
+honest empty bucket) · 15 weak_buy (10 in-zone, entry-eligible — incl. the old
+RIPE trio HEROMOTOCO 30 / ESCORTS 34 / TCS 35) · 17 strong_hold · 17 weak_hold ·
+17 weak_sell · 12 strong_sell (9 below hard stop) · 17 watch · 10 ungraded.
 
-**Mechanical definitions (never re-derive these by feel):** near-zone =
-within 5% above the buy-zone ceiling · momentum = close > 50-DMA AND 50-DMA
-> 200-DMA · losing volume = 20-day avg turnover < 60-day avg · near-stop =
-within 1 ATR of the stop reference (trailing pivot floor first, else the
-hard stop).
-
-**The No-Orphan rule:** a held name failing the weekly screen is never
-"orphaned" — it is PINNED (`data/darling_pins.json`) into the tier table
-until its paper position closes, then drops entirely. A REJECTED name pins
-`strong_sell`; a name the screen merely LOST THE DATA to judge pins
-`ungraded` — a sell verdict is never manufactured from absence.
-
-**Shadow book wiring:** entries from `strong_buy` + **in-zone** `weak_buy`
-only (near-zone names are watched, never chased). `strong_sell` FORCE-EXITS
-an open shadow (`fundamental_break` when pinned, `strong_sell_tier` when
-valuation-driven); `weak_sell` does NOT — the position's own stop is
-already the thesis-break detector. Still zero-capital PAPER_TELEMETRY,
-still advisory-only (Law #63).
-
-**Cards:** family transitions ONLY (buy/hold/sell/watch). Intrafamily moves
-(strong_buy → weak_buy) are visible in the table but silent — a valuation
-wobbling 25→26→25 would otherwise fire three cards in three days. First
-grading fires ONE distribution summary.
-
-**First live grading, 105 darlings:** 0 strong_buy (nothing is
-simultaneously in-zone AND ≤25 — an honest empty bucket, not a bug) · 15
-weak_buy, 10 of them in-zone and entry-eligible (the old RIPE trio
-HEROMOTOCO 30 / ESCORTS 34 / TCS 35 all landed here) · 17 strong_hold · 17
-weak_hold · 17 weak_sell · 12 strong_sell (9 below their hard stop) · 17
-watch · 10 ungraded.
-
-**Where the VM stands:** two commits behind, DELIBERATELY. Everything in
-this work is Mac-only by the boundary doctrine (bhavcopy lake, pricer,
-valuation all live on the Mac; the crons are NSE-crawling and must never
-run from the VM's IP). No VM pull or restart is needed; it syncs at the
-next regular deploy.
-
-**Open / next:** `business_metrics`, `liquidity_rank` and `ticker_dossier`
-(landed in `1629bc8`) still have NO dedicated test files — Dept-8 test
-debt. First cron-fired EOD run is 19:15 on 2026-07-20; first weekly
-recalibration is Saturday 2026-07-25 (its filing-refresh stage takes
-15–30 min, which is normal).
+**VM is two commits behind, DELIBERATELY** — this work is Mac-only (bhavcopy
+lake/pricer/valuation live on the Mac; the crons are NSE-crawling and must never
+run from the VM's IP). Syncs at the next regular deploy.
+**Test debt:** `business_metrics`, `liquidity_rank`, `ticker_dossier` (in
+`1629bc8`) still have no dedicated test files. First weekly recalibration is
+Sat 2026-07-25 (its filing-refresh stage takes 15–30 min — normal).
 
 ## 🟢 HOLY-GRAIL PHASES 4 & 5 COMPLETE, MERGED & DEPLOYED — the discovery brain now RUNS; it is DATA-STARVED by design, not broken (updated 2026-07-11 evening)
 
@@ -395,101 +333,39 @@ Order for a Saturday deploy: **merge backend branches → unified test run
 
 ## ✅ Regime-Aware Memory — BUILT AND TESTED; skeptic hypothesis honestly NOT confirmed (2026-07-09)
 
-Roadmap item #4. Every trade the learning stack remembers now carries the
-market conditions it was born under — `src/regime.py` is the vocabulary
-(trend = the proposer's own market_view read; vix_band = low <13 / mid
-13–16 / high >16, now the SINGLE source the planner's IV matrix and the
-evolution miner share):
-
-- **Capture:** `to_journal_entry` and the simulator's `_entry_for` attach
-  `entry["regime"]` at creation (additive key; old entries tolerate).
-- **Storage:** `outcomes.regime_trend/regime_vix` (in-place ALTER on
-  connect, post_mortem pattern) + the same columns on `simulated_trades`
-  (idempotent ALTER in ensure_schema). NULL on pre-feature rows — never
-  guessed.
-- **Backfill:** `python3 -m src.regime backfill --db <path>` recomputes
-  trend AS-OF each historical trade's proposal date from the bars cache
-  (the simulator's own no-future-data discipline); vix_band from the
-  row's stored vix.
-- **Query:** `brain_map.query_similar_events(tags, regime=...)` adds an
-  `in_regime` stats block (count/win_rate/avg_r + tag) alongside the
-  untouched overall stats — fully backward compatible.
-- **Skeptic contract v2:** FEATURE_NAMES += regime_trend/regime_vix_band
-  (contract change = retrain by design, decision #44; no model had ever
-  shipped, so nothing was invalidated).
-
-**The experiment (the reason this was prioritized):** backfilled all
-1,008 scratch trades (2015–2026, zero unknown trends) and retrained.
-Result: 5-fold balanced accuracy **0.578 vs 0.594 pre-regime — no
-improvement, within noise**. Why, per feature importances: raw `vix`
-(0.26) already contains the band (a coarsening of it, 0.027), and the
-simulator proposes structures MATCHED to the trend, so trend is nearly
-constant within a strategy (0.027). The "regime tags will ship the
-skeptic" hypothesis is NOT confirmed for these coarse tags. Gate stays
-closed; skeptic keeps abstaining. Next candidates for the 0.60 gate:
-features orthogonal to the entry gates (realized vol vs implied,
-distance-to-support, day-of-week/expiry-proximity) rather than
-re-encodings of inputs the pipeline already filters on.
-
-NOT deployed to the VM yet (observation week): migrations are additive
-and auto-apply on the next `git pull` + restart; the production DB's 366
-rows backfill with the same CLI when that happens. Tests:
-`tests/test_regime.py` (11, offline); suite 521 green.
+Roadmap item #4. Every remembered trade now carries the market regime it was
+born under (`src/regime.py` = the vocabulary: trend + vix_band low<13 / mid /
+high>16; additive nullable columns on `outcomes`/`simulated_trades`, NULL never
+guessed; backfill `python3 -m src.regime backfill`; `query_similar_events(...,
+regime=)` gains an `in_regime` stats block). **The experiment that motivated
+it:** backfilled all 1,008 scratch trades and retrained the skeptic → 5-fold
+accuracy **0.578 vs 0.594 — no improvement, within noise** (raw `vix` already
+contains the coarse band). Gate stays closed; skeptic keeps abstaining. The
+"why" + the next-feature direction (features orthogonal to the entry gates):
+`DECISIONS.md` #50. Tests `tests/test_regime.py` (11). NOT on the VM yet —
+migrations auto-apply on the next `git pull` + restart.
 
 ## ✅ Procedural Evolution — BUILT AND TESTED; NOT YET SCHEDULED (2026-07-09)
 
-`src/evolution.py` closes roadmap item #5: the system studies its own loss
-clusters and proposes rule mutations for HUMAN review — it can never apply
-anything itself. Pipeline per cluster: mine losses by (underlying ×
-strategy × VIX band) with journal_ref provenance → deterministic HER-style
-hindsight buckets (bad_risk_parameters / bad_timing / ambiguous) →
-counterfactual contrast against the same setup's wins → an Analyst→Critic
-→resolution dialectic on LOCAL Ollama (every reply strict-JSON-gated;
-unresolved critic BLOCK kills the candidate) → the proposal must come from
-the whitelisted `EVOLVABLE_PARAMETERS` registry (VIX gate, risk %, OTM %,
-profit-take fraction, pre-expiry days; bounds-checked — the 3B model never
-writes code; diffs are generated deterministically) → double backtest via
-the Phase 7 simulator (baseline vs `override_parameters`, in-memory DBs,
-cached bars) with **RevertOnRegression**: a cluster-fix that degrades
-global Sharpe/max-drawdown is discarded. Survivors:
-`candidates/evolution_<ts>.md` (4 sections: cluster, dialectic summary,
-simulator proof table, unified diff) + a version-tree entry in
-`data/evolution_lineage.json` (v1→v2 per parameter; failed attempts are
-remembered so future runs know what was tried).
+`src/evolution.py` closes roadmap item #5: the system mines its own loss
+clusters and proposes rule mutations (from the whitelisted `EVOLVABLE_PARAMETERS`
+registry only) to `candidates/evolution_<ts>.md` for HUMAN review — it never
+applies anything itself, and every candidate must survive an Analyst→Critic
+dialectic on local Ollama + a RevertOnRegression double-backtest. Runs Mac-side
+only (zero API spend); **deliberately on NO schedule until observation-week
+triage clears it** — run manually. First live run (2026-07-09) mined 10 clusters;
+the Critic correctly BLOCKED the worst proposal at the consensus gate. Full gate
+mechanics + anti-overfitting design: `DECISIONS.md` #49/#55. Tests
+`tests/test_evolution.py` (14).
 
-Runs Mac-side only (Ollama; zero API spend — user rule). Backtest bars
-come from `data/bars_cache.json`, refreshed THROUGH the VM
-(`python3 -m src.evolution --refresh-bars-cache`) since the Mac holds no
-live token (decision #48). Wired as sleep-phase Task E with the standard
-graceful skip (the VM skips it silently). **Deliberately NOT on any
-schedule until the observation-week triage clears it** — run manually.
+## ⚠️ Mac renew/push crons REMOVED — they raced the VM's token (2026-07-09)
 
-First live run (2026-07-09): mined 10 real clusters; the worst (13
-Bank-Nifty condor losses in the mid-VIX band, Rs.-8.1L) produced an
-Analyst proposal that the Critic BLOCKED at the consensus gate — the
-adversarial design doing its job. Bug found & fixed during the build:
-multi-line python shipped via ssh `--command` gets newline-mangled — both
-evolution's bars dump AND the edge miner's apply step now travel as scp'd
-FILES (the miner's flaw had never fired: its only prior run had 0 new
-edges). Also fixed: a queue-built notifier test hardcoding "today" broke
-the suite at midnight. Tests: `tests/test_evolution.py` (14, offline,
-scripted fake LLM); suite 500 green.
-
-## ⚠️ Correction (2026-07-09, just after midnight): Mac renew/push crons REMOVED — they raced the VM's token
-
-Discovered by accident: DhanHQ allows only ONE active access token per
-client ID — minting a new one silently invalidates the previous token,
-even one whose own expiry claim is hours from now. The Mac's 07:00
-renewal + 07:10 push (added a few hours earlier the same night as
-"deliberate redundancy") meant that on ANY morning where the VM's own
-07:00 Secret-Manager renewal happened to land a moment before the Mac's,
-the Mac's 07:10 push would overwrite the VM's fresh, valid token with
-the Mac's own (now-invalidated-by-the-VM) token — breaking the live
-engine's market data for the whole day. **Fixed**: both Mac cron entries
-removed. The VM's Secret-Manager renewal is proven reliable on its own
-(verified twice); it needs no backup, and the "backup" was actually the
-risk. `scripts/push_token_to_vm.sh` stays in the repo as a manual/dev
-tool only — never on an automatic schedule again. Decision #48.
+DhanHQ allows only ONE active token per client id, so the Mac's 07:00 renew +
+07:10 push (added hours earlier as "redundancy") could overwrite the VM's fresh
+token with a now-dead one and blind the live engine for the day. Both Mac cron
+entries removed; `scripts/push_token_to_vm.sh` stays as a manual tool only. Full
+discovery + rationale: `DECISIONS.md` #48. Never schedule token renewal on the
+Mac — `CRON_SETUP.md`.
 
 ## ✅ THE VM IS THE ENGINE — full migration, LIVE AND VERIFIED (2026-07-08 night)
 
@@ -526,54 +402,29 @@ Key facts for a cold pickup:
 
 ## ✅ Phase 7A: Master Scheduler & Live Execution Loop — BUILT AND TESTED (2026-07-08)
 
-`src/master_scheduler.py` (`python3 -m src.master_scheduler`) is the
-one-command entry point for a fully automated live paper-trading day.
-**Deliberately NOT `src/main.py`** — that name is the Phase 1 alert job the
-VM cron runs at 15:35 IST; clobbering it would have silently killed the
-alert pipeline.
-
-`run_trading_session()` runs strictly Mon-Fri 09:15–15:30 IST: launched
-early it sleeps until the open; launched after the close it exits
-immediately (cron-misfire safe); at 15:30 it shuts itself down. During the
-window it supervises the two existing live loops as asyncio tasks — ENTRY
-(`market_loop.run_market_loop` fed by the Phase 6H live adapter → margin-
-gated, PENDING_APPROVAL proposals; decision #11's human-in-the-loop stands,
-nothing is auto-approved) and EXIT (`live_bridge.run_live_loop` advisory
-profit-take/pre-expiry alerts). Session bookends go to Discord: the 🟢 OPEN
-card carries the Phase 6G account snapshot + the Phase 6I planner's
-advisory playbook per underlying; the 🔴 CLOSE card the end-of-day account.
-Graceful shutdown: SIGINT/SIGTERM set an asyncio.Event, both loops are
-cancelled and awaited; state cannot corrupt because every httpx client and
-SQLite touch in this codebase is per-call scoped (open-commit-close) — no
-long-lived handles exist to strand mid-write. A dying loop brings the
-session down safely (never a zombie). `CRON_SETUP.md` (project root)
-documents the exact Mac crontab line (09:10 Mon-Fri + Full-Disk-Access and
-wake-schedule caveats). Tests: `tests/test_master_scheduler.py` (8 offline
-tests with a hand-wound IST clock; suite 463 green). Decision #45.
+`src/master_scheduler.py` (`python3 -m src.master_scheduler`) is the one-command
+entry point for a fully automated live paper day. **Deliberately NOT `src/main.py`**
+(that name is the Phase-1 alert job the VM cron runs at 15:35). It runs strictly
+Mon-Fri 09:15–15:30 IST (sleeps until the open, exits if launched post-close,
+self-terminates 15:30), supervising the existing ENTRY (`market_loop`, margin-
+gated PENDING_APPROVAL — #11's human gate stands, nothing auto-approves) and EXIT
+(`live_bridge`, advisory) loops as asyncio tasks, with 🟢 open / 🔴 close Discord
+cards. Why it composes the existing loops rather than reimplementing them, plus
+the graceful-shutdown design: `DECISIONS.md` #45. Cron line in `CRON_SETUP.md`.
+Tests `tests/test_master_scheduler.py` (8).
 
 ## 🟡 Phase 7b: Skeptic Trainer — BUILT AND TESTED; MODEL DELIBERATELY NOT SHIPPED (2026-07-08)
 
-`src/train_skeptic.py` (`python3 -m src.train_skeptic [--dry-run|--force]`)
-fits the Phase 11 skeptic's Random Forest on `simulated_trades` in the
-frozen `FEATURE_NAMES` order (graph slots honestly zero for simulated rows
-— the simulator never consults the graph, so backfilling them would be
-look-ahead leakage), evaluates on a stratified 25% holdout, and persists
-`data/skeptic_model.pkl` + `skeptic_model_meta.json` ONLY above a
-`MIN_BALANCED_ACCURACY = 0.60` ship gate (decision #44).
-
-**The honest outcome so far**: the training corpus was grown from 82
-VIX-less rows to **366 resolved simulated trades with true VIX** (290 wins
-/ 76 losses; NIFTY 50 + NIFTY BANK, 2023-01 → 2026-06) — the simulator CLI
-now fetches India VIX history natively (`_fetch_vix_series`, `--no-vix` to
-skip) and the 82 legacy NULL-VIX rows were backfilled from real history.
-Even so, the forest scores **~0.55 five-fold balanced accuracy — a coin
-flip**: the 10 frozen features don't separate wins from losses for
-structures that already passed the pipeline's own gates. So the trainer
-correctly REFUSES to persist, and the skeptic keeps abstaining (its
-designed no-noise behavior). To go live the model needs richer signal:
-regime-aware features (pending "Regime-Aware Memory" phase), real graph
-context at simulation time, or a feature-contract revision (which means
-retraining by design).
+`src/train_skeptic.py` (`python3 -m src.train_skeptic [--dry-run|--force]`) fits
+the Phase 11 skeptic's Random Forest on `simulated_trades` and persists
+`data/skeptic_model.pkl` ONLY above a `MIN_BALANCED_ACCURACY = 0.60` ship gate.
+**Honest outcome so far:** corpus grown to **366 resolved simulated trades with
+true VIX** (290 wins / 76 losses, NIFTY 50 + NIFTY BANK, 2023-01 → 2026-06), yet
+the forest scores **~0.55 five-fold — a coin flip**: the 10 frozen features don't
+separate wins from losses for structures that already passed the pipeline's
+gates. So the trainer correctly REFUSES to persist and the skeptic keeps
+abstaining. The ship-gate contract + why: `DECISIONS.md` #44. To go live it needs
+richer/orthogonal signal (see the Regime-Aware Memory result above).
 
 ## ✅ Phase 6J: Strict Portfolio Realism — BUILT AND TESTED (2026-07-08)
 

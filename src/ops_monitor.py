@@ -41,6 +41,15 @@ LOGS_DIR = ROOT / "logs"
 STATE_PATH = LOGS_DIR / ".ops_monitor_state.json"
 PROBLEMS_PATH = LOGS_DIR / "problems.jsonl"
 
+# Logs that a sweep must NEVER read, because they are themselves REPORTS that
+# quote problem-shaped lines — sweeping them makes each day's card re-flag the
+# previous day's card, an infinite echo. ops_monitor.log has always been here;
+# ceo_brief.log joined 2026-07-20 after its first card quoted its own prior
+# run's rendered issues (e.g. a corporate_events crash surfacing "from
+# ceo_brief.log"). Both the 20:30 ops sweep and the 16:30 brief share this
+# exclusion because both write a card full of problem text to their own log.
+REPORT_LOGS = {"ops_monitor.log", "ceo_brief.log"}
+
 # Problem-shaped text. Deliberately includes the codebase's own
 # fail-open vocabulary ("unavailable", "skipped", "failed") — those
 # soft notes ARE the week's find-the-problems signal.
@@ -161,9 +170,10 @@ def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None,
     state = dict(state or {})
     problems = []
     for path in sorted(Path(logs_dir).glob("*.log")):
-        if path.name == "ops_monitor.log":
-            continue  # never scan our own output — the card quotes
-                      # problem lines, which would re-match every night
+        if path.name in REPORT_LOGS:
+            continue  # never scan a report's own output — its card quotes
+                      # problem lines, which would re-match every sweep
+                      # (see REPORT_LOGS)
         if baseline_cold_start and path.name not in state:
             try:
                 state[path.name] = path.stat().st_size

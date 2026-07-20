@@ -85,6 +85,21 @@ def test_sweep_never_scans_its_own_output_log():
         assert problems == []
 
 
+def test_sweep_never_scans_the_ceo_briefs_output_log():
+    """The brief's rendered card (written to ceo_brief.log) quotes problem
+    lines. Sweeping it makes each day's card re-flag the previous day's card
+    — the 2026-07-20 self-echo where a fixed corporate_events crash kept
+    resurfacing 'from ceo_brief.log'. Both reports' logs are excluded."""
+    with tempfile.TemporaryDirectory() as tmp:
+        logs = make_logs(tmp, {
+            "ceo_brief.log": "• a script was started with options it does "
+                             "not accept (--backfill ...) — that run did "
+                             "nothing.\n",
+            "a.log": "clean\n"})
+        problems, _ = om.sweep_logs(logs, {})
+        assert problems == []
+
+
 def test_heartbeats_flag_silent_jobs_weekday_aware():
     with tempfile.TemporaryDirectory() as tmp:
         logs = make_logs(tmp, {"renew_token.log": "ok\n"})

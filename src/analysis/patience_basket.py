@@ -175,6 +175,18 @@ def eod_chain() -> dict:
     basket = run()
     basket["bhavcopy"] = day
     basket["fo_snapshot_as_of"] = fo.get("snapshot_as_of")
+    # F&O tranche step 5 (owner-approved 2026-07-20): the darling shadow
+    # leg — resolve open PAPER_TELEMETRY shadows on today's closes, then
+    # log entries for today's RIPE names through the equity halt stack.
+    # Fail-open: telemetry can never break the basket.
+    try:
+        from src.equity_shadow_proposer import run_darling_cycle
+        shadow = run_darling_cycle()
+        basket["shadow"] = {"entries": len(shadow["entries"]),
+                            "exits": len(shadow["exits"])}
+    except Exception as exc:
+        print(f"  (patience basket: darling shadow leg failed [{exc}])")
+        basket["shadow"] = None
     return basket
 
 

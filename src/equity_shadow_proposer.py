@@ -56,6 +56,18 @@ REWARD_RISK = 2.0         # target = entry + 2 * (entry - stop)
 TIME_STOP_DAYS = 10       # calendar days before a stale thesis is closed
 GAP_SHOCK_PCT = 2.0       # exit this far below the stop = gapped through it
 
+# --- the Darling leg (F&O tranche step 5, owner-approved 2026-07-20:
+#     "Darlings par shadow proposals usi din se banne shuru") -----------
+# A RIPE darling (patience_basket: in zone + cheap + not overextended) is
+# paper-bought at the day's close with the pricer's own levels: stop =
+# the zone-failure stop, target = the first trim pivot above entry (2R
+# fallback when the pricer marked no trim). A patience thesis resolves
+# slower than a block-pullback, so it carries its own time stop.
+DARLING_SETUP = "darling_ripe"
+DARLING_TIME_STOP_DAYS = 45
+BASKET_PATH = ROOT / "data" / "patience_basket.json"
+LEVELS_PATH = ROOT / "data" / "darlings_levels.json"
+
 
 def _ist_today() -> str:
     return datetime.now(IST).date().isoformat()
@@ -225,10 +237,14 @@ def categorize_failure(reason: str, exit_price: float, entry: dict,
     GAP_SHOCK_PCT below the stop means the exit gapped through the level
     (we never got the orderly stop the plan assumed)."""
     action = entry.get("kya_kara_action") or {}
-    floor = (entry.get("kyu_trigger") or {}).get("block_vwap")
+    trigger = entry.get("kyu_trigger") or {}
+    floor = trigger.get("block_vwap")
+    is_darling = trigger.get("setup") == DARLING_SETUP
     stop = action.get("stop")
     if reason == "target":
-        return "Target hit: the block-VWAP floor defense held"
+        return ("Target hit: first trim pivot reached from the buy zone"
+                if is_darling else
+                "Target hit: the block-VWAP floor defense held")
     if reason == "time_stop":
         return "Time stop: thesis never resolved either way"
     # stop_loss taxonomies, most specific first
@@ -236,6 +252,9 @@ def categorize_failure(reason: str, exit_price: float, entry: dict,
         return "Gap-down shock: price gapped through the stop"
     if sector_bullish_at_exit is False:
         return "Stop-loss hit: sector dragged it down"
+    if is_darling:
+        return ("Buy-zone defense failed: price broke the ATR stop below "
+                "the zone (cheap got cheaper)")
     if floor and exit_price < floor:
         return "VWAP defense failed: institutional floor broke (trap)"
     return "Stop-loss hit: idiosyncratic (sector intact, floor intact at category time)"
@@ -284,7 +303,11 @@ def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
         else:
             try:
                 opened = date.fromisoformat(entry["as_of"])
-                if (now.date() - opened).days >= TIME_STOP_DAYS:
+                # Per-entry override (the darling leg's patience thesis
+                # carries its own horizon); block-leg entries without the
+                # key keep the original default.
+                tsd = action.get("time_stop_days") or TIME_STOP_DAYS
+                if (now.date() - opened).days >= tsd:
                     reason = "time_stop"
             except (ValueError, TypeError, KeyError):
                 pass
@@ -317,6 +340,162 @@ def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
             },
         }, path=path))
     return logged
+
+
+# ------------------------------------------------------ the Darling leg
+
+def evaluate_darling_entry(row: dict, level: dict, as_of: str,
+                           vix=None, sector_verdict=None,
+                           nifty_trend=None) -> dict | None:
+    """One RIPE basket row + its pricer level -> a ready-to-log entry
+    event in the same four-question frame as the block leg. None when the
+    row is malformed (missing close/stop, or stop >= close — a data
+    anomaly must never mint an un-falsifiable thesis)."""
+    sym = row.get("symbol")
+    close, stop = row.get("close"), row.get("stop")
+    if not sym or close is None or stop is None or stop >= close:
+        return None
+    # Target = the first trim pivot that pays AT LEAST 1R. A pivot a few
+    # ticks above entry would resolve as an instant near-zero "win" and
+    # poison the ledger's win-rate (caught on the leg's first live run:
+    # LTF trim 310.5 vs entry 310.05). No qualifying pivot -> 2R fallback.
+    risk = close - stop
+    trims = [t for t in (level or {}).get("trim_levels") or []
+             if isinstance(t, (int, float)) and t >= close + risk]
+    target = round(min(trims), 2) if trims \
+        else round(close + REWARD_RISK * risk, 2)
+    zone = row.get("buy_zone")
+    signal = (f"darling RIPE: valuation {row.get('valuation')} (cheap) + "
+              f"close ₹{close} inside buy zone {zone} + not overextended")
+    return {
+        "event": "entry", "id": kg.new_id(), "mode": MODE,
+        "capital_allocated": 0, "ticker": f"{sym}.NS", "as_of": as_of,
+        "kyu_trigger": {                     # WHY: the exact alpha signal
+            "setup": DARLING_SETUP,
+            "signal": signal,
+            "valuation": row.get("valuation"),
+            "forensic": row.get("forensic"),
+            "buy_zone": zone,
+            "anchored_vwap": (level or {}).get("anchored_vwap"),
+        },
+        "kaise_context": {                   # HOW: the market at entry
+            "vix": vix,
+            "sector": sector_verdict or {"sector": None, "bullish": None},
+            "nifty_trend": nifty_trend,
+        },
+        "kya_kara_action": {                 # WHAT we did (paper)
+            "side": "long",
+            "entry_price": close,
+            "fill_basis": "eod_close",       # honesty: bhavcopy close, not
+                                             # a live quote (Mac EOD chain)
+            "stop": stop,
+            "target": target,
+            "time_stop_days": DARLING_TIME_STOP_DAYS,
+            "simulated_risk_pct": round((close - stop) / close * 100, 2),
+        },
+    }
+
+
+def propose_darling_entries(basket_path=None, levels_path=None, path=None,
+                            as_of=None, check_fn=None, universe=None,
+                            vix_fn=None, nifty_trend_fn=None) -> list:
+    """Log a PAPER_TELEMETRY entry for every RIPE darling that clears the
+    equity halt stack (equity_entry_checks — the single enforcement door:
+    ban-list/expiry/overextension judged there, never re-implemented
+    here). Same dedup contract as the block leg: one open shadow per
+    ticker, no same-day re-entry. Fail-open per symbol."""
+    import json as _json
+    bpath = Path(basket_path) if basket_path else BASKET_PATH
+    lpath = Path(levels_path) if levels_path else LEVELS_PATH
+    try:
+        basket = _json.loads(bpath.read_text())
+    except (OSError, ValueError):
+        return []                            # no basket = nothing to do
+    ripe = basket.get("ripe") or []
+    if not ripe:
+        return []
+    if check_fn is None:
+        from src.analysis.equity_entry_checks import check_entry as check_fn
+    try:
+        levels = {r.get("symbol"): r for r in
+                  (_json.loads(lpath.read_text()).get("levels") or [])}
+    except (OSError, ValueError):
+        levels = {}
+    as_of = as_of or _ist_today()
+
+    events = kg.read_events(path)
+    open_now = kg.open_positions(events=events)
+    exited_today = {e.get("ticker") for e in events
+                    if e.get("event") == "exit"
+                    and str(e.get("ts", "")).startswith(as_of)}
+    vix = nifty = None
+    try:
+        vix = vix_fn() if vix_fn else None   # Mac EOD: usually None (no token)
+    except Exception:
+        pass
+    try:
+        nifty = (nifty_trend_fn or _nifty_trend)()
+    except Exception:
+        pass
+    if universe is None:
+        try:
+            universe = sector_trend.load_universe()
+        except Exception:
+            universe = {}
+
+    logged = []
+    for row in ripe:
+        sym = row.get("symbol")
+        if not sym or f"{sym}.NS" in open_now or f"{sym}.NS" in exited_today:
+            continue
+        try:
+            verdict = check_fn({"symbol": sym, "direction": "long",
+                                "instrument": "delivery"})
+            if not verdict.get("allowed"):
+                print(f"  (darling shadow: {sym} blocked by "
+                      f"{verdict.get('blocked_by')}: {verdict.get('reason')})")
+                continue
+            entry = evaluate_darling_entry(
+                row, levels.get(sym), as_of, vix=vix,
+                sector_verdict=_sector_verdict(f"{sym}.NS", universe),
+                nifty_trend=nifty)
+        except Exception:
+            continue                         # one symbol never voids the scan
+        if entry is not None:
+            logged.append(kg.log_event(entry, path=path))
+    return logged
+
+
+def _eod_close_quote_fn(lake_dir=None):
+    """quote_fn for the Mac EOD chain: the latest bhavcopy close instead
+    of a live quote (the Mac holds no Dhan token by design). Raises on a
+    missing symbol so track_open_shadows' fail-open skip applies."""
+    from src.ingestion.bhavcopy_clerk import bars_for
+
+    def _quote(ticker: str):
+        bars = bars_for(ticker, days=7, lake_dir=lake_dir)
+        if not bars:
+            raise LookupError(f"no bhavcopy bars for {ticker}")
+        return bars[-1].get("close")
+    return _quote
+
+
+def run_darling_cycle(basket_path=None, levels_path=None, path=None,
+                      quote_fn=None, universe=None, check_fn=None,
+                      now=None, as_of=None) -> dict:
+    """The Mac EOD darling shadow cycle: resolve open shadows against the
+    day's bhavcopy closes first, then log entries for today's RIPE names.
+    Composition-root seam (patience_basket.eod_chain); offline-honest
+    end to end — no live quotes, no token, vix recorded as None."""
+    quote_fn = quote_fn or _eod_close_quote_fn()
+    exits = track_open_shadows(quote_fn=quote_fn,
+                               vix_fn=lambda: None,
+                               universe=universe, path=path, now=now)
+    entries = propose_darling_entries(basket_path=basket_path,
+                                      levels_path=levels_path, path=path,
+                                      as_of=as_of, check_fn=check_fn,
+                                      universe=universe)
+    return {"entries": entries, "exits": exits}
 
 
 def run_cycle(deals_by_ticker=None, quote_fn=None, vix_fn=None,

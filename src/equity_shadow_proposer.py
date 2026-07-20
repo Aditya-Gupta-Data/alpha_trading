@@ -56,17 +56,28 @@ REWARD_RISK = 2.0         # target = entry + 2 * (entry - stop)
 TIME_STOP_DAYS = 10       # calendar days before a stale thesis is closed
 GAP_SHOCK_PCT = 2.0       # exit this far below the stop = gapped through it
 
-# --- the Darling leg (F&O tranche step 5, owner-approved 2026-07-20:
-#     "Darlings par shadow proposals usi din se banne shuru") -----------
-# A RIPE darling (patience_basket: in zone + cheap + not overextended) is
+# --- the Darling leg (F&O tranche step 5, owner-approved 2026-07-20;
+#     re-wired to the 7-tier lifecycle system the same day) -------------
+# A Buy-family darling (darling_tiers: strong_buy, or weak_buy that is
+# actually IN the zone — near-zone names are never chased) is
 # paper-bought at the day's close with the pricer's own levels: stop =
 # the zone-failure stop, target = the first trim pivot above entry (2R
 # fallback when the pricer marked no trim). A patience thesis resolves
 # slower than a block-pullback, so it carries its own time stop.
-DARLING_SETUP = "darling_ripe"
+# Directive 2 (No-Orphan rule): an open darling shadow graded strong_sell
+# is FORCE-EXITED at the day's close — pinned names (weekly fundamental
+# break) as "fundamental_break", valuation-extreme grades as
+# "strong_sell_tier"; both autopsied like any other exit.
+DARLING_SETUP = "darling_buy"        # legacy ledger rows carry
+LEGACY_DARLING_SETUP = "darling_ripe"  # the pre-tier setup id
 DARLING_TIME_STOP_DAYS = 45
-BASKET_PATH = ROOT / "data" / "patience_basket.json"
+TIERS_PATH = ROOT / "data" / "darling_tiers.json"
 LEVELS_PATH = ROOT / "data" / "darlings_levels.json"
+
+
+def _is_darling(entry: dict) -> bool:
+    setup = ((entry.get("kyu_trigger") or {}).get("setup")) or ""
+    return setup.startswith("darling")
 
 
 def _ist_today() -> str:
@@ -239,7 +250,7 @@ def categorize_failure(reason: str, exit_price: float, entry: dict,
     action = entry.get("kya_kara_action") or {}
     trigger = entry.get("kyu_trigger") or {}
     floor = trigger.get("block_vwap")
-    is_darling = trigger.get("setup") == DARLING_SETUP
+    is_darling = _is_darling(entry)
     stop = action.get("stop")
     if reason == "target":
         return ("Target hit: first trim pivot reached from the buy zone"
@@ -347,7 +358,7 @@ def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
 def evaluate_darling_entry(row: dict, level: dict, as_of: str,
                            vix=None, sector_verdict=None,
                            nifty_trend=None) -> dict | None:
-    """One RIPE basket row + its pricer level -> a ready-to-log entry
+    """One Buy-tier row + its pricer level -> a ready-to-log entry
     event in the same four-question frame as the block leg. None when the
     row is malformed (missing close/stop, or stop >= close — a data
     anomaly must never mint an un-falsifiable thesis)."""
@@ -365,14 +376,16 @@ def evaluate_darling_entry(row: dict, level: dict, as_of: str,
     target = round(min(trims), 2) if trims \
         else round(close + REWARD_RISK * risk, 2)
     zone = row.get("buy_zone")
-    signal = (f"darling RIPE: valuation {row.get('valuation')} (cheap) + "
-              f"close ₹{close} inside buy zone {zone} + not overextended")
+    tier = row.get("tier") or "strong_buy"
+    signal = (f"darling {tier}: valuation {row.get('valuation')} + "
+              f"close ₹{close} in buy zone {zone} ({row.get('rule')})")
     return {
         "event": "entry", "id": kg.new_id(), "mode": MODE,
         "capital_allocated": 0, "ticker": f"{sym}.NS", "as_of": as_of,
         "kyu_trigger": {                     # WHY: the exact alpha signal
             "setup": DARLING_SETUP,
             "signal": signal,
+            "tier": tier,
             "valuation": row.get("valuation"),
             "forensic": row.get("forensic"),
             "buy_zone": zone,
@@ -396,23 +409,34 @@ def evaluate_darling_entry(row: dict, level: dict, as_of: str,
     }
 
 
-def propose_darling_entries(basket_path=None, levels_path=None, path=None,
+def entry_eligible_rows(tiers: dict) -> list:
+    """The Buy-family rows the shadow book may actually buy: every
+    strong_buy (in-zone by rule), plus weak_buy rows that are IN the
+    zone — a near-zone weak_buy is watched, never chased (the patience
+    doctrine survives the tier system)."""
+    t = tiers.get("tiers") or {}
+    return list(t.get("strong_buy") or []) + \
+        [r for r in t.get("weak_buy") or [] if r.get("in_zone")]
+
+
+def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
                             as_of=None, check_fn=None, universe=None,
                             vix_fn=None, nifty_trend_fn=None) -> list:
-    """Log a PAPER_TELEMETRY entry for every RIPE darling that clears the
-    equity halt stack (equity_entry_checks — the single enforcement door:
-    ban-list/expiry/overextension judged there, never re-implemented
-    here). Same dedup contract as the block leg: one open shadow per
-    ticker, no same-day re-entry. Fail-open per symbol."""
+    """Log a PAPER_TELEMETRY entry for every entry-eligible Buy-tier
+    darling that clears the equity halt stack (equity_entry_checks — the
+    single enforcement door: ban-list/expiry/overextension judged there,
+    never re-implemented here). Same dedup contract as the block leg:
+    one open shadow per ticker, no same-day re-entry. Fail-open per
+    symbol."""
     import json as _json
-    bpath = Path(basket_path) if basket_path else BASKET_PATH
+    tpath = Path(tiers_path) if tiers_path else TIERS_PATH
     lpath = Path(levels_path) if levels_path else LEVELS_PATH
     try:
-        basket = _json.loads(bpath.read_text())
+        tiers = _json.loads(tpath.read_text())
     except (OSError, ValueError):
-        return []                            # no basket = nothing to do
-    ripe = basket.get("ripe") or []
-    if not ripe:
+        return []                            # no tier table = nothing to do
+    buyable = entry_eligible_rows(tiers)
+    if not buyable:
         return []
     if check_fn is None:
         from src.analysis.equity_entry_checks import check_entry as check_fn
@@ -444,7 +468,7 @@ def propose_darling_entries(basket_path=None, levels_path=None, path=None,
             universe = {}
 
     logged = []
-    for row in ripe:
+    for row in buyable:
         sym = row.get("symbol")
         if not sym or f"{sym}.NS" in open_now or f"{sym}.NS" in exited_today:
             continue
@@ -466,6 +490,77 @@ def propose_darling_entries(basket_path=None, levels_path=None, path=None,
     return logged
 
 
+def force_exit_strong_sell(tiers_path=None, path=None, quote_fn=None,
+                           now=None) -> list:
+    """Directive 2 (No-Orphan rule): an open darling shadow whose symbol
+    is graded strong_sell is closed at the day's price — a name we would
+    never buy today on BROKEN FUNDAMENTALS or an EXTREME valuation does
+    not get to coast to its technical stop. Pinned names (weekly
+    fundamental break) exit as "fundamental_break"; grade-driven ones as
+    "strong_sell_tier". Both are autopsied; both are learning rows.
+    Weak-sell grades do NOT force an exit — the position's own stop is
+    already the thesis-break detector. Fail-open per ticker."""
+    import json as _json
+    tpath = Path(tiers_path) if tiers_path else TIERS_PATH
+    try:
+        tiers = _json.loads(tpath.read_text())
+    except (OSError, ValueError):
+        return []
+    sell_rows = {r["symbol"]: r for r in
+                 (tiers.get("tiers") or {}).get("strong_sell") or []}
+    if not sell_rows:
+        return []
+    if quote_fn is None:
+        quote_fn = _eod_close_quote_fn()
+    now = now or datetime.now(IST)
+
+    logged = []
+    for ticker, entry in kg.open_positions(path=path).items():
+        sym = ticker.split(".")[0]
+        if sym not in sell_rows or not _is_darling(entry):
+            continue
+        row = sell_rows[sym]
+        try:
+            price = quote_fn(ticker)
+        except Exception:
+            price = None
+        if price is None:
+            continue                 # stays open; graded again tomorrow
+        if row.get("pinned"):
+            reason = "fundamental_break"
+            category = ("Fundamental break: weekly re-screen dropped the "
+                        "name — forced exit (No-Orphan rule): "
+                        f"{row.get('pinned')}")
+        else:
+            reason = "strong_sell_tier"
+            category = ("Strong Sell grade: "
+                        f"{row.get('rule')} — thesis vacated")
+        action = entry.get("kya_kara_action") or {}
+        entry_price, stop = action.get("entry_price"), action.get("stop")
+        risk = (entry_price - stop) if None not in (entry_price, stop) else None
+        held = None
+        try:
+            held = (now.date() - date.fromisoformat(entry["as_of"])).days
+        except (ValueError, TypeError, KeyError):
+            pass
+        logged.append(kg.log_event({
+            "event": "exit", "id": entry["id"], "mode": MODE,
+            "capital_allocated": 0, "ticker": ticker,
+            "exit_price": price, "reason": reason,
+            "kya_sikha_autopsy": {          # what we LEARNED
+                "category": category,
+                "tier_rule": row.get("rule"),
+                "r_multiple": (round((price - entry_price) / risk, 2)
+                               if risk else None),
+                "held_days": held,
+                "below_block_vwap": None,
+                "sector_at_exit": {"sector": None, "bullish": None},
+                "vix_at_exit": None,
+            },
+        }, path=path))
+    return logged
+
+
 def _eod_close_quote_fn(lake_dir=None):
     """quote_fn for the Mac EOD chain: the latest bhavcopy close instead
     of a live quote (the Mac holds no Dhan token by design). Raises on a
@@ -480,18 +575,21 @@ def _eod_close_quote_fn(lake_dir=None):
     return _quote
 
 
-def run_darling_cycle(basket_path=None, levels_path=None, path=None,
+def run_darling_cycle(tiers_path=None, levels_path=None, path=None,
                       quote_fn=None, universe=None, check_fn=None,
                       now=None, as_of=None) -> dict:
     """The Mac EOD darling shadow cycle: resolve open shadows against the
-    day's bhavcopy closes first, then log entries for today's RIPE names.
+    day's bhavcopy closes (stop/target/time), force-exit Strong-Sell
+    grades (Directive 2), then log entries for today's Buy-tier names.
     Composition-root seam (patience_basket.eod_chain); offline-honest
     end to end — no live quotes, no token, vix recorded as None."""
     quote_fn = quote_fn or _eod_close_quote_fn()
     exits = track_open_shadows(quote_fn=quote_fn,
                                vix_fn=lambda: None,
                                universe=universe, path=path, now=now)
-    entries = propose_darling_entries(basket_path=basket_path,
+    exits += force_exit_strong_sell(tiers_path=tiers_path, path=path,
+                                    quote_fn=quote_fn, now=now)
+    entries = propose_darling_entries(tiers_path=tiers_path,
                                       levels_path=levels_path, path=path,
                                       as_of=as_of, check_fn=check_fn,
                                       universe=universe)

@@ -47,13 +47,36 @@ Reinstall if ever needed:
 launchctl load ~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist
 ```
 
-**Crontab:** none, by design (as of 2026-07-09). The Mac used to run its
-own 07:00 renewal + 07:10 push as "redundancy" — removed after discovering
-DhanHQ allows only one active token per account, so the Mac's unattended
-renewal could invalidate and overwrite the VM's currently-valid token
-(decision #48). The VM's Secret-Manager renewal needs no backup.
-`scripts/push_token_to_vm.sh` still exists for manual troubleshooting —
-just never schedule it again.
+**Crontab (as of 2026-07-20): TWO Dept-8 jobs — the Darling two-clock
+architecture (decision #77).** Both are Mac-only by the boundary doctrine
+(the bhavcopy lake, the pricer and the valuation engine all live here; the
+VM holds none of it) and both are NSE-crawling, which must never run from
+the VM's IP:
+
+| When | Job | What |
+|---|---|---|
+| 19:15 Mon–Fri | `src.analysis.patience_basket --eod` | THE DAILY CLOCK: today's bhavcopy → F&O bundle → pricer → valuation → 7-tier grading → darling shadow leg (Buy-tier entries, Strong-Sell forced exits). Log: `logs/patience_eod.log` |
+| 10:00 Saturday | `src.analysis.weekly_recalibration` | THE WEEKLY CLOCK: refresh quarterly filings → re-screen fundamentals → No-Orphan pins → rebuild pricer/valuation/tiers → one summary card. Log: `logs/weekly_recalibration.log` |
+
+Installed by the owner from their own Terminal (Mac cron install is
+blocked for Claude by TCC — the edge-miner precedent). The crontab carries
+`SHELL=/bin/bash` so cron inherits the Full Disk Access granted to bash
+during the edge-miner fix, and both lines invoke python by ABSOLUTE path
+(`/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`) — the
+standing lesson from being bitten three times in 48h. Re-install safely
+(replaces rather than duplicates):
+
+```bash
+( crontab -l 2>/dev/null | grep -v -e 'src.analysis.patience_basket' -e 'src.analysis.weekly_recalibration' -e '^SHELL='; echo 'SHELL=/bin/bash'; echo '15 19 * * 1-5 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.analysis.patience_basket --eod >> logs/patience_eod.log 2>&1'; echo '0 10 * * 6 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.analysis.weekly_recalibration >> logs/weekly_recalibration.log 2>&1' ) | crontab -
+```
+
+**NEVER schedule on the Mac:** token renewal or push. The Mac used to run
+its own 07:00 renewal + 07:10 push as "redundancy" — removed 2026-07-09
+after discovering DhanHQ allows only one active token per account, so the
+Mac's unattended renewal could invalidate and overwrite the VM's
+currently-valid token (decision #48). The VM's Secret-Manager renewal
+needs no backup. `scripts/push_token_to_vm.sh` still exists for manual
+troubleshooting — just never schedule it again.
 
 ## Watching it work
 

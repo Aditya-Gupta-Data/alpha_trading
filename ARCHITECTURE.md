@@ -170,6 +170,19 @@ machine scores — two instruments, never rescaled into one number),
 exchange-filed numbers + the forensic trust gate; writes every passer to
 `darlings_queue.json`, which the report_downloader consumes — quant finds
 the darlings, the deep-read tells us if they're genuine),
+and **the Darling lifecycle** — the two-clock system (decision #77) that
+keeps that list from going stale: `dynamic_pricer` (per-name buy zone,
+ATR stop, trim pivots, overextension state) + `valuation_scorer` (the
+1–100 cheap-to-rich score vs winsorized sector-or-market μ/σ) feed
+`darling_tiers`, which every EOD grades the WHOLE cohort into seven tiers
+(strong/weak buy–hold–sell + watch) plus an honest `ungraded` Tier 0 —
+so a name is never "done" after entry and the same table that says BUY
+also says SELL for what we hold. Two clocks, deliberately different:
+`patience_basket --eod` (daily 19:15) re-grades on PRICE, because prices
+move daily; `weekly_recalibration` (Saturday 10:00) re-judges
+FUNDAMENTALS, because those only change when filings arrive — and it
+OVERRIDES the daily grade by PINNING a held name that fails its screen
+(the No-Orphan rule) until its paper position closes,
 plus two **research-stage orphans**:
 `institutional_alpha` (VWAP-pullback entry primitives — signal source for the
 Shadow Equity Engine's thesis) and `conviction` (a 0–1 multi-factor score that

@@ -6,6 +6,83 @@ Read this to pick up the project cold in a new agent session. For vision see
 updated only at milestone states, not on every commit** — check `git log`
 for anything more recent than what's written here.
 
+## ⚠️ COVERAGE GAP IN THIS FILE, READ FIRST (noted 2026-07-20)
+
+**This brief jumps from 2026-07-20 (the section directly below) back to
+2026-07-11.** The nine days between — honest paper fills #70 + the stale
+LOT_SIZES fix, portfolio Greeks #71, performance #72, book_context #73,
+text-intelligence #74, RSS ingestion #75, gated nightly discovery #76, the
+unified-main deploy, the whole Dept-8 Analysis department, the F&O intake
+tranche, the Issue-21 XBRL clerk, and dual-horizon news sentiment — are
+**recorded in `DECISIONS.md` (#70–#76), `MODULES.md`, and
+`docs/observation_week_ledger.md`, but were never folded into this file.**
+For anything in that window, trust `git log --oneline` + those three files
+over this brief's silence. Not reconstructed here rather than risk a
+plausible-sounding but unverified summary.
+
+## 🟢 THE DARLING LIFECYCLE IS LIVE — 7-tier grading + the two-clock architecture; both Mac crons INSTALLED (updated 2026-07-20 evening)
+
+**Decision #77, commits `5c326a3` + `1629bc8`, pushed; suite 1373 green.**
+The binary RIPE/waiting basket is SCRAPPED. Dept 8 now runs a lifecycle
+system: every darling is graded EVERY EOD into one of seven tiers
+(`strong_buy` / `weak_buy` / `strong_hold` / `weak_hold` / `weak_sell` /
+`strong_sell` / `watch`) plus an honest Tier-0 `ungraded` for names whose
+data can't support a grade. A name is never "done" after entry — the same
+table that says BUY also says HOLD and SELL for what the paper book holds.
+
+**The two clocks (do not collapse them into one):**
+- **DAILY** — `patience_basket --eod`, **Mac cron 19:15 Mon–Fri**: bhavcopy
+  → F&O bundle → pricer → valuation → tier grading → shadow leg. Re-grades
+  on PRICE, because prices move daily. This half already existed and was
+  already dynamic; a weekly-only recalibration would have made it WORSE.
+- **WEEKLY** — `weekly_recalibration`, **Mac cron 10:00 Saturday**: refresh
+  quarterly filings → re-screen → No-Orphan pins → rebuild → one card.
+  Re-judges FUNDAMENTALS, which only change when filings arrive, and
+  OVERRIDES the daily grade through pins.
+
+**Mechanical definitions (never re-derive these by feel):** near-zone =
+within 5% above the buy-zone ceiling · momentum = close > 50-DMA AND 50-DMA
+> 200-DMA · losing volume = 20-day avg turnover < 60-day avg · near-stop =
+within 1 ATR of the stop reference (trailing pivot floor first, else the
+hard stop).
+
+**The No-Orphan rule:** a held name failing the weekly screen is never
+"orphaned" — it is PINNED (`data/darling_pins.json`) into the tier table
+until its paper position closes, then drops entirely. A REJECTED name pins
+`strong_sell`; a name the screen merely LOST THE DATA to judge pins
+`ungraded` — a sell verdict is never manufactured from absence.
+
+**Shadow book wiring:** entries from `strong_buy` + **in-zone** `weak_buy`
+only (near-zone names are watched, never chased). `strong_sell` FORCE-EXITS
+an open shadow (`fundamental_break` when pinned, `strong_sell_tier` when
+valuation-driven); `weak_sell` does NOT — the position's own stop is
+already the thesis-break detector. Still zero-capital PAPER_TELEMETRY,
+still advisory-only (Law #63).
+
+**Cards:** family transitions ONLY (buy/hold/sell/watch). Intrafamily moves
+(strong_buy → weak_buy) are visible in the table but silent — a valuation
+wobbling 25→26→25 would otherwise fire three cards in three days. First
+grading fires ONE distribution summary.
+
+**First live grading, 105 darlings:** 0 strong_buy (nothing is
+simultaneously in-zone AND ≤25 — an honest empty bucket, not a bug) · 15
+weak_buy, 10 of them in-zone and entry-eligible (the old RIPE trio
+HEROMOTOCO 30 / ESCORTS 34 / TCS 35 all landed here) · 17 strong_hold · 17
+weak_hold · 17 weak_sell · 12 strong_sell (9 below their hard stop) · 17
+watch · 10 ungraded.
+
+**Where the VM stands:** two commits behind, DELIBERATELY. Everything in
+this work is Mac-only by the boundary doctrine (bhavcopy lake, pricer,
+valuation all live on the Mac; the crons are NSE-crawling and must never
+run from the VM's IP). No VM pull or restart is needed; it syncs at the
+next regular deploy.
+
+**Open / next:** `business_metrics`, `liquidity_rank` and `ticker_dossier`
+(landed in `1629bc8`) still have NO dedicated test files — Dept-8 test
+debt. First cron-fired EOD run is 19:15 on 2026-07-20; first weekly
+recalibration is Saturday 2026-07-25 (its filing-refresh stage takes
+15–30 min, which is normal).
+
 ## 🟢 HOLY-GRAIL PHASES 4 & 5 COMPLETE, MERGED & DEPLOYED — the discovery brain now RUNS; it is DATA-STARVED by design, not broken (updated 2026-07-11 evening)
 
 **The single most important fact for a cold session: the build has reached

@@ -108,6 +108,21 @@ def test_news_driver_rejects_aged_reads():
                          "last_updated": "not-a-date"}) is None
 
 
+def test_news_driver_reversal_rides_as_context_not_points():
+    """A v3 reversal flag changes the driver TEXT (decision #26 pattern:
+    advisory context), never the points."""
+    plain = news_entry(-4, "guidance cut")
+    flagged = dict(news_entry(-4, "guidance cut"),
+                   prev={"short_term": 3, "long_term": 1,
+                         "read_at": plain["last_updated"]},
+                   reversal={"short_term": True, "long_term": False})
+    p_plain = _news_driver(plain)
+    p_flagged = _news_driver(flagged)
+    assert p_flagged[0] == p_plain[0]                    # identical points
+    assert "REVERSED short-term: was +3" in p_flagged[1]
+    assert "REVERSED" not in p_plain[1]
+
+
 def test_drivers_are_capped_and_sorted_by_magnitude():
     with_fake_analysis(None, make_analysis(uptrend=True, fresh_cross=True, rsi=25))
     news = {"TEST.NS": news_entry(5, "rally")}

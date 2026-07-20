@@ -355,25 +355,67 @@ Verdict strings always begin with one of: `WIN`, `LOSS`, `GOOD SKIP`,
 `GOOD HOLD`, `MISSED GAIN`, `SHOULD HAVE SOLD`, `flat` — safe to key
 badge colors off that prefix.
 
-### 2.3 News sentiment — `data/news_sentiment.json`
+### 2.3 News sentiment — `data/news_sentiment.json` (v3, BUILT 2026-07-20)
+
+This section documented the dual-horizon schema before the code existed;
+as of 2026-07-20 `news_processor.py` actually writes it. Real schema:
+
 ```json
 {
-  "generated": "2026-07-05T07:36:22+00:00",
+  "generated": "2026-07-20T13:40:22+00:00",
   "source": "gemini",                  // "gemini" (real) | "fallback" (placeholder)
   "tickers": {
     "TCS.NS": {
-      "short_term_catalyst_score": -5, // int, -5 bearish .. +5 bullish
-      "long_term_macro_score": -5,     // int, -5 bearish .. +5 bullish
-      "headline_focus": "sharp price crash",   // ≤ 3 words
-      "last_updated": "2026-07-05T07:36:22+00:00",
-      "stale": false                   // true == neutral placeholder, NOT a real read
+      "sentiment_score": -4,           // int, -5..+5 — ALWAYS == short-term
+                                       // (back-compat key; existing consumers
+                                       // read this and keep working)
+      "short_term_catalyst_score": -4, // days/weeks: results, orders, events
+      "long_term_macro_score": 2,      // months/structural story; null when
+                                       // the model gave no read (unknown is
+                                       // NOT neutral — never render null as 0)
+      "headline_focus": "guidance cut",        // ≤ 3 words
+      "last_updated": "2026-07-20T13:40:22+00:00",
+      "stale": false,                  // true == neutral placeholder, NOT a real read
+      "prev": {                        // prior run's FRESH read, or null
+        "short_term": 3, "long_term": 2,
+        "read_at": "2026-07-19T13:40:11+00:00"
+      },
+      "reversal": {                    // drastic overnight narrative break:
+        "short_term": true,            // crossed/touched neutral AND moved
+        "long_term": false             // ≥ 3 pts vs prev (detect_reversal)
+      }
     }
   }
 }
 ```
 When `stale` is true, render "no news data", never a neutral-0 gauge.
+Entries older than `news_processor.NEWS_MAX_AGE_HOURS` (48h) must be
+treated as absent by every consumer — use `news_processor.entry_is_fresh`,
+never re-implement the age check (ledger Issue 22).
 
-*Note: The `sleep_phase` background task will attach `duration: short|long` tags to Episodic Event Frames in the Brain Map based on this dual-horizon data.*
+**Who consumes this file today (the wiring map — check here BEFORE
+building anything new on news):**
+
+| Consumer | What it reads | Effect |
+|---|---|---|
+| `forecast.py` `_news_driver` | `sentiment_score` (=short-term), `reversal`, `prev` | ±2 pts toward bias in the 08:00 suggest card + Discord `/analyze`; a flagged reversal is APPENDED TO THE DRIVER TEXT only, zero extra points (decision #26 pattern) |
+| `confluence/evidence.py` `news_evidence` | `sentiment_score` | the `news` layer of daily_context evidence frames (miners/receipts) |
+| `brain_map` ingest | whole entry | episodic news events, linked to outcomes later |
+| `ingestion/daily_archiver.py` | whole file | nightly lake snapshot `news_daily/` (skips un-regenerated files — a hole, never a duplicate) |
+| `news_processor` itself | previous run's file | `prev`-linking + reversal flags + the 📰 Discord reversal card |
+
+**NOT yet wired (deliberate):** the options proposer / trading path does
+not read news at all — entries are trend+VIX+regime-veto gated. House
+rule for wiring it in: new signals ride as ADVISORY first (cards,
+context lines), become a registered hypothesis, and only get scoring
+power after the proving harness validates them (#26/#63). The natural
+next taps, in value order: (1) sentiment-flip exit advisory on open
+positions (sibling of `trend_flip_advisory`), (2) long-term score as a
+Patience-Basket/darlings thesis column (long-term reversal on a darling
+= thesis-break review flag), (3) hypothesis: "short-term reversal
+against an open position predicts adverse resolution" via daily_context.
+
+*Note: The `sleep_phase` background task will attach `duration: short|long` tags to Episodic Event Frames in the Brain Map based on this dual-horizon data — still planned, not built.*
 
 ### 2.4 Forecast (computed on demand by `src/forecast.py`, not persisted)
 ```json

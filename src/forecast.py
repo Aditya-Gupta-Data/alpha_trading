@@ -209,7 +209,19 @@ def _news_driver(news_entry: dict):
     points = (sentiment / 5) * NEWS_POINTS_MAX
     direction = "positive" if sentiment > 0 else "negative"
     focus = news_entry.get("headline_focus", "no clear driver")
-    return points, f"{direction} news -- {focus} (sentiment {sentiment:+d}/5)"
+    text = f"{direction} news -- {focus} (sentiment {sentiment:+d}/5)"
+    # v3 reversal flags ride along as CONTEXT in the driver line (zero
+    # extra points — decision #26 pattern): the reader should know when
+    # today's read is a drastic break from yesterday's.
+    rev = news_entry.get("reversal") or {}
+    if rev.get("short_term") or rev.get("long_term"):
+        prev = news_entry.get("prev") or {}
+        was = prev.get("short_term") if rev.get("short_term") \
+            else prev.get("long_term")
+        which = "short-term" if rev.get("short_term") else "long-term"
+        if was is not None:
+            text += f" [REVERSED {which}: was {was:+d} yesterday]"
+    return points, text
 
 
 def _active_pattern_tags(result: dict, rsi_oversold: float) -> list:

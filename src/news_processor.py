@@ -12,19 +12,38 @@ To keep that isolation real, this file imports NO core trading code
 (no strategy/portfolio/journal/suggestions). It only reads the watchlist and
 its own .env, and writes one JSON file.
 
-Output — data/news_sentiment.json:
+Output — data/news_sentiment.json (v3, dual-horizon — owner spec 2026-07-20):
     {
       "generated": "<ISO timestamp>",
       "source": "gemini" | "fallback",
       "tickers": {
         "ONGC.NS": {
-          "sentiment_score": 2,          # int, -5 (bearish) .. +5 (bullish)
+          "sentiment_score": 2,          # int, -5..+5 — ALWAYS equals the
+                                         # short-term score (back-compat:
+                                         # forecast/evidence/brain_map read
+                                         # this key and keep working)
+          "short_term_catalyst_score": 2,  # days/weeks — the swing driver
+          "long_term_macro_score": 1,      # months/structural narrative
+                                           # (None = model gave no read;
+                                           # unknown is not neutral)
           "headline_focus": "oil price rise",   # <= 3-word driver
           "last_updated": "<ISO timestamp>",
-          "stale": false                 # true == neutral fallback, not real
+          "stale": false,                # true == neutral fallback, not real
+          "prev": {                      # the PRIOR run's fresh read, or null
+            "short_term": -2, "long_term": 1,
+            "read_at": "<ISO timestamp>"
+          },
+          "reversal": {                  # drastic overnight narrative break
+            "short_term": true,          # (crossed neutral, moved >= 3 pts
+            "long_term": false           #  vs prev — see detect_reversal)
+          }
         }, ...
       }
     }
+
+A flagged reversal on any horizon also fires ONE compact Discord note per
+run (fail-open, lazy src.notifier import — the only, deliberately
+side-door, non-core import; trading state stays untouched).
 
 If Gemini is unavailable (no GEMINI_API_KEY, network/quota failure, or an
 unparseable reply), EVERY ticker is written as a neutral score 0 with
@@ -129,11 +148,18 @@ def _build_prompt(headlines_by_ticker: dict) -> str:
     body = "\n\n".join(blocks)
     return (
         "You are a markets news classifier for Indian (NSE) stocks. For each "
-        "ticker below, read its recent headlines and judge the near-term "
-        "sentiment for that stock.\n\n"
+        "ticker below, read its recent headlines and judge the sentiment for "
+        "that stock on TWO separate horizons.\n\n"
         "Return ONLY a JSON object mapping each ticker to an object with:\n"
-        '  "sentiment_score": integer from -5 (very bearish) to +5 (very '
-        "bullish), 0 if neutral or unclear,\n"
+        '  "short_term_catalyst_score": integer from -5 (very bearish) to +5 '
+        "(very bullish) for the coming days/weeks — catalysts, results, "
+        "orders, upgrades/downgrades, price-moving events. 0 if neutral or "
+        "unclear,\n"
+        '  "long_term_macro_score": integer from -5 to +5 for the '
+        "months-ahead structural story — business model, sector cycle, "
+        "regulation, competitive position. 0 if neutral or unclear. Judge "
+        "the two INDEPENDENTLY (a stock can have a bad quarter inside a "
+        "strong structural story, and vice versa),\n"
         '  "headline_focus": at most 3 words naming the main driver '
         '(e.g. "earnings beat", "oil prices", "regulatory probe").\n\n'
         "Do not include any ticker not listed. Do not add commentary.\n\n"
@@ -159,29 +185,54 @@ def _call_gemini(prompt: str, api_key: str) -> dict:
     return json.loads(text)
 
 
-def _clean_entry(raw: dict, now: str) -> dict:
-    """Coerce one model result into the strict output schema."""
+def _coerce_score(value, default=0):
+    """One score -> a clamped int in [-5, 5], or `default` when unusable.
+    `default=None` distinguishes 'the model gave nothing' from 'neutral'."""
     try:
-        score = int(round(float(raw.get("sentiment_score", 0))))
+        score = int(round(float(value)))
     except (TypeError, ValueError):
-        score = 0
-    score = max(-5, min(5, score))
+        return default
+    return max(-5, min(5, score))
+
+
+def _clean_entry(raw: dict, now: str) -> dict:
+    """Coerce one model result into the strict output schema.
+
+    v3 (owner spec 2026-07-20): TWO horizons per share —
+    short_term_catalyst_score (days; what a swing trade rides) and
+    long_term_macro_score (months/structural narrative). `sentiment_score`
+    stays present and EQUALS the short-term score, so every existing
+    consumer (forecast, evidence, brain_map ingest) keeps working
+    unchanged. A model answering the old single-score schema feeds
+    short-term from it; its long-term is None — unknown is not neutral,
+    and None can never fire a reversal flag."""
+    short = _coerce_score(raw.get("short_term_catalyst_score",
+                                  raw.get("sentiment_score", 0)))
+    long_ = _coerce_score(raw.get("long_term_macro_score"), default=None)
     focus = str(raw.get("headline_focus", "")).strip() or "no clear driver"
     focus = " ".join(focus.split()[:3])
     return {
-        "sentiment_score": score,
+        "sentiment_score": short,
+        "short_term_catalyst_score": short,
+        "long_term_macro_score": long_,
         "headline_focus": focus,
         "last_updated": now,
         "stale": False,
+        "prev": None,
+        "reversal": {"short_term": False, "long_term": False},
     }
 
 
 def _neutral_entry(now: str) -> dict:
     return {
         "sentiment_score": 0,
+        "short_term_catalyst_score": 0,
+        "long_term_macro_score": 0,
         "headline_focus": "no data",
         "last_updated": now,
         "stale": True,
+        "prev": None,
+        "reversal": {"short_term": False, "long_term": False},
     }
 
 
@@ -220,9 +271,100 @@ def entry_is_fresh(entry: dict, now: datetime = None,
     return (now - written) <= timedelta(hours=max_age_hours)
 
 
-def build_sentiment(tickers: list) -> dict:
+# A reversal = the narrative crossed (or touched) neutral AND moved at
+# least this many points since the previous fresh read. +5→+2 is the same
+# story softening (no flag); +2→−2 is a different story (flag); +3→0 is a
+# strong story evaporating (flag). Owner spec 2026-07-20: "ekdum change
+# agar ho toh flag karo" — drastic changes only, both horizons.
+REVERSAL_MIN_DELTA = 3
+
+
+def detect_reversal(prev, today) -> bool:
+    """True when today's score is a drastic break from the previous read.
+    None on either side means 'unknown', and unknown never flags."""
+    if prev is None or today is None:
+        return False
+    return abs(today - prev) >= REVERSAL_MIN_DELTA and prev * today <= 0
+
+
+def link_previous(entry: dict, prev_entry: dict) -> dict:
+    """Stamp `prev` + `reversal` onto a freshly-cleaned entry from the
+    prior run's entry for the same ticker. The baseline must be REAL and
+    RECENT: a stale (fallback-neutral) prev is a fake number, and an aged
+    prev is not \"kal\" — both leave prev=None and the flags down (the
+    same entry_is_fresh gate every consumer uses, Issue 22). A legacy
+    single-score prev links short-term from sentiment_score; its
+    long-term baseline is unknown, so the long flag can never fire."""
+    if not isinstance(prev_entry, dict) or prev_entry.get("stale", True) \
+            or not entry_is_fresh(prev_entry):
+        return entry
+    prev_short = _coerce_score(prev_entry.get("short_term_catalyst_score",
+                                              prev_entry.get("sentiment_score")),
+                               default=None)
+    prev_long = _coerce_score(prev_entry.get("long_term_macro_score"),
+                              default=None)
+    entry["prev"] = {"short_term": prev_short, "long_term": prev_long,
+                     "read_at": prev_entry.get("last_updated")}
+    entry["reversal"] = {
+        "short_term": detect_reversal(prev_short,
+                                      entry["short_term_catalyst_score"]),
+        "long_term": detect_reversal(prev_long,
+                                     entry["long_term_macro_score"]),
+    }
+    return entry
+
+
+def _load_previous(path: Path = None) -> dict:
+    """Ticker -> entry from the PRIOR run's output file, read before this
+    run overwrites it. {} on any problem — first run, missing, unreadable."""
+    path = Path(path) if path is not None else OUTPUT_PATH
+    try:
+        data = json.loads(path.read_text())
+        tickers = data.get("tickers", {})
+        return tickers if isinstance(tickers, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _default_notify(text: str) -> None:
+    """One-line Discord note (the discovery/ops pattern): fail-open, and
+    the notifier muzzles itself under pytest (Phase 6J guard)."""
+    try:
+        import asyncio
+        from src.notifier import send_discord_message
+        asyncio.run(send_discord_message(text))
+    except Exception as exc:
+        print(f"  (news processor: notify failed [{exc}])")
+
+
+def _reversal_note(flagged: list) -> str:
+    """One compact card line for all of today's flagged reversals."""
+    parts = []
+    for ticker, entry in flagged:
+        prev = entry["prev"] or {}
+        segs = []
+        if entry["reversal"]["short_term"]:
+            segs.append(f"ST {prev.get('short_term'):+d}→"
+                        f"{entry['short_term_catalyst_score']:+d}")
+        if entry["reversal"]["long_term"]:
+            segs.append(f"LT {prev.get('long_term'):+d}→"
+                        f"{entry['long_term_macro_score']:+d}")
+        parts.append(f"{ticker} {' / '.join(segs)}"
+                     f" ({entry['headline_focus']})")
+    return "📰 Sentiment reversal: " + "; ".join(parts)
+
+
+def build_sentiment(tickers: list, previous_path: Path = None,
+                    notify_fn=None) -> dict:
     """Fetch + score all tickers into the output schema. Never raises: on any
-    LLM failure every ticker becomes a neutral, stale entry."""
+    LLM failure every ticker becomes a neutral, stale entry.
+
+    v3: each real read is LINKED to the prior run's read for the same
+    ticker (`prev` + `reversal` flags, both horizons), and one compact
+    Discord note fires when anything flagged — the owner sees "kal +3
+    bola tha, aaj -4" the moment the narrative breaks. Fallback (stale)
+    runs never link and never flag: a fake 0 must not read as a collapse.
+    `previous_path`/`notify_fn` are injectable for tests."""
     now = _now()
     if not tickers:
         return {"generated": now, "source": "fallback", "tickers": {}}
@@ -246,10 +388,21 @@ def build_sentiment(tickers: list) -> dict:
             "tickers": {t: _neutral_entry(now) for t in tickers},
         }
 
-    out = {}
+    previous = _load_previous(previous_path)
+    out, flagged = {}, []
     for ticker in tickers:
         raw = scored.get(ticker)
-        out[ticker] = _clean_entry(raw, now) if isinstance(raw, dict) else _neutral_entry(now)
+        if not isinstance(raw, dict):
+            out[ticker] = _neutral_entry(now)
+            continue
+        entry = link_previous(_clean_entry(raw, now), previous.get(ticker))
+        out[ticker] = entry
+        if entry["reversal"]["short_term"] or entry["reversal"]["long_term"]:
+            flagged.append((ticker, entry))
+    if flagged:
+        note = _reversal_note(flagged)
+        print(f"  {note}")
+        (notify_fn or _default_notify)(note)
     return {"generated": now, "source": "gemini", "tickers": out}
 
 

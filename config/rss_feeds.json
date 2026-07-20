@@ -5,7 +5,10 @@
     {"name": "mc_business",  "url": "https://www.moneycontrol.com/rss/business.xml",      "sector": "business"},
     {"name": "mc_economy",   "url": "https://www.moneycontrol.com/rss/economy.xml",       "sector": "economy"},
     {"name": "et_markets",   "url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms", "sector": "markets"},
-    {"name": "et_industry",  "url": "https://economictimes.indiatimes.com/industry/rssfeeds/13352306.cms",  "sector": "industry"},
+    {"name": "et_industry",  "url": "https://economictimes.indiatimes.com/industry/rssfeeds/13352306.cms",  "sector": "industry"}
+  ],
+  "_disabled_comment": "Feeds parked here are IGNORED by load_feeds() (it reads only 'feeds'). Kept so the URL isn't lost and the reason is on record. bs_markets: hard HTTP 403 from the VM's datacenter IP — verified 2026-07-20, three consecutive attempts with a browser User-Agent, so it is an origin-side block, not a transient failure or a UA problem. It fired one 'fetch failed' problem line on the nightly ops card every single run. Re-test from the VM before restoring; do NOT work around it by scraping.",
+  "disabled_feeds": [
     {"name": "bs_markets",   "url": "https://www.business-standard.com/rss/markets-106.rss", "sector": "markets"}
   ]
 }

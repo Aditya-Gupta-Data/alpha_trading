@@ -501,7 +501,7 @@ The Mac is no longer required for anything market-hours. Topology
 | Live session 09:15–15:30 | VM | `src.master_scheduler`, cron 09:10 Mon-Fri |
 | Token renewal | VM, 07:00 | `src.renew_token` — V2 creds fetched at runtime from **GCP Secret Manager** (verified live: mints with ZERO V2 keys on VM disk) |
 | Paper state (journal/portfolio/brain_map) | VM `data/` | Mac's live state migrated 2026-07-08; VM authoritative |
-| Alerts 15:35 / suggestions 08:00 / sleep-phase decay 20:00 / ops sweep 20:30 | VM cron | `scripts/setup_cron.sh` (6 jobs, CRON_TZ=Asia/Kolkata) |
+| All scheduled jobs (alerts, suggestions, ingestion, reports, sleep-phase, ops sweep) | VM cron | 20 jobs — authoritative list in `CRON_SETUP.md` (ground truth `scripts/setup_cron.sh`, CRON_TZ=Asia/Kolkata) |
 | API gateway + Discord bot + tunnel | VM (unchanged) | systemd, all `Restart=always` |
 | Causal edge mining (Ollama, no API spend) | **Mac, opportunistic** | `src/edge_miner.py` via LaunchAgent (login + 21:00): pull VM brain_map → mine locally → apply idempotent edges back → refresh Mac's read copies |
 | chat_agent, development | Mac | reads the miner-refreshed local copies |
@@ -1223,13 +1223,11 @@ created and now runs the current DhanHQ FastAPI backend.
   a domain to a Cloudflare account (`cloudflared tunnel create` +
   `tunnel route dns`). Not done — deferred until a domain is available.
 - **Scheduled jobs**: `scripts/setup_cron.sh` (idempotent, safe to re-run
-  after every `git pull`) installs the full cron block — `src.renew_token`
-  07:00 IST daily, `src.main` 15:35 IST Mon-Fri, `src.suggest` 08:00 IST
-  Mon-Fri, and `src.sleep_phase` 20:00 IST daily — each logging to
-  `logs/<name>.log`, pinned to IST via `CRON_TZ=Asia/Kolkata`. Run it on
-  the VM with `bash ~/alpha_trading/scripts/setup_cron.sh`; note the sleep
-  phase only does real work where `data/` + Ollama live (see the Phase 10B
-  bullet above).
+  after every `git pull`) installs the full VM cron block (20 jobs, pinned to
+  IST via `CRON_TZ=Asia/Kolkata`, each logging to `logs/<name>.log`). The
+  authoritative job list is `CRON_SETUP.md`. Run it on the VM with
+  `bash ~/alpha_trading/scripts/setup_cron.sh`; note the sleep phase only does
+  real work where `data/` + Ollama live (see the Phase 10B bullet above).
 - `data/`, `tests/`, `logs/` are not part of the deploy (paper-trading state
   stays local only; see `OVERVIEW.md`). `config.json` and `.env` are required
   — `src/config.py` fails loudly at import without `config.json`, and

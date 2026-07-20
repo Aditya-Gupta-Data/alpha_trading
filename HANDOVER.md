@@ -1253,6 +1253,12 @@ These upcoming features are officially added to the roadmap:
 * **Objective:** Support human-in-the-loop candidate generation for rule changes.
 * **Details:** Evaluates post-mortem clusters of losses in `src/analyst.py` and proposes rule adjustments to a `/candidates` folder for user review, driving iterative rule enhancement.
 
+### 6. Dashboard parity with the capital layer — DEFERRED (owner-parked 2026-07-20)
+* **Objective:** Surface the capital layer on the visual dashboard, not just Discord.
+* **Why parked:** Discord cards are the intended surface for now; revisit only once the infra has run live for a while and there's a track record worth visualizing.
+* **The gap (verified 2026-07-20):** the served `/dashboard` (`src/web/static/dashboard.html` + `/api/web/*`) is Phase-6-era and blind to — the **equity desk** #79 (positions live in a separate `data/equity_desk.db`, never read; dashboard reads only the options journal), the **firm treasury** dynamic split #80 (`/api/web/allocation` neither knows it nor is even fetched by the page), the **7-tier darling grading** #77 (no endpoint), and **Dept 8 Analysis** (the health strip / `_DEPARTMENT_JOBS` still lists only 7 depts).
+* **Work when picked up:** (a) bump the department strip 7→8 + add the new jobs; (b) add `/api/web/` endpoints for the equity desk, the treasury split, and darling tiers; (c) wire them into `dashboard.html`; (d) add their `DATA_CONTRACT.md` shapes so the Lovable React frontend can consume them too.
+
 ---
 ## 🔮 The Long-Term Vision (Phases 9 - 13)
 (To be executed only after Phase 7 Simulator proves statistical Alpha)

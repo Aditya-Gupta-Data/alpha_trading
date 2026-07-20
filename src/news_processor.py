@@ -41,7 +41,7 @@ import ssl
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import certifi
@@ -183,6 +183,41 @@ def _neutral_entry(now: str) -> dict:
         "last_updated": now,
         "stale": True,
     }
+
+
+# How old a sentiment entry may be before consumers must ignore it. 48h
+# tolerates ONE missed 19:10 refresh (yesterday's read still speaks) but
+# no more. Chosen after the 2026-07-05→16 incident, where this job was
+# unscheduled for 11 days and forecast.py kept trading a July-5 read at
+# full weight the whole time.
+NEWS_MAX_AGE_HOURS = 48
+
+
+def entry_is_fresh(entry: dict, now: datetime = None,
+                   max_age_hours: float = NEWS_MAX_AGE_HOURS) -> bool:
+    """True when a ticker entry's last_updated is recent enough to act on.
+
+    The `stale` flag alone is NOT freshness: it only records "the Gemini
+    call did not fail" at write time and never ages afterwards, so an
+    entry can sit stale=false for weeks if this job stops running.
+    Freshness is a time judgment made at READ time — here, in the module
+    that owns the file format, so forecast.py and confluence/evidence.py
+    can never disagree about it. A missing or unparseable timestamp is
+    NOT fresh: news is an advisory driver, so excluding it is the honest
+    default."""
+    if not isinstance(entry, dict):
+        return False
+    ts = entry.get("last_updated")
+    if not ts:
+        return False
+    try:
+        written = datetime.fromisoformat(str(ts))
+    except ValueError:
+        return False
+    if written.tzinfo is None:
+        written = written.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return (now - written) <= timedelta(hours=max_age_hours)
 
 
 def build_sentiment(tickers: list) -> dict:

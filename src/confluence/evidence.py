@@ -39,6 +39,8 @@ import json
 from datetime import date
 from pathlib import Path
 
+from src.news_processor import entry_is_fresh
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 LAYERS = ("technical", "news", "macro", "affinity", "flows", "vix_regime")
@@ -88,6 +90,11 @@ def news_evidence(entry: dict) -> dict:
     """From one data/news_sentiment.json ticker entry."""
     if not isinstance(entry, dict) or entry.get("stale", True):
         return _abstain("news", "no fresh sentiment read")
+    if not entry_is_fresh(entry):
+        # stale=false never ages; the age judgment lives with the file's
+        # owner (news_processor.entry_is_fresh) so this adapter and
+        # forecast._news_driver can never disagree about freshness.
+        return _abstain("news", "sentiment read too old")
     score = entry.get("sentiment_score")
     if score is None or score == 0:
         return _abstain("news", "neutral/absent sentiment")

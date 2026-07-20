@@ -9,7 +9,7 @@ Run either of these from the project folder:
 import json
 import sys
 import tempfile
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -27,10 +27,36 @@ def test_news_snapshot_roundtrip():
                                           "headline_focus": "strong quarter",
                                           "stale": False}}}
         news.write_text(json.dumps(payload))
+        # Archive-time clock pinned 30 min after generation (the normal
+        # 19:10-news/19:45-archive cadence).
         assert da.archive_news(date(2026, 7, 10), news_path=news,
-                               lake_root=tmp / "lake") is True
+                               lake_root=tmp / "lake",
+                               now=datetime(2026, 7, 10, 19, 30,
+                                            tzinfo=timezone.utc)) is True
         rows = lake.read_day("news_daily", "2026-07-10", root=tmp / "lake")
         assert rows == [payload]
+
+
+def test_stale_news_file_gets_a_hole_not_a_duplicate():
+    """A file NOT regenerated since the last cycle must not be re-archived
+    under a new date= key (the 2026-07-05→16 fabricated-history bug)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        news = tmp / "news_sentiment.json"
+        payload = {"generated": "2026-07-05T12:02:44+00:00", "source": "gemini",
+                   "tickers": {"TCS.NS": {"sentiment_score": -5,
+                                          "headline_focus": "old read",
+                                          "stale": False}}}
+        news.write_text(json.dumps(payload))
+        assert da.archive_news(date(2026, 7, 11), news_path=news,
+                               lake_root=tmp / "lake",
+                               now=datetime(2026, 7, 11, 14, 15,
+                                            tzinfo=timezone.utc)) is False
+        assert lake.read_day("news_daily", "2026-07-11", root=tmp / "lake") == []
+        # No `generated` stamp at all (pre-stamp format) — fail-open, archive.
+        news.write_text(json.dumps({"source": "gemini", "tickers": {}}))
+        assert da.archive_news(date(2026, 7, 11), news_path=news,
+                               lake_root=tmp / "lake") is True
 
 
 def test_missing_or_broken_news_skips_cleanly():

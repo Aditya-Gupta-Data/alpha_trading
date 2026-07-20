@@ -811,3 +811,39 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   ten days old — rev/PAT/EPS/share-count all matching reality). Fresh
   sweep of the 91 queued darlings launched; valuation + basket re-run
   on landing. The old results-comparision path stays only as history.
+
+## Issue 22 — news sentiment's `stale` flag never ages: 11 days on a July-5 read at full weight, and the lake archived the duplicates as fresh history (2026-07-20, found while triaging the 07-19 ops-sweep "silent jobs" card)
+
+- **Observed (verified on the VM):**
+  (a) `data/lake/news_daily/` holds 9 dated partitions (07-11→07-19)
+  but only TWO distinct `generated` stamps inside them:
+  2026-07-05T12:02:44Z (five partitions, 07-11→07-15) and
+  2026-07-16T10:05:26Z (four partitions, 07-16→07-19). The archiver
+  (19:45 IST) faithfully re-copied a file that news_processor was not
+  refreshing — news_processor had no cron line until the 07-16 partial
+  deploy, and the 07-19 20:36 crontab reinstall explains the sweep's
+  "silent jobs" card (lines installed AFTER their daily slots had
+  passed; `journalctl -u cron | grep CMD` shows no 18:50/19:10/20:20
+  firings that evening — that grep is now the standing one-shot
+  diagnostic for this alarm class).
+  (b) Every entry in those stale copies carries `"stale": false` —
+  because `stale` records "the Gemini call did not fail" at WRITE time
+  and never ages. `forecast._news_driver` checked only that flag, so a
+  July-5 TCS read (−5, "IT sector slump") scored −2.0 pts — exactly
+  the BEARISH_THRESHOLD — in every forecast through 07-16.
+  `confluence/evidence.news_evidence` had the identical hole.
+- **Fix (committed this session, suite green before push):**
+  (1) `news_processor.entry_is_fresh()` — freshness is now a READ-time
+  judgment owned by the module that owns the file format
+  (NEWS_MAX_AGE_HOURS=48: one missed 19:10 refresh tolerated, no
+  more; missing/unparseable timestamp = NOT fresh).
+  (2) `forecast._news_driver` and `evidence.news_evidence` both gate
+  through it (single source — the two consumers can never disagree).
+  (3) `daily_archiver.archive_news` skips a file whose `generated` is
+  >24h old: the lake gets an honest HOLE, never a duplicate
+  masquerading as a fresh day (no-`generated` legacy payloads still
+  archive, fail-open).
+- **Not fixed here (owner decisions pending):** the 8 fabricated
+  partitions already in the VM's lake (delete vs keep); rss_ingester
+  classifies nothing on the VM by design (#75 ollama default) so its
+  heartbeat means "ran", not "produced" — unchanged.

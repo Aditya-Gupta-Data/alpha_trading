@@ -25,7 +25,7 @@ Manual check:  python3 -m src.ingestion.daily_archiver
 """
 
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from src import lake
@@ -33,11 +33,26 @@ from src import lake
 ROOT = Path(__file__).resolve().parent.parent.parent
 NEWS_PATH = ROOT / "data" / "news_sentiment.json"
 
+# A news file older than this at archive time was NOT regenerated today —
+# re-copying it would mint a partition whose date= key lies about its
+# content (2026-07-05→16: five partitions all held the same July-5 read
+# because news_processor was unscheduled while this job kept copying).
+# A missing partition is honest history ("no read that day"); a re-copy
+# is fabricated history. 24h passes the normal cadence (news 19:10 IST,
+# archive 19:45 IST — 35 min) and fails the first missed refresh.
+NEWS_SNAPSHOT_MAX_AGE_HOURS = 24
 
-def archive_news(today: date, news_path=None, lake_root=None) -> bool:
+
+def archive_news(today: date, news_path=None, lake_root=None,
+                 now: datetime = None) -> bool:
     """Snapshot data/news_sentiment.json into the lake. False (logged) when
     the file is absent/unreadable — a fallback-neutral day still archives
-    (stale=true rows are honest history: 'the engine had no read that day')."""
+    (stale=true rows are honest history: 'the engine had no read that day').
+    Also False when the file's `generated` stamp is older than
+    NEWS_SNAPSHOT_MAX_AGE_HOURS: the day gets a hole, not a duplicate.
+    `now` is injectable for tests; default is the real clock. A payload
+    with no parseable `generated` archives as before (fail-open — old
+    formats shouldn't lose their history)."""
     path = Path(news_path) if news_path is not None else NEWS_PATH
     if not path.exists():
         print("  (daily archiver: no news_sentiment.json — skipped)")
@@ -47,6 +62,21 @@ def archive_news(today: date, news_path=None, lake_root=None) -> bool:
     except (ValueError, OSError) as exc:
         print(f"  (daily archiver: unreadable news file [{exc}] — skipped)")
         return False
+    generated = payload.get("generated") if isinstance(payload, dict) else None
+    if generated:
+        try:
+            written_at = datetime.fromisoformat(str(generated))
+            if written_at.tzinfo is None:
+                written_at = written_at.replace(tzinfo=timezone.utc)
+            age = (now or datetime.now(timezone.utc)) - written_at
+            if age > timedelta(hours=NEWS_SNAPSHOT_MAX_AGE_HOURS):
+                print(f"  (daily archiver: news file generated {generated} — "
+                      f"{age.days}d{age.seconds // 3600}h old, not today's "
+                      f"read; skipped so the lake gets an honest hole, not "
+                      f"a duplicate)")
+                return False
+        except ValueError:
+            pass  # unparseable stamp — archive as before
     written = lake.write_partition("news_daily", today.isoformat(),
                                    [payload], root=lake_root)
     return written is not None

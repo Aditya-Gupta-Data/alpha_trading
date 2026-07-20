@@ -7,7 +7,7 @@ Run either of these from the project folder:
 """
 
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -29,11 +29,25 @@ def test_technical_adapter_direction_strength_and_abstention():
 
 
 def test_news_adapter_stale_and_neutral_abstain():
+    fresh = datetime.now(timezone.utc).isoformat()
     assert ev.news_evidence({"sentiment_score": 3, "stale": True})["abstained"]
-    assert ev.news_evidence({"sentiment_score": 0, "stale": False})["abstained"]
+    assert ev.news_evidence({"sentiment_score": 0, "stale": False,
+                             "last_updated": fresh})["abstained"]
     e = ev.news_evidence({"sentiment_score": -5, "stale": False,
+                          "last_updated": fresh,
                           "headline_focus": "fraud probe"})
     assert e["direction"] == -1.0 and "fraud probe" in e["detail"]
+
+
+def test_news_adapter_abstains_on_aged_reads():
+    """stale=false never ages — the adapter judges age via the same
+    news_processor.entry_is_fresh gate forecast uses (single source)."""
+    old = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat()
+    e = ev.news_evidence({"sentiment_score": -5, "stale": False,
+                          "last_updated": old, "headline_focus": "old news"})
+    assert e["abstained"] and "too old" in e["detail"]
+    # Missing timestamp is not fresh either.
+    assert ev.news_evidence({"sentiment_score": -5, "stale": False})["abstained"]
 
 
 def test_macro_adapter_blends_horizons_and_routes_bank_names():

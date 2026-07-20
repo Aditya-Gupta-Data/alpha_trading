@@ -17,7 +17,9 @@ Points (nominally max +/-10, so confidence = min(|score| / 10, 1) * 100):
   - Trend (SMA 50 vs 200):        +/-4 (untuned)
   - Fresh Golden/Death Cross:     +/-2 (bullish/Golden side only tuned, see below)
   - RSI mean-reversion:           +/-2 (oversold/bullish side only tuned, see below)
-  - News sentiment (-5..+5):      scaled to +/-2 (0 weight if stale/no data, untuned)
+  - News sentiment (-5..+5):      scaled to +/-2 (0 weight if stale, older
+                                  than news_processor.NEWS_MAX_AGE_HOURS,
+                                  or no data; untuned)
 
 Phase 4F (src/tuner.py) learns weight multipliers for the two BUY
 archetypes strategy.py actually journals outcomes for -- fresh Golden
@@ -54,6 +56,7 @@ import yaml
 
 from src import brain_map
 from src.brain_map import query_similar_events
+from src.news_processor import entry_is_fresh
 from src.suggestions import analyze
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -193,6 +196,12 @@ def _rsi_driver(result: dict, rsi_oversold: float, rsi_overbought: float, weight
 
 def _news_driver(news_entry: dict):
     if not news_entry or news_entry.get("stale", True):
+        return None
+    if not entry_is_fresh(news_entry):
+        # stale=false only means "the Gemini call worked" — it never ages.
+        # If the news_processor cron dies, the file keeps its last read
+        # forever, so age is checked here at decision time (the 2026-07-05
+        # →16 incident: an 11-day-old read scored at full weight).
         return None
     sentiment = news_entry["sentiment_score"]
     if sentiment == 0:

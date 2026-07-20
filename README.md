@@ -1,4 +1,9 @@
-# Alpha Trading
+# ADiTrader
+
+> **Start here:** this README is an early Phase-1 snapshot, kept for history.
+> For the current system read **`OVERVIEW.md`** (what it is), then
+> `ARCHITECTURE.md` (how it runs) and `MODULES.md` (the components). To record
+> new work without creating drift, see `docs/DOC_GUIDE.md`.
 
 A personal tool for Indian stocks (NSE/BSE), built in phases:
 

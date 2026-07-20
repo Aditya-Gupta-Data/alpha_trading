@@ -181,7 +181,7 @@ waits until `daily_context` has enough history for an itemset to plausibly
 clear the floor — that wiring gets its own DECISIONS row when the data
 justifies it.
 
-**Next per HOLY_GRAIL_PLAN §8.6-8.7 (ALL gated — do NOT pre-build):**
+**Next per `docs/HOLY_GRAIL_PLAN.md` §8.6-8.7 (ALL gated — do NOT pre-build):**
 counterfactual structure pricing + the champion/challenger **duel** (needs
 a VALIDATED pattern + a ≥30-day disagreement floor + the human dethroning
 ritual #49 — never auto-applied), and **skeptic v3** (realized-vs-implied
@@ -241,7 +241,7 @@ on T, fill at T+1's true open, rows carry signal_day/signal_age_hours/
 entry_basis; refusal-never-interpolation). Suite 860 green, VM synced
 and services verified after each push.
 
-**Next per HOLY_GRAIL_PLAN §12:** Phase 4 remainder (pattern registry +
+**Next per `docs/HOLY_GRAIL_PLAN.md` §12:** Phase 4 remainder (pattern registry +
 lifecycle, walk-forward trial, stability battery, noise-injection
 suite — `stat_gates` P4-1 exists), plus the small §5.6 leftovers
 (llm_mined confidence cap, nightly no-LLM audit of outcome_derived
@@ -514,10 +514,10 @@ Key facts for a cold pickup:
   default service account.
 - The old `alpha-market-loop.service` is **disabled** (stale pre-6E code);
   the scheduler cron replaced it. Do not re-enable.
-- The Mac's crontab retains renew_token 07:00 + push_token_to_vm 07:10 as
-  DELIBERATE redundancy: when the Mac is awake it refreshes the VM's token
-  too (harmless either order); when asleep, the VM self-renews. Remove any
-  time with `crontab -e` if unwanted.
+- The Mac runs **no** token crons: `renew_token`/`push_token_to_vm` were
+  removed from the Mac (decision #48 — exactly one active Dhan token per client
+  id; a second renewer races the VM's 07:00 slot). The VM self-renews. Never
+  schedule token renewal on the Mac — see `CRON_SETUP.md` and `DECISIONS.md` #48.
 - The Mac's pre-migration state is archived at `data/mac-archive-pre-vm/`
   (created by the miner's first run) and the VM had NO prior data (its
   market loop never journaled — dead token since creation).
@@ -1442,4 +1442,3 @@ Planned build (when explicitly greenlit, one file at a time, offline-first, nati
 (Architecture documented ahead of the build — not started, not scheduled)
 
 * Phase 8: Semantic News Ingestion (Spec fully defined in docs/PHASE_8_NEWS_INGESTION_SPEC.md).
----

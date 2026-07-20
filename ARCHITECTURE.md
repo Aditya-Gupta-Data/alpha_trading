@@ -534,8 +534,7 @@ the anti-orphan rule working as written.
   decision loop, risk gates, reporting cards, and the gateway via `systemd`
   services + a cron block (`scripts/setup_cron.sh` — 20 numbered jobs; the
   token renews once at 07:00 IST). It mints its Dhan token from GCP Secret
-  Manager. See `docs/gcp_vm_deployment` context / `HANDOVER.md` for the deploy
-  checklist.
+  Manager. See `HANDOVER.md` for the deploy checklist.
 - **The Mac** runs only what needs a local Ollama or interactive state: the
   evolution agent and edge miner. It is NOT the engine; closing it doesn't stop
   trading.

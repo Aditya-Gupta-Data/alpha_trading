@@ -16,7 +16,9 @@ Verified against a green suite (1077 passed after the
 
 ## 1. System Infrastructure Map
 
-Subgraphs are the seven Departments from `MODULES.md`. Nodes are modules,
+Subgraphs are the (then) seven Departments from `MODULES.md` — Dept 8
+(ANALYSIS) was added after this 2026-07-16 map; see `ARCHITECTURE.md` for the
+current 8-department topology. Nodes are modules,
 state files (cylinders), scheduled entry points (with their cron time),
 and UI endpoints. Edges are labelled with the data that flows across them.
 Edges show the **primary runtime data path**, not every import.

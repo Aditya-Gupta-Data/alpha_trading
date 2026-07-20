@@ -73,14 +73,39 @@ def monthly_expiry(d: date) -> date:
     return last_day - timedelta(days=offset)
 
 
-def liquidity_filter(proposal: dict, **_) -> tuple:
-    """FAIL-CLOSED: until the F&O bhavcopy clerk supplies OI/contract
-    data, no equity-OPTION proposal can prove liquidity -> blocked.
-    Delivery (cash) proposals don't need options liquidity."""
-    if proposal.get("instrument") == "option":
-        return (False, "no F&O liquidity data yet (OI clerk pending) — "
-                       "fail-closed")
-    return (True, None)
+LIQUIDITY_PATH = ROOT / "data" / "fo_liquidity.json"
+LIQUIDITY_MAX_AGE_DAYS = 7      # a stale tier file is no evidence at all
+
+
+def liquidity_filter(proposal: dict, liquidity_path=None,
+                     today: date = None, **_) -> tuple:
+    """Wired 2026-07-20 to the fo_bhavcopy clerk's tier file: an equity-
+    OPTION proposal passes ONLY on a tier1 underlying (top-N by stock-
+    options traded value, not in the exchange ban list) from a FRESH
+    snapshot. Missing/stale/unknown -> FAIL-CLOSED, exactly as before —
+    absence of evidence never waves an option through. Delivery (cash)
+    proposals don't need options liquidity; the exchange BAN list blocks
+    even those in F&O-ban names' options."""
+    if proposal.get("instrument") != "option":
+        return (True, None)
+    try:
+        path = Path(liquidity_path) if liquidity_path else LIQUIDITY_PATH
+        snap = json.loads(path.read_text())
+        as_of = date.fromisoformat(snap.get("as_of", ""))
+        if ((today or date.today()) - as_of).days > LIQUIDITY_MAX_AGE_DAYS:
+            return (False, f"liquidity snapshot stale ({snap.get('as_of')})"
+                           " — fail-closed")
+        row = (snap.get("symbols") or {}).get(proposal.get("symbol", ""))
+        if row is None:
+            return (False, "not an F&O underlying — no options liquidity")
+        if row.get("tier") == "banned":
+            return (False, "exchange F&O BAN list (MWPL) — blocked")
+        if row.get("tier") != "tier1":
+            return (False, f"liquidity {row.get('tier')} (rank "
+                           f"{row.get('rank')}) — tier1 only")
+        return (True, None)
+    except (OSError, ValueError):
+        return (False, "no F&O liquidity data — fail-closed")
 
 
 def expiry_week_halt(proposal: dict, today: date = None, **_) -> tuple:

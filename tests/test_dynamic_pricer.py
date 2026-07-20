@@ -166,3 +166,40 @@ def test_one_r_gate_is_parked_and_absent():
     exists in this stack."""
     names = [c.__name__ for c in EC.EQUITY_ENTRY_CHECKS]
     assert not any("1r" in n.lower() or "one_r" in n for n in names)
+
+
+def test_liquidity_filter_wired_to_tiers(tmp_path):
+    """2026-07-20: the fail-closed stub became a real tier check."""
+    import json as _json
+    from datetime import date as _d
+    snap = tmp_path / "liq.json"
+    snap.write_text(_json.dumps({
+        "as_of": "2026-07-17",
+        "symbols": {"BIGLIQ": {"tier": "tier1", "rank": 3},
+                    "THINQ": {"tier": "tier2", "rank": 30},
+                    "CROWDED": {"tier": "banned", "rank": 5}}}))
+    today = _d(2026, 7, 20)
+
+    def prop(sym):
+        return {"symbol": sym, "direction": "long", "instrument": "option"}
+
+    ok, _ = EC.liquidity_filter(prop("BIGLIQ"), liquidity_path=snap,
+                                today=today)
+    assert ok is True
+    for sym, why in (("THINQ", "tier"), ("CROWDED", "BAN"),
+                     ("NOWHERE", "not an F&O")):
+        ok, reason = EC.liquidity_filter(prop(sym), liquidity_path=snap,
+                                         today=today)
+        assert ok is False and why.lower() in reason.lower()
+    # stale snapshot -> fail-closed
+    old = tmp_path / "old.json"
+    old.write_text(_json.dumps({"as_of": "2026-06-01",
+                                "symbols": {"BIGLIQ": {"tier": "tier1"}}}))
+    ok, reason = EC.liquidity_filter(prop("BIGLIQ"), liquidity_path=old,
+                                     today=today)
+    assert ok is False and "stale" in reason
+    # missing file -> fail-closed (unchanged behaviour)
+    ok, _ = EC.liquidity_filter(prop("BIGLIQ"),
+                                liquidity_path=tmp_path / "nope.json",
+                                today=today)
+    assert ok is False

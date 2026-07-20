@@ -11,11 +11,23 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import dhan_client as dc
 
 DATES = ["2026-07-14", "2026-07-21", "2026-07-28"]
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_pause(monkeypatch):
+    """`_RATE_PAUSE` (1.1s) paces Dhan's live rate limit before every call and
+    on each retry. With a mocked SDK that is pure dead time — it made this the
+    slowest file in the suite (~24s of sleeping). Zero it for tests; the
+    production throttle is untouched."""
+    monkeypatch.setattr(dc, "_RATE_PAUSE", 0.0)
+    monkeypatch.setattr(dc, "_last_api_call", 0.0)
 
 
 def _with_client(resolved=True):

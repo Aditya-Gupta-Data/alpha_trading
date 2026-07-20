@@ -12,29 +12,7 @@ from next_gen_engine import dhan_websocket as ws
 from next_gen_engine import execution_algo as ex
 from next_gen_engine import redis_pubsub as rp
 from next_gen_engine import trailing_stops as ts
-from next_gen_engine import wealth_flywheel as wf
 from next_gen_engine import wisdom_extractor as wis
-
-
-# ------------------------------------------------------------ wealth flywheel
-
-def test_sweep_order_sizes_whole_units_and_reports_residual():
-    r = wf.build_sweep_order(pnl_net=10_000, etf_price=62.0)
-    assert r["earmark_rs"] == 5000.0
-    assert r["order"]["qty"] == 80                    # floor(5000/62)
-    assert r["order"]["notional_rs"] == 4960.0
-    assert r["cash_residual_rs"] == 40.0
-    assert r["order"]["mode"] == "PAPER" and r["mode"] == "PAPER"
-    assert r["order"]["symbol"] == "GOLDBEES"
-
-
-def test_no_sweep_on_losses_and_deferred_sizing_without_a_quote():
-    assert wf.build_sweep_order(-5_000, 62.0) is None
-    assert wf.build_sweep_order(0, 62.0) is None
-    r = wf.build_sweep_order(10_000, etf_price=None)
-    assert r["order"] is None and r["cash_residual_rs"] == 5000.0
-    tiny = wf.build_sweep_order(100, etf_price=62.0)   # earmark 50 < 1 unit
-    assert tiny["order"] is None and "below one unit" in tiny["note"]
 
 
 # ------------------------------------------------------------- trailing stops

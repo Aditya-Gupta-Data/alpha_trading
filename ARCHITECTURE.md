@@ -292,12 +292,17 @@ margin-exhaustion check naturally chokes how many trades fit — no forced
 closes, no second settlement path. `margin_audit` (report-only CLI) replays
 the journal under these factors and cross-checks recorded margins for drift.
 
-**Staged merge targets:** `wealth_flywheel` → `wealth_lock.sweep_on_settlement`
-(advisory sweep becomes a concrete PAPER order — the Issue-15 blocker is now
-**LIFTABLE**: the scrip clerk verified GOLDBEES as NSE_EQ id **14428**
-(NIP IND ETF GOLD BEES, series EQ) on 2026-07-20. Adding it to
-`SECURITY_ID_MAP` and wiring the flywheel remain separate, deliberate steps —
-the clerk supplies the verified fact, it does not perform the merge);
+**Staged merge targets:** ~~`wealth_flywheel`~~ **MERGED 2026-07-20** — the
+scrip clerk verified GOLDBEES as NSE_EQ id **14428** (NIP IND ETF GOLD BEES,
+series EQ), the Issue-15 blocker was lifted, the id entered `SECURITY_ID_MAP`,
+and `build_sweep_order` graduated into `wealth_lock.size_sweep_order` (staging
+file deleted — the anti-orphan rule, second graduation after
+`portfolio_risk_manager`). The sweep now earmarks 50% of a winning settlement
+AND sizes whole GOLDBEES units with an honest cash residual — but only while
+`wealth_lock.goldbees_verified()` confirms the id against the clerk's latest
+report, re-read at call time. Mismatch, stale (>14d), `unavailable`, or missing
+report ⇒ sizing BLOCKED and the sweep degrades to the pre-merge earmark-only
+behavior, with the reason stored on the row and stated on the card;
 `trailing_stops` → its `atr()` math goes to `indicators.py` (the shared,
 department-neutral math library: SMA/RSI today), its advisory ratchet loop
 goes to `live_bridge` beside the existing exit alerts. That split is clean

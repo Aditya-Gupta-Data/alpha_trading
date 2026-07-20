@@ -16,7 +16,7 @@ drifting implementation of things `src/` already does.
 | Module | What it adds | Canonical integration target |
 |---|---|---|
 | ~~`portfolio_risk_manager.py`~~ | **MERGED 2026-07-19** into its canonical target: the daily realized-loss circuit breaker now lives in `src/portfolio_manager.py` as an entry in the composed `ENTRY_HALT_CHECKS` list (review #2 halt-stack rule), beside the 10% trailing-drawdown halt. The staging file is deleted per the anti-orphan rule; its tests moved to `tests/test_margin_stress.py`. | done — see `src/portfolio_manager.py` |
-| `wealth_flywheel.py` | Turns `src/wealth_lock.py`'s advisory sweep into a concrete PAPER ORDER (whole GOLDBEES units from a live quote, honest cash residual). | Extension of `src/wealth_lock.py` (`sweep_on_settlement` gains an order object); GOLDBEES id must be scrip-master-verified before any live pricing. |
+| ~~`wealth_flywheel.py`~~ | **GRADUATED 2026-07-20 — file deleted.** `build_sweep_order` now lives in `src/wealth_lock.py` as `size_sweep_order`, wired into `record_sweep` and gated on `goldbees_verified()`. Its blocker (a scrip-master-verified GOLDBEES id) was cleared by the new `ingestion/scrip_master` clerk: NSE_EQ **14428**. Second anti-orphan graduation, after `portfolio_risk_manager`. | — merged, nothing staged |
 | `trailing_stops.py` | Wilder-ATR chandelier trailing stop (ratchet, never widens; data gap retains previous stop). | `atr()` belongs in `src/indicators.py`; the advisory loop belongs in `src/live_bridge.py` next to the existing exit alerts. Roadmap item "ATR trailing stops". |
 
 ### Phase 2 — Execution quality (Stage 4)

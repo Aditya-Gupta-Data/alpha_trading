@@ -1,9 +1,7 @@
 {
- "_comment": "Symbols we do NOT have a SECURITY_ID_MAP id for but want one. The scrip-master clerk looks each up weekly and reports the candidate rows (exact NSE trading-symbol match only — never a fuzzy guess). Add a symbol here instead of hand-searching a 27MB CSV.",
- "wanted": [
-  "GOLDBEES"
- ],
- "_notes": {
-  "GOLDBEES": "Blocks the wealth-flywheel merge: wealth_lock stays an advisory LEDGER until this id is scrip-master-verified (ARCHITECTURE.md staged-merge note, the Issue-15 lesson)."
+ "_comment": "Symbols we do NOT have a SECURITY_ID_MAP id for but want one. The scrip-master clerk looks each up weekly and reports the candidate rows (exact NSE trading-symbol match only — never a fuzzy guess). Add a symbol here instead of hand-searching a 27MB CSV. Once an id is adopted into the map, REMOVE it here: mapped instruments are checked every run as ordinary rows, and leaving it listed just duplicates the line.",
+ "wanted": [],
+ "_graduated": {
+  "GOLDBEES": "Resolved 2026-07-20 -> NSE_EQ id 14428 (NIP IND ETF GOLD BEES, series EQ). Adopted into SECURITY_ID_MAP the same day, which unblocked the Wealth-Locking Flywheel merge (wealth_lock now sizes a real paper order, gated on this id's continued verification)."
  }
 }

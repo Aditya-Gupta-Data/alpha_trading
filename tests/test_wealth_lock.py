@@ -8,8 +8,11 @@ Run from the project folder:
     python -m pytest tests/                  (if you have pytest)
 """
 
+import json
 import sqlite3
 import sys
+import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -19,11 +22,39 @@ from src import portfolio_manager as pm
 from src import wealth_lock as wl
 from src.notifier import _build_embed
 
+_TMP = tempfile.TemporaryDirectory()
+
 
 def _conn():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _scrip_report(verdict="ok", age_days=1, status="verified",
+                  ticker="GOLDBEES.NS", name="report.json") -> Path:
+    """A scrip-clerk report fixture. Hermetic on purpose: the sizing gate
+    must never be decided by whatever happens to sit in the repo's data/
+    folder (which is gitignored — on a fresh clone it isn't there at
+    all)."""
+    as_of = (datetime.now() - timedelta(days=age_days)).isoformat(
+        timespec="seconds")
+    path = Path(_TMP.name) / name
+    path.write_text(json.dumps({
+        "as_of": as_of, "status": status,
+        "rows": [{"ticker": ticker, "id": "14428", "verdict": verdict,
+                  "detail": "id now trades as SOMETHINGELSE"}]}))
+    return path
+
+
+VERIFIED = None          # lazily built per test run
+
+
+def _verified() -> Path:
+    global VERIFIED
+    if VERIFIED is None:
+        VERIFIED = _scrip_report(name="verified.json")
+    return VERIFIED
 
 
 # ------------------------------------------------------------ record_sweep
@@ -61,26 +92,94 @@ def test_a_win_is_never_swept_twice():
 def test_price_fn_computes_mock_units():
     conn = _conn()
     row = wl.record_sweep(conn, "abcd1234", 1000.0,
-                          price_fn=lambda instrument: 65.50)
+                          price_fn=lambda instrument: 65.50,
+                          scrip_report_path=_verified())
     assert row["mock_price"] == 65.50
     assert row["mock_units"] == round(500.0 / 65.50, 4)
 
 
 def test_broken_price_fn_still_records_the_amount():
-    """GOLDBEES has no verified SECURITY_ID_MAP entry yet — a failing or
-    None price lookup stores the rupee amount with units unknown."""
+    """A failing or None price lookup stores the rupee amount with units
+    unknown — the sweep is never lost to a quote outage."""
     conn = _conn()
 
     def exploding(instrument):
-        raise RuntimeError("no security id")
+        raise RuntimeError("quote endpoint down")
 
-    row = wl.record_sweep(conn, "abcd1234", 1000.0, price_fn=exploding)
+    row = wl.record_sweep(conn, "abcd1234", 1000.0, price_fn=exploding,
+                          scrip_report_path=_verified())
     assert row["sweep_rs"] == 500.0
     assert row["mock_price"] is None and row["mock_units"] is None
 
     row2 = wl.record_sweep(conn, "efgh5678", 1000.0,
-                           price_fn=lambda instrument: None)
+                           price_fn=lambda instrument: None,
+                           scrip_report_path=_verified())
     assert row2["mock_units"] is None
+
+
+# ------------------------------------- the flywheel: sizing + the id gate
+
+def test_sweep_sizes_whole_units_and_reports_residual():
+    """Graduated from next_gen_engine/wealth_flywheel: whole units only,
+    the un-investable remainder reported honestly, never rounded in."""
+    conn = _conn()
+    row = wl.record_sweep(conn, "win00001", 10_000.0,
+                          price_fn=lambda i: 62.0,
+                          scrip_report_path=_verified())
+    assert row["sweep_rs"] == 5000.0
+    assert row["order_qty"] == 80                  # floor(5000/62)
+    assert row["cash_residual_rs"] == 40.0         # 5000 - 4960
+    assert row["sizing_blocked_reason"] is None
+
+
+def test_earmark_below_one_unit_accumulates_instead_of_rounding():
+    conn = _conn()
+    row = wl.record_sweep(conn, "tiny0001", 100.0, price_fn=lambda i: 62.0,
+                          scrip_report_path=_verified())
+    assert row["order_qty"] is None                # earmark 50 < one unit
+    assert row["cash_residual_rs"] == 50.0         # carries forward whole
+
+
+def test_sizing_is_blocked_when_the_id_fails_its_master_check():
+    """The owner's Null-Honesty condition: a rotted id must stop the
+    flywheel — but the sweep is still RECORDED, with the reason."""
+    conn = _conn()
+    bad = _scrip_report(verdict="symbol_mismatch", name="mismatch.json")
+    row = wl.record_sweep(conn, "rot00001", 10_000.0,
+                          price_fn=lambda i: 62.0, scrip_report_path=bad)
+    assert row["sweep_rs"] == 5000.0               # never lost
+    assert row["order_qty"] is None and row["mock_price"] is None
+    assert "symbol_mismatch" in row["sizing_blocked_reason"]
+
+
+def test_unverifiable_report_states_block_sizing_too():
+    """Missing, stale, or 'unavailable' can never read as a pass."""
+    conn = _conn()
+    cases = {
+        "missing": Path(_TMP.name) / "nope.json",
+        "stale": _scrip_report(age_days=30, name="stale.json"),
+        "unavailable": _scrip_report(status="unavailable",
+                                     name="outage.json"),
+        "absent_row": _scrip_report(ticker="TCS.NS", name="absent.json"),
+    }
+    for i, (label, path) in enumerate(cases.items()):
+        row = wl.record_sweep(conn, f"case{i:04d}", 10_000.0,
+                              price_fn=lambda i: 62.0,
+                              scrip_report_path=path)
+        assert row["order_qty"] is None, label
+        assert row["sizing_blocked_reason"], label
+        assert row["sweep_rs"] == 5000.0, label    # the earmark survives
+
+
+def test_verified_report_reads_as_verified():
+    g = wl.goldbees_verified(report_path=_verified())
+    assert g["verified"] is True and "14428" in g["reason"]
+
+
+def test_default_price_fn_never_touches_the_network_under_pytest():
+    """A unit test must never reach Dhan — the muzzle is the same
+    PYTEST_CURRENT_TEST signal the notifier uses."""
+    assert wl.default_price_fn() is None
 
 
 # --------------------------------------------------------- alert payload
@@ -106,6 +205,27 @@ def test_sweep_alert_mentions_units_when_a_price_was_known():
            "mock_price": 65.50, "mock_units": 7.6336, "status": "logged"}
     payload = wl.build_sweep_alert(row)
     assert "≈7.63 units @ Rs.65.50" in payload["description"]
+
+
+def test_sweep_alert_shows_the_sized_order_and_says_when_sizing_was_blocked():
+    sized = wl.build_sweep_alert(
+        {"ts": "2026-07-20T15:35:00", "journal_ref": "win00001",
+         "trade_pnl": 10_000.0, "sweep_rs": 5000.0, "instrument": "GOLDBEES",
+         "mock_price": 62.0, "mock_units": 80.6452, "order_qty": 80,
+         "cash_residual_rs": 40.0, "status": "logged"})
+    assert "PAPER ORDER: 80 unit(s) @ Rs.62.00" in sized["description"]
+    assert "Rs.40.00 residual" in sized["description"]
+    assert sized["order_qty"] == 80
+
+    blocked = wl.build_sweep_alert(
+        {"ts": "2026-07-20T15:35:00", "journal_ref": "rot00001",
+         "trade_pnl": 10_000.0, "sweep_rs": 5000.0, "instrument": "GOLDBEES",
+         "mock_price": None, "mock_units": None, "order_qty": None,
+         "cash_residual_rs": 5000.0, "status": "logged",
+         "sizing_blocked_reason": "scrip check FAILED: symbol_mismatch"})
+    # An un-sized sweep is stated, never left for the owner to infer.
+    assert "⚠ sizing skipped" in blocked["description"]
+    assert "symbol_mismatch" in blocked["description"]
 
 
 def test_sweep_embed_renders_gold_card_with_fields():

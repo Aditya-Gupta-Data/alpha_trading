@@ -167,6 +167,12 @@ SECURITY_ID_MAP = {
     "SONACOMS.NS":   {"id": "4684"  , "seg": "NSE_EQ", "inst": "EQUITY"},
     "TATACHEM.NS":   {"id": "3405"  , "seg": "NSE_EQ", "inst": "EQUITY"},
     "UNOMINDA.NS":   {"id": "14154" , "seg": "NSE_EQ", "inst": "EQUITY"},
+    # The Wealth-Locking Flywheel's sweep instrument. id verified against
+    # Dhan's scrip master by ingestion/scrip_master on 2026-07-20 (NSE,
+    # segment E, SEM_TRADING_SYMBOL "GOLDBEES", SM_SYMBOL_NAME
+    # "NIP IND ETF GOLD BEES", series EQ) — the ARCHITECTURE.md blocker
+    # that kept wealth_lock advisory-only. The weekly clerk re-checks it.
+    "GOLDBEES.NS":   {"id": "14428" , "seg": "NSE_EQ", "inst": "EQUITY"},
     "NIFTY 50":      {"id": "13",    "seg": "IDX_I",  "inst": "INDEX"},
     "NIFTY BANK":    {"id": "25",    "seg": "IDX_I",  "inst": "INDEX"},
     # id 21 verified against api-scrip-master-detailed.csv on 2026-07-06

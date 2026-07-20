@@ -27,6 +27,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OUT_PATH = ROOT / "data" / "lake" / "intraday_15m.jsonl"
 
+# How many failed ticker names a summary line may carry. Enough to diagnose
+# the usual "the same 2 are always dead", short enough that a token outage
+# (every ticker fails) doesn't write a wall of text every 15 minutes.
+MAX_NAMED_FAILURES = 12
+
 
 def watchlist_tickers(path: Path = None) -> list:
     """Deduped ticker list from config/watchlist.yaml (order-preserving)."""
@@ -60,14 +65,14 @@ def capture(price_fn=None, clock=None, tickers=None,
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     ts = now.isoformat()
-    rows, failed = [], 0
+    rows, failed_tickers = [], []
     for t in tickers:
         try:
             px = price_fn(t)
         except Exception:
             px = None
         if px is None:
-            failed += 1
+            failed_tickers.append(t)
             continue
         rows.append({"ts": ts, "ticker": t,
                      "price": round(float(px), 2), "src": "dhan_live_15m"})
@@ -78,7 +83,14 @@ def capture(price_fn=None, clock=None, tickers=None,
         for r in rows:
             f.write(json.dumps(r) + "\n")
 
-    return {"ts": ts, "captured": len(rows), "failed": failed,
+    # NAME THE DEAD (2026-07-20). This used to report only `failed: 2`, so
+    # the VM logged the same two silent tickers every 15 minutes for days
+    # and no one could tell WHICH two without a live token to bisect with.
+    # An anonymous failure count is a number you cannot act on; the names
+    # turn it into a one-line diagnosis. Capped so a total-outage slot
+    # cannot write an 84-name line every quarter hour.
+    return {"ts": ts, "captured": len(rows), "failed": len(failed_tickers),
+            "failed_tickers": failed_tickers[:MAX_NAMED_FAILURES],
             "tickers": len(tickers), "out": str(out_path)}
 
 
@@ -105,7 +117,7 @@ def capture_depth(quote_fn=None, clock=None, tickers=None,
     out_path = Path(out_path or (ROOT / "data" / "lake" / "orderbook_15m.jsonl"))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ts = now.isoformat()
-    rows, failed = [], 0
+    rows, failed_tickers = [], []
     for t in tickers:
         try:
             q = quote_fn(t) or {}
@@ -115,7 +127,7 @@ def capture_depth(quote_fn=None, clock=None, tickers=None,
         except Exception:
             bids = asks = None
         if not bids and not asks:
-            failed += 1
+            failed_tickers.append(t)      # named, same reason as capture()
             continue
         best_bid = bids[0].get("price") if bids else None
         best_ask = asks[0].get("price") if asks else None
@@ -126,7 +138,9 @@ def capture_depth(quote_fn=None, clock=None, tickers=None,
     with open(out_path, "a") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
-    return {"ts": ts, "captured": len(rows), "failed": failed, "out": str(out_path)}
+    return {"ts": ts, "captured": len(rows), "failed": len(failed_tickers),
+            "failed_tickers": failed_tickers[:MAX_NAMED_FAILURES],
+            "out": str(out_path)}
 
 
 if __name__ == "__main__":

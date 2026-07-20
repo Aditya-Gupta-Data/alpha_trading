@@ -208,3 +208,25 @@ def test_zero_valued_failure_stats_are_not_problems():
     assert not is_problem_line(healthy)
     assert is_problem_line(healthy.replace("'failed': 0", "'failed': 3"))
     assert is_problem_line("NSE fetch failed [HTTP Error 403: Forbidden]")
+
+
+def test_count_first_zero_failures_are_not_problems():
+    """2026-07-20 false alarm: the CEO brief reported '63 problem line(s)'
+    when 40 of them were SUCCESSFUL backfills announcing '0 failed'. The
+    zero-stat scrubber only knew the "'failed': 0" word order, not the
+    "0 window(s) failed" one our completion summaries actually use."""
+    from src.ops_monitor import is_problem_line
+
+    # Verbatim from the 2026-07-20 logs — both are successes.
+    assert not is_problem_line(
+        "(corporate_events backfill DONE: 62725 flagged events across "
+        "92 windows, 0 failed; flags {'CATALYST': 8399})")
+    assert not is_problem_line(
+        "(backfill: 84919 deal(s) across 2351 day(s) appended; "
+        "0 window(s) failed)")
+    assert not is_problem_line("run complete: 0 errors")
+
+    # The scrubber must not swallow a REAL failure standing next to a zero.
+    assert is_problem_line("backfill: 12 window(s) failed")
+    assert is_problem_line("0 rows written, upload failed")
+    assert is_problem_line("0 errors ingesting, but the NSE fetch timed out")

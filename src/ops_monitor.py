@@ -54,8 +54,22 @@ PROBLEM_PATTERNS = re.compile(
 # (2026-07-14 false alarm: a clean ingestion line tripped the card via
 # the literal word "failed"). Scrub them before the problem test so any
 # NONZERO count still fires.
+#
+# TWO SHAPES, because our own summary lines use both word orders:
+#   COUNTER FIRST  "'failed': 0"          (JSON/dict stats)
+#   COUNT FIRST    "0 failed",
+#                  "0 window(s) failed"   (backfill completion summaries)
+# The second shape is why the 2026-07-20 CEO brief cried "63 problem
+# lines" — 40 of them were successful backfills announcing "0 failed".
+# One optional noun may sit between the count and the word, so
+# "0 window(s) failed" is scrubbed but "0 rows written, upload failed"
+# is NOT (the genuine failure survives and still fires).
 ZERO_STAT_PATTERNS = re.compile(
-    r"(?i)['\"]?(failed|errors?|failures?)['\"]?\s*[:=]\s*0\b")
+    r"(?i)(?:"
+    r"['\"]?(?:failed|errors?|failures?)['\"]?\s*[:=]\s*0\b"
+    r"|"
+    r"\b0\s+(?:[\w()\-]+\s+)?(?:failed|failures?|errors?)\b"
+    r")")
 
 
 def is_problem_line(text: str) -> bool:
@@ -117,19 +131,45 @@ def _save_state(state_path: Path, state: dict) -> None:
     state_path.write_text(json.dumps(state, indent=2))
 
 
-def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None) -> tuple:
+def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None,
+               baseline_cold_start: bool = False) -> tuple:
     """Scan every *.log for NEW problem lines since the last sweep.
 
     Returns (problems, new_state): problems is a list of
     {"log", "line", "count"}; new_state maps filename -> byte offset
     already examined. A truncated/rotated file (smaller than its stored
-    offset) is re-read from the start rather than silently skipped."""
+    offset) is re-read from the start rather than silently skipped.
+
+    COLD START (no stored offset for a log). Two defensible behaviours:
+
+      baseline_cold_start=False (default, what ops_monitor has always done)
+        read the file from byte 0. On a fresh box that is a one-time replay
+        of the log's whole history.
+
+      baseline_cold_start=True
+        record the current end-of-file and report nothing for that log this
+        run. Reporting starts from the next sweep.
+
+    WHY THE OPTION EXISTS (2026-07-20): the CEO brief keeps its OWN offset
+    file, so its first-ever run had no offsets at all and replayed weeks of
+    history as "since the last brief" — 63 lines, including a
+    corporate_events crash that had already been fixed by 6d89eb4. A report
+    whose headline is "since the last brief" must not open with archaeology.
+    `ops_monitor` keeps the replay (its own state file is years old, and on a
+    genuinely fresh box one historical dump is useful); the brief opts in.
+    """
     state = dict(state or {})
     problems = []
     for path in sorted(Path(logs_dir).glob("*.log")):
         if path.name == "ops_monitor.log":
             continue  # never scan our own output — the card quotes
                       # problem lines, which would re-match every night
+        if baseline_cold_start and path.name not in state:
+            try:
+                state[path.name] = path.stat().st_size
+            except OSError:
+                state[path.name] = 0
+            continue
         offset = int(state.get(path.name, 0))
         try:
             size = path.stat().st_size

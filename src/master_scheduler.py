@@ -300,7 +300,9 @@ async def _main() -> dict:
 
 if __name__ == "__main__":
     from src import deploy_log
-    deploy_log.record_startup("master_scheduler")
+    # kind="job": this process self-terminates at 15:30, so its sha is a
+    # record of what THIS morning's session ran — not what is live tonight.
+    deploy_log.record_startup("master_scheduler", kind="job")
     try:
         summary = asyncio.run(_main())
         print(f"[Scheduler] done: {summary}")

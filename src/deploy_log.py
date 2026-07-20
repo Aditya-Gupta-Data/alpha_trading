@@ -87,17 +87,36 @@ def _last_sha_for(service: str, log_path: Path) -> str | None:
         return None
 
 
-def record_startup(service: str, *, repo_root: Path = _REPO_ROOT,
+def record_startup(service: str, *, kind: str = "service",
+                   repo_root: Path = _REPO_ROOT,
                    log_path: Path = _LOG_PATH) -> dict | None:
     """Append this process's startup (with the code version it runs) to
     the deploy log. Returns the entry, or None if even best-effort
-    logging failed — callers never need to handle errors."""
+    logging failed — callers never need to handle errors.
+
+    `kind` distinguishes two things that look identical in this log but mean
+    opposite things when you ask "what is live?":
+
+      "service"  long-running (api_server, discord_bot). Its sha IS what is
+                 running right now, so two services on different shas is a
+                 real half-finished deploy.
+      "job"      scheduled and self-terminating (master_scheduler starts
+                 09:10 and exits 15:30). Its sha is a HISTORICAL record of
+                 the code that morning's run used. By evening the process is
+                 gone, so comparing it against a service that restarted at
+                 15:33 invents a deploy split that does not exist — which is
+                 exactly what the 2026-07-20 CEO brief did.
+
+    Defaults to "service" so existing callers and older log entries keep
+    their meaning.
+    """
     try:
         git = _git_state(repo_root)
         previous = _last_sha_for(service, log_path)
         entry = {
             "ts": datetime.now(IST).isoformat(timespec="seconds"),
             "service": service,
+            "kind": kind,
             "sha": git["sha"],
             "subject": git["subject"],
             "committed": git["committed"],

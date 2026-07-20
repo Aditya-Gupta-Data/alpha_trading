@@ -198,13 +198,91 @@ def liquidity_snapshot(lake_dir=None, out_path=None,
     return snap
 
 
+# ---------------------------------------------- automated daily fetch
+# The bundle's key members live individually on NSE's static archives —
+# verified live 2026-07-20 (all three fetched for 16-Jul). Owner order:
+# no manual downloads; the EOD chain fetches these itself.
+URLS = {
+    "fo": ("https://nsearchives.nseindia.com/archives/fo/mkt/"
+           "fo{ddmmyyyy}.zip"),
+    "secban": ("https://nsearchives.nseindia.com/archives/fo/sec_ban/"
+               "fo_secban_{ddmmyyyy}.csv"),
+    "fovolt": ("https://nsearchives.nseindia.com/archives/nsccl/volt/"
+               "FOVOLT_{ddmmyyyy}.csv"),
+}
+FETCH_THROTTLE = (2.0, 4.0)
+
+
+def _fetch_bytes(url: str) -> bytes:
+    from src.ingestion.report_downloader import _fetch_bytes as f
+    return f(url)
+
+
+def fetch_day(day, fetch_bytes_fn=_fetch_bytes, lake_dir=None,
+              sleep_fn=None) -> dict:
+    """One trading day's three files -> the lake. Idempotent; a missing
+    file (holiday / not yet published) is an honest miss, never fatal."""
+    import random as _r
+    import time as _t
+    sleep_fn = sleep_fn or _t.sleep
+    lake = Path(lake_dir) if lake_dir else FO_LAKE
+    tag = day.strftime("%d%m%Y")
+    dest = lake / day.isoformat()
+    got, missed = [], []
+    for kind, tmpl in URLS.items():
+        out = dest / f"{kind}.csv"
+        if out.exists():
+            got.append(kind)
+            continue
+        try:
+            blob = fetch_bytes_fn(tmpl.format(ddmmyyyy=tag))
+            if kind == "fo":                      # zip -> the csv inside
+                inner = zipfile.ZipFile(io.BytesIO(blob))
+                member = next((n for n in inner.namelist()
+                               if re.fullmatch(r"fo\d{8}\.csv",
+                                               n.lower())), None)
+                if member is None:
+                    missed.append(kind)
+                    continue
+                blob = inner.read(member)
+            if b"<html" in blob[:200].lower():
+                missed.append(kind)
+                continue
+            dest.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(blob)
+            got.append(kind)
+        except Exception:
+            missed.append(kind)
+        sleep_fn(_r.uniform(*FETCH_THROTTLE))
+    return {"day": day.isoformat(), "got": got, "missed": missed}
+
+
+def fetch_recent(days: int = 7, end=None, **kw) -> dict:
+    """Walk back over weekdays fetching whatever's missing, then refresh
+    the liquidity snapshot. The EOD chain's F&O leg."""
+    from datetime import date as _date, timedelta as _td
+    end = end or datetime.now(IST).date()
+    results = []
+    for i in range(days):
+        d = end - _td(days=i)
+        if d.weekday() < 5:
+            results.append(fetch_day(d, **kw))
+    snap = liquidity_snapshot(lake_dir=kw.get("lake_dir"))
+    return {"fetched": results,
+            "snapshot_as_of": snap.get("as_of", "no_data")}
+
+
 if __name__ == "__main__":
     import argparse
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--ingest", type=str, default=None)
+    ap.add_argument("--fetch", type=int, default=None, metavar="DAYS",
+                    help="auto-fetch the last N weekdays from NSE archives")
     ap.add_argument("--snapshot", action="store_true")
     args = ap.parse_args()
+    if args.fetch:
+        print(json.dumps(fetch_recent(args.fetch), indent=1))
     if args.ingest:
         print(json.dumps(ingest_bundle(args.ingest), indent=1))
     if args.snapshot or not args.ingest:

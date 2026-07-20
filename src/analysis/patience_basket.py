@@ -167,11 +167,14 @@ def eod_chain() -> dict:
     from src.analysis.dynamic_pricer import run as pricer_run
     from src.analysis.valuation_scorer import run as valuation_run
     from src.ingestion.bhavcopy_clerk import fetch_day
+    from src.ingestion.fo_bhavcopy import fetch_recent
     day = fetch_day(_date.today())
+    fo = fetch_recent(3)          # F&O bundle leg (owner: no manual DLs)
     pricer_run()
     valuation_run()
     basket = run()
     basket["bhavcopy"] = day
+    basket["fo_snapshot_as_of"] = fo.get("snapshot_as_of")
     return basket
 
 

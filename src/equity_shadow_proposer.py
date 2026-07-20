@@ -27,11 +27,18 @@ already showed "required confirmation hurts, data-sparse"). Logging
 floor-holds WITH the accumulation flag lets the outcome analysis decide
 whether it matters — which is the whole point of a telemetry engine.
 
-HARD TELEMETRY CONTRACT:
-  * every event carries mode="PAPER_TELEMETRY" and capital_allocated=0;
-  * this module never imports journal / portfolio_manager /
-    options_proposer / notifier — no margin, no capital, no Discord, no
-    real-book writes of any kind, ever;
+HARD TELEMETRY CONTRACT (amended by the owner ruling 2026-07-20):
+  * block-leg events stay mode="PAPER_TELEMETRY" + capital_allocated=0;
+    a DARLING entry the composition root's injected `capital_fn` funds
+    (src/equity_desk.py — a slice of the firm's 10L paper pool) is
+    stamped mode="PAPER_CAPITAL" with its locked notional, and its exit
+    settles through the injected `settle_fn`. No injection (every legacy
+    caller, every test default) = byte-identical zero-capital telemetry;
+  * this module STILL never imports journal / portfolio_manager /
+    equity_desk / options_proposer / notifier — capital lives behind the
+    injected seams, wired only at patience_basket.eod_chain;
+  * a funding rejection never suppresses the telemetry row — "log the
+    false positives" survives the capital era;
   * one open shadow per ticker; no same-day re-entry after an exit;
   * fail-open per ticker: a quote/data outage skips that ticker silently.
 
@@ -50,6 +57,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 ROOT = Path(__file__).resolve().parent.parent
 
 MODE = "PAPER_TELEMETRY"
+CAPITAL_MODE = "PAPER_CAPITAL"   # darling entries the equity desk funds
 PULLBACK_BAND_PCT = 5.0   # entry zone: floor .. floor*(1+5%)
 STOP_PCT = 2.0            # stop 2% below the block-VWAP floor
 REWARD_RISK = 2.0         # target = entry + 2 * (entry - stop)
@@ -337,7 +345,10 @@ def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
         except (ValueError, TypeError, KeyError):
             pass
         logged.append(kg.log_event({
-            "event": "exit", "id": entry["id"], "mode": MODE,
+            # mode rides the ENTRY's stamp: a desk-funded (PAPER_CAPITAL)
+            # position's exit must not masquerade as pure telemetry.
+            "event": "exit", "id": entry["id"],
+            "mode": entry.get("mode", MODE),
             "capital_allocated": 0, "ticker": ticker,
             "exit_price": price, "reason": reason,
             "kya_sikha_autopsy": {          # what we LEARNED
@@ -421,13 +432,17 @@ def entry_eligible_rows(tiers: dict) -> list:
 
 def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
                             as_of=None, check_fn=None, universe=None,
-                            vix_fn=None, nifty_trend_fn=None) -> list:
-    """Log a PAPER_TELEMETRY entry for every entry-eligible Buy-tier
-    darling that clears the equity halt stack (equity_entry_checks — the
-    single enforcement door: ban-list/expiry/overextension judged there,
-    never re-implemented here). Same dedup contract as the block leg:
-    one open shadow per ticker, no same-day re-entry. Fail-open per
-    symbol."""
+                            vix_fn=None, nifty_trend_fn=None,
+                            capital_fn=None) -> list:
+    """Log an entry for every entry-eligible Buy-tier darling that clears
+    the equity halt stack (equity_entry_checks — the single enforcement
+    door: ban-list/expiry/overextension judged there, never re-implemented
+    here). With an injected `capital_fn` (the equity desk), a funded entry
+    is stamped PAPER_CAPITAL with its locked notional; a rejection keeps
+    the zero-capital telemetry row WITH the rejection reason — the
+    learning ledger never loses a line to the capital layer. Same dedup
+    contract as the block leg: one open shadow per ticker, no same-day
+    re-entry. Fail-open per symbol."""
     import json as _json
     tpath = Path(tiers_path) if tiers_path else TIERS_PATH
     lpath = Path(levels_path) if levels_path else LEVELS_PATH
@@ -485,8 +500,22 @@ def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
                 nifty_trend=nifty)
         except Exception:
             continue                         # one symbol never voids the scan
-        if entry is not None:
-            logged.append(kg.log_event(entry, path=path))
+        if entry is None:
+            continue
+        if capital_fn is not None:
+            try:
+                funding = capital_fn(entry)
+            except Exception as exc:         # desk down = telemetry only
+                funding = {"funded": False,
+                           "reason": f"desk unavailable ({exc})"}
+            entry["funding"] = {k: funding.get(k) for k in
+                                ("funded", "qty", "notional", "lock_ref",
+                                 "reason")}
+            if funding.get("funded"):
+                entry["mode"] = CAPITAL_MODE
+                entry["capital_allocated"] = funding["notional"]
+                entry["kya_kara_action"]["qty"] = funding["qty"]
+        logged.append(kg.log_event(entry, path=path))
     return logged
 
 
@@ -544,7 +573,8 @@ def force_exit_strong_sell(tiers_path=None, path=None, quote_fn=None,
         except (ValueError, TypeError, KeyError):
             pass
         logged.append(kg.log_event({
-            "event": "exit", "id": entry["id"], "mode": MODE,
+            "event": "exit", "id": entry["id"],
+            "mode": entry.get("mode", MODE),
             "capital_allocated": 0, "ticker": ticker,
             "exit_price": price, "reason": reason,
             "kya_sikha_autopsy": {          # what we LEARNED
@@ -577,10 +607,14 @@ def _eod_close_quote_fn(lake_dir=None):
 
 def run_darling_cycle(tiers_path=None, levels_path=None, path=None,
                       quote_fn=None, universe=None, check_fn=None,
-                      now=None, as_of=None) -> dict:
+                      now=None, as_of=None, capital_fn=None,
+                      settle_fn=None) -> dict:
     """The Mac EOD darling shadow cycle: resolve open shadows against the
     day's bhavcopy closes (stop/target/time), force-exit Strong-Sell
-    grades (Directive 2), then log entries for today's Buy-tier names.
+    grades (Directive 2), SETTLE any desk-funded exits (injected
+    settle_fn — capital freed today is buyable today), then log entries
+    for today's Buy-tier names (injected capital_fn sizes and locks;
+    None = zero-capital telemetry, byte-identical to the pre-desk leg).
     Composition-root seam (patience_basket.eod_chain); offline-honest
     end to end — no live quotes, no token, vix recorded as None."""
     quote_fn = quote_fn or _eod_close_quote_fn()
@@ -589,11 +623,28 @@ def run_darling_cycle(tiers_path=None, levels_path=None, path=None,
                                universe=universe, path=path, now=now)
     exits += force_exit_strong_sell(tiers_path=tiers_path, path=path,
                                     quote_fn=quote_fn, now=now)
+    settlements = []
+    if settle_fn is not None and exits:
+        hosts = {e.get("id"): e for e in kg.read_events(path)
+                 if e.get("event") == "entry"}
+        for x in exits:
+            host = hosts.get(x.get("id"))
+            if not host or not (host.get("funding") or {}).get("funded"):
+                continue
+            try:
+                s = settle_fn(host, x)
+            except Exception as exc:         # sweep CLI reconciles later
+                print(f"  (darling settlement failed for "
+                      f"{x.get('ticker')}: {exc})")
+                continue
+            if s:
+                settlements.append(s)
     entries = propose_darling_entries(tiers_path=tiers_path,
                                       levels_path=levels_path, path=path,
                                       as_of=as_of, check_fn=check_fn,
-                                      universe=universe)
-    return {"entries": entries, "exits": exits}
+                                      universe=universe,
+                                      capital_fn=capital_fn)
+    return {"entries": entries, "exits": exits, "settlements": settlements}
 
 
 def run_cycle(deals_by_ticker=None, quote_fn=None, vix_fn=None,

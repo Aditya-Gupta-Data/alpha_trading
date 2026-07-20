@@ -49,9 +49,28 @@ def eod_chain() -> dict:
     # Fail-open: telemetry can never break the chain.
     try:
         from src.equity_shadow_proposer import run_darling_cycle
-        shadow = run_darling_cycle()
-        report["shadow"] = {"entries": len(shadow["entries"]),
-                            "exits": len(shadow["exits"])}
+
+        # Equity desk (owner ruling 2026-07-20): the ONE place the desk's
+        # paper capital is wired in. A missing/disabled desk degrades to
+        # the zero-capital telemetry leg, never to a broken chain.
+        capital_fn = settle_fn = None
+        desk = None
+        try:
+            from src import equity_desk as desk
+            if desk.EQUITY_DESK_ENABLED:
+                capital_fn, settle_fn = desk.fund_entry, desk.settle_exit
+        except Exception as exc:
+            print(f"  (equity desk unavailable — telemetry only [{exc}])")
+        shadow = run_darling_cycle(capital_fn=capital_fn,
+                                   settle_fn=settle_fn)
+        report["shadow"] = {
+            "entries": len(shadow["entries"]),
+            "exits": len(shadow["exits"]),
+            "settlements": len(shadow.get("settlements") or []),
+            "funded": len([e for e in shadow["entries"]
+                           if (e.get("funding") or {}).get("funded")])}
+        if desk is not None and capital_fn is not None:
+            desk.broadcast_activity(shadow)   # one card, quiet days silent
     except Exception as exc:
         print(f"  (patience basket: darling shadow leg failed [{exc}])")
         report["shadow"] = None

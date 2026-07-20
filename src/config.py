@@ -97,3 +97,14 @@ TUNER_WEIGHT_BOUNDS = tuple(_CONFIG["tuner_weight_bounds"])
 # Rs.1,00,000 paper book or no options trade could ever size above 0 lots.
 # Optional key so older config.json copies (e.g. on the VM) keep working.
 OPTIONS_RISK_PER_TRADE_PCT = float(_CONFIG.get("options_risk_per_trade_pct", 10.0))
+
+# Equity desk (owner ruling 2026-07-20): the darling shadow book's paper
+# capital slice, carved from the firm's 10L pool. Optional keys so older
+# config.json copies keep working; the code default is DISABLED so a
+# stale copy (e.g. the VM's) can never fund entries by accident.
+EQUITY_DESK_ENABLED = bool(_CONFIG.get("equity_desk_enabled", False))
+EQUITY_DESK_CAPITAL_RS = float(_CONFIG.get("equity_desk_capital_rs", 300000.0))
+EQUITY_DESK_RISK_PER_TRADE_PCT = float(
+    _CONFIG.get("equity_desk_risk_per_trade_pct", 1.0))
+EQUITY_DESK_MAX_NOTIONAL_PCT = float(
+    _CONFIG.get("equity_desk_max_notional_pct", 15.0))

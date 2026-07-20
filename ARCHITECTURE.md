@@ -292,6 +292,18 @@ margin-exhaustion check naturally chokes how many trades fit — no forced
 closes, no second settlement path. `margin_audit` (report-only CLI) replays
 the journal under these factors and cross-checks recorded margins for drift.
 
+**The equity desk (decision #79, owner ruling 2026-07-20):** the firm's 10L now
+funds TWO desks. `src/equity_desk.py` carves a slice (default Rs.3,00,000) for
+the darling shadow book: a standing `equity_desk_allocation` lock in the VM's
+options account keeps the total honest, and the Mac-side desk ledger
+(`data/equity_desk.db`) runs the SAME portfolio_manager machinery — same halt
+list, same drawdown math, same exhaustion doctrine — against that slice. The
+desk funds darling entries (1% risk / 15% notional cap, whole shares, delivery
+frictions on settlement) through injected seams at the patience_basket
+composition root; funding fails CLOSED while the telemetry ledger keeps every
+row. The Dept-5-first rule was explicitly waived by the owner for this wiring;
+the desk's own equity curve is the evidence a later Dept-5 review judges.
+
 **Staged merge targets:** ~~`wealth_flywheel`~~ **MERGED 2026-07-20** — the
 scrip clerk verified GOLDBEES as NSE_EQ id **14428** (NIP IND ETF GOLD BEES,
 series EQ), the Issue-15 blocker was lifted, the id entered `SECURITY_ID_MAP`,
@@ -349,11 +361,16 @@ go through `knowledge_graph_logger` to `logs/equity_shadow_journal.jsonl` —
 **deliberately OUTSIDE `brain_map`**, because zero-capital telemetry mixed into
 the options engine's `query_similar_events` would skew live decisions, and a
 "remember the mode filter in every query" convention would fail exactly once.
-The parallel store is the right shape while the shadow engine has zero capital;
-the ONLY path into `brain_map` is a future explicit, mode-tagged ingest — never
-an implicit merge. The shadow engine is import-banned (test-enforced) from
-journal / portfolio_manager / options_proposer / notifier / brain_map, and every
-event carries `mode="PAPER_TELEMETRY"` + `capital_allocated=0`.
+The parallel store remains the right shape in the capital era (decision #79):
+money math lives in the equity desk's OWN ledger (`data/equity_desk.db`), never
+here — the ONLY path into `brain_map` is a future explicit, mode-tagged ingest,
+never an implicit merge. The shadow engine is import-banned (test-enforced)
+from journal / portfolio_manager / equity_desk / options_proposer / notifier /
+brain_map. Block-leg events carry `mode="PAPER_TELEMETRY"` +
+`capital_allocated=0`; a darling entry the desk funds is stamped
+`mode="PAPER_CAPITAL"` with its locked notional (its exit rides the same
+stamp), and a funding rejection keeps the telemetry row with the reason — the
+learning ledger never loses a line to the capital layer.
 
 **Inputs:** resolved outcomes, daily market context, deal/flow history.
 **Outputs:** the trade ledger; queryable pattern memory; tuned weights; the

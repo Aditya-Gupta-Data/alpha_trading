@@ -20,6 +20,28 @@ For anything in that window, trust `git log --oneline` + those three files
 over this brief's silence. Not reconstructed here rather than risk a
 plausible-sounding but unverified summary.
 
+## 🟢 THE EQUITY DESK — the darling book now trades PAPER CAPITAL (decision #79, 2026-07-20 night)
+
+**Owner ruling ("10,00,000 of paper money only buddy — let's see how
+efficiently our system runs the 10 lakhs"), issued AFTER the recorded
+pushback; supersedes #77's zero-capital clause for the darling leg only.**
+`src/equity_desk.py` (Dept 3): a Rs.3,00,000 slice of the firm's 10L funds
+darling Buy-tier entries — 1% risk / 15% notional cap, whole shares,
+delivery-friction-net settlement — through portfolio_manager reused
+conn-generic against `data/equity_desk.db` (Mac). Same halts (10% ruin,
+daily 3%), same silent exhaustion, zero re-implemented risk rules. The VM's
+options account carries the matching standing lock `equity_desk_allocation`
+(**run once on the VM:** `python3 -m src.equity_desk --reserve-firm-slice`)
+so the firm total stays one honest 10L. Funded entries stamp
+`mode="PAPER_CAPITAL"`; funding failures keep the telemetry row with the
+reason (the learning ledger never loses a line); the proposer's Dept-3
+import ban still holds — seams injected only at `patience_basket.eod_chain`.
+One Discord card per EOD run, only when money moved. Kill switch
+`equity_desk_enabled` (code default OFF). Desk summary:
+`python3 -m src.equity_desk`; crash reconciler: `--sweep`. The block-VWAP
+leg stays pure telemetry. The desk's equity curve starts at zero history —
+judge it like performance.py judges everything: no verdicts on thin samples.
+
 ## 🟢 THE DARLING LIFECYCLE IS LIVE — 7-tier grading + the two-clock architecture; both Mac crons INSTALLED (updated 2026-07-20 evening)
 
 **Decision #77, commits `5c326a3` + `1629bc8`, pushed; suite 1373 green.**

@@ -1,0 +1,9 @@
+{
+ "_comment": "Symbols we do NOT have a SECURITY_ID_MAP id for but want one. The scrip-master clerk looks each up weekly and reports the candidate rows (exact NSE trading-symbol match only — never a fuzzy guess). Add a symbol here instead of hand-searching a 27MB CSV.",
+ "wanted": [
+  "GOLDBEES"
+ ],
+ "_notes": {
+  "GOLDBEES": "Blocks the wealth-flywheel merge: wealth_lock stays an advisory LEDGER until this id is scrip-master-verified (ARCHITECTURE.md staged-merge note, the Issue-15 lesson)."
+ }
+}

@@ -113,13 +113,16 @@ a peer module with its own path to consumers: the non-negotiable stays "one
 market-data door," counted in doors, not sockets. It already reuses
 `token_provider` (verified) — never a second credential source.
 
-**Owns (as of review #2, a standing gap to fill):** scrip-master
-reconciliation. The watchlist encodes broker security IDs that silently rot on
-delisting/demerger (ledger Issues 14/15: LTIM delisted, TATAMOTORS demerged —
-both found at deploy time). A scheduled clerk should diff the watchlist (and
-GOLDBEES, before the flywheel ever prices it) against Dhan's scrip master and
-fire a review card on any mismatch. Until that job exists, every deploy must
-re-verify IDs by hand.
+**Owns (review #2's standing gap — CLOSED 2026-07-20):** scrip-master
+reconciliation. `SECURITY_ID_MAP` encodes broker security IDs that silently rot
+on delisting/demerger (ledger Issues 14/15: LTIM delisted, TATAMOTORS demerged —
+both found by a human at deploy time). `ingestion/scrip_master.py` now diffs
+every mapped id — and the `config/scrip_wanted.json` list, GOLDBEES included —
+against Dhan's public scrip master weekly, firing a de-duped review card on any
+mismatch. Nothing auto-corrects: a guessed replacement id is the same bug again,
+so the clerk reports and a human edits the map. A fetch failure reports
+`unavailable`, never a pass — an unread master must not look like a clean run.
+First live run: 218,714 master rows, **88/88 ids verified**, zero drift.
 
 **Inputs:** DhanHQ Data API (read-only), NSE end-of-day reports, Google-News
 RSS, yfinance fundamentals/index bars, owner-supplied flow exports.
@@ -290,8 +293,11 @@ closes, no second settlement path. `margin_audit` (report-only CLI) replays
 the journal under these factors and cross-checks recorded margins for drift.
 
 **Staged merge targets:** `wealth_flywheel` → `wealth_lock.sweep_on_settlement`
-(advisory sweep becomes a concrete PAPER order — **blocked until GOLDBEES's
-security id is scrip-master-verified**, the Issue-15 lesson);
+(advisory sweep becomes a concrete PAPER order — the Issue-15 blocker is now
+**LIFTABLE**: the scrip clerk verified GOLDBEES as NSE_EQ id **14428**
+(NIP IND ETF GOLD BEES, series EQ) on 2026-07-20. Adding it to
+`SECURITY_ID_MAP` and wiring the flywheel remain separate, deliberate steps —
+the clerk supplies the verified fact, it does not perform the merge);
 `trailing_stops` → its `atr()` math goes to `indicators.py` (the shared,
 department-neutral math library: SMA/RSI today), its advisory ratchet loop
 goes to `live_bridge` beside the existing exit alerts. That split is clean

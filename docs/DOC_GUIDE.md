@@ -40,6 +40,7 @@ references it.
 
 - **I locked a choice / trade-off** → one new row in `DECISIONS.md` (why + mechanics + numbers). Add a 2–3 line status line in `HANDOVER.md` that links to it.
 - **I built / shipped / deployed a module** → operational detail in `MODULES.md`; status + live numbers in `HANDOVER.md` (linking the decision).
+- **I shipped a USER-FACING capability** → additionally add/update its row in the **Surface coverage matrix** at the top of `HANDOVER.md`. Mark every surface it does NOT yet reach (dashboard, `DATA_CONTRACT.md`, tests, VM) as **❌** — an unbuilt surface recorded as ❌ is a *logged* gap; an unrecorded one is a gap that gets lost to memory. This is how the docs surface their own blind spots (the dashboard was invisible to the engine's whole capital layer until someone happened to ask — the matrix exists so that can't recur).
 - **I changed a schedule** → `scripts/setup_cron.sh` (ground truth) + the table in `CRON_SETUP.md`. Nowhere else.
 - **I hit a bug / observed something in the book** → `docs/observation_week_ledger.md` as a new Issue. Link it from the fixing decision.
 - **I changed a JSON shape the frontend reads** → `DATA_CONTRACT.md`.

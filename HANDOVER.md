@@ -20,6 +20,32 @@ For anything in that window, trust `git log --oneline` + those three files
 over this brief's silence. Not reconstructed here rather than risk a
 plausible-sounding but unverified summary.
 
+## 🗺️ Surface coverage matrix — what's built vs. where it actually shows
+
+Every user-facing capability and whether each downstream surface reflects it.
+**An ❌ is a LOGGED gap, not a forgotten one** — scan a column top-to-bottom to
+see what's lagging the engine. Update the matching row in the SAME commit that
+ships a capability (`docs/DOC_GUIDE.md` makes this a rule). This table exists so a
+lagging surface (a stale dashboard, an un-contracted feature) is impossible to
+lose to memory.
+
+Surfaces: **Engine** = does it run · **Discord** = card fires · **Dash** =
+`/dashboard` (`src/web`) · **Contract** = `DATA_CONTRACT.md` → the React app ·
+**Tests** · **VM** = live on the box. (✅ done · ❌ gap · ◑ partial · — n/a)
+
+| Capability | Engine | Discord | Dash | Contract | Tests | VM |
+|---|---|---|---|---|---|---|
+| Options proposals + paper book | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Equity desk — darling paper capital (#79) | ✅ | ✅ | ❌ | ❌ | ✅ | ◑ lock only |
+| Firm treasury — dynamic split (#80) | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ lock |
+| Darling 7-tier lifecycle (#77) | ✅ | ✅ | ❌ | ❌ | ✅ | Mac-only |
+| Dept 8 — Analysis research desk | ✅ | ✅ | ❌ | ❌ | ◑ debt | Mac-only |
+
+**Standing ❌ cluster:** the entire capital layer is invisible on the visual
+dashboard + React contract — parked deliberately (Pending Phase #6; Discord is
+the surface until the infra has live runtime). This whole row of ❌ is the gap
+that used to live only in memory.
+
 ## 🟢 THE FIRM TREASURY — the 7L/3L split is now DYNAMIC (decision #80, 2026-07-20 night)
 
 **Live.** `src/firm_treasury.py` replaced #79's static split (owner ruled it

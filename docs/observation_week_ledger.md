@@ -847,3 +847,5 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   partitions already in the VM's lake (delete vs keep); rss_ingester
   classifies nothing on the VM by design (#75 ollama default) so its
   heartbeat means "ran", not "produced" — unchanged.
+
+- **Issue 22 ADDENDUM (2026-07-20 15:35 IST, caught during the VM deploy smoke-run):** the v3 dual-horizon prompt's FIRST live Gemini call answered with a JSON ARRAY instead of the requested object — `scored.get(ticker)` crashed the whole run ('list' object has no attribute 'get'), leaving the on-disk file stale (which, post-freshness-fix, would blank news for every consumer after 48h). Intermittent: runs 2-3 minutes later returned proper objects. Hardened same hour (`d6015de`-ish, see git): `_as_mapping()` coerces the array shapes back to {ticker: entry} (unrecognizable rows → honest stale-neutral, never a crash) + the prompt now says "single JSON OBJECT (never an array)". Deploy verified after: 84/84 real reads, dual-horizon schema live, prev-linking working (same-day baseline).

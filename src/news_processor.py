@@ -150,7 +150,8 @@ def _build_prompt(headlines_by_ticker: dict) -> str:
         "You are a markets news classifier for Indian (NSE) stocks. For each "
         "ticker below, read its recent headlines and judge the sentiment for "
         "that stock on TWO separate horizons.\n\n"
-        "Return ONLY a JSON object mapping each ticker to an object with:\n"
+        "Return ONLY a single JSON OBJECT (never an array) mapping each "
+        "ticker to an object with:\n"
         '  "short_term_catalyst_score": integer from -5 (very bearish) to +5 '
         "(very bullish) for the coming days/weeks — catalysts, results, "
         "orders, upgrades/downgrades, price-moving events. 0 if neutral or "
@@ -314,6 +315,32 @@ def link_previous(entry: dict, prev_entry: dict) -> dict:
     return entry
 
 
+def _as_mapping(scored) -> dict:
+    """Gemini sometimes answers the mapping prompt with a JSON ARRAY
+    instead of an object — seen live on the VM's first v3 run 2026-07-20
+    ('list' object has no attribute 'get' crashed the whole run, leaving
+    the on-disk file stale). Coerce the array shapes it actually produces
+    back into {ticker: entry}: rows carrying their own "ticker"/"symbol"
+    key, or single-key {ticker: {...}} wrappers. Anything unrecognizable
+    contributes nothing — those tickers become honest stale-neutrals via
+    the existing per-ticker guard, and the run NEVER crashes."""
+    if isinstance(scored, dict):
+        return scored
+    out = {}
+    if isinstance(scored, list):
+        for item in scored:
+            if not isinstance(item, dict):
+                continue
+            t = item.get("ticker") or item.get("symbol")
+            if isinstance(t, str) and t:
+                out[t] = item
+            elif len(item) == 1:
+                key, val = next(iter(item.items()))
+                if isinstance(val, dict):
+                    out[key] = val
+    return out
+
+
 def _load_previous(path: Path = None) -> dict:
     """Ticker -> entry from the PRIOR run's output file, read before this
     run overwrites it. {} on any problem — first run, missing, unreadable."""
@@ -388,6 +415,7 @@ def build_sentiment(tickers: list, previous_path: Path = None,
             "tickers": {t: _neutral_entry(now) for t in tickers},
         }
 
+    scored = _as_mapping(scored)
     previous = _load_previous(previous_path)
     out, flagged = {}, []
     for ticker in tickers:

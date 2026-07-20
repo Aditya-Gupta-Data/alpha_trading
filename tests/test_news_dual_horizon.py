@@ -243,5 +243,35 @@ def test_gemini_failure_never_links_or_flags(monkeypatch):
         assert notes == []
 
 
+def test_as_mapping_coerces_gemini_array_shapes():
+    """Seen live on the VM's first v3 run: Gemini answered with a JSON
+    array and 'list'.get crashed the whole run. Both array shapes coerce;
+    junk contributes nothing (stale-neutral downstream), never a crash."""
+    entry = {"short_term_catalyst_score": 2, "long_term_macro_score": 1}
+    assert np_module._as_mapping({"TCS.NS": entry}) == {"TCS.NS": entry}
+    rows = [dict(entry, ticker="TCS.NS"), {"INFY.NS": entry},
+            "junk", {"a": 1, "b": 2}, 42]
+    m = np_module._as_mapping(rows)
+    assert set(m) == {"TCS.NS", "INFY.NS"}
+    assert m["TCS.NS"]["short_term_catalyst_score"] == 2
+    assert np_module._as_mapping(None) == {}
+
+
+def test_build_sentiment_survives_gemini_array_reply(monkeypatch):
+    monkeypatch.setattr(np_module, "fetch_headlines", _fake_headlines)
+    monkeypatch.setattr(np_module, "_call_gemini", lambda prompt, key: [
+        {"ticker": "TCS.NS", "short_term_catalyst_score": -3,
+         "long_term_macro_score": 1, "headline_focus": "guidance cut"}])
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    with tempfile.TemporaryDirectory() as tmp:
+        data = build_sentiment(["TCS.NS", "INFY.NS"],
+                               previous_path=Path(tmp) / "ghost.json",
+                               notify_fn=lambda t: None)
+        assert data["tickers"]["TCS.NS"]["short_term_catalyst_score"] == -3
+        assert data["tickers"]["TCS.NS"]["stale"] is False
+        # The ticker the array never mentioned: honest stale-neutral.
+        assert data["tickers"]["INFY.NS"]["stale"] is True
+
+
 if __name__ == "__main__":
     print("Run via pytest: python -m pytest tests/test_news_dual_horizon.py")

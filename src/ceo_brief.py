@@ -716,6 +716,16 @@ def _risk_field(risk: dict) -> dict:
              f"({risk['open_spreads']} option spread(s), "
              f"{risk['open_equities']} share position(s)).\n"
              f"Overall the book is {bias}.")
+    # One-firm-view (decision #82): the equity desk's summary line rides
+    # on the brief — headline only (the 2h card carries the full table).
+    try:
+        from src import equity_desk
+        snap = equity_desk.load_snapshot()
+        if snap is not None:
+            value += ("\n" + equity_desk.render_firm_lines(snap)
+                      .split("\n")[0])
+    except Exception:
+        pass
     return {"name": "💰 Risk & Capital", "value": value, "inline": False}
 
 

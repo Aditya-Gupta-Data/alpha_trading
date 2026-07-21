@@ -89,6 +89,16 @@ def eod_chain() -> dict:
     except Exception as exc:
         print(f"  (patience basket: darling shadow leg failed [{exc}])")
         report["shadow"] = None
+    # One-firm-view (decision #82): publish the desk's money book and ship
+    # it to the VM, whose cards render it beside the options book.
+    try:
+        from src import equity_desk, firm_treasury
+        equity_desk.publish_snapshot()
+        report["snapshot_pushed"] = firm_treasury.vm_push_file(
+            equity_desk.SNAPSHOT_PATH)
+    except Exception as exc:
+        print(f"  (equity snapshot push failed [{exc}])")
+        report["snapshot_pushed"] = False
     return report
 
 

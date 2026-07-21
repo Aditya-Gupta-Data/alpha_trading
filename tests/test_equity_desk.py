@@ -289,5 +289,95 @@ def test_proposer_import_contract_still_holds():
         assert not hits, f"proposer must not import {forbidden}: {hits}"
 
 
+# ---------------------------------------- one-firm-view (decision #82)
+
+def test_publish_snapshot_lists_only_funded_open_money():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        db, ledger, snapf = tmp / "d.db", tmp / "s.jsonl", tmp / "snap.json"
+        funded = _entry("TCS")
+        funded["funding"] = desk.fund_entry(funded, db_path=db)
+        kg.log_event(funded, path=ledger)
+        kg.log_event(_entry("INFY"), path=ledger)        # telemetry-only
+        closed = _entry("WIPRO")
+        closed["funding"] = {"funded": True, "qty": 5, "notional": 11345.0}
+        kg.log_event(closed, path=ledger)
+        kg.log_event({"event": "exit", "id": closed["id"],
+                      "ticker": "WIPRO.NS", "exit_price": 2400.0},
+                     path=ledger)                        # resolved -> out
+        snap = desk.publish_snapshot(path=snapf, ledger_path=ledger,
+                                     db_path=db, quote_fn=lambda t: 2300.0)
+        [p] = snap["positions"]                          # TCS only
+        assert p["ticker"] == "TCS.NS" and p["qty"] == 16
+        assert p["unrealized_rs"] == round((2300.0 - 2269.0) * 16, 2)
+        assert snap["telemetry_only_open"] == 1
+        assert snap["account"]["locked_margin"] > 0
+        assert json.loads(snapf.read_text())["as_of"] == snap["as_of"]
+
+
+def test_load_snapshot_freshness_and_absence():
+    with tempfile.TemporaryDirectory() as tmp:
+        snapf = Path(tmp) / "snap.json"
+        assert desk.load_snapshot(snapf) is None         # missing = None
+        from datetime import datetime, timedelta
+        now = datetime.now(desk.IST)
+        snapf.write_text(json.dumps({"as_of": now.isoformat(), "positions": []}))
+        assert desk.load_snapshot(snapf)["stale"] is False
+        old = (now - timedelta(hours=40)).isoformat()
+        snapf.write_text(json.dumps({"as_of": old, "positions": []}))
+        s = desk.load_snapshot(snapf)
+        assert s["stale"] is True and s["age_hours"] >= 39
+
+
+def test_render_firm_lines_is_honest_about_every_state():
+    assert "no snapshot" in desk.render_firm_lines(None)
+    snap = {"as_of": "2026-07-21T19:15:00+05:30", "stale": False,
+            "account": {"locked_margin": 177540.0,
+                        "available_cash": 222460.0, "trading_halted": False},
+            "positions": [
+                {"ticker": "TCS.NS", "qty": 16, "entry_price": 2269.0,
+                 "last_close": 2300.0, "unrealized_rs": 496.0},
+                {"ticker": "INFY.NS", "qty": 10, "entry_price": 1500.0,
+                 "last_close": None, "unrealized_rs": None}]}
+    out = desk.render_firm_lines(snap)
+    assert "deployed Rs.177,540" in out and "unrealized +Rs.496" in out
+    assert "(1 unmarked)" in out and "TCS" in out and "—" in out
+    stale = desk.render_firm_lines(dict(snap, stale=True, age_hours=40.0))
+    assert "STALE 40h old" in stale
+    halted = dict(snap, account=dict(snap["account"], trading_halted=True))
+    assert "HALTED" in desk.render_firm_lines(halted)
+
+
+def test_report_card_carries_the_equity_section():
+    from datetime import datetime
+    from src.portfolio_report import build_report_payload
+    payload = build_report_payload([], 0, 0, None, datetime(2026, 7, 21),
+                                   equity_section="EQUITY DESK (EOD): 5 open")
+    assert "EQUITY DESK (EOD): 5 open" in payload["description"]
+    bare = build_report_payload([], 0, 0, None, datetime(2026, 7, 21))
+    assert "EQUITY DESK" not in bare["description"]      # additive-only
+
+
+def test_eod_card_gains_the_desk_field():
+    from src import eod_summary
+    real_read, real_q = eod_summary._read_journal, \
+        eod_summary.query_todays_resolutions
+    real_load = desk.load_snapshot
+    try:
+        eod_summary._read_journal = lambda path=None: []
+        eod_summary.query_todays_resolutions = lambda db_path=None: []
+        desk.load_snapshot = lambda path=None, max_age_hours=30.0: {
+            "as_of": "2026-07-21T19:15:00+05:30", "stale": False,
+            "account": {"locked_margin": 1000.0, "available_cash": 2000.0},
+            "positions": []}
+        card = eod_summary.build_eod_card()
+        [f] = [f for f in card["fields"] if f["name"] == "💼 Equity Desk"]
+        assert "deployed Rs.1,000" in f["value"]
+    finally:
+        eod_summary._read_journal = real_read
+        eod_summary.query_todays_resolutions = real_q
+        desk.load_snapshot = real_load
+
+
 if __name__ == "__main__":
     print("Run via pytest: python -m pytest tests/test_equity_desk.py")

@@ -325,6 +325,20 @@ def plan_move(current_rs: float, target_rs: float, desk_liquid: float,
 
 # ------------------------------------------------------------ SSH bridge
 
+def vm_push_file(local_path, remote_rel: str = "data/") -> bool:
+    """The Mac→VM artifact shipping lane (one-firm-view, decision #82):
+    scp one file into the VM's repo tree. False on any failure — the
+    caller reports and moves on; the VM renders its last-known copy."""
+    cmd = [GCLOUD_PATH, "compute", "scp", str(local_path),
+           f"{VM_SSH_TARGET}:~/alpha_trading/{remote_rel}",
+           f"--project={VM_SSH_PROJECT}", f"--zone={VM_SSH_ZONE}"]
+    try:
+        return subprocess.run(cmd, capture_output=True,
+                              timeout=90).returncode == 0
+    except Exception:
+        return False
+
+
 def _vm_call(args: list) -> dict | None:
     """Run a firm_treasury CLI mode on the VM, parse the LAST stdout line
     as JSON. None on any failure — the caller keeps the current split."""

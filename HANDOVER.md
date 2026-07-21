@@ -20,6 +20,21 @@ For anything in that window, trust `git log --oneline` + those three files
 over this brief's silence. Not reconstructed here rather than risk a
 plausible-sounding but unverified summary.
 
+## 🟢 ONE FIRM VIEW — every report card now shows BOTH desks (decision #82, 2026-07-21, first freeze exception)
+
+**Owner ruling ("lift freeze and fix it — one ledger"):** the 12:00 card
+showed only options; the equity desk's 5 funded positions were invisible
+outside the Mac's 💼 card. Fixed at the VIEW layer — the physical stores
+stay separate BY DESIGN (two machines, two write owners; equity rows in
+the options journal would break plan_tracker's sweep). After every Mac
+19:15 chain: `equity_desk.publish_snapshot()` → scp to the VM
+(`firm_treasury.vm_push_file`) → the 2h Portfolio Report Card (full
+section + table), the 15:45 EOD summary (💼 field), and the 16:30 CEO
+brief (headline line) all render the equity book beside options. Labeled
+"EOD marks" always (Mac holds no token); >30h old = "STALE" on the card;
+missing = "no snapshot yet"; every seam fail-open. **Freeze resumed
+after this deploy.**
+
 ## 🟢 THE FIRM TREASURY — the 7L/3L split is now DYNAMIC (decision #80, 2026-07-20 night, owner Directive 1)
 
 **#79's static split lasted about two hours** — the owner ruled it

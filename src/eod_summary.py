@@ -199,6 +199,17 @@ def build_eod_card(db_path=None) -> dict:
     else:
         fields.append({"name": "Net Delta", "value": "±0 (flat)", "inline": True})
 
+    # One-firm-view (decision #82): the equity desk's EOD book rides on
+    # this card too — read from the Mac-pushed snapshot, fail-open.
+    try:
+        from src import equity_desk
+        fields.append({"name": "💼 Equity Desk",
+                       "value": equity_desk.render_firm_lines(
+                           equity_desk.load_snapshot()),
+                       "inline": False})
+    except Exception:
+        pass
+
     if active_total == 0 and not todays_exits:
         description = "No open positions. Engine idle until next signal."
     else:

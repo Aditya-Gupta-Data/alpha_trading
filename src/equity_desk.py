@@ -45,6 +45,7 @@ CLI:
     python3 -m src.equity_desk --sweep               # reconcile orphan locks
     python3 -m src.equity_desk --reserve-firm-slice  # VM ONLY: carve the slice
 """
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -272,6 +273,118 @@ def broadcast_activity(shadow: dict, broadcast_fn=None, db_path=None) -> bool:
     except Exception as exc:
         print(f"  (equity desk card failed: {exc})")
         return False
+
+
+# ------------------------------------------- one-firm-view (decision #82)
+
+SNAPSHOT_PATH = ROOT / "data" / "equity_desk_snapshot.json"
+
+
+def publish_snapshot(path=None, ledger_path=None, db_path=None,
+                     quote_fn=None) -> dict:
+    """The Mac EOD chain's answer to "one ledger": the desk's whole money
+    book — account, every FUNDED open position marked at the latest
+    bhavcopy close — written to one JSON artifact and shipped to the VM,
+    whose report cards render it beside the options book. Telemetry-only
+    shadows are counted, not listed (they hold no money). A missing mark
+    is None, never a guess."""
+    from src import knowledge_graph_logger as kg
+    events = kg.read_events(ledger_path)
+    open_pos = kg.open_positions(events=events)
+    if quote_fn is None:
+        try:
+            from src.equity_shadow_proposer import _eod_close_quote_fn
+            quote_fn = _eod_close_quote_fn()
+        except Exception:
+            quote_fn = lambda t: None                    # noqa: E731
+    positions, telemetry_only = [], 0
+    for ticker, entry in sorted(open_pos.items()):
+        funding = entry.get("funding") or {}
+        if not funding.get("funded"):
+            telemetry_only += 1
+            continue
+        action = entry.get("kya_kara_action") or {}
+        try:
+            last = quote_fn(ticker)
+        except Exception:
+            last = None
+        qty = int(funding.get("qty") or 0)
+        unreal = (round((float(last) - float(action["entry_price"])) * qty, 2)
+                  if last is not None and action.get("entry_price") is not None
+                  else None)
+        positions.append({"ticker": ticker, "qty": qty,
+                          "entry_price": action.get("entry_price"),
+                          "stop": action.get("stop"),
+                          "target": action.get("target"),
+                          "notional": funding.get("notional"),
+                          "last_close": last, "unrealized_rs": unreal,
+                          "opened": entry.get("as_of")})
+    snap = {"as_of": datetime.now(IST).isoformat(timespec="seconds"),
+            "account": summary(db_path), "positions": positions,
+            "telemetry_only_open": telemetry_only}
+    p = Path(path) if path else SNAPSHOT_PATH
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(snap, indent=1))
+    except OSError:
+        pass                                             # publish is telemetry
+    return snap
+
+
+def load_snapshot(path=None, max_age_hours: float = 30.0):
+    """VM-side reader: None when missing/unparseable; `stale` flagged past
+    one EOD cycle + slack (an old snapshot means the Mac chain or the scp
+    lane died — the card says so instead of quietly showing old money)."""
+    p = Path(path) if path else SNAPSHOT_PATH
+    try:
+        snap = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    try:
+        age_h = (datetime.now(IST)
+                 - datetime.fromisoformat(snap["as_of"])).total_seconds() / 3600
+    except (KeyError, ValueError, TypeError):
+        age_h = None
+    snap["age_hours"] = round(age_h, 1) if age_h is not None else None
+    snap["stale"] = bool(age_h is not None and age_h > max_age_hours)
+    return snap
+
+
+def render_firm_lines(snap) -> str:
+    """The equity section every VM card appends — one summary line plus a
+    compact position table. Honest about its cadence (EOD marks, never
+    presented as live) and about staleness/unmarked rows."""
+    if snap is None:
+        return ("EQUITY DESK: no snapshot from the Mac yet "
+                "(first 19:15 chain publishes it)")
+    acct = snap.get("account") or {}
+    pos = snap.get("positions") or []
+    marked = [p["unrealized_rs"] for p in pos
+              if p.get("unrealized_rs") is not None]
+    head = (f"EQUITY DESK (EOD marks {str(snap.get('as_of', '?'))[:16]}"
+            + (f" — STALE {snap['age_hours']:.0f}h old"
+               if snap.get("stale") else "") + "): "
+            f"{len(pos)} open · deployed Rs.{acct.get('locked_margin', 0):,.0f}"
+            f" · cash Rs.{acct.get('available_cash', 0):,.0f}")
+    if marked:
+        total = sum(marked)
+        head += f" · unrealized {'+' if total >= 0 else ''}Rs.{total:,.0f}"
+        if len(marked) < len(pos):
+            head += f" ({len(pos) - len(marked)} unmarked)"
+    if acct.get("trading_halted"):
+        head += " · ⛔ HALTED"
+    if not pos:
+        return head
+    rows = ["TICKER      QTY    ENTRY     LAST      P&L"]
+    for p_ in pos:
+        t = str(p_.get("ticker", "")).replace(".NS", "")[:10]
+        last = (f"{p_['last_close']:.1f}"
+                if p_.get("last_close") is not None else "—")
+        pnl = (f"{p_['unrealized_rs']:+,.0f}"
+               if p_.get("unrealized_rs") is not None else "—")
+        rows.append(f"{t:<10} {p_.get('qty', 0):>4} "
+                    f"{p_.get('entry_price', 0):>8} {last:>8} {pnl:>8}")
+    return head + "\n```\n" + "\n".join(rows) + "\n```"
 
 
 def reserve_firm_slice(conn=None) -> dict:

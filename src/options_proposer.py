@@ -35,7 +35,7 @@ from datetime import date, timedelta
 
 from src import journal
 from src import portfolio as pf
-from src.config import OPTIONS_RISK_PER_TRADE_PCT
+from src.config import MAX_RISK_PER_TRADE_RS, OPTIONS_RISK_PER_TRADE_PCT
 from src.dhan_client import get_expiry_list, get_india_vix, get_option_chain
 from src.strategy import StrategyConstructor
 from src.suggestions import analyze
@@ -273,6 +273,15 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                 "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot doesn't fit "
                            f"the {_risk_pct:g}% options risk "
                            f"budget (or SPAN margin exceeds cash)")}
+    # Owner hard cap (decision #84): max_loss × lots may never exceed
+    # MAX_RISK_PER_TRADE_RS, whatever the percentage budget allowed.
+    if spread["max_loss"] > 0:
+        lots = min(lots, int(MAX_RISK_PER_TRADE_RS // spread["max_loss"]))
+    if lots <= 0:
+        return {"proposal": None, "view": view, "vix": vix,
+                "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot exceeds "
+                           f"the Rs.{MAX_RISK_PER_TRADE_RS:,.0f} hard "
+                           f"per-trade risk cap")}
     # Adaptive sizing feedback (Directive 2, decision #81): the real
     # resolved record may shrink (floor 1 lot) or veto this archetype.
     # Fails open inside the module; a crashed layer changes nothing.

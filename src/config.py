@@ -126,3 +126,15 @@ GCLOUD_PATH = str(_CONFIG.get(
 # sizing feedback loop. Optional key; code default OFF — a stale config
 # copy must never start resizing trades on its own.
 ADAPTIVE_SIZING_ENABLED = bool(_CONFIG.get("adaptive_sizing_enabled", False))
+
+# Autonomous-run constraints (owner final override 2026-07-21, decision
+# #84): a HARD rupee ceiling on the risk any single trade may carry —
+# equity: the entry-to-stop risk budget; options: max_loss × lots.
+# Applied AFTER percentage sizing, regardless of stop distance.
+MAX_RISK_PER_TRADE_RS = float(_CONFIG.get("max_risk_per_trade_rs", 10000.0))
+# Treasury rupee-granularity (pool-scale aware since the 2L clean sheet).
+TREASURY_ROUND_RS = float(_CONFIG.get("treasury_round_rs", 5000.0))
+# Directive 4 (#84): the daily Discord message budget. Code default OFF
+# so a stale config copy never mutes anything unexpectedly.
+DISCORD_BUDGET_ENABLED = bool(_CONFIG.get("discord_budget_enabled", False))
+DISCORD_DAILY_BUDGET = int(_CONFIG.get("discord_daily_budget", 5))

@@ -147,27 +147,33 @@ def test_options_history_mirrors_performance_exclusions():
 
 
 def test_fund_entry_applies_multiplier_and_veto():
+    import sqlite3
+    import src.firm_treasury as ft
     entry = {"id": "z9", "ticker": "TCS.NS",
              "kyu_trigger": {"setup": "darling_buy", "tier": "weak_buy"},
              "kya_kara_action": {"entry_price": 2269.0, "stop": 2085.0}}
-    with tempfile.TemporaryDirectory() as tmp:
-        db = Path(tmp) / "desk.db"
-        real = az.equity_verdict
-        try:
-            az.equity_verdict = lambda e, **kw: {"multiplier": 0.5,
-                                                 "action": "penalty",
-                                                 "detail": "test"}
-            f = desk.fund_entry(entry, db_path=db)
-            assert f["funded"] and f["qty"] == 8         # 16 x 0.5 risk
-            assert "x0.5" in f["reason"]
-            az.equity_verdict = lambda e, **kw: {"multiplier": 0.0,
-                                                 "action": "veto",
-                                                 "detail": "burned"}
-            f = desk.fund_entry(dict(entry, id="z10"), db_path=db)
-            assert not f["funded"]
-            assert "vetoed_by adaptive_sizing" in f["reason"]
-        finally:
-            az.equity_verdict = real
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    pm.get_account(conn)
+    ft.EQUITY_DESK_CAPITAL_RS = 300000.0
+    ft.get_budget(conn)
+    real = az.equity_verdict
+    try:
+        az.equity_verdict = lambda e, **kw: {"multiplier": 0.5,
+                                             "action": "penalty",
+                                             "detail": "test"}
+        f = desk.fund_entry(entry, conn=conn)
+        assert f["funded"] and f["qty"] == 8             # 16 x 0.5 risk
+        assert "x0.5" in f["reason"]
+        az.equity_verdict = lambda e, **kw: {"multiplier": 0.0,
+                                             "action": "veto",
+                                             "detail": "burned"}
+        f = desk.fund_entry(dict(entry, id="z10"), conn=conn)
+        assert not f["funded"]
+        assert "vetoed_by adaptive_sizing" in f["reason"]
+    finally:
+        az.equity_verdict = real
+        conn.close()
 
 
 def test_adjust_option_lots_floors_and_vetoes():

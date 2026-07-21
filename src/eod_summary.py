@@ -199,14 +199,24 @@ def build_eod_card(db_path=None) -> dict:
     else:
         fields.append({"name": "Net Delta", "value": "±0 (flat)", "inline": True})
 
-    # One-firm-view (decision #82): the equity desk's EOD book rides on
-    # this card too — read from the Mac-pushed snapshot, fail-open.
+    # One-firm-view (decision #82, VM-native since #83): the equity
+    # desk's live book rides on this card too — all local, fail-open.
     try:
         from src import equity_desk
         fields.append({"name": "💼 Equity Desk",
-                       "value": equity_desk.render_firm_lines(
-                           equity_desk.load_snapshot()),
+                       "value": equity_desk.render_book_lines(),
                        "inline": False})
+    except Exception:
+        pass
+
+    # Directive 4 (#84): everything the daily Discord budget spooled —
+    # trades, rotations, sizing changes, review flags — lands HERE.
+    try:
+        from src.notifier import drain_digest_queue
+        batched = drain_digest_queue()
+        if batched:
+            fields.append({"name": "📦 Batched signals",
+                           "value": batched[:1024], "inline": False})
     except Exception:
         pass
 

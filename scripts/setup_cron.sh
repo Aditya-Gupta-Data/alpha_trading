@@ -266,6 +266,12 @@ CRON_TZ=Asia/Kolkata
 #     eod_summary, never recomputed). Weekdays only: on a weekend there is
 #     no session to report and the evening jobs are the ops sweep's business.
 30 16 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ceo_brief >> "$REPO_ROOT/logs/ceo_brief.log" 2>&1
+
+# 21. Firm treasury rotation (Mon-Fri 19:50 IST, decision #83) — re-routes
+#     the equity desk's budget AFTER the Mac's ~19:20 artifact ship (fresh
+#     tier table) and BEFORE the next session. One atomic budget move in
+#     brain_map.db; deadband/step-capped; one Discord card per rotation.
+50 19 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.firm_treasury --rotate >> "$REPO_ROOT/logs/firm_treasury.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

@@ -34,6 +34,11 @@ from src.notifier import (
     fire_broadcast,
 )
 
+# Decision #84 discord budget: OFF here — these tests exercise the raw
+# send/card path; the gate has its own suite (test_discord_budget.py).
+import src.config as _cfg
+_cfg.DISCORD_BUDGET_ENABLED = False
+
 FAKE_URL = "https://discord.com/api/webhooks/123/abc"
 
 

@@ -387,6 +387,37 @@ def get_live_price(ticker: str) -> float | None:
     return float(sec["last_price"])
 
 
+def get_live_price_by_id(security_id, segment: str = "NSE_EQ") -> float | None:
+    """Quote for an instrument NOT in SECURITY_ID_MAP, addressed by its
+    scrip-master id (the darling desk's path, decision #83 — ids come from
+    the weekly `darling_ids.json` built off Dhan's public master, never a
+    guess). Same throttle/retry/unwrap discipline as _quote_sec."""
+    client = _get_client()
+    if client is None or security_id in (None, ""):
+        return None
+    resp = None
+    for attempt in range(2):
+        _throttle()
+        try:
+            resp = client.quote_data({segment: [int(security_id)]})
+        except Exception as e:
+            print(f"  Dhan quote error for id {security_id}: {e}")
+            resp = None
+        if isinstance(resp, dict) and resp.get("status") == "success":
+            break
+        if attempt == 0:
+            time.sleep(_RATE_PAUSE)
+    if not isinstance(resp, dict) or resp.get("status") != "success":
+        return None
+    d = unwrap_payload(resp, inner_marker=segment)
+    try:
+        sec = d[segment][str(int(security_id))]
+        return float(sec["last_price"]) if sec.get("last_price") is not None \
+            else None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def get_quote(ticker: str) -> dict | None:
     """Drop-in replacement for the old data_fetcher.get_quote — same shape:
     {ticker, current_price, prev_close, percent_change} or None."""

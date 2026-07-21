@@ -716,14 +716,11 @@ def _risk_field(risk: dict) -> dict:
              f"({risk['open_spreads']} option spread(s), "
              f"{risk['open_equities']} share position(s)).\n"
              f"Overall the book is {bias}.")
-    # One-firm-view (decision #82): the equity desk's summary line rides
-    # on the brief — headline only (the 2h card carries the full table).
+    # One-firm-view (decision #82, VM-native since #83): the equity
+    # desk's headline rides on the brief (the 2h card has the table).
     try:
         from src import equity_desk
-        snap = equity_desk.load_snapshot()
-        if snap is not None:
-            value += ("\n" + equity_desk.render_firm_lines(snap)
-                      .split("\n")[0])
+        value += "\n" + equity_desk.render_book_lines().split("\n")[0]
     except Exception:
         pass
     return {"name": "💰 Risk & Capital", "value": value, "inline": False}
@@ -757,13 +754,25 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
     else:
         description = "⚠️ Attention needed — see the sections below."
 
+    fields = [_ops_field(ops), _issues_field(issues),
+              _deploy_field(dep), _risk_field(risk)]
+    # Directive 4 (#84): anything the Discord budget spooled since the
+    # last digest (the 15:45 EOD drains first; this catches the rest).
+    try:
+        from src.notifier import drain_digest_queue
+        batched = drain_digest_queue()
+        if batched:
+            fields.append({"name": "📦 Batched signals",
+                           "value": batched[:1024], "inline": False})
+    except Exception:
+        pass
+
     return {
         "event": "ceo_brief",
         "ticker": "",
         "date": _today(clock),
         "description": description,
-        "fields": [_ops_field(ops), _issues_field(issues),
-                   _deploy_field(dep), _risk_field(risk)],
+        "fields": fields,
     }
 
 

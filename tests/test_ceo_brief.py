@@ -16,6 +16,11 @@ import pytest
 
 from src import ceo_brief
 
+# Decision #84 discord budget: OFF here — these tests exercise the raw
+# send/card path; the gate has its own suite (test_discord_budget.py).
+import src.config as _cfg
+_cfg.DISCORD_BUDGET_ENABLED = False
+
 IST = timezone(timedelta(hours=5, minutes=30))
 
 

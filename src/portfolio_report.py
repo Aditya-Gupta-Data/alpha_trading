@@ -381,8 +381,7 @@ def run(entries: list = None, spot_fn=None, db_path: Path = None,
     exposure = read_exposure(db_path)
     try:
         from src import equity_desk
-        equity_section = equity_desk.render_firm_lines(
-            equity_desk.load_snapshot())
+        equity_section = equity_desk.render_book_lines()   # VM-local, live
     except Exception:
         equity_section = None                # fail-open: options card intact
     payload = build_report_payload(marked, open_count,

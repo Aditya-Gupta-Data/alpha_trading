@@ -368,13 +368,18 @@ def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
 
 def evaluate_darling_entry(row: dict, level: dict, as_of: str,
                            vix=None, sector_verdict=None,
-                           nifty_trend=None) -> dict | None:
+                           nifty_trend=None, price=None,
+                           fill_basis="eod_close") -> dict | None:
     """One Buy-tier row + its pricer level -> a ready-to-log entry
     event in the same four-question frame as the block leg. None when the
-    row is malformed (missing close/stop, or stop >= close — a data
-    anomaly must never mint an un-falsifiable thesis)."""
+    row is malformed (missing close/stop, or stop >= entry — a data
+    anomaly must never mint an un-falsifiable thesis). `price` overrides
+    the row's close (the VM live path, decision #83 — entry at the LIVE
+    quote, stamped with its own fill_basis)."""
     sym = row.get("symbol")
     close, stop = row.get("close"), row.get("stop")
+    if price is not None:
+        close = price
     if not sym or close is None or stop is None or stop >= close:
         return None
     # Target = the first trim pivot that pays AT LEAST 1R. A pivot a few
@@ -410,8 +415,9 @@ def evaluate_darling_entry(row: dict, level: dict, as_of: str,
         "kya_kara_action": {                 # WHAT we did (paper)
             "side": "long",
             "entry_price": close,
-            "fill_basis": "eod_close",       # honesty: bhavcopy close, not
-                                             # a live quote (Mac EOD chain)
+            "fill_basis": fill_basis,        # honesty: "eod_close" =
+                                             # bhavcopy close; "live" = the
+                                             # VM desk's real-time quote
             "stop": stop,
             "target": target,
             "time_stop_days": DARLING_TIME_STOP_DAYS,
@@ -433,7 +439,8 @@ def entry_eligible_rows(tiers: dict) -> list:
 def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
                             as_of=None, check_fn=None, universe=None,
                             vix_fn=None, nifty_trend_fn=None,
-                            capital_fn=None) -> list:
+                            capital_fn=None, quote_fn=None,
+                            fill_basis="eod_close") -> list:
     """Log an entry for every entry-eligible Buy-tier darling that clears
     the equity halt stack (equity_entry_checks — the single enforcement
     door: ban-list/expiry/overextension judged there, never re-implemented
@@ -494,10 +501,17 @@ def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
                 print(f"  (darling shadow: {sym} blocked by "
                       f"{verdict.get('blocked_by')}: {verdict.get('reason')})")
                 continue
+            price = None
+            if quote_fn is not None:         # the VM LIVE path (#83): the
+                price = quote_fn(f"{sym}.NS")    # quote must sit INSIDE the
+                zone = row.get("buy_zone") or [None, None]   # STRICT zone
+                if (price is None or zone[0] is None or zone[1] is None
+                        or not zone[0] <= price <= zone[1]):
+                    continue                 # no quote / out of zone today
             entry = evaluate_darling_entry(
                 row, levels.get(sym), as_of, vix=vix,
                 sector_verdict=_sector_verdict(f"{sym}.NS", universe),
-                nifty_trend=nifty)
+                nifty_trend=nifty, price=price, fill_basis=fill_basis)
         except Exception:
             continue                         # one symbol never voids the scan
         if entry is None:

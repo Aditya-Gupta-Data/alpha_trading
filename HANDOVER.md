@@ -20,6 +20,55 @@ For anything in that window, trust `git log --oneline` + those three files
 over this brief's silence. Not reconstructed here rather than risk a
 plausible-sounding but unverified summary.
 
+## 🟢 THE AUTONOMOUS RUN — ₹2L clean sheet, ₹10k/trade hard cap, set-and-forget (decision #84, 2026-07-21, owner final override)
+
+**The owner stepped away. The firm reboots at Rs.2,00,000** (account
+reset: realized 0, peak 2L; the 10L era is archived in the pre-migration
+DB backup; open options spreads CARRY and settle into the new base).
+Treasury pool is now DERIVED from the account (never a constant);
+granularity rescaled (deadband ₹10k / step ₹25k / round ₹5k); equity
+budget seeds ₹60k. **Hard cap `max_risk_per_trade_rs`=₹10,000 on BOTH
+desks** applied after percentage sizing: equity risk budget min-capped;
+options lots capped by max_loss, and a structure whose max_loss/lot
+alone exceeds ₹10k is refused. 100% utilization allowed (no idle
+buffers; the one cash door is the only brake). Equity sizing: 5% risk /
+25% notional per name. Firm halts auto-rescale: daily 3% = ₹6k, ruin
+10% = ₹20k trailing. **Set-and-forget:** an unhandled master_scheduler
+crash fires a real-time 🚨 page (traceback tail, then re-raises).
+**Directive 4 — 5 Discord messages/day (`notifier.budget_gate` at the
+one door):** crash ALWAYS pages; scheduled digests (EOD/CEO/tiers +
+Saturday cards) spend the budget; the 2-hourly snapshot DROPS; every
+other card (trades, rotations, 🧠 sizing, review flags) SPOOLS to
+`logs/discord_digest_queue.jsonl` and lands in the next digest's
+"📦 Batched signals" field. This supersedes the 07-16 real-time
+review-flag rule for the autonomous run. Kill switch
+`discord_budget_enabled`.
+
+## 🟢 THE VM-SHIFT — equity desk is VM-NATIVE, one database, LIVE trading (decision #83, 2026-07-21, owner override)
+
+**Owner formally overruled the observe-first hold, accepted wiping the 5
+day-old paper positions, and ordered the shift the same day.** The desk
+now lives in the VM's ONE firm database: equity notional locks through
+the same `pm.request_entry` door as options margin (`eqd:` prefix = the
+desk's identity; deployed/realized are views over tagged rows), the
+treasury is ONE atomically-updated row (`treasury_state.equity_budget_rs`
+— v1's two-phase/reconcile/SSH machinery deleted; VM cron #21 19:50),
+and `run_darling_live_cycle` rides the market loop beside the block-leg
+shadow: LIVE exits (stop/target/time at real quotes), Strong-Sell
+force-exits, mid-session settlements, LIVE entries when a Buy-tier
+name's quote sits INSIDE the strict buy zone (`fill_basis:"live"`).
+Quote ids: `data/darling_ids.json`, built weekly ON THE MAC from Dhan's
+public scrip master (exact-match only, #78), shipped nightly. **The Mac
+is analysis-only now** — its 19:15 chain ends by shipping tiers + levels
++ ids; the VM freshness-gates all three (stale tiers = no new entries,
+exits always run; stale ids = unmarked, never guessed). Migration:
+Mac desk DB + ledger archived (.bak), resolved autopsies MERGED into the
+VM ledger (learning survives), the 5 open positions wiped per the owner
+("the system will simply re-enter them"), the old `equity_desk_allocation`
+reservation released, budget seeded at the routed ₹4,00,000. Report
+cards (#82 surfaces) now render the desk LIVE from local state. First
+live session: next market open 09:15.
+
 ## 🟢 ONE FIRM VIEW — every report card now shows BOTH desks (decision #82, 2026-07-21, first freeze exception)
 
 **Owner ruling ("lift freeze and fix it — one ledger"):** the 12:00 card

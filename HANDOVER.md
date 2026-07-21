@@ -1,5 +1,27 @@
 # HANDOVER.md — Cold-Start Brief
 
+## 🚨 THE THURSDAY PROTOCOL — READ THIS BEFORE ANYTHING ELSE (owner directive, 2026-07-21)
+
+**The system ran AUTONOMOUSLY from 2026-07-21 (owner away until Thursday
+2026-07-24). Whenever the next session initializes, the VERY FIRST task —
+before writing any new code, answering queries, or changing architecture —
+is:**
+
+1. `python3 -m src.bug_ledger --report` **on the VM** (the consolidated
+   `logs/autonomous_bug_report.jsonl` — nightly cron #22 folds the ops
+   sweep's problem lines, silent rejections/halts, treasury anomalies and
+   sizing vetoes into it; rows whose `found`/`ts` pre-date 2026-07-21
+   evening are pre-run history).
+2. Analyze EVERY bug/warning/miss logged during the autonomous run.
+3. Deploy fixes for them — only then take up anything else.
+
+Also read on return: the batched-signals archive
+(`logs/discord_digest_queue.jsonl.drained` — everything the 5/day Discord
+budget suppressed), `logs/treasury_ledger.jsonl`, and the desk book
+(`python3 -m src.equity_desk`).
+
+---
+
 Read this to pick up the project cold in a new agent session. For vision see
 `OVERVIEW.md`, for system flow see `ARCHITECTURE.md`, for the file index see
 `MODULES.md`, for why past calls were made see `DECISIONS.md`. **This file is

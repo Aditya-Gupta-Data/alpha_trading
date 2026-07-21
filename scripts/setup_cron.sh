@@ -272,6 +272,11 @@ CRON_TZ=Asia/Kolkata
 #     tier table) and BEFORE the next session. One atomic budget move in
 #     brain_map.db; deadband/step-capped; one Discord card per rotation.
 50 19 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.firm_treasury --rotate >> "$REPO_ROOT/logs/firm_treasury.log" 2>&1
+
+# 22. Internal bug ledger (Daily 20:40 IST, #84 Directive 5) — folds the
+#     20:30 ops sweep's problem lines + silent rejections/halts/vetoes
+#     into logs/autonomous_bug_report.jsonl for the Thursday Protocol.
+40 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.bug_ledger >> "$REPO_ROOT/logs/bug_ledger.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

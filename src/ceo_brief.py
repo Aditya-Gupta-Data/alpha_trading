@@ -723,7 +723,14 @@ def _risk_field(risk: dict) -> dict:
         value += "\n" + equity_desk.render_book_lines().split("\n")[0]
     except Exception:
         pass
-    return {"name": "💰 Risk & Capital", "value": value, "inline": False}
+    # Directive 6 (#84): the firm MTM + return line, read-only compute.
+    try:
+        from src.firm_mtm import render_line
+        value += "\n" + render_line()
+    except Exception:
+        pass
+    return {"name": "💰 Risk & Capital", "value": value[:1024],
+            "inline": False}
 
 
 def build_brief_card(logs_dir: Path = LOGS_DIR,

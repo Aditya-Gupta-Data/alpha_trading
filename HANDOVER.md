@@ -20,6 +20,10 @@ Also read on return: the batched-signals archive
 budget suppressed), `logs/treasury_ledger.jsonl`, and the desk book
 (`python3 -m src.equity_desk`).
 
+*(Directive 6, added at sign-off: the EOD/CEO digests carry a 💹 Firm
+MTM & Return line — `src/firm_mtm.py`, read-only; absolute return until
+day 30, true CAGR after. The 2L run's day counter started 2026-07-21.)*
+
 ---
 
 Read this to pick up the project cold in a new agent session. For vision see

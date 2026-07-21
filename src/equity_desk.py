@@ -299,9 +299,23 @@ def security_id_for(symbol: str, ids_path=None):
         return None
 
 
+def market_data_muzzled() -> bool:
+    """True in test environments — un-injected reporting paths must never
+    place market calls. Deliberately NOT notifier.webhooks_muzzled: that
+    one carries a test override for exercising the send path, which must
+    not re-open market I/O."""
+    import os
+    return (os.environ.get("IS_TEST_ENV", "").strip().lower()
+            in ("1", "true", "yes")
+            or bool(os.environ.get("PYTEST_CURRENT_TEST")))
+
+
 def live_quote(ticker: str, ids_path=None, quote_by_id_fn=None):
     """LIVE price for a darling via its scrip-master id. None = honest
-    absence (no id / no quote); raises never."""
+    absence (no id / no quote); raises never. Test environments never
+    place market calls."""
+    if quote_by_id_fn is None and market_data_muzzled():
+        return None
     sid = security_id_for(ticker, ids_path=ids_path)
     if sid is None:
         return None

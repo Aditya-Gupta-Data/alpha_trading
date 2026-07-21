@@ -199,6 +199,15 @@ def build_eod_card(db_path=None) -> dict:
     else:
         fields.append({"name": "Net Delta", "value": "±0 (flat)", "inline": True})
 
+    # Directive 6 (#84): the firm's MTM + return line, prominent (first
+    # field). Read-only compute, fail-open like every section here.
+    try:
+        from src.firm_mtm import render_line
+        fields.insert(0, {"name": "💹 Firm MTM & Return",
+                          "value": render_line()[:1024], "inline": False})
+    except Exception:
+        pass
+
     # One-firm-view (decision #82, VM-native since #83): the equity
     # desk's live book rides on this card too — all local, fail-open.
     try:

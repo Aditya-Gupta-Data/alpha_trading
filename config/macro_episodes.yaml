@@ -1,0 +1,89 @@
+# macro_episodes.yaml — the curated Episode seed catalog (spec §2)
+# ----------------------------------------------------------------
+# Route (a) admissions: hand-curated anchors, each with its one-line why —
+# auditable, deliberately small. Route (b) (mechanical detection) proposes
+# ADDITIONS via the candidate court; it never edits this file.
+#
+# Fields per episode:
+#   anchor   — the shock's anchor date (Indian trading calendar snaps to
+#              the last session <= anchor at fingerprint time)
+#   name     — short handle the whole firm uses
+#   class    — seed hint ONLY (geopolitical | financial | monetary |
+#              pandemic | domestic_political). Clustering may disagree;
+#              the DTW archetypes are the truth, this is the prior.
+#   why      — one line, the audit trail
+#
+# Dating discipline: anchors are the recognized SHOCK DAY (first major
+# market session), not the underlying event's calendar day, when they
+# differ. Every date here was chosen at curation time (2026-07-23) and is
+# frozen; corrections are a new commit with a reason, never a silent edit.
+
+episodes:
+  - anchor: 2001-09-17
+    name: nine_eleven
+    class: geopolitical
+    why: First NYSE session after the 9/11 attacks; global risk-off, oil spike.
+  - anchor: 2004-05-17
+    name: india_election_2004
+    class: domestic_political
+    why: UPA upset verdict; NIFTY's worst single day to date, pure domestic shock vs quiet globals.
+  - anchor: 2006-05-18
+    name: em_selloff_2006
+    class: monetary
+    why: Global EM unwind on Fed tightening fear; INR and NIFTY hit while DM held.
+  - anchor: 2008-09-15
+    name: lehman_gfc
+    class: financial
+    why: Lehman filing; the reference global credit collapse.
+  - anchor: 2010-05-06
+    name: eurozone_flash_2010
+    class: financial
+    why: Greece contagion week + flash crash; dollar bid, crude dumped.
+  - anchor: 2011-08-08
+    name: us_downgrade_2011
+    class: financial
+    why: First session after S&P stripped the US AAA; classic dollar-crude clash onset.
+  - anchor: 2013-05-22
+    name: taper_tantrum
+    class: monetary
+    why: Bernanke taper testimony; THE USDINR crisis template (INR -20% in 3 months).
+  - anchor: 2015-08-24
+    name: yuan_deval_2015
+    class: financial
+    why: China devaluation Monday; EM FX contagion with crude collapsing.
+  - anchor: 2016-11-09
+    name: demonetization_plus_trump
+    class: domestic_political
+    why: Demonetization announced overnight INTO the US election result; a two-shock composite, flagged as such.
+  - anchor: 2018-10-01
+    name: ilfs_nbfc_crisis
+    class: financial
+    why: IL&FS defaults cascade; domestic credit shock with crude near cycle high — the INR double-squeeze.
+  - anchor: 2020-02-24
+    name: covid_crash
+    class: pandemic
+    why: The COVID cascade's first global risk-off Monday; deepest modern drawdown.
+  - anchor: 2022-02-24
+    name: ukraine_invasion
+    class: geopolitical
+    why: Invasion day; Brent through 100, the canonical energy-shock fingerprint.
+  - anchor: 2022-06-13
+    name: cpi_rate_shock_2022
+    class: monetary
+    why: Post-CPI global repricing to 75bps era; dollar wrecking-ball phase.
+  - anchor: 2023-03-13
+    name: svb_banking_2023
+    class: financial
+    why: SVB weekend's first full session; yields' sharpest 2-day drop in decades.
+  - anchor: 2023-10-09
+    name: israel_gaza_2023
+    class: geopolitical
+    why: First session after Oct-7; oil-led geopolitical bid, contained fast — the "shock that faded" template.
+  - anchor: 2024-06-04
+    name: india_election_2024
+    class: domestic_political
+    why: Result-day NIFTY -6% on a thinner-than-expected mandate; domestic shock, quiet globals — the 2004 rhyme.
+  - anchor: 2024-08-05
+    name: yen_carry_unwind
+    class: financial
+    why: BoJ-triggered global carry unwind Monday; violent vol spike, V-shaped recovery template.

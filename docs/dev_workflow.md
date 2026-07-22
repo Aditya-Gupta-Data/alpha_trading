@@ -50,6 +50,23 @@ when they touch the same manager seam:
 - **The VM is a lane of its own:** deploy = `git pull` on `main` only.
   Nothing is ever edited directly on the VM.
 
+## 3b. Multi-agent handoff rules (added 2026-07-23, learned the hard way)
+
+The M1 macro_lake build had THREE write collisions between a worker
+session and the PM session editing one file. The rules that prevent it:
+
+- **"Done" means HANDS OFF.** The moment a worker reports done, the
+  owner closes/stops that worker chat BEFORE relaying the report to the
+  PM. A worker that keeps polishing after its done-report is a defect,
+  not diligence — the PM owns the file from the handoff onward.
+- **One writer per file, ever.** If the PM needs a worker revision after
+  handoff, the PM sends an amendment prompt and does not touch the file
+  until the worker's NEXT done-report; or the PM takes the file back and
+  the worker never touches it again. Never both at once.
+- **The commit gate reads pytest's EXIT CODE, never a piped tail** —
+  `pytest … | tail` reports tail's success, and that is how a broken
+  intermediate got committed (and amended away) on 2026-07-23.
+
 ## 4. The standing session loop
 
 1. Pick the task lane (task list / cycle_hunter_plan.md).

@@ -47,6 +47,8 @@ validate.** Neither arm alone is enough.
 | lake/deals_census + raw_backfill | multi-year | big-money footprints |
 | **GAP: 2021-04 → 2023-01** | — | fillable free from NSE archives |
 
+## OPTION B ACTIVE (owner directive 2026-07-23): the Macro Regime Engine (docs/macro_regime_engine_spec.md) is prioritized OVER the landing page for the remaining Max window. M1→M4 build now; the landing page (G2 leg 2) slips behind them. Execution runs in Multi-Agent mode: PM/architect session (wiring, schemas, docs, integration, commits) + Opus worker (math/normalization) + Fable worker (fetchers/boilerplate/tests) — workers build isolated new files only, never commit; the PM session integrates behind the full gate.
+
 ## The build window (HARD constraint: Claude Max lapses Aug 8)
 
 Owner 07-22: Max subscription ends **2026-08-08**, then **downgrades to

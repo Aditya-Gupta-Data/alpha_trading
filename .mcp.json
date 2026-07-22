@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "alpha-brain-map": {
+      "command": "python3",
+      "args": ["-m", "src.brain_mcp"]
+    }
+  }
+}

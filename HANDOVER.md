@@ -11,6 +11,25 @@ non-bugs. Full triage record: `docs/observation_week_ledger.md`. The
 protocol machinery (`python3 -m src.bug_ledger --report` on the VM)
 remains THE first read after any future autonomous stretch.
 
+## 📌 2026-07-23 OVERNIGHT SPRINT — the Macro Regime Engine went from spec to first real opinion
+
+- **M1 macro lake LIVE**: `macro_lake` (FRED REST API, `FRED_API_KEY` in
+  .env — 46,392 rows: US10Y→1962, USDINR→1973, BRENT→1987, DXY→2006) +
+  `indices_lake` (India VIX, NIFTY, 12 sectors from NSE's daily
+  all-indices archive; historical walk 2019→today ran overnight).
+- **M2 fingerprint engine LIVE** (`macro_fingerprints`): 17 curated
+  episodes → banded multivariate DTW → 4 archetypes, first real build in
+  `data/macro_templates.json`. **Read
+  `docs/macro_clustering_report.md`** — Ukraine clustered with the
+  taper tantrum; IL&FS refused every family, correctly.
+- **Darlings re-screen on June-2026 quarters DONE** (233 refreshed):
+  +CYIENTDLM +SCHAEFFLER / −BOSCHLTD −UNITDSPR, tier table rebuilt.
+- **Time Machine complete**: full-market bhavcopy 2019-09-30→today
+  (1,765 sessions, 465MB, ₹0).
+- Next: M3 playbook tables, M4 state tracker (spec §3-4), Phase B
+  miners. Multi-agent worker mode was tried and RETIRED (collisions —
+  dev_workflow §3b); single-lane sprint is the operating mode.
+
 ## 📌 2026-07-22 MILESTONES — the build sprint opened (code freeze lifted by owner)
 
 - **Brain-MCP server** (`src/brain_mcp.py`, `7b7faee`): the data

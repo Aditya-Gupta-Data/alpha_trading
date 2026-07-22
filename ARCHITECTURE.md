@@ -11,8 +11,20 @@ through 50 files: find the department, go to its manager.
 
 Written for the strategic brain, not the compiler: every department below says,
 in plain English, what it does, what goes in, what comes out, and the ONE place
-to change it. Current as of `7b7faee` (2026-07-22, build sprint opened), suite
-**1480 green**.
+to change it. Current as of `bc0315d` (2026-07-23 overnight sprint), suite
+**1526 green**.
+
+> **2026-07-23 addendum — the Macro Regime Engine (spec:
+> `docs/macro_regime_engine_spec.md`):** Department 1 gained the
+> cross-asset macro lake (`ingestion/macro_lake` FRED leg +
+> `ingestion/indices_lake` NSE indices leg → `data/lake/macro/`);
+> Department 8 gained the ONE macro featurizer
+> (`analysis/macro_features`) and the fingerprint/archetype engine
+> (`analysis/macro_fingerprints` → `data/macro_templates.json`).
+> First real build: 4 archetypes over 17 shocks —
+> `docs/macro_clustering_report.md`. Execution authority: NONE yet —
+> M4's tracker must survive Dept 5 scoring before any advisory hook
+> arms (spec §3-4).
 
 > **2026-07-22 addendum:** Department 7 (Interfaces) gained a second front
 > door — `src/brain_mcp.py`, the read-only MCP server exposing the brain's

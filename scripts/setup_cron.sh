@@ -277,6 +277,16 @@ CRON_TZ=Asia/Kolkata
 #     20:30 ops sweep's problem lines + silent rejections/halts/vetoes
 #     into logs/autonomous_bug_report.jsonl for the Thursday Protocol.
 40 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.bug_ledger >> "$REPO_ROOT/logs/bug_ledger.log" 2>&1
+
+# 23. Intraday 15-minute price snapshot (every 15 min, Mon-Fri 09:00-15:45) —
+#     the read-only lake tap (data/lake/intraday_15m.jsonl); the module
+#     self-gates to 09:15-15:30 IST so the edge slots exit quietly. Was
+#     running on the VM but WAS MISSING FROM THIS SCRIPT — added here so the
+#     source of truth is complete. NOTE: if a manual crontab line for
+#     intraday_tracker exists on the VM, remove it so this isn't double-run.
+#     Rate-safe: all its calls share the host-wide _throttle() gate (dhan
+#     DH-905 fix), so it can never starve the live loop.
+*/15 9-15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.intraday_tracker >> "$REPO_ROOT/logs/intraday_15m.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

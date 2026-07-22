@@ -99,10 +99,15 @@ the market's structure.
 
 **The two layers of the door — a deliberate split:**
 - `dhan_client` is the **wire**: mechanics only. The proactive `_throttle()`
-  (1.1s minimum gap, process-wide, the DH-905 fix) lives HERE, below the guard,
-  on purpose — pacing must cover *every* caller, including ingestion clerks
-  that talk to the wire directly, so it sits at the lowest layer where nothing
-  can route around it. Known gap: the throttle sleeps silently — throttle
+  (1.1s minimum gap, the DH-905 fix) lives HERE, below the guard, on purpose —
+  pacing must cover *every* caller, including ingestion clerks that talk to the
+  wire directly, so it sits at the lowest layer where nothing can route around
+  it. It is **host-wide, not per-process** (2026-07-22): the one Dhan account
+  has one rate budget but the box runs several callers at once during market
+  hours (live loop, report cards, intraday tracker, equity desk), so the gate
+  reserves the next slot in an `flock`'d file (`data/.dhan_throttle`) — every
+  call on the host is spaced regardless of process; fail-open to per-process if
+  the FS/lock is unavailable. Known gap: the throttle sleeps silently — throttle
   events are unobservable until it logs a countable line (Dept 1 follow-up,
   flagged on the CEO Brief).
 - `dhan_guard` is the **judgment**: failure classification, retry-once,

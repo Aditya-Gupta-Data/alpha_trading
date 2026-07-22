@@ -10,7 +10,7 @@ and `DECISIONS.md` #48/#51.
 
 ## The VM (the engine — always on)
 
-All 20 jobs are installed by the idempotent script (safe to re-run after every
+All 23 jobs are installed by the idempotent script (safe to re-run after every
 `git pull`):
 
 ```bash
@@ -27,6 +27,7 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | 07:00 daily | `src.renew_token` | Mints the day's Dhan token — V2 creds fetched from **GCP Secret Manager** at runtime, never on disk. THE only scheduled renewal (never add a second — #48). |
 | 08:00 Mon-Fri | `src.suggest` | Daily momentum/trend suggestions digest. |
 | 09:10 Mon-Fri | `src.master_scheduler` | The full automated paper session; waits for the 09:15 open, self-terminates 15:30 (#45). |
+| every 15m, mkt hrs Mon-Fri | `src.ingestion.intraday_tracker` | Read-only 15-min price snapshot → `data/lake/intraday_15m.jsonl` (not traded on yet). Self-gates to 09:15–15:30; fail-open per ticker. All calls share the host-wide `_throttle()` gate (DH-905 fix). |
 | 15:35 Mon-Fri | `src.main` | Watchlist alert checks. |
 | 15:40 Mon-Fri | `src.ingestion.chain_archiver` | EOD option-chain capture — unbuyable later (#36). After the 15:30 self-termination ⇒ zero token contention. |
 | 15:45 Mon-Fri | `src.eod_summary` | MTM P&L + active positions + net-delta card. Journal + brain_map only (no Dhan token). |
@@ -37,9 +38,11 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | 19:30 daily | `src.ingestion.deals_tracker` | EOD bulk & block deals footprint → `data/bulk_deals.json`. Advisory-only (#60), fails open. |
 | 19:35 daily | `src.ingestion.flows_tracker` | FII/DII daily cash flows; one row/day into `data/` + the lake. |
 | 19:45 daily | `src.ingestion.daily_archiver` | Snapshots perishable news/macro artifacts into the lake before sleep_phase. |
+| 19:50 Mon-Fri | `src.firm_treasury --rotate` | Re-routes the equity desk's budget after the Mac's ~19:20 artifact ship (#83). |
 | 20:00 daily | `src.sleep_phase` | Brain Map pass — decay-only on the VM (no Ollama; edge mining runs opportunistically from the Mac). |
 | 20:20 daily | `src.discovery.nightly` | Gated Phase-5 miner pass (#76): skips (exit 0) unless ops heartbeats green + no INGESTION problems + `daily_context` ≥ 60 frames. Every 7th skip fires one Discord note. |
 | 20:30 daily | `src.ops_monitor` | Log sweep + job heartbeats → Discord health card. |
+| 20:40 daily | `src.bug_ledger` | Folds the ops sweep's problem lines + silent rejections/halts into `logs/autonomous_bug_report.jsonl` for the Thursday Protocol (#84). |
 | every 2h :00 | `src.portfolio_report` | Report card; the SCRIPT self-gates to market hours and exits quietly otherwise. Even-hour slots never touch the 07:00 renewal minute. |
 | every 2h :30 | `src.portfolio_greeks` | Book-level net delta/vega budget advisory (#71); self-gates like the report. One card/day only on a breach. Kill switch in `config.json`. |
 | Sat 10:00 | `src.validation.digest` | Weekly proving-harness digest — what's in trial, what validated/died, the placebo false-discovery rate. Read-only. |

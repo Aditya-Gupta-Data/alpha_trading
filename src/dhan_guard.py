@@ -50,7 +50,29 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 # Codes that mean "credentials/token", not "market data" — the ops-visible
 # distinction that was lost when everything degraded to a silent [].
-AUTH_ERROR_CODES = {"DH-901", "DH-905", "DH-906"}
+#
+# DH-905 IS NOT AN AUTH ERROR (corrected 2026-07-20). It used to be in this
+# set, which made `auth_failures()` — documented as "what an ops sweep should
+# page on" — raise a dead-token alarm every time we merely asked a bad
+# question. Three independent places in this repo agree it is an INPUT error:
+#   * Dhan's own payload calls it  'error_type': 'Input_Exception'
+#   * dhan_client.get_ohlc_since   guards a same-day/empty range because
+#                                  "Dhan rejects [it] with DH-905"
+#   * renew_token                  gets DH-905 from the DEPRECATED endpoint
+#                                  ("Renewal of token not allowed")
+# None of those is a credential problem, and treating them as one sends the
+# owner off to rotate a perfectly healthy token.
+AUTH_ERROR_CODES = {"DH-901", "DH-906"}
+
+# Codes that mean "we asked the wrong question" — a bad symbol, a stale
+# security id, or a date range the API won't serve. Real and worth fixing,
+# but the token is fine; these must never page as a credential outage.
+INPUT_ERROR_CODES = {"DH-905"}
+
+# Every code we can name. Used ONLY to spot a code inside a free-text
+# `remarks` string — DH-905 stays here so string-shaped failures are still
+# identified by code, even though they no longer count as auth.
+KNOWN_ERROR_CODES = AUTH_ERROR_CODES | INPUT_ERROR_CODES
 
 
 class DhanApiError(Exception):
@@ -67,11 +89,19 @@ class DhanApiError(Exception):
 
     @property
     def is_auth_error(self) -> bool:
+        """Credentials/token — the owner must act. Pages."""
         return self.code in AUTH_ERROR_CODES
+
+    @property
+    def is_input_error(self) -> bool:
+        """We asked a bad question (symbol, security id, date range). Worth
+        fixing in code, but the token is healthy — must not page as auth."""
+        return self.code in INPUT_ERROR_CODES
 
     def as_dict(self) -> dict:
         return {"ts": self.ts, "endpoint": self.endpoint, "code": self.code,
-                "message": self.message, "auth_error": self.is_auth_error}
+                "message": self.message, "auth_error": self.is_auth_error,
+                "input_error": self.is_input_error}
 
 
 class StaleDataError(DhanApiError):
@@ -207,7 +237,8 @@ def classify_failure(resp) -> DhanApiError | None:
                             raw=str(resp))
     if isinstance(remarks, str) and remarks.strip():
         # e.g. {"status": "failure", "remarks": "DH-906 : Invalid Token"}
-        code = next((c for c in sorted(AUTH_ERROR_CODES) if c in remarks), "UNKNOWN")
+        code = next((c for c in sorted(KNOWN_ERROR_CODES) if c in remarks),
+                    "UNKNOWN")
         return DhanApiError(code, remarks.strip(), raw=str(resp))
     return DhanApiError("UNKNOWN", f"status={resp.get('status')!r}", raw=str(resp))
 
@@ -414,5 +445,11 @@ class SafeDhanClient:
 
     def auth_failures(self) -> list:
         """The audit entries that mean credentials/token, not market data —
-        what an ops sweep should page on."""
+        what an ops sweep should page on. Excludes DH-905 input errors: see
+        AUTH_ERROR_CODES for why a bad date range is not a dead token."""
         return [a for a in self.audit if a.get("auth_error")]
+
+    def input_failures(self) -> list:
+        """Bad-question failures (DH-905): a wrong symbol, a stale security
+        id, or an unserved date range. A code bug to chase, not an outage."""
+        return [a for a in self.audit if a.get("input_error")]

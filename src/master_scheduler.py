@@ -71,15 +71,39 @@ SESSION_POLL_SECONDS = 30    # how often the supervisor rechecks the clock
 
 
 def _shadow_cycle_fn():
-    """The Shadow Equity telemetry cycle (2026-07-17), resolved lazily and
-    fail-open — a broken/absent shadow module must never stop the options
-    engine. This is the composition root that turns the shadow ON in prod;
-    run_market_loop's own default stays None (tests/simulator unaffected)."""
+    """The equity-side per-cycle work, resolved lazily and fail-open — a
+    broken/absent equity module must never stop the options engine. Two
+    legs since decision #83: the block-VWAP telemetry cycle (2026-07-17)
+    AND the darling desk's LIVE cycle (exits at live marks, settlements
+    into the one firm account, live in-zone entries). This is the
+    composition root that turns both ON in prod; run_market_loop's own
+    default stays None (tests/simulator unaffected)."""
+    legs = []
     try:
         from src.equity_shadow_proposer import run_cycle
-        return run_cycle
+        legs.append(("block_shadow", run_cycle))
     except Exception:
+        pass
+    try:
+        from src.config import EQUITY_DESK_ENABLED
+        from src.equity_desk import run_darling_live_cycle
+        if EQUITY_DESK_ENABLED:
+            legs.append(("darling_desk", run_darling_live_cycle))
+    except Exception:
+        pass
+    if not legs:
         return None
+
+    def _combined():
+        out = {}
+        for name, fn in legs:
+            try:
+                out[name] = fn()
+            except Exception as exc:         # one leg never kills the other
+                print(f"  (equity {name} cycle failed: {exc})")
+                out[name] = None
+        return out
+    return _combined
 
 
 def seconds_until_open(now: datetime) -> float:
@@ -300,9 +324,33 @@ async def _main() -> dict:
 
 if __name__ == "__main__":
     from src import deploy_log
-    deploy_log.record_startup("master_scheduler")
+    # kind="job": this process self-terminates at 15:30, so its sha is a
+    # record of what THIS morning's session ran — not what is live tonight.
+    deploy_log.record_startup("master_scheduler", kind="job")
     try:
         summary = asyncio.run(_main())
         print(f"[Scheduler] done: {summary}")
     except KeyboardInterrupt:
         print("\n[Scheduler] stopped.")
+    except Exception as exc:
+        # Set-and-forget doctrine (decision #84): an UNHANDLED crash of
+        # the trading session is the ONE event that pages the owner in
+        # real time — everything else waits for the EOD/CEO cards.
+        print(f"[Scheduler] FATAL: {exc}")
+        try:
+            import traceback
+            from src.notifier import fire_broadcast
+            fire_broadcast({
+                "event": "system_crash", "ticker": "🚨 SYSTEM",
+                "date": ist_now().date().isoformat(),
+                "description": ("🚨 MASTER SCHEDULER CRASHED — the trading "
+                                "session died on an unhandled exception and "
+                                "will not resume until tomorrow's 09:10 "
+                                f"cron.\n`{type(exc).__name__}: {exc}`\n"
+                                "```\n"
+                                + "".join(traceback.format_exc()
+                                          .splitlines(True)[-6:])
+                                + "\n```")})
+        except Exception:
+            pass                       # the pager itself must never mask
+        raise                          # the crash from the log/exit code

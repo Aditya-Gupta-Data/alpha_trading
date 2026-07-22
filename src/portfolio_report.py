@@ -241,7 +241,8 @@ def _report_table(marked: list) -> str:
 
 
 def build_report_payload(marked: list, open_count: int, unmarked: int,
-                         exposure: dict | None, now) -> dict:
+                         exposure: dict | None, now,
+                         equity_section: str = None) -> dict:
     """The broadcast_alert payload — pure function, tests pin its shape.
 
     Presentation is a single code-block TABLE of the marked positions plus
@@ -268,6 +269,10 @@ def build_report_payload(marked: list, open_count: int, unmarked: int,
                   + " · ".join(summary_bits))
     if marked:
         description += "\n" + _report_table(marked)
+    # One-firm-view (decision #82): the equity desk's EOD book rides on
+    # the same card — the owner sees ONE portfolio, never two ledgers.
+    if equity_section:
+        description += "\n" + equity_section
 
     return {
         "event": "portfolio_report",
@@ -374,8 +379,14 @@ def run(entries: list = None, spot_fn=None, db_path: Path = None,
     marked, _mark_source = get_live_marks(entries=spreads + equities,
                                           spot_fn=spot_fn)
     exposure = read_exposure(db_path)
+    try:
+        from src import equity_desk
+        equity_section = equity_desk.render_book_lines()   # VM-local, live
+    except Exception:
+        equity_section = None                # fail-open: options card intact
     payload = build_report_payload(marked, open_count,
-                                   open_count - len(marked), exposure, now)
+                                   open_count - len(marked), exposure, now,
+                                   equity_section=equity_section)
     notify_fn(payload)
     print(f"[Report Card] posted — {open_count} open, "
           f"{len(marked)} marked live.")

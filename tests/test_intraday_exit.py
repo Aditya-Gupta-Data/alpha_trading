@@ -197,3 +197,56 @@ def test_square_off_falls_back_to_advisory_without_quotes(tmp_path, monkeypatch)
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --------------------------------------------------------------------------
+# Failed tickers are NAMED, not just counted (2026-07-20)
+# --------------------------------------------------------------------------
+
+def test_capture_names_the_tickers_that_failed():
+    """The VM logged `"captured": 8, "failed": 2` every 15 minutes for days.
+    The count alone is undiagnosable — you cannot tell WHICH two are dead
+    without a live token to bisect with. The names make it a one-liner."""
+    from src.ingestion.intraday_tracker import capture
+
+    dead = {"TMPV.NS", "ARE&M.NS"}
+    tickers = ["TCS.NS", "INFY.NS", "TMPV.NS", "ARE&M.NS"]
+    out = capture(price_fn=lambda t: None if t in dead else 100.0,
+                  tickers=tickers, out_path=_tmp_lake(), force=True)
+
+    assert out["captured"] == 2
+    assert out["failed"] == 2
+    assert set(out["failed_tickers"]) == dead
+
+
+def test_capture_reports_no_failed_tickers_on_a_clean_sweep():
+    from src.ingestion.intraday_tracker import capture
+    out = capture(price_fn=lambda t: 100.0, tickers=["TCS.NS"],
+                  out_path=_tmp_lake(), force=True)
+    assert out["failed"] == 0 and out["failed_tickers"] == []
+
+
+def test_capture_caps_the_named_failures_on_a_total_outage():
+    """A dead token fails every ticker. The summary must stay one readable
+    line rather than dumping the whole watchlist every 15 minutes."""
+    from src.ingestion.intraday_tracker import capture, MAX_NAMED_FAILURES
+    tickers = [f"T{i}.NS" for i in range(40)]
+    out = capture(price_fn=lambda t: None, tickers=tickers,
+                  out_path=_tmp_lake(), force=True)
+    assert out["failed"] == 40                       # the COUNT stays honest
+    assert len(out["failed_tickers"]) == MAX_NAMED_FAILURES
+
+
+def test_capture_depth_also_names_its_failures():
+    from src.ingestion.intraday_tracker import capture_depth
+    good = {"depth": {"buy": [{"price": 99.0}], "sell": [{"price": 101.0}]}}
+    out = capture_depth(quote_fn=lambda t: good if t == "TCS.NS" else {},
+                        tickers=["TCS.NS", "DEAD.NS"],
+                        out_path=_tmp_lake(), force=True)
+    assert out["failed"] == 1
+    assert out["failed_tickers"] == ["DEAD.NS"]
+
+
+def _tmp_lake():
+    import tempfile, pathlib
+    return pathlib.Path(tempfile.mkdtemp()) / "intraday.jsonl"

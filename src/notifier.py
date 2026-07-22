@@ -26,6 +26,8 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
@@ -248,6 +250,153 @@ def _build_embed(payload: dict) -> dict:
     return embed
 
 
+# --------------------------- Discord budget (Directive 4, decision #84)
+#
+# "Maximum 5 Discord messages per day. Silence the noise, consolidate
+# the signal." ONE gate at the ONE door every embed card already passes
+# through. Three buckets by event name:
+#   ALWAYS    — a system crash pages regardless of the budget (the 1-2
+#               reserved slots); it also counts, honestly.
+#   SCHEDULED — the daily digests (EOD, CEO brief, tier summary, the
+#               Saturday digest/performance cards) send while the day's
+#               budget lasts.
+#   DROP      — the 2-hourly portfolio snapshot: stale by digest time
+#               and fully covered by the EOD card; its data ledgers keep
+#               accumulating, only the ping dies.
+#   (everything else) — SPOOLED to logs/discord_digest_queue.jsonl and
+#               rendered inside the next digest's "📦 Batched" section:
+#               trades, treasury rotations, 🧠 sizing changes, review
+#               flags. Logged silently, shown in the evening — exactly
+#               the owner's rule. Unknown events spool too: nothing
+#               signal-bearing ever silently dies.
+# The budget state is per-machine (Issue-8 ledger-as-memory); totals
+# stay ≤5 by construction because each machine's SCHEDULED list is
+# tiny (VM: EOD+CEO weekdays / digest+performance Saturday; Mac: the
+# tier card) plus crash slots.
+
+BUDGET_STATE_PATH = ROOT / "logs" / ".discord_budget.json"
+DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
+BUDGET_ALWAYS = {"system_crash"}
+BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest",
+                    "performance", "weekly_digest"}
+BUDGET_DROP = {"portfolio_report"}
+
+
+def _ist_today_str():
+    from datetime import datetime, timedelta, timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    return datetime.now(ist).date().isoformat()
+
+
+def _ist_now_str():
+    from datetime import datetime, timedelta, timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    return datetime.now(ist).isoformat(timespec="seconds")
+
+
+def _budget_state(state_path=None) -> dict:
+    import json
+    p = Path(state_path) if state_path else BUDGET_STATE_PATH
+    today = _ist_today_str()
+    try:
+        state = json.loads(p.read_text())
+        if state.get("date") == today:
+            return state
+    except (OSError, ValueError):
+        pass
+    return {"date": today, "sent": 0}
+
+
+def _budget_save(state: dict, state_path=None) -> None:
+    import json
+    p = Path(state_path) if state_path else BUDGET_STATE_PATH
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state))
+    except OSError:
+        pass
+
+
+def budget_gate(payload: dict, state_path=None, queue_path=None,
+                enabled=None) -> str:
+    """"send" | "spool" | "drop" for one card. Spooling appends the card
+    to the digest queue so the next digest carries it. `enabled` is a
+    test seam; production always reads the config."""
+    from src.config import DISCORD_BUDGET_ENABLED, DISCORD_DAILY_BUDGET
+    if enabled is None:
+        enabled = DISCORD_BUDGET_ENABLED
+    if not enabled:
+        return "send"
+    event = str(payload.get("event") or "")
+    if event in BUDGET_ALWAYS:
+        return "send"                       # crash pages past any budget
+    if event in BUDGET_DROP:
+        return "drop"
+    state = _budget_state(state_path)
+    if event in BUDGET_SCHEDULED and state["sent"] < DISCORD_DAILY_BUDGET:
+        return "send"
+    _spool(payload, queue_path)
+    return "spool"
+
+
+def _spool(payload: dict, queue_path=None) -> None:
+    import json
+    p = Path(queue_path) if queue_path else DIGEST_QUEUE_PATH
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a") as f:
+            f.write(json.dumps({"ts": _ist_now_str(),
+                                "event": payload.get("event"),
+                                "ticker": payload.get("ticker"),
+                                "description":
+                                    str(payload.get("description") or "")[:400]
+                                }) + "\n")
+    except OSError:
+        pass                                # spooling is best-effort
+
+
+def _budget_count_send(state_path=None) -> None:
+    state = _budget_state(state_path)
+    state["sent"] += 1
+    _budget_save(state, state_path)
+
+
+def drain_digest_queue(queue_path=None, max_lines: int = 12) -> str | None:
+    """Everything spooled since the last digest, as compact lines — then
+    the queue archives and truncates (the digest that drained it is the
+    one place the owner reads it). None when nothing waited."""
+    import json
+    p = Path(queue_path) if queue_path else DIGEST_QUEUE_PATH
+    try:
+        raw = [ln for ln in p.read_text().splitlines() if ln.strip()]
+    except OSError:
+        return None
+    if not raw:
+        return None
+    rows = []
+    for ln in raw:
+        try:
+            rows.append(json.loads(ln))
+        except ValueError:
+            continue
+    lines = []
+    for r in rows[:max_lines]:
+        first = str(r.get("description") or "").split("\n")[0][:80]
+        lines.append(f"{str(r.get('ts', ''))[11:16]} · "
+                     f"{r.get('event', '?')}: {first}")
+    if len(rows) > max_lines:
+        lines.append(f"…and {len(rows) - max_lines} more (full text in "
+                     f"the drained ledger)")
+    try:
+        with (p.parent / (p.name + ".drained")).open("a") as f:
+            for ln in raw:
+                f.write(ln + "\n")
+        p.write_text("")
+    except OSError:
+        pass
+    return "\n".join(lines)
+
+
 async def broadcast_alert(payload: dict) -> bool:
     """Dispatch one structured embed card to DISCORD_WEBHOOK_URL via httpx.
 
@@ -257,11 +406,22 @@ async def broadcast_alert(payload: dict) -> bool:
     Posts {"embeds": [embed]} — the Discord rich-embed format; distinct from
     the {"content": "..."} text-webhook path (send_webhook_message). Always
     returns False instead of raising on misconfiguration / network failure.
-    """
+
+    Since decision #84 every card passes the daily Discord budget first:
+    suppressed cards return True (they reached the owner's digest queue —
+    dedup ledgers may honestly mark them announced)."""
     if webhooks_muzzled():
         return _muzzle_log(
             "embed broadcast",
             f"{payload.get('event', '?')} {payload.get('ticker', '?')}")
+    try:
+        verdict = budget_gate(payload)
+    except Exception:
+        verdict = "send"                    # a broken gate never mutes
+    if verdict in ("spool", "drop"):
+        print(f"  (discord budget: {payload.get('event', '?')} "
+              f"{'queued for the next digest' if verdict == 'spool' else 'dropped'})")
+        return True
     try:
         from src.discord_client import _webhook_url, REQUEST_TIMEOUT_SECONDS
     except Exception as exc:
@@ -285,6 +445,10 @@ async def broadcast_alert(payload: dict) -> bool:
         if resp.status_code >= 300:
             print(f"  (broadcast_alert: HTTP {resp.status_code})")
             return False
+        try:
+            _budget_count_send()            # only a DELIVERED card burns
+        except Exception:                   # budget; a failed post doesn't
+            pass
         return True
     except Exception as exc:
         print(f"  (broadcast_alert: network error: {exc})")

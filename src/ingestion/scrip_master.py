@@ -331,3 +331,81 @@ if __name__ == "__main__":
             print(f"  wanted {sym}: NOT FOUND in the NSE equity segment")
     if rep.get("announced"):
         print(f"  ({rep['announced']} new problem(s) announced on Discord)")
+
+
+# ----------------------------------------- darling ids (decision #83)
+
+DARLING_IDS_PATH = ROOT / "data" / "darling_ids.json"
+TIERS_PATH_FOR_IDS = ROOT / "data" / "darling_tiers.json"
+
+
+def _darling_symbols(tiers_path=None) -> list:
+    """Every symbol in the tier table — the id universe the VM desk may
+    ever need to quote."""
+    import json as _json
+    p = Path(tiers_path) if tiers_path else TIERS_PATH_FOR_IDS
+    try:
+        tiers = _json.loads(p.read_text()).get("tiers") or {}
+    except (OSError, ValueError):
+        return []
+    return sorted({r.get("symbol") for rows in tiers.values()
+                   for r in rows if r.get("symbol")})
+
+
+def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
+                      tiers_path=None) -> dict:
+    """The VM desk's quote ids (decision #83): darlings are non-F&O names
+    outside SECURITY_ID_MAP, so their ids come from Dhan's PUBLIC scrip
+    master — exact name match only, EQ series preferred, anything
+    ambiguous lands in `unresolved` and stays UNQUOTABLE (#78: a guessed
+    id silently prices the wrong instrument). Built ON THE MAC (27MB
+    fetch), shipped nightly; the VM refuses ids older than its own
+    freshness gate."""
+    import json as _json
+    symbols = symbols if symbols is not None else _darling_symbols(tiers_path)
+    master = index_master(fetch_master(fetch_fn))
+    found = lookup_wanted(symbols, master)
+    ids, unresolved = {}, {}
+    for sym, cands in found.items():
+        eq = [c for c in cands if c.get("series") == "EQ"] or cands
+        if len(eq) == 1:
+            ids[sym] = {"id": eq[0]["id"],
+                        "master_symbol": eq[0]["symbol"],
+                        "series": eq[0]["series"]}
+        else:
+            unresolved[sym] = f"{len(cands)} candidate(s) in the master"
+    out = {"built_at": _now_iso(), "count": len(ids),
+           "ids": ids, "unresolved": unresolved}
+    p = Path(out_path) if out_path else DARLING_IDS_PATH
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_json.dumps(out, indent=1))
+    except OSError:
+        pass
+    return out
+
+
+def ensure_darling_ids(max_age_days: int = 7, fetch_fn=None,
+                       out_path=None, tiers_path=None) -> bool:
+    """Weekly-refresh guard around the heavy fetch: rebuild only when the
+    artifact is absent or older than `max_age_days`. A failed fetch keeps
+    the previous file (the VM's own staleness gate judges it) and returns
+    False — never a crash in the Mac evening chain."""
+    import json as _json
+    from datetime import datetime as _dt
+    p = Path(out_path) if out_path else DARLING_IDS_PATH
+    try:
+        built = _dt.fromisoformat(_json.loads(p.read_text())["built_at"])
+        if (_dt.now(built.tzinfo) - built).days <= max_age_days:
+            return True
+    except Exception:
+        pass
+    try:
+        out = build_darling_ids(fetch_fn=fetch_fn, out_path=out_path,
+                                tiers_path=tiers_path)
+        print(f"  (darling ids rebuilt: {out['count']} resolved, "
+              f"{len(out['unresolved'])} unresolved)")
+        return True
+    except Exception as exc:
+        print(f"  (darling ids rebuild failed — keeping prior file: {exc})")
+        return False

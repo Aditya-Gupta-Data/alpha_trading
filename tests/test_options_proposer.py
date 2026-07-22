@@ -20,6 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import options_proposer as op
 import src.plan_tracker as plan_tracker
 
+# The #84 hard rupee cap is pinned wide here: these fixtures' synthetic
+# chains price a condor's max_loss at ~10.7k/lot, and the suite's job is
+# the PIPELINE's mechanics — the cap's own binding behavior is tested
+# where it lives (test_equity_desk / the cap refusal below uses op's
+# module value directly).
+op.MAX_RISK_PER_TRADE_RS = 1_000_000.0
+
 
 def make_analysis(uptrend=True, fresh_cross=False, rsi=50.0, price=25000.0):
     return {"ticker": "NIFTY 50", "uptrend": uptrend,

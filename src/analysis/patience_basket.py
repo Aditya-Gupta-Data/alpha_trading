@@ -44,51 +44,32 @@ def eod_chain() -> dict:
               "card_fired": tiers.get("card_fired"),
               "pins_cleared": tiers.get("pins_cleared"),
               "bhavcopy": day, "fo_snapshot_as_of": fo.get("snapshot_as_of")}
-    # Firm treasury (owner Directive 1, decision #80): rotate capital
-    # AFTER grading (freshest Buy-tier demand read) and BEFORE the shadow
-    # leg spends. Fail-open: an unreachable VM keeps the current split.
+    # VM-SHIFT (decision #83, owner override 2026-07-21): the Mac is the
+    # ANALYSIS side only — every trade, rupee and ledger row lives on the
+    # VM. This chain's last job is shipping tonight's artifacts down the
+    # scp lane: the tier table + pricer levels (the VM desk's eyes,
+    # freshness-gated there) and the weekly darling-ids file (quote ids
+    # from Dhan's public scrip master — heavy fetch, weekly guard).
+    # Fail-open per artifact; a missed ship = the VM holds yesterday's
+    # copy and its own staleness gates judge it.
+    from pathlib import Path as _Path
+    data_dir = _Path(__file__).resolve().parents[2] / "data"
+    shipped = []
     try:
         from src import firm_treasury
-        if firm_treasury.TREASURY_ENABLED:
-            t = firm_treasury.run_rotation()
-            report["treasury"] = {"rotated": t.get("rotated"),
-                                  "reason": (t.get("move") or {}).get(
-                                      "reason") or t.get("reason")}
-        else:
-            report["treasury"] = None
-    except Exception as exc:
-        print(f"  (firm treasury failed — split unchanged [{exc}])")
-        report["treasury"] = None
-    # The darling shadow leg (F&O tranche step 5, re-wired to tiers
-    # 2026-07-20): Strong-Sell forced exits + Buy-family entries.
-    # Fail-open: telemetry can never break the chain.
-    try:
-        from src.equity_shadow_proposer import run_darling_cycle
-
-        # Equity desk (owner ruling 2026-07-20): the ONE place the desk's
-        # paper capital is wired in. A missing/disabled desk degrades to
-        # the zero-capital telemetry leg, never to a broken chain.
-        capital_fn = settle_fn = None
-        desk = None
+        from src.ingestion import scrip_master
         try:
-            from src import equity_desk as desk
-            if desk.EQUITY_DESK_ENABLED:
-                capital_fn, settle_fn = desk.fund_entry, desk.settle_exit
+            scrip_master.ensure_darling_ids()
         except Exception as exc:
-            print(f"  (equity desk unavailable — telemetry only [{exc}])")
-        shadow = run_darling_cycle(capital_fn=capital_fn,
-                                   settle_fn=settle_fn)
-        report["shadow"] = {
-            "entries": len(shadow["entries"]),
-            "exits": len(shadow["exits"]),
-            "settlements": len(shadow.get("settlements") or []),
-            "funded": len([e for e in shadow["entries"]
-                           if (e.get("funding") or {}).get("funded")])}
-        if desk is not None and capital_fn is not None:
-            desk.broadcast_activity(shadow)   # one card, quiet days silent
+            print(f"  (darling ids refresh failed [{exc}])")
+        for art in ("darling_tiers.json", "darlings_levels.json",
+                    "darling_ids.json"):
+            p = data_dir / art
+            if p.exists() and firm_treasury.vm_push_file(p):
+                shipped.append(art)
     except Exception as exc:
-        print(f"  (patience basket: darling shadow leg failed [{exc}])")
-        report["shadow"] = None
+        print(f"  (artifact ship failed [{exc}])")
+    report["artifacts_shipped"] = shipped
     return report
 
 

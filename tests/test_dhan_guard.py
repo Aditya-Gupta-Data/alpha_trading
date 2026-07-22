@@ -447,3 +447,52 @@ if __name__ == "__main__":
         except AssertionError:
             print(f"FAIL  {t.__name__}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+# --------------------------------------------------------------------------
+# DH-905 is an INPUT error, not an auth error (corrected 2026-07-20)
+# --------------------------------------------------------------------------
+
+def test_dh905_is_an_input_error_not_a_dead_token():
+    """The 2026-07-20 CEO brief filed 14 DH-905s under a credential alarm.
+    Dhan's own payload calls it Input_Exception — a bad question, not a bad
+    token. Paging the owner to rotate a healthy token is the harm here."""
+    err = classify_failure({
+        "status": "failure",
+        "remarks": {"error_code": "DH-905", "error_type": "Input_Exception",
+                    "error_message": "Invalid date range"},
+        "data": ""})
+    assert err.code == "DH-905"
+    assert not err.is_auth_error       # the whole point
+    assert err.is_input_error
+    assert err.as_dict()["auth_error"] is False
+    assert err.as_dict()["input_error"] is True
+
+
+def test_real_auth_codes_still_page():
+    """Guard the correction from over-reaching: DH-901/DH-906 must still
+    read as credential failures."""
+    for code in ("DH-901", "DH-906"):
+        err = classify_failure({"status": "failure",
+                                "remarks": {"error_code": code,
+                                            "error_message": "Invalid Token"}})
+        assert err.is_auth_error, code
+        assert not err.is_input_error, code
+
+
+def test_dh905_in_a_free_text_remark_is_still_identified():
+    """Removing DH-905 from AUTH_ERROR_CODES must not make the string-remark
+    parser forget the code exists (it scans KNOWN_ERROR_CODES now)."""
+    err = classify_failure({"status": "failure",
+                            "remarks": "DH-905 : Renewal of token not allowed"})
+    assert err.code == "DH-905"
+    assert not err.is_auth_error
+
+
+def test_auth_and_input_failures_are_separate_audit_views():
+    from src.dhan_guard import DhanApiError, SafeDhanClient
+    safe = SafeDhanClient()
+    safe.audit.append(DhanApiError("DH-906", "Invalid Token", "quote").as_dict())
+    safe.audit.append(DhanApiError("DH-905", "bad range", "historical").as_dict())
+    assert [a["code"] for a in safe.auth_failures()] == ["DH-906"]
+    assert [a["code"] for a in safe.input_failures()] == ["DH-905"]

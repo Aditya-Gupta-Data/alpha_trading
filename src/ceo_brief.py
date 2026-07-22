@@ -182,8 +182,115 @@ def _today(clock=None) -> str:
 
 
 def _truncate(text: str, limit: int = MAX_LINE_CHARS) -> str:
+    """Flatten to ONE line and clip. For log lines, never whole fields."""
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _clip(text: str, limit: int) -> str:
+    """Clip a MULTI-LINE field body, keeping its line breaks.
+
+    `_truncate` collapses all whitespace, which is right for one log line and
+    catastrophic for an assembled field: on 2026-07-20 it ran the whole Issues
+    section into a single unreadable paragraph. Discord caps a field value at
+    1024 chars, so clipping still has to happen — it just must not flatten.
+    Clips on a line boundary so the card never ends mid-word.
+    """
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    notice = "_…trimmed — full detail in the ops ledger._"
+    budget = limit - len(notice) - 1          # -1 for the notice's own newline
+    kept, used = [], 0
+    for line in text.split("\n"):
+        if used + len(line) + 1 > budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    kept.append(notice)
+    return "\n".join(kept)
+
+
+def _human_time(ts: str) -> str:
+    """'2026-07-20T15:33:04+05:30' -> '20 Jul, 3:33 PM'. Raw text if unparsable."""
+    raw = str(ts or "").strip()
+    try:
+        return datetime.fromisoformat(raw).strftime("%-d %b, %-I:%M %p")
+    except Exception:
+        return raw[:16] or "time unknown"
+
+
+# Conventional-commit prefixes are for the git log, not for the owner's card.
+_COMMIT_PREFIX = re.compile(r"^(feat|fix|docs|chore|refactor|test|perf|build|"
+                            r"ci|style|revert)(\([^)]*\))?!?:\s*")
+
+
+def _plain_subject(subject: str, limit: int = 80) -> str:
+    """Strip the 'feat(analysis): ' machine prefix and sentence-case the rest."""
+    text = _COMMIT_PREFIX.sub("", " ".join(str(subject or "").split()))
+    if text:
+        text = text[0].upper() + text[1:]
+    return _truncate(text, limit)
+
+
+# Plain-English readings of the log shapes this system actually emits. The
+# owner does not read Python tracebacks or JSON stats dicts, so the card says
+# what HAPPENED; the verbatim line stays in `logs/problems.jsonl`.
+#
+# HONESTY RULE for anything added here: a reading may only restate what the
+# line already says. It must never diagnose a cause the log did not state —
+# a confident wrong summary is worse than a raw line the owner can grep.
+DHAN_ERROR_CODES = {
+    "DH-901": "the access token is invalid or expired",
+    "DH-902": "the authentication is not valid",
+    "DH-903": "the login failed",
+    "DH-904": "too many requests — rate limited",
+    "DH-905": "the request itself was malformed (bad symbol or date range)",
+    "DH-906": "the data is not available for that instrument",
+}
+
+
+def humanize_issue(line: str) -> str:
+    """Turn one raw log line into a sentence the owner can act on.
+
+    Falls back to the cleaned-up raw line whenever the shape is unrecognized —
+    an unreadable truth beats a readable guess.
+    """
+    raw = " ".join(str(line or "").split()).strip().strip("()")
+
+    m = re.search(r"(?i)error:\s*unrecognized arguments:\s*(.+)$", raw)
+    if m:
+        script = re.match(r"([\w./]+\.py)", raw)
+        who = script.group(1) if script else "a script"
+        return (f"{who} was started with options it does not accept "
+                f"({_truncate(m.group(1), 60)}) — that run did nothing.")
+
+    m = re.search(r"(?i)\b(DH-\d{3})\b", raw)
+    if m:
+        code = m.group(1).upper()
+        meaning = DHAN_ERROR_CODES.get(code, "the broker API refused the call")
+        what = "a historical-data request" if re.search(
+            r"(?i)historical", raw) else "a request"
+        return f"Dhan rejected {what} — {meaning} ({code})."
+
+    m = re.search(r'(?i)"captured":\s*(\d+).*?"failed":\s*(\d+)'
+                  r'.*?"tickers":\s*(\d+)', raw)
+    if m:
+        got, bad, total = m.group(1), m.group(2), m.group(3)
+        return (f"Intraday capture got {got} of {total} tickers — "
+                f"{bad} failed. Partial data for that slot.")
+
+    if re.search(r"(?i)fall(?:ing|s|en)?[\s-]open", raw):
+        what = "A live feed"
+        m = re.match(r"(?i)([\w\s]{3,30}?):", raw)
+        if m:
+            what = m.group(1).strip().capitalize()
+        reason = "timed out" if re.search(r"(?i)tim(?:e|ed)\s*out", raw) \
+            else "was unreachable"
+        return (f"{what} {reason} — the system fell back to its saved "
+                f"snapshot, so this data is stale rather than missing.")
+
+    return _truncate(raw, MAX_LINE_CHARS)
 
 
 # --------------------------------------------------------------------------
@@ -264,12 +371,23 @@ def collect_issues(logs_dir: Path = LOGS_DIR,
     """
     try:
         from src.ops_monitor import sweep_logs
+        # COLD START is "we have never run here" — the FILE is absent. It is
+        # NOT "the file is unreadable": a corrupt offset file must fall back
+        # to a full re-read, because silently baselining past a corruption
+        # would swallow real problems (test_issues_corrupt_state_file_
+        # recovers pins this). Missing = baseline; corrupt = replay.
+        cold = not Path(state_path).exists()
         state = {}
-        try:
-            state = json.loads(Path(state_path).read_text())
-        except Exception:
-            state = {}   # first run, or a corrupt offset file — re-read fully
-        problems, new_state = sweep_logs(Path(logs_dir), state)
+        if not cold:
+            try:
+                state = json.loads(Path(state_path).read_text())
+            except Exception:
+                state = {}   # corrupt offset file — re-read fully, don't skip
+        # See sweep_logs: cold start records EOF rather than replaying weeks
+        # of history. `cold` rides onto the card so a quiet first brief reads
+        # as "the ledger starts here", never as "nothing is wrong".
+        problems, new_state = sweep_logs(Path(logs_dir), state,
+                                         baseline_cold_start=cold)
 
         buckets: dict = {}
         for p in problems:
@@ -285,15 +403,34 @@ def collect_issues(logs_dir: Path = LOGS_DIR,
 
         return {"buckets": buckets,
                 "total": sum(p.get("count", 1) for p in problems),
+                "cold_start": cold,
                 "available": True}
     except Exception as exc:
-        return {"buckets": {}, "total": 0, "available": False,
-                "error": str(exc)}
+        return {"buckets": {}, "total": 0, "cold_start": False,
+                "available": False, "error": str(exc)}
 
 
 # --------------------------------------------------------------------------
 # 3. DEPLOYMENTS & WORK
 # --------------------------------------------------------------------------
+
+# Entries written BEFORE deploy_log gained its `kind` field carry no marker,
+# so short-lived jobs have to be recognised by name for the existing log.
+# New entries carry kind="job" and need no entry here.
+KNOWN_SCHEDULED_JOBS = {"master_scheduler"}
+
+
+def _is_scheduled_job(name: str, entry: dict) -> bool:
+    """Does this deploy-log entry describe a process that has already exited?
+
+    Prefers the explicit `kind` written since 2026-07-20; falls back to the
+    name list for entries logged before the field existed.
+    """
+    kind = (entry or {}).get("kind")
+    if kind:
+        return kind == "job"
+    return name in KNOWN_SCHEDULED_JOBS
+
 
 def live_version(log_path: Path = DEPLOY_LOG_PATH) -> dict:
     """What code the long-running services on THIS box came up on.
@@ -304,7 +441,7 @@ def live_version(log_path: Path = DEPLOY_LOG_PATH) -> dict:
     service plus a `consistent` flag: two services on different shas means a
     half-finished deploy, which is exactly the state worth shouting about.
     """
-    out = {"services": {}, "consistent": True, "available": False,
+    out = {"services": {}, "jobs": {}, "consistent": True, "available": False,
            "dirty": False}
     try:
         latest: dict = {}
@@ -319,9 +456,18 @@ def live_version(log_path: Path = DEPLOY_LOG_PATH) -> dict:
                     latest[svc] = entry
         if not latest:
             return out
-        shas = {e.get("sha") for e in latest.values()}
-        out["services"] = latest
-        out["consistent"] = len(shas) == 1
+        services = {n: e for n, e in latest.items() if not _is_scheduled_job(n, e)}
+        jobs = {n: e for n, e in latest.items() if _is_scheduled_job(n, e)}
+        # CONSISTENCY IS A LONG-RUNNING-SERVICE QUESTION ONLY. A scheduled job
+        # has already exited by brief time; its sha is history, not something
+        # "live" that could disagree with anything. Including it made the
+        # 2026-07-20 card shout "half-finished deploy" because
+        # master_scheduler had started at 09:10 and the two real services
+        # restarted at 15:33 — which is just a normal day with a commit in it.
+        shas = {e.get("sha") for e in services.values()}
+        out["services"] = services
+        out["jobs"] = jobs
+        out["consistent"] = len(shas) <= 1
         out["dirty"] = any(e.get("dirty") for e in latest.values())
         out["available"] = True
         return out
@@ -460,25 +606,38 @@ def _issues_field(issues: dict) -> dict:
     if not issues.get("available"):
         return {"name": "🐛 Issues",
                 "value": "Log sweep unavailable.", "inline": False}
+    if issues.get("cold_start"):
+        return {"name": "🐛 Issues",
+                "value": "📍 First brief on this box — the issue ledger starts "
+                         "from here.\nOlder log history was deliberately not "
+                         "replayed (it would report bugs already fixed weeks "
+                         "ago as if they happened today). Reporting begins "
+                         "with the next brief.\n"
+                         f"_{THROTTLE_CAVEAT}_",
+                "inline": False}
     if not issues["total"]:
         return {"name": "🐛 Issues",
                 "value": "✅ No problem lines in any log since the last brief.\n"
                          f"_{THROTTLE_CAVEAT}_",
                 "inline": False}
-    lines = [f"{issues['total']} problem line(s) since the last brief:"]
+    distinct = sum(len(items) for items in issues["buckets"].values())
+    lines = [f"**{issues['total']}** problem line(s) since the last brief, "
+             f"in **{distinct}** distinct issue(s):", ""]
     for name, items in issues["buckets"].items():
         count = sum(i.get("count", 1) for i in items)
-        lines.append(f"**{name}** — {count}")
+        lines.append(f"__{name}__ — {count} line(s)")
         for item in items[:MAX_ISSUE_LINES]:
-            n = f" x{item['count']}" if item.get("count", 1) > 1 else ""
-            lines.append(f"• `{item.get('log', '?')}`{n}: "
-                         f"{_truncate(item.get('line', ''))}")
+            times = item.get("count", 1)
+            n = f" _(happened {times} times)_" if times > 1 else ""
+            lines.append(f"• {humanize_issue(item.get('line', ''))}{n}")
+            lines.append(f"  ⤷ from `{item.get('log', '?')}`")
         if len(items) > MAX_ISSUE_LINES:
-            lines.append(f"…and {len(items) - MAX_ISSUE_LINES} more")
-    lines.append("_Resolutions are the owner's call — "
-                 "the ops ledger (20:30) keeps the full record._")
+            lines.append(f"• …and {len(items) - MAX_ISSUE_LINES} more of these")
+        lines.append("")
+    lines.append("_Verbatim log text lives in `logs/problems.jsonl`. "
+                 "Resolutions are the owner's call._")
     lines.append(f"_{THROTTLE_CAVEAT}_")
-    return {"name": "🐛 Issues", "value": _truncate("\n".join(lines), 1000),
+    return {"name": "🐛 Issues", "value": _clip("\n".join(lines), 1000),
             "inline": False}
 
 
@@ -489,14 +648,21 @@ def _deploy_field(dep: dict) -> dict:
     lines = []
 
     if live.get("available"):
-        for svc, entry in sorted(live["services"].items()):
-            flag = " ⚠️ dirty tree" if entry.get("dirty") else ""
-            lines.append(f"• `{svc}` on `{entry.get('sha', '?')}` "
-                         f"({entry.get('event', '?')} {entry.get('ts', '?')[:16]})"
-                         f"{flag}")
+        for svc, entry in sorted(live.get("services", {}).items()):
+            flag = " ⚠️ running uncommitted edits" if entry.get("dirty") else ""
+            lines.append(f"• **{svc}** — running `{entry.get('sha', '?')}`, "
+                         f"{entry.get('event', 'started')} "
+                         f"{_human_time(entry.get('ts', ''))}{flag}")
         if not live.get("consistent"):
-            lines.append("⚠️ **Services are on DIFFERENT shas — "
-                         "half-finished deploy.**")
+            lines.append("⚠️ **These are not all the same version — a deploy "
+                         "was left half-finished.** The older service is still "
+                         "running yesterday's behaviour.")
+        # Scheduled jobs are reported, never sha-compared: they have already
+        # exited, so "which version" is history, not a live inconsistency.
+        for job, entry in sorted(live.get("jobs", {}).items()):
+            lines.append(f"• **{job}** _(scheduled job, already finished)_ — "
+                         f"last ran `{entry.get('sha', '?')}` at "
+                         f"{_human_time(entry.get('ts', ''))}")
     else:
         lines.append("• No deploy record on this box "
                      "(services log their own startup — none has come up here).")
@@ -504,15 +670,17 @@ def _deploy_field(dep: dict) -> dict:
     if work.get("available"):
         commits = work["commits"]
         if commits:
-            lines.append(f"**Built today ({len(commits)} commit(s)):**")
+            lines.append(f"**Built today — {len(commits)} change(s):**")
             for c in commits[:MAX_ISSUE_LINES]:
-                lines.append(f"• `{c['sha']}` {_truncate(c['subject'], 70)}")
+                lines.append(f"• {_plain_subject(c['subject'])} "
+                             f"_(`{c['sha']}`)_")
             if len(commits) > MAX_ISSUE_LINES:
-                lines.append(f"…and {len(commits) - MAX_ISSUE_LINES} more")
+                lines.append(f"• …and {len(commits) - MAX_ISSUE_LINES} more")
         else:
             lines.append("**Built today:** nothing committed.")
         if work.get("dirty"):
-            lines.append("⚠️ Uncommitted edits in the working tree.")
+            lines.append("⚠️ There are edits here that have not been "
+                         "committed yet.")
     else:
         lines.append("**Built today:** git unavailable.")
 
@@ -530,17 +698,39 @@ def _risk_field(risk: dict) -> dict:
     sign = "+" if pnl >= 0 else ""
     delta = risk["net_delta"]
     if delta > 0:
-        bias = f"{delta:+.1f} (long bias)"
+        bias = f"leaning LONG — it profits if the market rises ({delta:+.1f})"
     elif delta < 0:
-        bias = f"{delta:+.1f} (short bias)"
+        bias = f"leaning SHORT — it profits if the market falls ({delta:+.1f})"
     else:
-        bias = "±0 (flat)"
+        bias = "market-neutral — direction doesn't move it much (0)"
     total_open = risk["open_spreads"] + risk["open_equities"]
-    value = (f"Realized today: **Rs.{sign}{pnl:,.0f}** across "
-             f"{risk['resolved']} resolved trade(s).\n"
-             f"Open: **{total_open}** ({risk['open_spreads']} spread(s), "
-             f"{risk['open_equities']} equity) · net delta {bias}")
-    return {"name": "💰 Risk & Capital", "value": value, "inline": False}
+
+    if risk["resolved"]:
+        booked = (f"Booked today: **Rs.{sign}{pnl:,.0f}** from "
+                  f"{risk['resolved']} position(s) that closed.")
+    else:
+        booked = ("Nothing closed today, so there is no profit or loss to "
+                  "book yet.")
+    value = (f"{booked}\n"
+             f"Still open: **{total_open}** position(s) "
+             f"({risk['open_spreads']} option spread(s), "
+             f"{risk['open_equities']} share position(s)).\n"
+             f"Overall the book is {bias}.")
+    # One-firm-view (decision #82, VM-native since #83): the equity
+    # desk's headline rides on the brief (the 2h card has the table).
+    try:
+        from src import equity_desk
+        value += "\n" + equity_desk.render_book_lines().split("\n")[0]
+    except Exception:
+        pass
+    # Directive 6 (#84): the firm MTM + return line, read-only compute.
+    try:
+        from src.firm_mtm import render_line
+        value += "\n" + render_line()
+    except Exception:
+        pass
+    return {"name": "💰 Risk & Capital", "value": value[:1024],
+            "inline": False}
 
 
 def build_brief_card(logs_dir: Path = LOGS_DIR,
@@ -561,18 +751,35 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
                               clock=clock)
     risk = collect_risk(journal_path=journal_path)
 
-    healthy = ops.get("ok") and not issues.get("total")
-    description = ("✅ Clean day — everything ran, nothing broke."
-                   if healthy else
-                   "⚠️ Attention needed — see the sections below.")
+    # A cold start is NOT a clean day — we baselined instead of looking, and
+    # the card must never bank credit for a check it did not perform.
+    if issues.get("cold_start"):
+        description = ("📍 First brief on this box — issue reporting starts "
+                       "from here.")
+    elif ops.get("ok") and not issues.get("total"):
+        description = "✅ Clean day — everything ran, nothing broke."
+    else:
+        description = "⚠️ Attention needed — see the sections below."
+
+    fields = [_ops_field(ops), _issues_field(issues),
+              _deploy_field(dep), _risk_field(risk)]
+    # Directive 4 (#84): anything the Discord budget spooled since the
+    # last digest (the 15:45 EOD drains first; this catches the rest).
+    try:
+        from src.notifier import drain_digest_queue
+        batched = drain_digest_queue()
+        if batched:
+            fields.append({"name": "📦 Batched signals",
+                           "value": batched[:1024], "inline": False})
+    except Exception:
+        pass
 
     return {
         "event": "ceo_brief",
         "ticker": "",
         "date": _today(clock),
         "description": description,
-        "fields": [_ops_field(ops), _issues_field(issues),
-                   _deploy_field(dep), _risk_field(risk)],
+        "fields": fields,
     }
 
 

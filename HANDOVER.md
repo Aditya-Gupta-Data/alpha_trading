@@ -1,5 +1,31 @@
 # HANDOVER.md — Cold-Start Brief
 
+## 🚨 THE THURSDAY PROTOCOL — READ THIS BEFORE ANYTHING ELSE (owner directive, 2026-07-21)
+
+**The system ran AUTONOMOUSLY from 2026-07-21 (owner away until Thursday
+2026-07-24). Whenever the next session initializes, the VERY FIRST task —
+before writing any new code, answering queries, or changing architecture —
+is:**
+
+1. `python3 -m src.bug_ledger --report` **on the VM** (the consolidated
+   `logs/autonomous_bug_report.jsonl` — nightly cron #22 folds the ops
+   sweep's problem lines, silent rejections/halts, treasury anomalies and
+   sizing vetoes into it; rows whose `found`/`ts` pre-date 2026-07-21
+   evening are pre-run history).
+2. Analyze EVERY bug/warning/miss logged during the autonomous run.
+3. Deploy fixes for them — only then take up anything else.
+
+Also read on return: the batched-signals archive
+(`logs/discord_digest_queue.jsonl.drained` — everything the 5/day Discord
+budget suppressed), `logs/treasury_ledger.jsonl`, and the desk book
+(`python3 -m src.equity_desk`).
+
+*(Directive 6, added at sign-off: the EOD/CEO digests carry a 💹 Firm
+MTM & Return line — `src/firm_mtm.py`, read-only; absolute return until
+day 30, true CAGR after. The 2L run's day counter started 2026-07-21.)*
+
+---
+
 Read this to pick up the project cold in a new agent session. For vision see
 `OVERVIEW.md`, for system flow see `ARCHITECTURE.md`, for the file index see
 `MODULES.md`, for why past calls were made see `DECISIONS.md`. **This file is
@@ -36,7 +62,7 @@ Surfaces: **Engine** = does it run · **Discord** = card fires · **Dash** =
 | Capability | Engine | Discord | Dash | Contract | Tests | VM |
 |---|---|---|---|---|---|---|
 | Options proposals + paper book | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Equity desk — darling paper capital (#79) | ✅ | ✅ | ❌ | ❌ | ✅ | ◑ lock only |
+| Equity desk — darling book, VM-native live (#79/#82/#83) | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ live |
 | Firm treasury — dynamic split (#80) | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ lock |
 | Darling 7-tier lifecycle (#77) | ✅ | ✅ | ❌ | ❌ | ✅ | Mac-only |
 | Dept 8 — Analysis research desk | ✅ | ✅ | ❌ | ❌ | ◑ debt | Mac-only |
@@ -46,17 +72,102 @@ dashboard + React contract — parked deliberately (Pending Phase #6; Discord is
 the surface until the infra has live runtime). This whole row of ❌ is the gap
 that used to live only in memory.
 
-## 🟢 THE FIRM TREASURY — the 7L/3L split is now DYNAMIC (decision #80, 2026-07-20 night)
+## 🟢 THE AUTONOMOUS RUN — ₹2L clean sheet, ₹10k/trade hard cap, set-and-forget (decision #84, 2026-07-21, owner final override)
 
-**Live.** `src/firm_treasury.py` replaced #79's static split (owner ruled it
-capital-inefficient — options' stress-adjusted peak margin is only ~₹1.9L) with
-a mechanical nightly regime router that moves capital between the equity and
-options desks, run inside the 19:15 EOD chain. Kill switch `treasury_enabled`;
-ledger `logs/treasury_ledger.jsonl`. Router tilts, the 15–60% clamp, and the
-RAISE-FIRST **E_vm ≥ E_mac** invariant that makes the two-machine transfer
-crash-safe: `DECISIONS.md` #80.
-**Not started — Session 2 `adaptive_sizing.py`:** Bayesian/Wilson autopsy-driven
-sizing. **First live funded run tonight:** 5 darling entries, ₹1,77,540 locked.
+**The owner stepped away. The firm reboots at Rs.2,00,000** (account
+reset: realized 0, peak 2L; the 10L era is archived in the pre-migration
+DB backup; open options spreads CARRY and settle into the new base).
+Treasury pool is now DERIVED from the account (never a constant);
+granularity rescaled (deadband ₹10k / step ₹25k / round ₹5k); equity
+budget seeds ₹60k. **Hard cap `max_risk_per_trade_rs`=₹10,000 on BOTH
+desks** applied after percentage sizing: equity risk budget min-capped;
+options lots capped by max_loss, and a structure whose max_loss/lot
+alone exceeds ₹10k is refused. 100% utilization allowed (no idle
+buffers; the one cash door is the only brake). Equity sizing: 5% risk /
+25% notional per name. Firm halts auto-rescale: daily 3% = ₹6k, ruin
+10% = ₹20k trailing. **Set-and-forget:** an unhandled master_scheduler
+crash fires a real-time 🚨 page (traceback tail, then re-raises).
+**Directive 4 — 5 Discord messages/day (`notifier.budget_gate` at the
+one door):** crash ALWAYS pages; scheduled digests (EOD/CEO/tiers +
+Saturday cards) spend the budget; the 2-hourly snapshot DROPS; every
+other card (trades, rotations, 🧠 sizing, review flags) SPOOLS to
+`logs/discord_digest_queue.jsonl` and lands in the next digest's
+"📦 Batched signals" field. This supersedes the 07-16 real-time
+review-flag rule for the autonomous run. Kill switch
+`discord_budget_enabled`.
+
+## 🟢 THE VM-SHIFT — equity desk is VM-NATIVE, one database, LIVE trading (decision #83, 2026-07-21, owner override)
+
+**Owner formally overruled the observe-first hold, accepted wiping the 5
+day-old paper positions, and ordered the shift the same day.** The desk
+now lives in the VM's ONE firm database: equity notional locks through
+the same `pm.request_entry` door as options margin (`eqd:` prefix = the
+desk's identity; deployed/realized are views over tagged rows), the
+treasury is ONE atomically-updated row (`treasury_state.equity_budget_rs`
+— v1's two-phase/reconcile/SSH machinery deleted; VM cron #21 19:50),
+and `run_darling_live_cycle` rides the market loop beside the block-leg
+shadow: LIVE exits (stop/target/time at real quotes), Strong-Sell
+force-exits, mid-session settlements, LIVE entries when a Buy-tier
+name's quote sits INSIDE the strict buy zone (`fill_basis:"live"`).
+Quote ids: `data/darling_ids.json`, built weekly ON THE MAC from Dhan's
+public scrip master (exact-match only, #78), shipped nightly. **The Mac
+is analysis-only now** — its 19:15 chain ends by shipping tiers + levels
++ ids; the VM freshness-gates all three (stale tiers = no new entries,
+exits always run; stale ids = unmarked, never guessed). Migration:
+Mac desk DB + ledger archived (.bak), resolved autopsies MERGED into the
+VM ledger (learning survives), the 5 open positions wiped per the owner
+("the system will simply re-enter them"), the old `equity_desk_allocation`
+reservation released, budget seeded at the routed ₹4,00,000. Report
+cards (#82 surfaces) now render the desk LIVE from local state. First
+live session: next market open 09:15.
+
+## 🟢 ONE FIRM VIEW — every report card now shows BOTH desks (decision #82, 2026-07-21, first freeze exception)
+
+**Owner ruling ("lift freeze and fix it — one ledger"):** the 12:00 card
+showed only options; the equity desk's 5 funded positions were invisible
+outside the Mac's 💼 card. Fixed at the VIEW layer — the physical stores
+stay separate BY DESIGN (two machines, two write owners; equity rows in
+the options journal would break plan_tracker's sweep). After every Mac
+19:15 chain: `equity_desk.publish_snapshot()` → scp to the VM
+(`firm_treasury.vm_push_file`) → the 2h Portfolio Report Card (full
+section + table), the 15:45 EOD summary (💼 field), and the 16:30 CEO
+brief (headline line) all render the equity book beside options. Labeled
+"EOD marks" always (Mac holds no token); >30h old = "STALE" on the card;
+missing = "no snapshot yet"; every seam fail-open. **Freeze resumed
+after this deploy.**
+
+## 🟢 THE FIRM TREASURY — the 7L/3L split is now DYNAMIC (decision #80, 2026-07-20 night, owner Directive 1)
+
+**#79's static split lasted about two hours** — the owner ruled it
+capital-inefficient (correct: options' stress-adjusted peak margin use is
+~₹1.9L) and green-lit dynamic routing with three pre-agreed pushbacks
+(nightly cadence not intraday; evidence-bar learning deferred to
+Session 2 `adaptive_sizing`; gap-shock down-weighting). `src/firm_treasury.py`:
+mechanical regime router (base 30% equity share; tilts for NIFTY trend,
+Buy-tier depth, deep value, high VIX, options margin demand; clamp
+15–60%, ₹50k deadband, ₹1L/night max step), runs inside the 19:15 EOD
+chain between tier grading and the shadow leg. Capital moves =
+subscribe/redeem on the desk's `starting_capital` (peak shifts with base
+— the ruin halt stays rupee-honest; NOT the originally-planned 10L
+re-init, which would have diluted the desk's 10% halt to ~0.3% —
+pushback #4, applied during build) mirrored by the VM's
+`equity_desk_allocation` lock under the RAISE-FIRST invariant
+**E_vm ≥ E_mac**: any mid-move crash idles capital for a night, never
+double-spends it; next run reconciles E_vm := E_mac. Unreachable VM =
+frozen split, 3rd consecutive night = one warning card. Ledger
+`logs/treasury_ledger.jsonl`; kill switch `treasury_enabled`.
+**Session 2 ✅ BUILT (decision #81): `adaptive_sizing.py`** — the
+autopsy-driven sizing feedback loop is LIVE on both desks (equity
+fund_entry risk-budget multiplier; options lots penalty/veto after
+size_lots). Break-even-centered priors = 1.0x until each key's own
+record earns otherwise; penalties fast (≥4n, floor 0.25x), vetoes
+earned (≥8n, Wilson UPPER bound under break-even, telemetry row kept),
+boosts slow (≥10n, LOWER bound clear, cap 1.5x inside existing caps),
+gap-shocks half-weight, ticker veto overlay (≥5n). Ledger
+`logs/sizing_adjustments.jsonl`, one card per key state-change; kill
+switch `adaptive_sizing_enabled`; CLI `python3 -m src.adaptive_sizing`.
+Also tonight: the desk's FIRST LIVE FUNDED RUN — 5 darling entries,
+₹1,77,540 locked at the 19:15 chain.
 
 ## 🟢 THE EQUITY DESK — the darling book now trades PAPER CAPITAL (decision #79, 2026-07-20 night)
 

@@ -321,6 +321,17 @@ a partial failure can only idle capital for a night, never double-spend it,
 and the next run's reconcile (E_vm := E_mac) converges every failure mode.
 P&L stays with the earning desk — winners compound their own buying power.
 
+**Adaptive sizing (decision #81, owner Directive 2):** both desks consult
+`src/adaptive_sizing.py` before sizing — the first consumer of the
+four-question autopsy frame with sizing authority. A break-even-centered
+Bayesian read of each setup's OWN resolved record: penalties are fast
+(≥4 weighted resolutions, floor 0.25x), vetoes are earned (≥8, and only when
+even the Wilson upper bound sits under break-even — the telemetry row still
+logs), boosts are slow (≥10, lower bound over break-even, cap 1.5x inside
+the existing caps). Gap-shock losses count half; a repeatedly-burning ticker
+can be vetoed on its own. Day one it says 1.0x for everything — authority
+accrues per-key as the record earns it, never before.
+
 **Staged merge targets:** ~~`wealth_flywheel`~~ **MERGED 2026-07-20** — the
 scrip clerk verified GOLDBEES as NSE_EQ id **14428** (NIP IND ETF GOLD BEES,
 series EQ), the Issue-15 blocker was lifted, the id entered `SECURITY_ID_MAP`,

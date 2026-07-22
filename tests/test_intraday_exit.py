@@ -212,7 +212,8 @@ def test_capture_names_the_tickers_that_failed():
     dead = {"TMPV.NS", "ARE&M.NS"}
     tickers = ["TCS.NS", "INFY.NS", "TMPV.NS", "ARE&M.NS"]
     out = capture(price_fn=lambda t: None if t in dead else 100.0,
-                  tickers=tickers, out_path=_tmp_lake(), force=True)
+                  tickers=tickers, out_path=_tmp_lake(), force=True,
+                  sleep_fn=lambda s: None)
 
     assert out["captured"] == 2
     assert out["failed"] == 2
@@ -232,9 +233,59 @@ def test_capture_caps_the_named_failures_on_a_total_outage():
     from src.ingestion.intraday_tracker import capture, MAX_NAMED_FAILURES
     tickers = [f"T{i}.NS" for i in range(40)]
     out = capture(price_fn=lambda t: None, tickers=tickers,
-                  out_path=_tmp_lake(), force=True)
+                  out_path=_tmp_lake(), force=True, sleep_fn=lambda s: None)
     assert out["failed"] == 40                       # the COUNT stays honest
     assert len(out["failed_tickers"]) == MAX_NAMED_FAILURES
+
+
+def test_capture_retries_the_dead_once_and_recovers_transients():
+    """Rate-limit bursts kill 15-26 big names for one slot and they answer
+    fine the next — the spaced in-sweep retry recovers them, so a throttled
+    slot no longer leaves a hole in the lake."""
+    from src.ingestion import intraday_tracker
+
+    flaky = {"HDFCBANK.NS", "TCS.NS"}
+    seen = []
+
+    def price_fn(t):
+        seen.append(t)
+        if t in flaky and seen.count(t) == 1:      # dead on pass 1 only
+            return None
+        return 100.0
+
+    slept = []
+    out = intraday_tracker.capture(
+        price_fn=price_fn, tickers=["INFY.NS", "HDFCBANK.NS", "TCS.NS"],
+        out_path=_tmp_lake(), force=True, sleep_fn=slept.append)
+
+    assert out["captured"] == 3 and out["failed"] == 0
+    assert out["recovered"] == 2
+    assert slept == [intraday_tracker.RETRY_SLEEP_SECONDS]  # spaced, once
+
+
+def test_capture_retry_keeps_naming_tickers_dead_on_both_passes():
+    """The retry is a second chance, not a cover-up: a scrip that fails
+    both passes stays a NAMED failure and nothing sleeps twice."""
+    from src.ingestion.intraday_tracker import capture
+
+    slept = []
+    out = capture(price_fn=lambda t: None if t == "DEAD.NS" else 100.0,
+                  tickers=["TCS.NS", "DEAD.NS"], out_path=_tmp_lake(),
+                  force=True, sleep_fn=slept.append)
+
+    assert out["captured"] == 1
+    assert out["failed"] == 1 and out["failed_tickers"] == ["DEAD.NS"]
+    assert out["recovered"] == 0
+    assert len(slept) == 1
+
+
+def test_capture_clean_sweep_never_sleeps():
+    """No failures → no retry pause; the happy path stays instant."""
+    from src.ingestion.intraday_tracker import capture
+    slept = []
+    out = capture(price_fn=lambda t: 100.0, tickers=["TCS.NS"],
+                  out_path=_tmp_lake(), force=True, sleep_fn=slept.append)
+    assert out["failed"] == 0 and slept == []
 
 
 def test_capture_depth_also_names_its_failures():

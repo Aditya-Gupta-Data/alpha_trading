@@ -32,6 +32,11 @@ OUT_PATH = ROOT / "data" / "lake" / "intraday_15m.jsonl"
 # (every ticker fails) doesn't write a wall of text every 15 minutes.
 MAX_NAMED_FAILURES = 12
 
+# One spaced second chance for a failed sweep slot. Long enough to fall out
+# of the same rate-limit window the first pass tripped, short enough that a
+# sweep still finishes far inside its 15-minute slot.
+RETRY_SLEEP_SECONDS = 2.0
+
 
 def watchlist_tickers(path: Path = None) -> list:
     """Deduped ticker list from config/watchlist.yaml (order-preserving)."""
@@ -48,9 +53,10 @@ def watchlist_tickers(path: Path = None) -> list:
 
 
 def capture(price_fn=None, clock=None, tickers=None,
-            out_path=None, force: bool = False) -> dict:
+            out_path=None, force: bool = False, sleep_fn=None) -> dict:
     """One 15-minute snapshot. Returns a summary dict (never raises for a
-    dead ticker). `force=True` bypasses the market-hours gate (tests)."""
+    dead ticker). `force=True` bypasses the market-hours gate (tests);
+    `sleep_fn` injects the retry pause (tests pass a no-op)."""
     from src.market_loop import is_market_open, ist_now
     now = (clock or ist_now)()
     if not force and not is_market_open(now):
@@ -77,6 +83,31 @@ def capture(price_fn=None, clock=None, tickers=None,
         rows.append({"ts": ts, "ticker": t,
                      "price": round(float(px), 2), "src": "dhan_live_15m"})
 
+    # SECOND CHANCE FOR THE DEAD (2026-07-22, bug-ledger triage). The
+    # failure bursts cluster by SLOT, not by scrip — 15-26 big names dead
+    # at 11:00 and all fine at 11:15 — which is another job sharing the
+    # Dhan rate limit, not dead tickers. One spaced retry pass inside the
+    # same sweep recovers those; a ticker that fails BOTH passes stays a
+    # named failure, so the fail-open contract is unchanged.
+    recovered = 0
+    if failed_tickers:
+        import time
+        (sleep_fn or time.sleep)(RETRY_SLEEP_SECONDS)
+        still_failed = []
+        for t in failed_tickers:
+            try:
+                px = price_fn(t)
+            except Exception:
+                px = None
+            if px is None:
+                still_failed.append(t)
+                continue
+            rows.append({"ts": ts, "ticker": t,
+                         "price": round(float(px), 2),
+                         "src": "dhan_live_15m"})
+            recovered += 1
+        failed_tickers = still_failed
+
     # Append-only lake write (one line per ticker); atomic enough for a
     # 15-min cadence — each line is a self-contained JSON record.
     with open(out_path, "a") as f:
@@ -91,6 +122,7 @@ def capture(price_fn=None, clock=None, tickers=None,
     # cannot write an 84-name line every quarter hour.
     return {"ts": ts, "captured": len(rows), "failed": len(failed_tickers),
             "failed_tickers": failed_tickers[:MAX_NAMED_FAILURES],
+            "recovered": recovered,
             "tickers": len(tickers), "out": str(out_path)}
 
 

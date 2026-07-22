@@ -198,8 +198,14 @@ def test_shadow_never_imports_the_real_book():
         assert f"import src.{forbidden}" not in src
 
 
-def test_market_loop_hook_is_off_by_default_and_fail_open():
+def test_market_loop_hook_is_off_by_default_and_fail_open(tmp_path, monkeypatch):
     from src.market_loop import run_market_loop
+    # Isolate the cooldown seed from the REAL journal (2026-07-22 fix): the
+    # edge miner refreshes data/journal.jsonl from the VM, so a real NIFTY 50
+    # entry can drift inside this test's pinned 11:00 window and cooldown-block
+    # fetch_fn — the assertion then fails on live data, not on code.
+    from src import journal
+    monkeypatch.setattr(journal, "JOURNAL_PATH", tmp_path / "journal.jsonl")
 
     calls = {"shadow": 0, "fetch": 0}
 

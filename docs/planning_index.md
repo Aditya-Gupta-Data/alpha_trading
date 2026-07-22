@@ -1,5 +1,12 @@
 # Planning Pipeline Index — everything queued for after the observation week
 
+> **2026-07-22: the observation week ENDED — owner lifted the freeze and
+> the build sprint opened.** Thursday Protocol cleared same day. The
+> master plan governing the sprint (and its proof-gated budget) is
+> `docs/cycle_hunter_plan.md`; workflow rules are `docs/dev_workflow.md`.
+> Items below remain valid backlog wherever the sprint hasn't already
+> shipped them — check HANDOVER.md's milestone block before starting one.
+
 > **This is the single map of what's been designed and what's actually
 > confirmed to build first.** Six planning documents accumulated in one
 > night; this file exists so nobody (including a future session) has to

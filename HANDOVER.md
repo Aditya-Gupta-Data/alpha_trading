@@ -1,28 +1,32 @@
 # HANDOVER.md — Cold-Start Brief
 
-## 🚨 THE THURSDAY PROTOCOL — READ THIS BEFORE ANYTHING ELSE (owner directive, 2026-07-21)
+## ✅ THURSDAY PROTOCOL — CLEARED 2026-07-22 (owner returned early, ordered "start building")
 
-**The system ran AUTONOMOUSLY from 2026-07-21 (owner away until Thursday
-2026-07-24). Whenever the next session initializes, the VERY FIRST task —
-before writing any new code, answering queries, or changing architecture —
-is:**
+The 2026-07-21 blocking directive (bug-ledger report → analyze → fix,
+before anything else) was executed 2026-07-22 night. Verdict: 55 items,
+ONE real code bug (intraday_tracker rate-limit bursts → in-sweep retry,
+`8e70e97`) + one suite flake (journal-drift test isolation, same
+commit); MACPOWER budget-refusal and the corporate_events arg error were
+non-bugs. Full triage record: `docs/observation_week_ledger.md`. The
+protocol machinery (`python3 -m src.bug_ledger --report` on the VM)
+remains THE first read after any future autonomous stretch.
 
-1. `python3 -m src.bug_ledger --report` **on the VM** (the consolidated
-   `logs/autonomous_bug_report.jsonl` — nightly cron #22 folds the ops
-   sweep's problem lines, silent rejections/halts, treasury anomalies and
-   sizing vetoes into it; rows whose `found`/`ts` pre-date 2026-07-21
-   evening are pre-run history).
-2. Analyze EVERY bug/warning/miss logged during the autonomous run.
-3. Deploy fixes for them — only then take up anything else.
+## 📌 2026-07-22 MILESTONES — the build sprint opened (code freeze lifted by owner)
 
-Also read on return: the batched-signals archive
-(`logs/discord_digest_queue.jsonl.drained` — everything the 5/day Discord
-budget suppressed), `logs/treasury_ledger.jsonl`, and the desk book
-(`python3 -m src.equity_desk`).
-
-*(Directive 6, added at sign-off: the EOD/CEO digests carry a 💹 Firm
-MTM & Return line — `src/firm_mtm.py`, read-only; absolute return until
-day 30, true CAGR after. The 2L run's day counter started 2026-07-21.)*
+- **Brain-MCP server** (`src/brain_mcp.py`, `7b7faee`): the data
+  product's first door — 9 read-only tools over the brain, zero new
+  deps, SEBI posture (data-not-advice) enforced BY TEST; repo
+  `.mcp.json` = zero-step Claude Code demo. Localhost-only until gate G2.
+- **Time Machine backfill**: NSE free archive floor probed = ~Oct 2019;
+  `bhavcopy_clerk --backfill 2500` running on the Mac toward ~6.8 years
+  of full-market daily bars. ₹0 spent.
+- **Master plan + budget**: `docs/cycle_hunter_plan.md` — replay history
+  backward / validate forward, proof-gated spend (G1–G5, ₹1L cap),
+  Aug-8 Max-window schedule. THE living plan; PLAN.md is history.
+- **Workflow**: `docs/dev_workflow.md` — the Speed & Scale protocol
+  (scoped tests while iterating, full suite ONLY as the pre-deploy
+  gate, zero-tech-debt rule, parallel-lane rules). Binding on every
+  session.
 
 ---
 

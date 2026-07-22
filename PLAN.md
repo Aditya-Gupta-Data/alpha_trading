@@ -1,4 +1,11 @@
-# Phase 4 Plan (replanned 2026-07-04)
+# Phase 4 Plan (replanned 2026-07-04) — HISTORICAL
+
+> **2026-07-22: this document is history, kept for the record.** The
+> living master plan is `docs/cycle_hunter_plan.md` (replay-backward /
+> validate-forward + the G1–G5 proof-gated budget + the Aug-8 schedule);
+> the build queue index is `docs/planning_index.md`; the workflow rules
+> are `docs/dev_workflow.md`. Much of what this file planned has since
+> shipped in evolved form — see `ARCHITECTURE.md` for what exists now.
 
 This replaces the step order in `aditrader-phase4-master-handoff-prd.md` (that
 file's 4A/4B/4C only covered part of what we actually want). The replan is

@@ -11,8 +11,18 @@ through 50 files: find the department, go to its manager.
 
 Written for the strategic brain, not the compiler: every department below says,
 in plain English, what it does, what goes in, what comes out, and the ONE place
-to change it. Current as of `52003d9` (2026-07-18, review #2), suite **1174
-collected**.
+to change it. Current as of `7b7faee` (2026-07-22, build sprint opened), suite
+**1480 green**.
+
+> **2026-07-22 addendum:** Department 7 (Interfaces) gained a second front
+> door — `src/brain_mcp.py`, the read-only MCP server exposing the brain's
+> DERIVED data (tiers, valuation, earnings quality, event→outcome memory)
+> to external AI clients; data-not-advice posture test-enforced, localhost
+> until gate G2 (`docs/cycle_hunter_plan.md`). Department 1's lake is being
+> deepened to ~Oct-2019 by the Time Machine backfill (existing
+> `bhavcopy_clerk`, free NSE archives). Dev workflow rules now live in
+> `docs/dev_workflow.md` (scoped tests while iterating; full suite only as
+> the deploy gate).
 
 > **Numbering note (review #2):** Department 8 — ANALYSIS was added in this
 > revision. In the *data flow* it sits between DATA (1) and DECISION (2), but

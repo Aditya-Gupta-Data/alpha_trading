@@ -101,6 +101,50 @@ This refusal is the credibility of every future match.
 4. The k=4 cap is load-bearing. With this few episodes, more clusters
    would be numerology.
 
+## ADDENDUM (written ~05:00 after the indices backfill) — did the archetypes survive richer evidence?
+
+**Partly. And the way they didn't is the most valuable finding of the
+night.** After the India VIX/NIFTY/sector backfill (1,680 sessions,
+zero failures), the fingerprints rebuilt with the India channels live —
+but note the honesty boundary: index history starts Oct-2019 and a
+z-score needs 252 sessions, so **India channels genuinely speak only
+for the 2021+ episodes** (Ukraine, CPI-2022, SVB, Israel-Gaza,
+election-2024, yen-carry). Everything earlier — including COVID —
+still fingerprints on global channels alone.
+
+What happened:
+
+1. **Pairs where BOTH episodes have India channels re-measured for
+   real** — and moved hugely: Ukraine↔Israel-Gaza 0.671→1.169,
+   Ukraine↔election-2024 0.672→1.050. The machine learned that
+   *India experienced these shocks very differently* (2022: a hard
+   NIFTY/VIX regime; late-2023/2024 shocks: shrugged off fast).
+2. **Ukraine↔taper stayed exactly 0.606** — that pair still compares
+   on shared global channels only, so the original headline stands on
+   its original evidence base.
+3. **The clusters reshuffled**: Ukraine was expelled from the
+   INR-transmission family (its India-channel disagreement with
+   Israel-Gaza/election-2024 outweighed its global-channel kinship
+   with taper), IL&FS lost its splendid isolation and merged into the
+   financial family, em-2006 and SVB swapped sides. Ukraine's nearest
+   neighbours are STILL demonetization (0.557) and taper (0.606) —
+   its new cluster placement is a linkage artifact of mixing
+   channel-rich and channel-poor pairs in one average.
+
+**The honest conclusion: with mixed channel coverage, pairwise
+distances are not fully commensurable, and the k=4 taxonomy is
+coverage-sensitive.** That is not a bug in DTW — it is the data
+telling us the clustering needs one refinement before M3 may lean on
+it: **M2.1 — cluster on the common-channel core first (stable across
+all 17), then use India channels as a WITHIN-family refinement for the
+2021+ episodes.** Small, principled, queued. Until M2.1 lands, the
+Archetype IDs should be treated as provisional; the pairwise distance
+matrix (which is per-pair honest) is the trustworthy layer.
+
+Both builds are preserved: the four-channel build in this report's
+body (git history of `data/macro_templates.json` at `b6932ed`), the
+richer rebuild on disk now.
+
 ## What runs next (already in motion overnight)
 
 1. Indices backfill 2019→today (India VIX, NIFTY, 12 sector indices) —

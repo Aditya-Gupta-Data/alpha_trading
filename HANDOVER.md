@@ -1,5 +1,33 @@
 # HANDOVER.md — Cold-Start Brief
 
+## ⛔ STEALTH MODE — the operating posture as of 2026-07-23 (owner pivot, READ FIRST)
+
+**We are a PROPRIETARY DESK. No public surface for ≥6 months and NOT
+before October 1st.** Gate G2 (public waitlist / landing page /
+storefront) is **SHELVED — do not build it.** The engine must earn a
+real, forward-tested **60-session Dept-5 scoring track record** before a
+storefront is reconsidered.
+
+The three stealth priorities, in order:
+1. **The October clock.** `analysis/macro_nightly` on the VM cron (19:50
+   IST) is the SOLE heartbeat — its one job is to run *flawlessly* every
+   trading day and grow `logs/macro_regime_declarations.jsonl` toward 60
+   sessions. Evaluate Oct 1. **Reliability > features.**
+2. **Finish Auto-Discovery AD-2→AD-4** — the significance layer
+   (block-bootstrap + phase-randomized surrogates + out-of-sample
+   rejection), then court wiring, then dual-catalog.
+3. **Internal Prop Desk Dashboard** — a weekly private markdown/HTML
+   report (shadow P&L, vetoes, newly discovered regimes). NOT public.
+
+**Immediate next build (post doc-review):** the fingerprint CACHE — so
+the nightly `declare()` is light enough to never fail on the e2-micro.
+Then AD-2. See `docs/cycle_hunter_plan.md` + `docs/auto_discovery_spec.md`.
+
+**⚠️ Honest VM state:** the nightly has ticked the ledger once manually;
+the OFFICIAL clock starts once the cache + a VM re-seed (deep lake +
+current templates) land — that's the very next step after doc review.
+The VM currently runs the earlier (pre-deep-sector) seed.
+
 ## ✅ THURSDAY PROTOCOL — CLEARED 2026-07-22 (owner returned early, ordered "start building")
 
 The 2026-07-21 blocking directive (bug-ledger report → analyze → fix,
@@ -26,9 +54,23 @@ remains THE first read after any future autonomous stretch.
   +CYIENTDLM +SCHAEFFLER / −BOSCHLTD −UNITDSPR, tier table rebuilt.
 - **Time Machine complete**: full-market bhavcopy 2019-09-30→today
   (1,765 sessions, 465MB, ₹0).
-- Next: M3 playbook tables, M4 state tracker (spec §3-4), Phase B
-  miners. Multi-agent worker mode was tried and RETIRED (collisions —
+- Multi-agent worker mode was tried and RETIRED (collisions —
   dev_workflow §3b); single-lane sprint is the operating mode.
+
+## 📌 2026-07-23 DAY SPRINT — Macro Engine COMPLETE (M2.1→M4 + AD-1), then Stealth pivot
+
+- **M2.1** (`e0f29a5` and earlier): core-channel clustering fixed the
+  coverage reshuffle; slow-burn horizon class added.
+- **M3 playbooks + M4 tracker + `macro_nightly` VM heartbeat** — all
+  live, committed, deployed.
+- **Deep-history backfill:** owner manually pulled pre-2019 index CSVs
+  (NSE bot-walls every automated path); the ROBUST `index_history`
+  clerk ingested them — NIFTY 1995→, Pharma 2005→, Auto 2004→, IT
+  2002→, Bank 2000→. +4 slow-burn episodes → clustered n=5 by macro era
+  (labels overruled by data again). `docs/macro_clustering_report.md`.
+- **AD-1 unsupervised discovery FUNCTIONAL** (`analysis/auto_discovery`),
+  AD-2→4 scaffolded (`docs/auto_discovery_spec.md`).
+- Then **Stealth Mode** (see top). Feature dev PAUSED for this doc sync.
 
 ## 📌 2026-07-22 MILESTONES — the build sprint opened (code freeze lifted by owner)
 

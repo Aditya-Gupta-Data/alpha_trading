@@ -11,20 +11,54 @@ through 50 files: find the department, go to its manager.
 
 Written for the strategic brain, not the compiler: every department below says,
 in plain English, what it does, what goes in, what comes out, and the ONE place
-to change it. Current as of `bc0315d` (2026-07-23 overnight sprint), suite
-**1526 green**.
+to change it. Current as of `e0f29a5` (2026-07-23, Macro Regime Engine complete
++ Stealth Mode), suite **1559 green**.
 
-> **2026-07-23 addendum — the Macro Regime Engine (spec:
-> `docs/macro_regime_engine_spec.md`):** Department 1 gained the
-> cross-asset macro lake (`ingestion/macro_lake` FRED leg +
-> `ingestion/indices_lake` NSE indices leg → `data/lake/macro/`);
-> Department 8 gained the ONE macro featurizer
-> (`analysis/macro_features`) and the fingerprint/archetype engine
-> (`analysis/macro_fingerprints` → `data/macro_templates.json`).
-> First real build: 4 archetypes over 17 shocks —
-> `docs/macro_clustering_report.md`. Execution authority: NONE yet —
-> M4's tracker must survive Dept 5 scoring before any advisory hook
-> arms (spec §3-4).
+> **2026-07-23 — the Macro Regime Engine, FINALIZED (spec:
+> `docs/macro_regime_engine_spec.md`; auto-discovery:
+> `docs/auto_discovery_spec.md`). Zero execution authority — advisory
+> only, gated behind Dept-5 scoring.**
+>
+> **Data (Dept 1):** the cross-asset macro lake `data/lake/macro/` —
+> `ingestion/macro_lake` (FRED globals, US10Y→1962/USDINR→1973/
+> Brent→1987/DXY→2006), `ingestion/indices_lake` (NSE daily indices,
+> 2019→), and `ingestion/index_history` (the ROBUST drop-folder clerk
+> for owner-supplied pre-2019 CSVs — BOM-safe, header-aware, salvages
+> dirty/empty-column files; NIFTY now 1995→, sectors to 2000-2013).
+> NSE pre-2019 index history is NOT scriptable (bot-walled on every
+> path); owner manual-download + this clerk is the only route.
+>
+> **Analysis (Dept 8):** the ONE featurizer `analysis/macro_features`
+> feeds everything. `analysis/macro_fingerprints` = M2.1: banded
+> multivariate DTW → k-capped archetypes, clustering on the
+> commensurable GLOBAL core channels only (India channels are a
+> within-family refinement, never a clustering input — this fixed the
+> coverage-driven reshuffle). **Two horizon species, never
+> cross-compared:** shock (A*, T-20..+120, z20) and slow_burn (S*,
+> T-60..+500, z60). `analysis/macro_playbooks` = M3: horizon-clocked
+> per-(archetype,phase,sector) excess-vs-NIFTY, n stated.
+> `analysis/macro_regime` = M4: nightly declaration onto the immutable
+> `logs/macro_regime_declarations.jsonl` ledger. `analysis/macro_nightly`
+> = the VM heartbeat cron (19:50 IST) driving it.
+>
+> **The clustering twist (the moat working):** with the catalog at 20
+> shocks + 7 slow-burns, archetypes group by DATA, not human labels —
+> Ukraine sits with the taper tantrum, and the four new slow-burns
+> clustered into ONE n=5 family by macro ERA (2009-2015 regime), not by
+> El-Niño-vs-rate-cycle. n≥3 achieved for the dominant slow-burn family.
+> `docs/macro_clustering_report.md` has the numbers.
+>
+> **Auto-Discovery (`analysis/auto_discovery`, the true moat):** AD-1
+> FUNCTIONAL — unsupervised shock (change-point) + slow-burn (DTW motif)
+> scan proposing episodes with NO human labels; AD-2 (significance:
+> surrogates + OOS + stability), AD-3 (court), AD-4 (dual-catalog)
+> scaffolded. Reuses the ONE featurizer + ONE DTW.
+>
+> **Upcoming (next build, post doc-review):** a fingerprint CACHE —
+> episode fingerprints are static (change only on catalog rebuild), so
+> they'll be persisted once on the Mac and READ by the VM nightly,
+> making `declare()` ultra-light and bulletproof on the e2-micro (the
+> October-clock reliability fix).
 
 > **2026-07-22 addendum:** Department 7 (Interfaces) gained a second front
 > door — `src/brain_mcp.py`, the read-only MCP server exposing the brain's

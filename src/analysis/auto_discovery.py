@@ -25,7 +25,10 @@ nightly cron.
 
 CLI: python3 -m src.analysis.auto_discovery [--dry-run]
 """
+import cmath
 import json
+import math
+import random
 from datetime import date, datetime
 from pathlib import Path
 
@@ -164,36 +167,241 @@ def discover(lake_dir=None, out_path=None, dry_run=False) -> dict:
     return doc
 
 
-# ---------------------------------------- AD-2: significance (scaffold)
+# ------------------------------------------ AD-2: the significance layer
+# The moat: reject noise. A candidate is admitted only if it beats BOTH
+# null models AND survives a held-out test. Stdlib only.
 
-def significance_gate(candidate, lake_dir=None, n_surrogates=200):
-    """SCAFFOLD (AD-2). A candidate becomes admissible only if it beats a
-    null of phase-randomized / block-bootstrap surrogates of the same
-    series (preserving autocorrelation), recurs out-of-sample, and is
-    stable to window perturbation. Returns a verdict dict; until built,
-    an explicit not-built marker so nothing is silently admitted."""
-    return {"admitted": False, "status": "AD-2_not_built",
-            "candidate": candidate,
-            "todo": ["phase_randomized_surrogates", "block_bootstrap",
-                     "out_of_sample_recurrence", "window_stability"]}
-
-
-# ---------------------------------------- AD-3: court wiring (scaffold)
-
-def route_to_court(admitted_candidates):
-    """SCAFFOLD (AD-3). Admitted candidates -> validation/registry as
-    hypotheses under the SAME lifecycle every human episode faces;
-    survivors land in data/discovered_episodes.json (source='auto')."""
-    return {"status": "AD-3_not_built", "would_route": admitted_candidates}
+def _mean_std(xs):
+    n = len(xs)
+    if n == 0:
+        return 0.0, 0.0
+    m = math.fsum(xs) / n
+    var = math.fsum((x - m) ** 2 for x in xs) / n
+    return m, math.sqrt(var)
 
 
-# ------------------------------------- AD-4: dual-catalog (scaffold)
+def block_bootstrap(series, block_len, rng):
+    """Same-length surrogate from random contiguous blocks (holes
+    dropped) — preserves within-block autocorrelation, destroys the
+    rest. The simple, robust null."""
+    vals = [v for v in series if v is not None]
+    n = len(vals)
+    if n == 0:
+        return []
+    out = []
+    while len(out) < n:
+        start = rng.randint(0, max(0, n - block_len))
+        out.extend(vals[start:start + block_len])
+    return out[:n]
+
+
+def _fft(a, invert=False):
+    """Iterative radix-2 Cooley-Tukey FFT (len power of two), pure
+    stdlib — the primitive behind phase randomization."""
+    n = len(a)
+    a = list(a)
+    j = 0
+    for i in range(1, n):
+        bit = n >> 1
+        while j & bit:
+            j ^= bit
+            bit >>= 1
+        j |= bit
+        if i < j:
+            a[i], a[j] = a[j], a[i]
+    length = 2
+    while length <= n:
+        wlen = cmath.exp((2j if invert else -2j) * math.pi / length)
+        for i in range(0, n, length):
+            w, half = 1 + 0j, length >> 1
+            for k in range(half):
+                u, v = a[i + k], a[i + k + half] * w
+                a[i + k], a[i + k + half] = u + v, u - v
+                w *= wlen
+        length <<= 1
+    return [x / n for x in a] if invert else a
+
+
+def phase_randomize(series, rng):
+    """Same-length surrogate with the SAME power spectrum (all linear
+    autocorrelation preserved) but random, conjugate-symmetric phases
+    (real output), rescaled to the original mean/std. The stricter
+    null."""
+    vals = [float(v) for v in series if v is not None]
+    n = len(vals)
+    if n < 4:
+        return list(vals)
+    size = 1
+    while size < n:
+        size <<= 1
+    spec = _fft([complex(x) for x in vals + [0.0] * (size - n)])
+    for k in range(1, size >> 1):
+        spec[k] = cmath.rect(abs(spec[k]), rng.uniform(0, 2 * math.pi))
+        spec[size - k] = spec[k].conjugate()
+    sur = [x.real for x in _fft(spec, invert=True)][:n]
+    m0, s0 = _mean_std(vals)
+    m1, s1 = _mean_std(sur)
+    return list(vals) if s1 == 0 else [m0 + (x - m1) * s0 / s1 for x in sur]
+
+
+def surrogate_pvalue(observed, surrogate_stats, extreme="high"):
+    """Add-one fraction of surrogates at least as extreme as `observed`.
+    'high' where bigger=stronger (shock stress); 'low' where
+    smaller=stronger (motif DTW distance)."""
+    if not surrogate_stats:
+        return 1.0
+    if extreme == "high":
+        k = sum(1 for s in surrogate_stats if s >= observed)
+    else:
+        k = sum(1 for s in surrogate_stats if s <= observed)
+    return (k + 1) / (len(surrogate_stats) + 1)
+
+
+def oos_split(dates, frac=0.6):
+    """Index splitting `dates` into a train head and a held-out tail."""
+    return max(1, int(len(dates) * frac))
+
+
+def _max_stress_of(channels_vals, window):
+    """Peak system-stress a channel-value set produces — the statistic a
+    shock must beat its surrogates on (reuses the AD-1 stress def)."""
+    keys = list(channels_vals)
+    if not keys:
+        return 0.0
+    idx = [str(i) for i in range(len(channels_vals[keys[0]]))]
+    stress = system_stress(idx, channels_vals, window=window)
+    real = [s for s in stress if s is not None]
+    return max(real) if real else 0.0
+
+
+def shock_significance(observed_stress, channels_vals, window=20,
+                       n_surrogates=200, alpha=0.05, rng=None):
+    """Admit a shock only if its stress beats BOTH block-bootstrap AND
+    phase-randomized surrogates at `alpha` — one null is not enough."""
+    rng = rng or random.Random(0)
+    block_max, phase_max = [], []
+    for _ in range(n_surrogates):
+        block_max.append(_max_stress_of(
+            {c: block_bootstrap(v, window, rng)
+             for c, v in channels_vals.items()}, window))
+        phase_max.append(_max_stress_of(
+            {c: phase_randomize(v, rng)
+             for c, v in channels_vals.items()}, window))
+    p_block = surrogate_pvalue(observed_stress, block_max, "high")
+    p_phase = surrogate_pvalue(observed_stress, phase_max, "high")
+    return {"kind": "shock", "observed": round(observed_stress, 3),
+            "p_block": round(p_block, 4), "p_phase": round(p_phase, 4),
+            "admitted": p_block < alpha and p_phase < alpha,
+            "n_surrogates": n_surrogates, "alpha": alpha}
+
+
+def held_out_confirms(candidate_date, dates, stress, oos_frac=0.6):
+    """Held-out honesty: a shock in the TRAIN head must have a
+    comparably-extreme event in the held-out tail too (recurs, not a
+    one-off fit); a candidate already in the tail self-confirms."""
+    split = oos_split(dates, oos_frac)
+    if candidate_date >= dates[split]:
+        return True, "candidate in held-out tail"
+    obs = stress[dates.index(candidate_date)]
+    tail = [s for s in stress[split:] if s is not None]
+    if obs is None or not tail:
+        return False, "no held-out stress to compare"
+    return max(tail) >= 0.7 * obs, f"held-out peak {max(tail):.2f} vs 0.7*{obs:.2f}"
+
+
+def significance_gate(candidate, lake_dir=None, n_surrogates=200,
+                      alpha=0.05, oos_frac=0.6, rng=None):
+    """AD-2 verdict for ONE shock candidate: beats both null models AND
+    the held-out test → admitted. Reads the core channels once; a motif
+    verdict (same surrogate machinery, DTW statistic) is the next slice.
+    Returns the full verdict — nothing is admitted silently."""
+    if candidate.get("kind") and candidate["kind"] != "shock":
+        return {"admitted": False, "status": "motif_gate_pending",
+                "candidate": candidate}
+    dates, matrix = _aligned_closes(lake_dir)
+    if not dates:
+        return {"admitted": False, "status": "no_data", "candidate": candidate}
+    stress = system_stress(dates, matrix)
+    cdate = candidate["date"]
+    if cdate not in dates:
+        return {"admitted": False, "status": "date_not_in_lake",
+                "candidate": candidate}
+    observed = stress[dates.index(cdate)]
+    sig = shock_significance(observed or 0.0, matrix,
+                             n_surrogates=n_surrogates, alpha=alpha, rng=rng)
+    oos_ok, oos_detail = held_out_confirms(cdate, dates, stress, oos_frac)
+    sig["held_out_confirmed"] = oos_ok
+    sig["held_out_detail"] = oos_detail
+    sig["date"] = cdate
+    sig["admitted"] = sig["admitted"] and oos_ok      # BOTH nulls AND held-out
+    return sig
+
+
+# ------------------------------------------------- AD-3: candidate court
+
+DISCOVERED_EPISODES_PATH = ROOT / "data" / "discovered_episodes.json"
+
+
+def route_to_court(admitted_candidates, out_path=None, dry_run=False):
+    """AD-3: record AD-2-ADMITTED candidates as provisional discovered
+    episodes (`source='auto'`) in `data/discovered_episodes.json` — the
+    input the dual-catalog tracker (AD-4) reads. Only candidates whose
+    verdict says `admitted` are written; the rest are dropped with a
+    count. (Full Dept-5 `validation/registry` enrolment — the same
+    lifecycle human episodes face — is the remaining slice; this writes
+    the provisional artifact it will consume.) Idempotent atomic write."""
+    admitted = [c for c in admitted_candidates if c.get("admitted")]
+    doc = {"built_at": datetime.now().isoformat(timespec="seconds"),
+           "source": "auto", "n_admitted": len(admitted),
+           "n_rejected": len(admitted_candidates) - len(admitted),
+           "episodes": [{"name": f"auto_{c.get('kind', 'shock')}_"
+                                 f"{c.get('date', '?')}",
+                         "anchor": c.get("date"), "kind": c.get("kind",
+                                                                 "shock"),
+                         "source": "auto", "significance": c}
+                        for c in admitted]}
+    if not dry_run:
+        p = Path(out_path or DISCOVERED_EPISODES_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(doc, indent=1, default=str))
+        tmp.replace(p)
+    return doc
+
+
+# ------------------------------------------------- AD-4: dual catalog
 
 def merged_catalog(human_path=None, discovered_path=None):
-    """SCAFFOLD (AD-4). The tracker declares against human ∪ auto
-    archetypes; agreement = strongest signal, an auto-only regime the
-    human catalog missed = a discovery card."""
-    return {"status": "AD-4_not_built"}
+    """AD-4: the union the tracker declares against — human episodes
+    (`macro_episodes.yaml`) ∪ auto-discovered (`discovered_episodes.json`).
+    Each entry tagged by `source`; an auto episode whose anchor sits far
+    from every human anchor is flagged `discovery=True` (a regime the
+    human catalog MISSED — the card-worthy find). Agreement (auto near a
+    human anchor) is the strongest signal. Missing files degrade to
+    whatever exists (honest, never a crash)."""
+    try:
+        human = FP.load_episodes(human_path)
+    except (OSError, ValueError):
+        human = []
+    try:
+        disc = json.loads(
+            Path(discovered_path or DISCOVERED_EPISODES_PATH).read_text()
+        ).get("episodes", [])
+    except (OSError, json.JSONDecodeError):
+        disc = []
+    human_anchors = [date.fromisoformat(e["anchor"]) for e in human
+                     if e.get("anchor")]
+    out = [{**e, "source": "human"} for e in human]
+    for e in disc:
+        anchor = e.get("anchor")
+        near = False
+        if anchor and human_anchors:
+            ad = date.fromisoformat(anchor)
+            near = any(abs((ad - h).days) <= 90 for h in human_anchors)
+        out.append({**e, "source": "auto", "discovery": not near})
+    return {"n_human": len(human), "n_auto": len(disc),
+            "n_discoveries": sum(1 for e in out
+                                 if e.get("discovery")), "episodes": out}
 
 
 if __name__ == "__main__":

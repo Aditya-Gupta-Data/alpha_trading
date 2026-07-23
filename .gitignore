@@ -26,6 +26,11 @@ data/
 # Claude Code's local, machine-specific settings -- not part of the app
 .claude/
 
+# Stage-A drop folder — regenerable CSVs the fetch script writes for the
+# index_history clerk to ingest; the merged lake (also gitignored) is the
+# artifact, not these throwaway inputs.
+drop/
+
 # Lovable React frontend — co-located here for local dev convenience, but
 # version-controlled ONLY on the `lovable-ui` branch (decoupled branch
 # strategy). It must never be committed to `main`, so `main` ignores it

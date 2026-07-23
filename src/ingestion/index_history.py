@@ -59,7 +59,13 @@ _MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
      "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], start=1)}
 
-_CLOSE_COL = 4          # Date,Open,High,Low,Close,...
+_CLOSE_COL = 4          # NSE standard fallback: Date,Open,High,Low,Close,…
+
+
+def _clean(cell: str) -> str:
+    """Strip whitespace AND a leading UTF-8 BOM (older NSE exports carry
+    one on the header's first cell)."""
+    return (cell or "").replace("﻿", "").strip()
 
 
 def index_key_from_filename(filename: str):
@@ -87,23 +93,68 @@ def _parse_ddmonyyyy(raw: str):
         return None
 
 
+def _locate_columns(line: str):
+    """If `line` is a header row (names Date + Close, no parseable date in
+    col 0), return {'date': i, 'close': j}; else None. Column-order is
+    NSE's to shuffle and older files drop columns — so we find Close BY
+    NAME, never by fixed position."""
+    cells = [_clean(c).lower() for c in line.split(",")]
+    if not cells or _parse_ddmonyyyy(cells[0]) is not None:
+        return None                       # a data row, not a header
+    date_i = close_i = None
+    for j, c in enumerate(cells):
+        if c == "date" and date_i is None:
+            date_i = j
+        elif c == "close" and close_i is None:
+            close_i = j
+    return ({"date": date_i, "close": close_i}
+            if date_i is not None and close_i is not None else None)
+
+
 def parse_export(raw) -> list:
-    """NSE historical-index CSV -> [(iso_date, close|None)] in file order.
-    A '-'/blank close is a NULL-honest hole (None), never 0.0 or a
-    dropped row; header and short rows are skipped."""
+    """NSE historical-index CSV -> [(iso_date, close_float)] in file order.
+
+    ROBUST (2026-07-23 owner directive): salvage every row that yields a
+    real Date + Close, whatever else is missing. Handles the UTF-8 BOM,
+    empty OHLC/volume cells (older files carry only Close), reduced
+    schemas (Date,Close) and column reshuffles by finding Close BY NAME
+    from the header. A row with no parseable close is dropped (a
+    close-less day has no price for the lake), never a crash."""
     text = raw.decode("utf-8", errors="replace") if isinstance(
         raw, (bytes, bytearray)) else str(raw)
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return []
+
+    cols_map, start = None, 0
+    for i, ln in enumerate(lines[:5]):        # header sits near the top
+        cols_map = _locate_columns(ln)
+        if cols_map:
+            start = i + 1
+            break
+
     rows = []
-    for line in text.splitlines():
-        if not line.strip():
+    for ln in lines[start:]:
+        cells = ln.split(",")
+        if cols_map:
+            di, ci = cols_map["date"], cols_map["close"]
+            if len(cells) <= max(di, ci):
+                continue                      # row truncated past Close
+            iso = _parse_ddmonyyyy(_clean(cells[di]))
+            val = ML._value(_clean(cells[ci]))
+        else:
+            # no recognizable header — heuristic: Date,Close or the
+            # NSE-standard Close at index 4
+            iso = _parse_ddmonyyyy(_clean(cells[0]))
+            if len(cells) == 2:
+                val = ML._value(_clean(cells[1]))
+            elif len(cells) > _CLOSE_COL:
+                val = ML._value(_clean(cells[_CLOSE_COL]))
+            else:
+                val = None
+        if iso is None or val is None:        # need BOTH to salvage
             continue
-        cols = line.split(",")
-        if len(cols) <= _CLOSE_COL:
-            continue
-        iso = _parse_ddmonyyyy(cols[0])
-        if iso is None:
-            continue                      # header or junk
-        rows.append((iso, ML._value(cols[_CLOSE_COL])))
+        rows.append((iso, val))
     return rows
 
 

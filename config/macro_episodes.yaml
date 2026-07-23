@@ -110,3 +110,25 @@ episodes:
     class: monetary
     horizon: slow_burn
     why: Off-cycle RBI hike opens the 250bp tightening cycle to Feb-2023; a year-long rate-transmission grind, not a shock day.
+
+  # ---- slow-burn family expansion (owner directive 2026-07-23, for n>=3) --
+  - anchor: 2009-06-01
+    name: el_nino_2009_10
+    class: climate
+    horizon: slow_burn
+    why: Strong El Niño onset; 2009 was India's worst monsoon since 1972 — a deep rural-demand/food-inflation squeeze into 2010.
+  - anchor: 2018-09-01
+    name: el_nino_2018_19
+    class: climate
+    horizon: slow_burn
+    why: Weak-moderate El Niño developing post-monsoon into winter 2018-19; a milder rural cycle (the weak-case counterpart to 2009/2014).
+  - anchor: 2010-03-19
+    name: rbi_hike_2010_11
+    class: monetary
+    horizon: slow_burn
+    why: RBI's first post-GFC hike opens the 2010-11 tightening cycle (repo 4.75%->8.5%); a year-plus rate-transmission grind.
+  - anchor: 2013-09-20
+    name: rbi_hike_2013_14
+    class: monetary
+    horizon: slow_burn
+    why: Rajan's INR-defence hikes post-taper; a distinct rate cycle layered over the taper shock (different anchor, different clock).

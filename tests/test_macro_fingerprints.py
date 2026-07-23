@@ -105,6 +105,33 @@ def test_cluster_is_deterministic():
     assert FP.cluster(dist, names) == FP.cluster(dist, names)
 
 
+# --------------------------------------------------- M2.1: core layer
+
+def test_channel_rows_filters_to_the_requested_subset():
+    traj = {"rows": [{"offset": 0, "date": "d", "vector": {
+        "series": {"BRENT": {"z20": 1.0}, "NIFTY": {"z20": 9.0},
+                   "INDIAVIX": {"z20": 8.0}},
+        "pairs": {"dxy_brent_corr60": -0.5}}}]}
+    full = FP.channel_rows(traj)
+    core = FP.channel_rows(traj, channels=FP.CORE_CHANNELS)
+    assert "NIFTY:z20" in full[0] and "NIFTY:z20" not in core[0]
+    assert core[0] == {"BRENT:z20": 1.0, "dxy_brent_corr60": -0.5}
+
+
+def test_india_only_divergence_cannot_reshuffle_the_taxonomy():
+    """The addendum's exact pathology, as a regression test: two
+    episodes identical on core channels but violently different on the
+    India channels must still be ZERO apart at the clustering layer."""
+    a = [{"BRENT:z20": v, "INDIAVIX:z20": 5.0} for v in SPIKE]
+    b = [{"BRENT:z20": v, "INDIAVIX:z20": -5.0} for v in SPIKE]
+    core_a = [{k: r[k] for k in r if k in FP.CORE_CHANNELS} for r in a]
+    core_b = [{k: r[k] for k in r if k in FP.CORE_CHANNELS} for r in b]
+    d_core, _ = FP.dtw_distance(core_a, core_b)
+    d_full, _ = FP.dtw_distance(a, b)
+    assert d_core == 0.0                      # taxonomy layer: identical
+    assert d_full > 0.0                       # refinement layer: sees it
+
+
 # ----------------------------------------------------------- catalog
 
 def test_load_episodes_normalizes_and_refuses_malformed(tmp_path):
@@ -135,7 +162,7 @@ def _canned_trajectory(monkeypatch, shapes):
     monkeypatch.setattr(FP.MF, "trajectory", fake_trajectory)
     monkeypatch.setattr(
         FP, "channel_rows",
-        lambda traj: shapes.get(traj["anchor"], []))
+        lambda traj, channels=None: shapes.get(traj["anchor"], []))
 
 
 def test_build_templates_names_exclusions_and_is_deterministic(
@@ -154,18 +181,19 @@ def test_build_templates_names_exclusions_and_is_deterministic(
     out_path = tmp_path / "templates.json"
     doc = FP.build_templates(episodes_path=catalog, out_path=out_path,
                              k_max=1)
-    assert [e["name"] for e in doc["excluded"]] == ["too_old"]
+    shock = doc["horizons"]["shock"]
+    assert [e["name"] for e in shock["excluded"]] == ["too_old"]
     flags = {e["name"]: e["included"] for e in doc["episodes"]}
     assert flags == {"covid": True, "ukraine": True, "too_old": False}
-    assert len(doc["archetypes"]) == 1            # two spikes, one family
-    assert set(doc["archetypes"][0]["members"]) == {"covid", "ukraine"}
+    assert len(shock["archetypes"]) == 1          # two spikes, one family
+    assert set(shock["archetypes"][0]["members"]) == {"covid", "ukraine"}
     on_disk = json.loads(out_path.read_text())
-    assert on_disk["distances"] == doc["distances"]
+    assert on_disk["horizons"]["shock"]["distances"] == shock["distances"]
 
     again = FP.build_templates(episodes_path=catalog,
                                out_path=out_path, dry_run=True, k_max=1)
-    assert again["distances"] == doc["distances"]
-    assert again["archetypes"] == doc["archetypes"]
+    assert again["horizons"]["shock"]["distances"] == shock["distances"]
+    assert again["horizons"]["shock"]["archetypes"] == shock["archetypes"]
 
 
 def test_build_templates_dry_run_writes_nothing(tmp_path, monkeypatch):
@@ -178,3 +206,33 @@ def test_build_templates_dry_run_writes_nothing(tmp_path, monkeypatch):
     FP.build_templates(episodes_path=catalog, out_path=out_path,
                        dry_run=True)
     assert not out_path.exists()
+
+
+def test_horizons_never_cross_compare(tmp_path, monkeypatch):
+    """A shock and a slow-burn episode with IDENTICAL shapes must land
+    in separate horizon blocks with no pairwise distance between them —
+    a war and a weather cycle are different species."""
+    catalog = tmp_path / "eps.yaml"
+    catalog.write_text(
+        "episodes:\n"
+        "  - {anchor: 2020-02-24, name: warlike, class: geopolitical,"
+        " why: a}\n"
+        "  - {anchor: 2023-06-01, name: nino, class: climate,"
+        " horizon: slow_burn, why: b}\n")
+    _canned_trajectory(monkeypatch, {"2020-02-24": _rows(SPIKE),
+                                     "2023-06-01": _rows(SPIKE)})
+    doc = FP.build_templates(episodes_path=catalog, dry_run=True)
+    assert set(doc["horizons"]) == {"shock", "slow_burn"}
+    assert doc["horizons"]["shock"]["distances"] == {}   # singleton each
+    assert doc["horizons"]["slow_burn"]["distances"] == {}
+    ids = [a["id"] for h in doc["horizons"].values()
+           for a in h["archetypes"]]
+    assert ids == ["A1", "S1"]        # separate namespaces, no mixing
+
+
+def test_load_episodes_refuses_unknown_horizon(tmp_path):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("episodes:\n"
+                   "  - {anchor: 2020-02-24, name: x, horizon: medium}\n")
+    with pytest.raises(ValueError):
+        FP.load_episodes(bad)

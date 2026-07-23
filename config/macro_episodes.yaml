@@ -9,8 +9,14 @@
 #              the last session <= anchor at fingerprint time)
 #   name     — short handle the whole firm uses
 #   class    — seed hint ONLY (geopolitical | financial | monetary |
-#              pandemic | domestic_political). Clustering may disagree;
-#              the DTW archetypes are the truth, this is the prior.
+#              pandemic | domestic_political | climate). Clustering may
+#              disagree; the DTW archetypes are the truth, this is the prior.
+#   horizon  — shock (default: the T-20..T+120 session window) or
+#              slow_burn (owner directive 2026-07-23: multi-month/multi-
+#              year cycles — El Niño, rate cycles — fingerprinted on the
+#              T-60..T+500 window with z60 channels and a wider DTW
+#              band). Horizons NEVER cross-compare: a war and a weather
+#              cycle are different species (the commensurability law).
 #   why      — one line, the audit trail
 #
 # Dating discipline: anchors are the recognized SHOCK DAY (first major
@@ -87,3 +93,20 @@ episodes:
     name: yen_carry_unwind
     class: financial
     why: BoJ-triggered global carry unwind Monday; violent vol spike, V-shaped recovery template.
+
+  # ---- slow-burn cycles (owner directive 2026-07-23) -----------------
+  - anchor: 2014-06-02
+    name: el_nino_2014_16
+    class: climate
+    horizon: slow_burn
+    why: Strong El Niño onset; back-to-back deficient monsoons 2014-15 squeezed rural demand, food CPI and FMCG/Auto over ~2 years.
+  - anchor: 2023-06-01
+    name: el_nino_2023_24
+    class: climate
+    horizon: slow_burn
+    why: El Niño declared June 2023; patchy 2023 monsoon, rural-demand drag and food-inflation cycle into 2024.
+  - anchor: 2022-05-04
+    name: rbi_hike_cycle_2022_23
+    class: monetary
+    horizon: slow_burn
+    why: Off-cycle RBI hike opens the 250bp tightening cycle to Feb-2023; a year-long rate-transmission grind, not a shock day.

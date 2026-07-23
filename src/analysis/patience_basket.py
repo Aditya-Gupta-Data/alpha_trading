@@ -70,6 +70,29 @@ def eod_chain() -> dict:
     except Exception as exc:
         print(f"  (artifact ship failed [{exc}])")
     report["artifacts_shipped"] = shipped
+    # MACRO LEG (2026-07-23, Macro Regime Engine M4): ingest tonight's
+    # cross-asset rows (FRED + NSE indices) and put the regime
+    # declaration ON THE RECORD — the 60-session public scoring clock
+    # (spec §3, gates G2/G5). Fail-open like every other stage: a dead
+    # macro leg leaves the ledger honest-empty tonight, never breaks
+    # the darlings chain. Advisory authority: none (Dept-5 graduation).
+    try:
+        from src.ingestion.macro_lake import ingest_all as _macro_ingest
+        from src.ingestion.indices_lake import ingest_day as _idx_ingest
+        from src.analysis.macro_regime import declare as _regime_declare
+        macro = _macro_ingest()
+        idx = _idx_ingest(_date.today())
+        reg = _regime_declare()
+        report["macro"] = {
+            "fred_ok": macro.get("ok"), "fred_failed":
+                [f.get("series") for f in macro.get("failed") or []],
+            "indices_no_file": idx.get("no_file"),
+            "regime_declared": reg.get("declared"),
+            "regime_reason": reg.get("reason"),
+            "regime_best": (reg.get("best") or {}).get("archetype")}
+    except Exception as exc:
+        print(f"  (macro leg failed [{exc}])")
+        report["macro"] = {"error": str(exc)[:200]}
     return report
 
 

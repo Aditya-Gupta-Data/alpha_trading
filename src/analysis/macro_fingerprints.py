@@ -8,6 +8,12 @@ episodes (config/macro_episodes.yaml) -> fingerprint channel matrices
 DTW distances -> average-linkage agglomerative clustering, HARD-CAPPED
 at K_MAX archetypes -> data/macro_templates.json.
 
+M2.1 (the clustering-report addendum's fix): the TAXONOMY layer runs on
+CORE_CHANNELS — the global set every episode can in principle show — so
+pairwise distances stay commensurable across the catalog; the India
+channels (observable for 2021+ episodes only) live in the artifact's
+`india_view` as a within-family refinement and never steer clustering.
+
 Honesty machinery:
   * A channel missing at an offset (hole/insufficient history) is simply
     absent for that offset; the local DTW cost uses the channels BOTH
@@ -43,8 +49,41 @@ T_MINUS, T_PLUS = 20, 120
 UNOBSERVED_PENALTY = 3.0   # ~a 3-sigma disagreement; documented, versioned
 _INF = float("inf")
 
+# HORIZON CLASSES (owner directive 2026-07-23: slow-burn cycles). A war
+# and a weather cycle are different species: each horizon gets its own
+# window geometry, z-channel tempo (z20 for shocks, z60 for multi-month
+# cycles), DTW band (elasticity scales with the window) and k-cap
+# (3 slow-burn episodes cannot support more than 2 families). Horizons
+# NEVER cross-compare — the commensurability law, extended.
+HORIZONS = {
+    "shock": {"t_minus": T_MINUS, "t_plus": T_PLUS, "band": DTW_BAND,
+              "k_max": K_MAX, "z_window": "z20", "id_prefix": "A"},
+    "slow_burn": {"t_minus": 60, "t_plus": 500, "band": 75,
+                  "k_max": 2, "z_window": "z60", "id_prefix": "S"},
+}
+
 # The comparable channels of a fingerprint row (order fixed = vector shape).
-CHANNELS = tuple(f"{s}:z20" for s in MF.SERIES) + ("dxy_brent_corr60",)
+CHANNELS = (tuple(f"{s}:z20" for s in MF.SERIES)
+            + tuple(f"{s}:z60" for s in MF.SERIES)
+            + ("dxy_brent_corr60",))
+
+# M2.1 (2026-07-23, the addendum's fix): ARCHETYPES cluster on the core
+# channels every episode can in principle show — the global set. India
+# channels (indices history starts 2019-10 + the 252-session z baseline
+# ⇒ they speak only for 2021+ episodes) would make pairwise distances
+# incommensurable across the catalog and reshuffle the taxonomy by
+# coverage, not by behavior — verified live in the 05:00 rebuild. They
+# stay a WITHIN-family refinement (the artifact's `india_view`), never
+# a clustering input. Each horizon has its own tempo's core set.
+_GLOBALS = ("BRENT", "DXY", "USDINR", "US10Y")
+CORE_CHANNELS = tuple(f"{s}:z20" for s in _GLOBALS) + ("dxy_brent_corr60",)
+CORE_CHANNELS_SLOW = (tuple(f"{s}:z60" for s in _GLOBALS)
+                      + ("dxy_brent_corr60",))
+INDIA_CHANNELS = ("INDIAVIX:z20", "NIFTY:z20", "INDIAVIX:z60", "NIFTY:z60")
+
+
+def core_channels_for(horizon: str):
+    return CORE_CHANNELS_SLOW if horizon == "slow_burn" else CORE_CHANNELS
 
 
 def load_episodes(path=None):
@@ -57,27 +96,35 @@ def load_episodes(path=None):
     for row in doc.get("episodes") or []:
         anchor = str((row or {}).get("anchor") or "")[:10]
         name = (row or {}).get("name")
-        if not name or len(anchor) != 10:
+        horizon = (row or {}).get("horizon") or "shock"
+        if not name or len(anchor) != 10 or horizon not in HORIZONS:
             raise ValueError(f"malformed episode row: {row!r}")
-        out.append({"anchor": anchor, "name": name,
+        out.append({"anchor": anchor, "name": name, "horizon": horizon,
                     "class": row.get("class"), "why": row.get("why")})
     return out
 
 
-def channel_rows(traj):
+def channel_rows(traj, channels=None):
     """trajectory() output -> one dict per offset holding ONLY the
-    genuinely observed channels ({} for a None vector)."""
+    genuinely observed channels ({} for a None vector). `channels`
+    filters to a subset (M2.1: CORE_CHANNELS for the clustering layer);
+    None keeps every channel."""
+    keep = set(channels) if channels else None
     rows = []
     for r in traj["rows"]:
         vec, out = r.get("vector"), {}
         if vec:
             for s in MF.SERIES:
-                z = (vec["series"].get(s) or {}).get("z20")
-                if z is not None:
-                    out[f"{s}:z20"] = z
+                block = vec["series"].get(s) or {}
+                for zw in ("z20", "z60"):
+                    z = block.get(zw)
+                    if z is not None:
+                        out[f"{s}:{zw}"] = z
             c = vec["pairs"].get("dxy_brent_corr60")
             if c is not None:
                 out["dxy_brent_corr60"] = c
+        if keep is not None:
+            out = {k: v for k, v in out.items() if k in keep}
         rows.append(out)
     return rows
 
@@ -124,13 +171,14 @@ def dtw_distance(rows_a, rows_b, band=DTW_BAND):
     return total / length, round(coverage, 4)
 
 
-def distance_matrix(fingerprints):
+def distance_matrix(fingerprints, band=DTW_BAND):
     """{name: rows} -> ({(a, b): (dist|None, coverage)}, sorted names)."""
     names = sorted(fingerprints)
     out = {}
     for i, a in enumerate(names):
         for b in names[i + 1:]:
-            out[(a, b)] = dtw_distance(fingerprints[a], fingerprints[b])
+            out[(a, b)] = dtw_distance(fingerprints[a], fingerprints[b],
+                                       band=band)
     return out, names
 
 
@@ -185,30 +233,73 @@ def build_templates(lake_dir=None, episodes_path=None, out_path=None,
     whole window is unobservable are EXCLUDED and named — the artifact
     records what it could not see."""
     episodes = load_episodes(episodes_path)
-    fingerprints, excluded = {}, []
-    for ep in episodes:
-        rows = channel_rows(
-            MF.trajectory(ep["anchor"], T_MINUS, T_PLUS, lake_dir))
-        if not any(rows):
-            excluded.append({"name": ep["name"],
-                             "why": "no observable channels in window"})
+    horizons_out = {}
+    for hz, cfg in HORIZONS.items():
+        hz_eps = [e for e in episodes if e["horizon"] == hz]
+        if not hz_eps:
             continue
-        fingerprints[ep["name"]] = rows
-    dist, names = distance_matrix(fingerprints)
-    archetypes = cluster(dist, names, k_max=k_max)
+        core_set = core_channels_for(hz)
+        hz_k_max = cfg["k_max"] if k_max == K_MAX else k_max
+        core_fp, full_fp, excluded = {}, {}, []
+        for ep in hz_eps:
+            traj = MF.trajectory(ep["anchor"], cfg["t_minus"],
+                                 cfg["t_plus"], lake_dir)
+            core = channel_rows(traj, channels=core_set)
+            if not any(core):
+                excluded.append({"name": ep["name"],
+                                 "why": "no observable core channels "
+                                        "in window"})
+                continue
+            core_fp[ep["name"]] = core
+            full_fp[ep["name"]] = channel_rows(traj)
+        # M2.1: the taxonomy layer sees this horizon's CORE channels
+        # only (commensurable across its whole catalog) …
+        dist, names = distance_matrix(core_fp, band=cfg["band"])
+        archetypes = cluster(dist, names, k_max=hz_k_max)
+        # … and the India channels become the WITHIN-family refinement.
+        india_view = []
+        for i, arch in enumerate(archetypes):
+            members = arch["members"]
+            pair_block = {}
+            for x in range(len(members)):
+                for y in range(x + 1, len(members)):
+                    a, b = members[x], members[y]
+                    d, cov = dtw_distance(full_fp[a], full_fp[b],
+                                          band=cfg["band"])
+                    pair_block[f"{a}|{b}"] = {"dtw": d, "coverage": cov}
+            has_india = sorted(
+                m for m in members
+                if any(any(ch in row for ch in INDIA_CHANNELS)
+                       for row in full_fp[m]))
+            india_view.append({"id": f"{cfg['id_prefix']}{i + 1}",
+                               "members_with_india_channels": has_india,
+                               "full_channel_distances": pair_block})
+        horizons_out[hz] = {
+            "params": {"k_max": hz_k_max, "dtw_band": cfg["band"],
+                       "window": [cfg["t_minus"], cfg["t_plus"]],
+                       "clustering_channels": list(core_set)},
+            "episodes": [{**ep, "included": ep["name"] in core_fp}
+                         for ep in hz_eps],
+            "excluded": excluded,
+            "distances": {f"{a}|{b}": {"dtw": v[0], "coverage": v[1]}
+                          for (a, b), v in sorted(dist.items())},
+            "archetypes": [{"id": f"{cfg['id_prefix']}{i + 1}", **c}
+                           for i, c in enumerate(archetypes)],
+            "india_view": india_view,
+        }
+    included = set()
+    for h in horizons_out.values():
+        for arch in h["archetypes"]:
+            included.update(arch["members"])
     doc = {
         "built_at": datetime.now().isoformat(timespec="seconds"),
-        "params": {"k_max": k_max, "dtw_band": DTW_BAND,
-                   "window": [T_MINUS, T_PLUS],
-                   "unobserved_penalty": UNOBSERVED_PENALTY,
-                   "channels": list(CHANNELS)},
-        "episodes": [{**ep, "included": ep["name"] in fingerprints}
+        "params": {"unobserved_penalty": UNOBSERVED_PENALTY,
+                   "refinement_channels": list(INDIA_CHANNELS),
+                   "channels": list(CHANNELS),
+                   "horizons": {h: dict(c) for h, c in HORIZONS.items()}},
+        "episodes": [{**ep, "included": ep["name"] in included}
                      for ep in episodes],
-        "excluded": excluded,
-        "distances": {f"{a}|{b}": {"dtw": v[0], "coverage": v[1]}
-                      for (a, b), v in sorted(dist.items())},
-        "archetypes": [{"id": f"A{i + 1}", **c}
-                       for i, c in enumerate(archetypes)],
+        "horizons": horizons_out,
     }
     if not dry_run:
         path = Path(out_path or TEMPLATES_PATH)
@@ -230,6 +321,7 @@ if __name__ == "__main__":
     print(json.dumps({
         "built_at": result["built_at"],
         "included": sum(1 for e in result["episodes"] if e["included"]),
-        "excluded": result["excluded"],
-        "archetypes": result["archetypes"],
+        "horizons": {h: {"excluded": blk["excluded"],
+                         "archetypes": blk["archetypes"]}
+                     for h, blk in result["horizons"].items()},
     }, indent=2, default=str))

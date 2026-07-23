@@ -221,6 +221,23 @@ def _playbook_slice(playbooks, archetype, phase):
             .get(phase)) or None
 
 
+def _strategy_slice(archetype, phase, registry_path=None, require_cache=False):
+    """The Strategy Registry's ranked recipes for a DECLARED (archetype,
+    phase) cell — spec §7. Fail-OPEN: any error (missing artifact, bad
+    shape) yields None and NEVER blocks the declaration/ledger write; the
+    scoring clock must tick even if the registry is absent. top_strategies
+    itself already returns an honest 'unavailable' status rather than
+    raising — the try/except is belt-and-suspenders."""
+    if not (archetype and phase):
+        return None
+    try:
+        from src.analysis.strategy_registry import top_strategies
+        return top_strategies(archetype, phase, registry_path=registry_path,
+                              require_cache=require_cache)
+    except Exception:
+        return None
+
+
 def _last_ledger_line(ledger_path):
     try:
         lines = Path(ledger_path).read_text().strip().splitlines()
@@ -254,7 +271,7 @@ def _transition(prev, now):
 def declare(lake_dir=None, templates_path=None, playbooks_path=None,
             state_path=None, ledger_path=None, broadcast_fn=None,
             clock=None, dry_run=False, require_cache=False,
-            cache_path=None):
+            cache_path=None, strategies_path=None):
     """The nightly run: read lake -> evaluate -> write state artifact +
     ledger line -> ONE Discord card iff the family changed. Fail-open
     on the card; dry_run performs NO writes and NO card.
@@ -305,10 +322,13 @@ def declare(lake_dir=None, templates_path=None, playbooks_path=None,
                 continue
             verdict = evaluate(current, fps, members, horizon=hz)
         verdict["cache_status"] = cstatus
+        declared_archetype = (verdict["best"]["archetype"]
+                              if verdict["declared"] else None)
         verdict["playbook_slice"] = _playbook_slice(
-            playbooks,
-            verdict["best"]["archetype"] if verdict["declared"] else None,
-            verdict["phase"])
+            playbooks, declared_archetype, verdict["phase"])
+        verdict["strategy_slice"] = _strategy_slice(
+            declared_archetype, verdict["phase"],
+            registry_path=strategies_path, require_cache=require_cache)
         horizons_out[hz] = verdict
 
     declared_any = any(v["declared"] for v in horizons_out.values())
@@ -321,7 +341,8 @@ def declare(lake_dir=None, templates_path=None, playbooks_path=None,
         "declared": declared_any,
         "horizons": {hz: {k: v.get(k) for k in
                           ("declared", "reason", "phase", "best",
-                           "runner_up", "playbook_slice", "cache_status")}
+                           "runner_up", "playbook_slice", "strategy_slice",
+                           "cache_status")}
                      for hz, v in horizons_out.items()},
         "advisory_note": ("public forecast on the record; zero execution "
                           "authority until Dept-5 scoring passes"),
@@ -342,12 +363,22 @@ def declare(lake_dir=None, templates_path=None, playbooks_path=None,
                        "horizons": {}}
         for hz, v in doc["horizons"].items():
             b = v.get("best") or {}
+            ss = v.get("strategy_slice") or {}
             ledger_line["horizons"][hz] = {
                 "declared": v["declared"], "reason": v["reason"],
                 "phase": v["phase"],
                 "archetype": b.get("archetype"),
                 "episode": b.get("best_episode"),
-                "similarity": b.get("similarity")}
+                "similarity": b.get("similarity"),
+                # the strategy calls put ON the record for Dept-5 scoring:
+                # the compact top-3, so the immutable ledger stays lean
+                "strategy_verdict": ss.get("verdict"),
+                "strategy_status": ss.get("status"),
+                "top_strategies": [
+                    {"name": s.get("name"), "ev": s.get("ev"),
+                     "hit_rate": s.get("hit_rate"),
+                     "wilson_lb": s.get("wilson_lb")}
+                    for s in (ss.get("strategies") or [])[:3]]}
         with ledger.open("a") as fh:
             fh.write(json.dumps(ledger_line, default=str) + "\n")
         if _transition(prev, doc):
@@ -364,6 +395,14 @@ def declare(lake_dir=None, templates_path=None, playbooks_path=None,
                             f"{v.get('phase') or ''} (analog "
                             f"{b.get('best_episode')}, sim "
                             f"{b.get('similarity')})")
+                        ss = v.get("strategy_slice") or {}
+                        tops = ss.get("strategies") or []
+                        if tops:
+                            t = tops[0]
+                            lines.append(
+                                f"   ↳ {ss.get('verdict')}: {t['name']} "
+                                f"EV {t['ev']:+.1%} (hit {t['hit_rate']:.0%}, "
+                                f"LB {t['wilson_lb']:.0%})")
                     else:
                         lines.append(f"{hz}: — ({v['reason']})")
                 fn({"event": "macro_regime_transition",

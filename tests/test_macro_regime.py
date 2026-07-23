@@ -84,10 +84,14 @@ def _stub_environment(tmp_path, monkeypatch, current_pattern):
                         lambda lake_dir=None, length=60, horizon="shock":
                         ("2026-07-23", current_pattern))
     monkeypatch.setattr(MR, "episode_fingerprints",
-                        lambda templates, lake_dir=None, horizon="shock":
+                        lambda templates, lake_dir=None, horizon="shock",
+                        cache_path=None, require_cache=False:
                         {"e1": episode,
                          "e2": _rows([v * 1.01 for v in SHAPE]),
                          "e3": _rows([v * 0.99 for v in SHAPE])})
+    # isolate declare's cache-status read from the real production cache
+    monkeypatch.setattr(MR, "_load_fingerprint_cache",
+                        lambda *a, **k: (None, "hit"))
     return tpl, pb
 
 
@@ -197,6 +201,46 @@ def test_episode_fingerprints_recomputes_when_cache_stale(tmp_path,
     out = MR.episode_fingerprints(templates, horizon="shock",
                                   cache_path=cache)
     assert called and out == {"e1": _rows(SHAPE)}     # recomputed, not stale
+
+
+def test_require_cache_raises_instead_of_recomputing(tmp_path):
+    """The e2-micro fail-fast: with require_cache=True a stale/absent
+    cache RAISES CacheUnavailable — it must NEVER fall into the 30-min
+    recompute. MF.trajectory is booby-trapped to prove no recompute."""
+    import json
+    templates = {"built_at": "LIVE",
+                 "horizons": {"shock": {"episodes": [
+                     {"name": "e1", "anchor": "2020-01-01",
+                      "included": True}]}}}
+    cache = tmp_path / "fp.json"
+    cache.write_text(json.dumps({"built_at": "OLD", "horizons": {}}))  # stale
+    import pytest as _pt
+    with _pt.raises(MR.CacheUnavailable) as ei:
+        MR.episode_fingerprints(templates, horizon="shock",
+                                cache_path=cache, require_cache=True)
+    assert ei.value.status == "miss_stale"
+
+
+def test_declare_abstains_and_screams_on_cache_miss(tmp_path, monkeypatch):
+    """require_cache declare: a cache miss makes the horizon ABSTAIN with
+    a named cache_miss reason + stamped status, never a recompute."""
+    tpl, pb = _stub_environment(tmp_path, monkeypatch, _rows(SHAPE)[40:100])
+    # a genuine miss: the status read reports it AND episode_fingerprints
+    # raises (require_cache) exactly as the real code does on the VM
+    monkeypatch.setattr(MR, "_load_fingerprint_cache",
+                        lambda *a, **k: (None, "miss_absent"))
+
+    def _raise(*a, **k):
+        raise MR.CacheUnavailable("shock", "miss_absent")
+    monkeypatch.setattr(MR, "episode_fingerprints", _raise)
+    doc = MR.declare(templates_path=tpl, playbooks_path=pb,
+                     state_path=tmp_path / "s.json",
+                     ledger_path=tmp_path / "l.jsonl",
+                     broadcast_fn=lambda p: None, require_cache=True)
+    shock = doc["horizons"]["shock"]
+    assert shock["declared"] is False
+    assert shock["reason"] == "cache_miss_absent_aborted"
+    assert shock["cache_status"] == "miss_absent"
 
 
 def test_phase_mapping_edges():

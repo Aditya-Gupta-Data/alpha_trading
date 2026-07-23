@@ -70,18 +70,32 @@ def run(fred_fn=None, indices_fn=None, declare_fn=None,
     except Exception as exc:
         stages["indices"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
 
-    # 3. declare onto the immutable ledger — the actual clock tick
+    # 3. declare onto the immutable ledger — the actual clock tick.
+    #    THE VM is a DUMB EXECUTOR: require_cache=True forbids the 30-min
+    #    recompute — a stale/absent cache makes the run abstain fast and
+    #    scream, never grind the e2-micro (owner directive 2026-07-23).
     try:
         if declare_fn is None:
-            from src.analysis.macro_regime import declare as declare_fn
+            from src.analysis.macro_regime import declare as _declare
+            def declare_fn():
+                return _declare(require_cache=True)
         d = declare_fn()
+        horizons = d.get("horizons") or {}
         stages["declare"] = {
             "declared": d.get("declared"),
             "horizons": {h: {"declared": v.get("declared"),
                              "phase": v.get("phase"),
+                             "cache_status": v.get("cache_status"),
                              "archetype": (v.get("best") or {}).get(
                                  "archetype")}
-                         for h, v in (d.get("horizons") or {}).items()}}
+                         for h, v in horizons.items()}}
+        # silence ban: a cache miss is a LOUD ops fault, not a silent grind
+        misses = [h for h, v in horizons.items()
+                  if str(v.get("cache_status") or "").startswith("miss")]
+        if misses:
+            stages["declare"]["ALERT"] = (
+                f"Cache Miss/Stale - Aborting (horizons: {misses}) — "
+                "reseed the VM's fingerprint cache from the Mac")
     except Exception as exc:
         stages["declare"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
 

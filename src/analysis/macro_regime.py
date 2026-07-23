@@ -93,33 +93,44 @@ def current_rows(lake_dir=None, length=CURRENT_LEN, horizon="shock"):
                                   channels=FP.core_channels_for(horizon))
 
 
+class CacheUnavailable(Exception):
+    """Raised when the fingerprint cache is stale/absent AND the caller
+    demanded it (require_cache). The e2-micro executor must NEVER fall
+    back to the 30-minute recompute — it aborts and abstains instead."""
+
+    def __init__(self, horizon, status):
+        self.horizon, self.status = horizon, status
+        super().__init__(f"fingerprint cache {status} for {horizon}")
+
+
 def _load_fingerprint_cache(templates, horizon, cache_path=None):
-    """The static core fingerprints for a horizon, from the cache —
-    ONLY if the cache's stamp matches the live templates (same rebuild)
-    and covers this horizon. Any mismatch/miss returns None so the
-    caller recomputes (the cache can make declare() faster, never
-    wrong)."""
+    """(rows, status) for a horizon's static fingerprints from the cache.
+    status ∈ 'hit' | 'miss_stale' (stamp ≠ live templates) | 'miss_absent'
+    (no file / horizon not present). rows is None on any miss."""
     p = Path(cache_path) if cache_path else FP.FINGERPRINT_CACHE_PATH
     try:
         cache = json.loads(p.read_text())
     except (OSError, json.JSONDecodeError):
-        return None
+        return None, "miss_absent"
     if cache.get("built_at") != templates.get("built_at"):
-        return None                       # stale — templates rebuilt since
+        return None, "miss_stale"         # templates rebuilt since
     rows = (cache.get("horizons") or {}).get(horizon)
-    return rows or None
+    return (rows, "hit") if rows else (None, "miss_absent")
 
 
 def episode_fingerprints(templates, lake_dir=None, horizon="shock",
-                         cache_path=None):
-    """{episode: core-channel fingerprint rows} for every included
-    episode of one horizon block. Reads the fingerprint CACHE when it
-    matches the live templates (the e2-micro fix — no nightly recompute
-    of 20+ static trajectories); recomputes through the featurizer as a
-    correctness-preserving fallback when the cache is missing/stale."""
-    cached = _load_fingerprint_cache(templates, horizon, cache_path)
+                         cache_path=None, require_cache=False):
+    """{episode: core-channel fingerprint rows} for one horizon. Reads
+    the fingerprint CACHE when it matches the live templates (the
+    e2-micro fix — no nightly recompute). `require_cache=True` (the VM
+    executor) turns a cache miss into a RAISE (CacheUnavailable) rather
+    than the 30-min recompute; the default recomputes as a
+    correctness-preserving fallback (the Mac rebuild lane)."""
+    cached, status = _load_fingerprint_cache(templates, horizon, cache_path)
     if cached is not None:
         return cached                     # ultra-light: no featurizer pass
+    if require_cache:
+        raise CacheUnavailable(horizon, status)
 
     cfg = FP.HORIZONS[horizon]
     block = templates["horizons"].get(horizon) or {"episodes": []}
@@ -242,10 +253,17 @@ def _transition(prev, now):
 
 def declare(lake_dir=None, templates_path=None, playbooks_path=None,
             state_path=None, ledger_path=None, broadcast_fn=None,
-            clock=None, dry_run=False):
+            clock=None, dry_run=False, require_cache=False,
+            cache_path=None):
     """The nightly run: read lake -> evaluate -> write state artifact +
     ledger line -> ONE Discord card iff the family changed. Fail-open
-    on the card; dry_run performs NO writes and NO card."""
+    on the card; dry_run performs NO writes and NO card.
+
+    `require_cache=True` (the VM executor, via macro_nightly) FORBIDS the
+    30-minute recompute: a stale/absent fingerprint cache makes that
+    horizon ABSTAIN with a named `cache_miss_*` reason rather than grind
+    the e2-micro. Every horizon stamps its `cache_status` (hit/miss_*/
+    recomputed) — a fallback is never silent again (the silence ban)."""
     templates = json.loads(
         Path(templates_path or TEMPLATES_PATH).read_text())
     try:
@@ -262,14 +280,31 @@ def declare(lake_dir=None, templates_path=None, playbooks_path=None,
         as_of = as_of or hz_as_of
         members = {a["id"]: a["members"]
                    for a in templates["horizons"][hz]["archetypes"]}
+        _, cstatus = _load_fingerprint_cache(templates, hz, cache_path)
         if not current or not any(current):
             verdict = {"declared": False,
                        "reason": "empty_current_window", "phase": None,
                        "horizon": hz, "best": None, "runner_up": None,
                        "per_episode": {}}
         else:
-            fps = episode_fingerprints(templates, lake_dir, horizon=hz)
+            try:
+                fps = episode_fingerprints(templates, lake_dir, horizon=hz,
+                                           cache_path=cache_path,
+                                           require_cache=require_cache)
+                if cstatus != "hit":
+                    cstatus = "recomputed"
+            except CacheUnavailable as exc:
+                # THE fail-fast: abstain, do NOT recompute on the e2-micro
+                verdict = {"declared": False,
+                           "reason": f"cache_{exc.status}_aborted",
+                           "phase": None, "horizon": hz, "best": None,
+                           "runner_up": None, "per_episode": {}}
+                verdict["playbook_slice"] = None
+                verdict["cache_status"] = exc.status
+                horizons_out[hz] = verdict
+                continue
             verdict = evaluate(current, fps, members, horizon=hz)
+        verdict["cache_status"] = cstatus
         verdict["playbook_slice"] = _playbook_slice(
             playbooks,
             verdict["best"]["archetype"] if verdict["declared"] else None,
@@ -284,9 +319,9 @@ def declare(lake_dir=None, templates_path=None, playbooks_path=None,
                    "horizon_match": HORIZON_MATCH,
                    "templates_built_at": templates["built_at"]},
         "declared": declared_any,
-        "horizons": {hz: {k: v[k] for k in
+        "horizons": {hz: {k: v.get(k) for k in
                           ("declared", "reason", "phase", "best",
-                           "runner_up", "playbook_slice")}
+                           "runner_up", "playbook_slice", "cache_status")}
                      for hz, v in horizons_out.items()},
         "advisory_note": ("public forecast on the record; zero execution "
                           "authority until Dept-5 scoring passes"),

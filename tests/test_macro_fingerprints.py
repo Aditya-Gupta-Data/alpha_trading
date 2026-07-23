@@ -216,6 +216,30 @@ def test_build_templates_writes_fingerprint_cache(tmp_path, monkeypatch):
     assert cache["horizons"]["shock"]["covid"] == _rows(SPIKE)
 
 
+def test_redirected_build_never_touches_the_production_cache(tmp_path,
+                                                            monkeypatch):
+    """THE leak regression (2026-07-23): a build redirected to a tmp
+    out_path (every test) must write its cache BESIDE that out_path and
+    NEVER the production FINGERPRINT_CACHE_PATH — no cache_path needed.
+    This is the bug that poisoned the VM's cache with 2-episode test
+    data and cost a 30-min recompute."""
+    # keep the real cache basename; only the DIRECTORY marks "production"
+    prod = tmp_path / "prodzone" / "macro_fingerprints_cache.json"
+    monkeypatch.setattr(FP, "FINGERPRINT_CACHE_PATH", prod)
+    catalog = tmp_path / "eps.yaml"
+    catalog.write_text(
+        "episodes:\n"
+        "  - {anchor: 2020-02-24, name: covid, class: pandemic, why: a}\n"
+        "  - {anchor: 2022-02-24, name: ukraine, class: geopolitical, why: b}\n")
+    _canned_trajectory(monkeypatch, {"2020-02-24": _rows(SPIKE),
+                                     "2022-02-24": _rows(SPIKE)})
+    sub = tmp_path / "run"
+    FP.build_templates(episodes_path=catalog, out_path=sub / "templates.json",
+                       k_max=1)                     # NO cache_path given
+    assert not prod.exists()                        # production untouched
+    assert (sub / "macro_fingerprints_cache.json").exists()   # beside output
+
+
 def test_build_templates_dry_run_writes_nothing(tmp_path, monkeypatch):
     catalog = tmp_path / "eps.yaml"
     catalog.write_text(

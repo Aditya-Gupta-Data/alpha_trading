@@ -60,6 +60,41 @@ to change it. Current as of `e0f29a5` (2026-07-23, Macro Regime Engine complete
 > making `declare()` ultra-light and bulletproof on the e2-micro (the
 > October-clock reliability fix).
 
+## Phase 2: Qualitative Engine (The Knowledge Graph) — VISION, NOT BUILT
+
+> **Owner directive 2026-07-23. Logged for the future; no code exists.
+> Build only after the macro/DTW engine has its Oct-1 track record.**
+
+Today's engine is **quantitative** — pure price/cross-asset math (DTW
+over the macro lake). Phase 2 adds the **qualitative/fundamental** half:
+a **3D associative Knowledge Graph** (GraphRAG / spreading-activation
+network) for news, filings, supply-chain and thematic reasoning.
+
+- **Shape, not a flat table.** Entities are **nodes** (companies,
+  sectors, themes, commodities, people, events); relationships are
+  **edges** (Tata Motors —makes→ EV; EV —needs→ Lithium; Exide
+  —supplies→ Tata Motors). Weighted, typed, directional.
+- **Spreading activation, not search.** A news event ("EV orders surge")
+  injects energy at the matched nodes ("EV", "Tata Motors"); activation
+  **spreads along edges** and decays with distance. Nodes where multiple
+  activation fronts **intersect and shine** are the surfaced signal —
+  hidden supply-chain plays and connected sectors light up on their own,
+  without a query enumerating them. The brain-map metaphor: related
+  concepts co-fire.
+- **Why a graph beats a table here.** Second- and third-order links
+  (the supplier of a supplier; the sector that quietly moves with a
+  theme) are edge-traversals in a graph but combinatorial joins in a
+  flat schema — the graph makes the non-obvious connection cheap.
+- **Ties into the existing brain.** This is the qualitative sibling of
+  the current `brain_map`/entity-affinity graph (Dept 4) and the macro
+  regime engine — a macro regime could *bias* activation (e.g. a
+  crisis phase amplifies defensive-sector nodes), fusing the two halves.
+- **Honesty discipline carries over:** edges are evidence-weighted; an
+  activation with thin support abstains rather than asserts a phantom
+  play. Same court (Dept 5) governs what a lit intersection may *advise*.
+
+Deferred deliberately — the quantitative moat earns its record first.
+
 > **2026-07-22 addendum:** Department 7 (Interfaces) gained a second front
 > door — `src/brain_mcp.py`, the read-only MCP server exposing the brain's
 > DERIVED data (tiers, valuation, earnings quality, event→outcome memory)

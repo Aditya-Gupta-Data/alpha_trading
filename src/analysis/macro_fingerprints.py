@@ -313,14 +313,22 @@ def build_templates(lake_dir=None, episodes_path=None, out_path=None,
         "horizons": horizons_out,
     }
     cache = {"built_at": doc["built_at"], "horizons": cache_horizons}
+    path = Path(out_path or TEMPLATES_PATH)
+    # THE cache follows the templates (2026-07-23 leak fix): a redirected
+    # build (tests -> tmp) writes its cache BESIDE its templates, so a
+    # test can NEVER clobber the production cache. Only an explicit
+    # cache_path overrides; a bare production build uses both defaults.
+    if cache_path is not None:
+        cpath = Path(cache_path)
+    elif out_path is not None:
+        cpath = path.parent / FINGERPRINT_CACHE_PATH.name
+    else:
+        cpath = FINGERPRINT_CACHE_PATH
     if not dry_run:
-        path = Path(out_path or TEMPLATES_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(doc, indent=1, default=str))
         tmp.replace(path)
-        # write the fingerprint cache alongside, same built_at stamp
-        cpath = Path(cache_path or FINGERPRINT_CACHE_PATH)
         ctmp = cpath.with_suffix(".tmp")
         ctmp.write_text(json.dumps(cache, default=str))
         ctmp.replace(cpath)

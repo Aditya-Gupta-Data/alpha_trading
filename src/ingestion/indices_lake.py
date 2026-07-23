@@ -65,6 +65,7 @@ INDEX_MAP = {
     "NIFTY_FIN_SERVICE": "Nifty Financial Services",
     "NIFTY_MEDIA": "Nifty Media",
     "NIFTY_INFRA": "Nifty Infrastructure",
+    "NIFTY_HEALTHCARE": "Nifty Healthcare Index",
 }
 _NAME_TO_KEY = {v.lower(): k for k, v in INDEX_MAP.items()}
 

@@ -25,6 +25,28 @@
 # frozen; corrections are a new commit with a reason, never a silent edit.
 
 episodes:
+  # ---- deep-past crises (owner directive 2026-07-23 eve; unlocked by the
+  #      1995+ NIFTY backfill. DXY (2006+) and India VIX (2019+) are dark
+  #      this far back, so these cluster on the common macro core only —
+  #      coverage-honest, like the existing pre-2006 pair. They carry NO
+  #      sector legs (deepest sector is 2000), so they deepen the REGIME
+  #      taxonomy, not the sector-strategy analog counts. ----
+  - anchor: 1997-10-28
+    name: asian_crisis_1997
+    class: financial
+    why: Asian-contagion mini-crash (global -7% session); baht/ringgit collapse spilling into EM, INR pressured.
+  - anchor: 1998-08-31
+    name: russia_ltcm_1998
+    class: financial
+    why: Russia default + LTCM near-collapse; the reference EM-credit/liquidity seizure of the 1990s.
+  - anchor: 2000-04-17
+    name: dotcom_crash_2000
+    class: financial
+    why: Nasdaq's -25% April week; India's IT-heavy index led the domestic unwind off the Feb-2000 tech peak.
+  - anchor: 2001-03-13
+    name: ketan_parekh_2001
+    class: domestic_political
+    why: KP payment-crisis + exchange default cascade layered on the global tech wreck; a domestic market-structure shock.
   - anchor: 2001-09-17
     name: nine_eleven
     class: geopolitical
@@ -93,6 +115,19 @@ episodes:
     name: yen_carry_unwind
     class: financial
     why: BoJ-triggered global carry unwind Monday; violent vol spike, V-shaped recovery template.
+
+  # ---- sector-rich 2010s additions (owner directive 2026-07-23 eve). Unlike
+  #      the deep-past block, these fall inside the 2010+ sector-history
+  #      window (post Stage-A backfill), so they DO grow the Strategy
+  #      Registry's sector-strategy analog counts — the actual PREFER lever. ----
+  - anchor: 2016-06-24
+    name: brexit_2016
+    class: geopolitical
+    why: Referendum-result session; global risk-off, GBP crash, safe-haven bid — a one-session shock that round-tripped.
+  - anchor: 2018-02-06
+    name: volmageddon_2018
+    class: financial
+    why: XIV/short-vol blow-up; the VIX-spike/equity-air-pocket template, layered on India's LTCG-tax + PNB-fraud month.
 
   # ---- slow-burn cycles (owner directive 2026-07-23) -----------------
   - anchor: 2014-06-02

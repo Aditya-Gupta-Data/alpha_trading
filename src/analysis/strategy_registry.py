@@ -358,9 +358,15 @@ def build_strategies(templates_path=None, lake_dir=None, out_path=None,
         for arch in block["archetypes"]:
             members_by_arch[(hz, arch["id"])] = arch["members"]
 
-    # score every (strategy, cell) above the floor; collect p-values so ONE
-    # Benjamini-Hochberg pass corrects the entire build at once
-    raw_cells, pvals, index_map = {}, [], []
+    # score every (strategy, cell) above the floor. REAL and PLACEBO
+    # hypotheses get PARALLEL Benjamini-Hochberg batches (the placebo.py law:
+    # placebos are the false-discovery METER — they must NOT inflate the real
+    # correction's denominator, or a fistful of controls would make the real
+    # theses structurally impossible to clear). The real batch still corrects
+    # across the WHOLE build (every real strategy x cell at once), never
+    # per-cell — that is the anti-overfitting guard.
+    raw_cells = {}
+    batches = {"real": {"p": [], "idx": []}, "placebo": {"p": [], "idx": []}}
     for spec in specs:
         hz = spec["horizon"]
         phases = PB.PHASES_BY_HORIZON[hz]
@@ -379,12 +385,14 @@ def build_strategies(templates_path=None, lake_dir=None, out_path=None,
                        "thesis": spec.get("thesis"), **_aggregate_returns(legs)}
                 cell = raw_cells.setdefault((aid, phase), [])
                 cell.append(row)
-                pvals.append(row["p_two_sided"])
-                index_map.append((aid, phase, len(cell) - 1))
+                lane = "placebo" if row["source"] == "placebo" else "real"
+                batches[lane]["p"].append(row["p_two_sided"])
+                batches[lane]["idx"].append((aid, phase, len(cell) - 1))
 
-    passed = sg.benjamini_hochberg(pvals, q=FDR_Q)
-    for (aid, phase, i), ok in zip(index_map, passed):
-        raw_cells[(aid, phase)][i]["bh_significant"] = bool(ok)
+    for b in batches.values():
+        passed = sg.benjamini_hochberg(b["p"], q=FDR_Q)
+        for (aid, phase, i), ok in zip(b["idx"], passed):
+            raw_cells[(aid, phase)][i]["bh_significant"] = bool(ok)
 
     # rank each cell on the honest lower bound; split real vs placebo
     table, placebo_total, placebo_survivors = {}, 0, 0

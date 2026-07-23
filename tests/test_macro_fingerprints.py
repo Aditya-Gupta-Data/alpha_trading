@@ -196,6 +196,26 @@ def test_build_templates_names_exclusions_and_is_deterministic(
     assert again["horizons"]["shock"]["archetypes"] == shock["archetypes"]
 
 
+def test_build_templates_writes_fingerprint_cache(tmp_path, monkeypatch):
+    """The cache is written alongside the templates, stamped with the
+    SAME built_at, holding each included episode's core rows."""
+    catalog = tmp_path / "eps.yaml"
+    catalog.write_text(
+        "episodes:\n"
+        "  - {anchor: 2020-02-24, name: covid, class: pandemic, why: a}\n"
+        "  - {anchor: 2022-02-24, name: ukraine, class: geopolitical, why: b}\n")
+    _canned_trajectory(monkeypatch, {"2020-02-24": _rows(SPIKE),
+                                     "2022-02-24": _rows(SPIKE)})
+    out_path = tmp_path / "templates.json"
+    cache_path = tmp_path / "fp_cache.json"
+    doc = FP.build_templates(episodes_path=catalog, out_path=out_path,
+                             cache_path=cache_path, k_max=1)
+    cache = json.loads(cache_path.read_text())
+    assert cache["built_at"] == doc["built_at"]        # same rebuild stamp
+    assert set(cache["horizons"]["shock"]) == {"covid", "ukraine"}
+    assert cache["horizons"]["shock"]["covid"] == _rows(SPIKE)
+
+
 def test_build_templates_dry_run_writes_nothing(tmp_path, monkeypatch):
     catalog = tmp_path / "eps.yaml"
     catalog.write_text(
@@ -203,9 +223,10 @@ def test_build_templates_dry_run_writes_nothing(tmp_path, monkeypatch):
         "  - {anchor: 2020-02-24, name: covid, class: pandemic, why: a}\n")
     _canned_trajectory(monkeypatch, {"2020-02-24": _rows(SPIKE)})
     out_path = tmp_path / "templates.json"
+    cache_path = tmp_path / "fp_cache.json"
     FP.build_templates(episodes_path=catalog, out_path=out_path,
-                       dry_run=True)
-    assert not out_path.exists()
+                       cache_path=cache_path, dry_run=True)
+    assert not out_path.exists() and not cache_path.exists()
 
 
 def test_horizons_never_cross_compare(tmp_path, monkeypatch):

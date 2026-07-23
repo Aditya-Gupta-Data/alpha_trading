@@ -42,6 +42,11 @@ from src.analysis import macro_features as MF
 ROOT = Path(__file__).resolve().parents[2]
 EPISODES_PATH = ROOT / "config" / "macro_episodes.yaml"
 TEMPLATES_PATH = ROOT / "data" / "macro_templates.json"
+# The static episode fingerprints, persisted at (rare) rebuild time so the
+# nightly declare() on the e2-micro READS them instead of recomputing 20+
+# episode trajectories every run. Stamped with the templates' built_at so a
+# consumer can verify the cache matches the live templates (else recompute).
+FINGERPRINT_CACHE_PATH = ROOT / "data" / "macro_fingerprints_cache.json"
 
 K_MAX = 4                  # the taxonomy may not outgrow the evidence
 DTW_BAND = 20              # Sakoe-Chiba: phases may stretch, not teleport
@@ -227,13 +232,16 @@ def cluster(dist, names, k_max=K_MAX):
 
 
 def build_templates(lake_dir=None, episodes_path=None, out_path=None,
-                    dry_run=False, k_max=K_MAX):
+                    dry_run=False, k_max=K_MAX, cache_path=None):
     """The M2 artifact: every episode's fingerprint -> distances ->
     archetypes -> data/macro_templates.json (atomic). Episodes whose
     whole window is unobservable are EXCLUDED and named — the artifact
-    records what it could not see."""
+    records what it could not see. Also persists the static CORE-channel
+    episode fingerprints to `cache_path` so the nightly declare() reads
+    them (the e2-micro reliability fix)."""
     episodes = load_episodes(episodes_path)
     horizons_out = {}
+    cache_horizons = {}
     for hz, cfg in HORIZONS.items():
         hz_eps = [e for e in episodes if e["horizon"] == hz]
         if not hz_eps:
@@ -287,6 +295,9 @@ def build_templates(lake_dir=None, episodes_path=None, out_path=None,
                            for i, c in enumerate(archetypes)],
             "india_view": india_view,
         }
+        # the static core fingerprints for this horizon — what the nightly
+        # declare() would otherwise recompute every run
+        cache_horizons[hz] = core_fp
     included = set()
     for h in horizons_out.values():
         for arch in h["archetypes"]:
@@ -301,12 +312,19 @@ def build_templates(lake_dir=None, episodes_path=None, out_path=None,
                      for ep in episodes],
         "horizons": horizons_out,
     }
+    cache = {"built_at": doc["built_at"], "horizons": cache_horizons}
     if not dry_run:
         path = Path(out_path or TEMPLATES_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(doc, indent=1, default=str))
         tmp.replace(path)
+        # write the fingerprint cache alongside, same built_at stamp
+        cpath = Path(cache_path or FINGERPRINT_CACHE_PATH)
+        ctmp = cpath.with_suffix(".tmp")
+        ctmp.write_text(json.dumps(cache, default=str))
+        ctmp.replace(cpath)
+    doc["_cache"] = cache            # expose for callers/tests (not persisted in the template file)
     return doc
 
 

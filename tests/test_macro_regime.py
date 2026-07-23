@@ -151,6 +151,54 @@ def test_declare_dry_run_writes_nothing_and_no_card(tmp_path, monkeypatch):
     assert cards == []
 
 
+def test_episode_fingerprints_uses_cache_without_recompute(tmp_path,
+                                                           monkeypatch):
+    """When the cache stamp matches the templates, episode_fingerprints
+    returns the cached rows and NEVER calls the featurizer — the whole
+    point of the e2-micro fix. Proven by making MF.trajectory explode."""
+    import json
+    templates = {"built_at": "STAMP-1",
+                 "horizons": {"shock": {"episodes": [
+                     {"name": "e1", "anchor": "2020-01-01",
+                      "included": True}]}}}
+    cache = tmp_path / "fp_cache.json"
+    cache.write_text(json.dumps({
+        "built_at": "STAMP-1",
+        "horizons": {"shock": {"e1": _rows(SHAPE)}}}))
+
+    def boom(*a, **k):
+        raise AssertionError("featurizer must NOT run when cache is valid")
+    monkeypatch.setattr(MR.MF, "trajectory", boom)
+
+    out = MR.episode_fingerprints(templates, horizon="shock",
+                                  cache_path=cache)
+    assert out == {"e1": _rows(SHAPE)}
+
+
+def test_episode_fingerprints_recomputes_when_cache_stale(tmp_path,
+                                                          monkeypatch):
+    """A cache stamped for a DIFFERENT build is ignored — the engine
+    recomputes (correct, never wrong; just slower)."""
+    import json
+    templates = {"built_at": "STAMP-2",
+                 "horizons": {"shock": {"episodes": [
+                     {"name": "e1", "anchor": "2020-01-01",
+                      "included": True}]}}}
+    cache = tmp_path / "fp_cache.json"
+    cache.write_text(json.dumps({
+        "built_at": "STAMP-1",                       # mismatched stamp
+        "horizons": {"shock": {"e1": [{"stale": 1}]}}}))
+    called = []
+    monkeypatch.setattr(MR.MF, "trajectory",
+                        lambda *a, **k: called.append(1) or
+                        {"rows": []})
+    monkeypatch.setattr(MR.FP, "channel_rows",
+                        lambda traj, channels=None: _rows(SHAPE))
+    out = MR.episode_fingerprints(templates, horizon="shock",
+                                  cache_path=cache)
+    assert called and out == {"e1": _rows(SHAPE)}     # recomputed, not stale
+
+
 def test_phase_mapping_edges():
     assert MR._phase_for(0) == "P1_shock"
     assert MR._phase_for(10) == "P1_shock"

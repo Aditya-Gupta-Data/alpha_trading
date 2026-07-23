@@ -93,10 +93,34 @@ def current_rows(lake_dir=None, length=CURRENT_LEN, horizon="shock"):
                                   channels=FP.core_channels_for(horizon))
 
 
-def episode_fingerprints(templates, lake_dir=None, horizon="shock"):
+def _load_fingerprint_cache(templates, horizon, cache_path=None):
+    """The static core fingerprints for a horizon, from the cache —
+    ONLY if the cache's stamp matches the live templates (same rebuild)
+    and covers this horizon. Any mismatch/miss returns None so the
+    caller recomputes (the cache can make declare() faster, never
+    wrong)."""
+    p = Path(cache_path) if cache_path else FP.FINGERPRINT_CACHE_PATH
+    try:
+        cache = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if cache.get("built_at") != templates.get("built_at"):
+        return None                       # stale — templates rebuilt since
+    rows = (cache.get("horizons") or {}).get(horizon)
+    return rows or None
+
+
+def episode_fingerprints(templates, lake_dir=None, horizon="shock",
+                         cache_path=None):
     """{episode: core-channel fingerprint rows} for every included
-    episode of one horizon block (recomputed through the featurizer —
-    the artifact stores distances, not rows)."""
+    episode of one horizon block. Reads the fingerprint CACHE when it
+    matches the live templates (the e2-micro fix — no nightly recompute
+    of 20+ static trajectories); recomputes through the featurizer as a
+    correctness-preserving fallback when the cache is missing/stale."""
+    cached = _load_fingerprint_cache(templates, horizon, cache_path)
+    if cached is not None:
+        return cached                     # ultra-light: no featurizer pass
+
     cfg = FP.HORIZONS[horizon]
     block = templates["horizons"].get(horizon) or {"episodes": []}
     out = {}

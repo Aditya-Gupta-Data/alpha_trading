@@ -765,9 +765,14 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
               _deploy_field(dep), _risk_field(risk)]
     # Directive 4 (#84): anything the Discord budget spooled since the
     # last digest (the 15:45 EOD drains first; this catches the rest).
+    # The queue is a LOG file — drain it from the injected logs_dir so it
+    # honors the same sandbox as every other collector (2026-07-23: this
+    # read used to escape to the real logs/ and pick up live-spooled
+    # signals mid-test — the 07-22 journal-drift lesson, one door over).
     try:
         from src.notifier import drain_digest_queue
-        batched = drain_digest_queue()
+        batched = drain_digest_queue(
+            queue_path=logs_dir / "discord_digest_queue.jsonl")
         if batched:
             fields.append({"name": "📦 Batched signals",
                            "value": batched[:1024], "inline": False})

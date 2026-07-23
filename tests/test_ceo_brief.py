@@ -420,6 +420,25 @@ def test_build_brief_card_shape(logs, tmp_path):
         assert expected in names
 
 
+def test_digest_drain_is_sandboxed_to_the_injected_logs_dir(logs, tmp_path):
+    """The batched-signals field drains the digest queue from the
+    INJECTED logs_dir, never the real logs/ (2026-07-23 regression: a
+    live-spooled macro-regime signal leaked into the shape test). A
+    signal in the sandbox queue appears; the card is otherwise clean."""
+    import json
+    (logs / "market.log").write_text("all fine\n")
+    (logs / "discord_digest_queue.jsonl").write_text(
+        json.dumps({"event": "sandbox_signal",
+                    "description": "from the tmp queue"}) + "\n")
+    card = ceo_brief.build_brief_card(
+        logs_dir=logs, state_path=_warm_state(tmp_path / "s.json"),
+        deploy_log_path=tmp_path / "none.jsonl", repo_root=tmp_path,
+        journal_path=tmp_path / "none.jsonl", clock=_clock())
+    batched = [f for f in card["fields"] if "Batched" in f["name"]]
+    assert len(batched) == 1                       # read from the sandbox
+    assert "sandbox_signal" in batched[0]["value"]
+
+
 def test_card_renders_through_the_real_notifier(logs, tmp_path):
     """The payload must survive the Department-6 manager's embed builder."""
     from src.notifier import _build_embed

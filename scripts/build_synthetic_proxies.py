@@ -48,8 +48,12 @@ CONSTITUENTS = {
                      "TECHM.NS", "MPHASIS.NS"],
     "NIFTY_PHARMA": ["SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "LUPIN.NS",
                      "AUROPHARMA.NS", "DIVISLAB.NS"],
-    "NIFTY_AUTO":   ["TATAMOTORS.NS", "M&M.NS", "MARUTI.NS", "HEROMOTOCO.NS",
-                     "BAJAJ-AUTO.NS", "EICHERMOT.NS", "ASHOKLEY.NS"],
+    # TATAMOTORS is UNAVAILABLE on Yahoo (all of .NS/.BO/DVR/old-TELCO 404 —
+    # the 2024-25 CV/PV demerger orphaned the historical series). Best-effort
+    # fallbacks exhausted; compensated with Bosch (ancillary) + TVS (2-wheeler),
+    # both genuine deep-history stalwarts.
+    "NIFTY_AUTO":   ["M&M.NS", "MARUTI.NS", "HEROMOTOCO.NS", "BAJAJ-AUTO.NS",
+                     "EICHERMOT.NS", "ASHOKLEY.NS", "BOSCHLTD.NS", "TVSMOTOR.NS"],
 }
 VALIDATION_THRESHOLD = 0.90
 TRAIL = 63          # ~one quarter of sessions for the liquidity weight

@@ -59,9 +59,32 @@ VALIDATION_THRESHOLD = 0.90
 TRAIL = 63          # ~one quarter of sessions for the liquidity weight
 MIN_TRAIL = 20
 
+# LOCAL overrides: owner-supplied CSVs (date,close,volume) for heavyweights
+# Yahoo can't serve — spliced into the basket exactly like a fetched name.
+# TATAMOTORS is 404 on Yahoo (demerger-orphaned); the owner supplied real
+# 2000-2019 data (investing.com), consolidated into drop/TATAMOTORS-LOCAL.csv.
+LOCAL_OVERRIDES = {
+    "NIFTY_AUTO": {"TATAMOTORS": Path(__file__).resolve().parents[1]
+                   / "drop" / "TATAMOTORS-LOCAL.csv"},
+}
 
-def _fetch(tickers, yf, pd):
-    """{ticker: (adj_close Series, volume Series)} + first-date coverage."""
+
+def _load_local(name, path, pd):
+    """Owner-supplied local CSV (date,close,volume) -> (close, volume) Series,
+    normalized. Splits/dividends assumed already adjusted (verified at
+    consolidation). Returns (None, None) if the file is absent."""
+    p = Path(path)
+    if not p.exists():
+        print(f"    ! {name}: local file not found ({p.name})", file=sys.stderr)
+        return None, None
+    df = pd.read_csv(p, parse_dates=["date"]).set_index("date").sort_index()
+    df.index = df.index.normalize()
+    vol = df["volume"] if "volume" in df.columns else None
+    return df["close"], vol
+
+
+def _fetch(tickers, overrides, yf, pd):
+    """{name: (adj_close, volume)} from Yahoo + any local overrides."""
     closes, volumes, coverage = {}, {}, {}
     for t in tickers:
         try:
@@ -79,13 +102,18 @@ def _fetch(tickers, yf, pd):
         c.index, v.index = c.index.normalize(), v.index.normalize()
         closes[t], volumes[t] = c, v
         coverage[t] = c.index.min().date().isoformat()
+    for name, path in (overrides or {}).items():
+        c, v = _load_local(name, path, pd)
+        if c is not None:
+            closes[name], volumes[name] = c, v
+            coverage[name] = c.index.min().date().isoformat() + " [local]"
     return closes, volumes, coverage
 
 
-def _proxy_schemes(tickers, yf, pd):
+def _proxy_schemes(tickers, overrides, yf, pd):
     """Two LOOK-AHEAD-FREE proxy daily-return series: expanded equal-weight and
     trailing-liquidity-weight. Returns ({scheme: returns}, coverage)."""
-    closes, volumes, coverage = _fetch(tickers, yf, pd)
+    closes, volumes, coverage = _fetch(tickers, overrides, yf, pd)
     if not closes:
         return None, {}
     px = pd.DataFrame(closes).sort_index()
@@ -131,8 +159,10 @@ def validate(threshold):
     print(f"Proxy Validation Protocol v2 — PREFER threshold r>={threshold}\n")
     summary = []
     for key, tickers in CONSTITUENTS.items():
-        print(f"[{key}] {len(tickers)} names: {', '.join(tickers)}")
-        schemes, cov = _proxy_schemes(tickers, yf, pd)
+        overrides = LOCAL_OVERRIDES.get(key, {})
+        allnames = tickers + [f"{n} (local)" for n in overrides]
+        print(f"[{key}] {len(allnames)} names: {', '.join(allnames)}")
+        schemes, cov = _proxy_schemes(tickers, overrides, yf, pd)
         official = _official_returns(key, pd)
         print(f"    coverage: " + ", ".join(f"{t.split('.')[0]}:{d}"
                                              for t, d in cov.items()))

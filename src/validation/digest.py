@@ -46,7 +46,22 @@ def _last_promotion_days(conn, today: date) -> int | None:
         return None
 
 
-def build_digest(conn, today: date = None, since_days: int = 7) -> str:
+def _stage_b_block(scoreboard_path=None) -> str:
+    """The Stage-B forward-clock section (SB-3), fail-OPEN: a scoreboard read
+    error never breaks the pattern digest. Empty string when the clock hasn't
+    started (no scoreboard file yet)."""
+    try:
+        from src.analysis.strategy_scoreboard import digest_lines as _sb
+        sb = _sb(scoreboard_path)
+    except Exception:
+        return ""
+    if not sb or sb[0] == "Forward clock: no scoreboard yet.":
+        return ""
+    return "\n\n**Strategy forward-clock (Stage B):**\n" + "\n".join(sb)
+
+
+def build_digest(conn, today: date = None, since_days: int = 7,
+                 scoreboard_path=None) -> str:
     """Compose the weekly card. Never raises."""
     today = today or date.today()
     rg.ensure_schema(conn)
@@ -66,7 +81,8 @@ def build_digest(conn, today: date = None, since_days: int = 7) -> str:
     if total_tracked == 0:
         return ("🔬 **Harness digest** — no patterns yet. The miners haven't "
                 "run / not enough history. Silence here is correct: nothing "
-                "is being surfaced that hasn't earned it.")
+                "is being surfaced that hasn't earned it."
+                + _stage_b_block(scoreboard_path))
 
     lines = [f"🔬 **Harness digest — week of {today.isoformat()}**"]
     lines.append(
@@ -115,7 +131,7 @@ def build_digest(conn, today: date = None, since_days: int = 7) -> str:
     else:
         lines.append(f"\n🎲 Placebo FDR: {fdr['state']} (n={fdr['n']})")
 
-    return "\n".join(lines)
+    return "\n".join(lines) + _stage_b_block(scoreboard_path)
 
 
 def run(conn=None, db_path=None, today: date = None, notify_fn=None) -> dict:

@@ -84,3 +84,29 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}: {e}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+def test_stage_b_block_appears_when_scoreboard_has_confirmed(tmp_path):
+    """SB-3: the forward-clock block is appended to the digest, honestly, from
+    the scoreboard — even with an empty pattern harness."""
+    import json
+    board = tmp_path / "sb.json"
+    board.write_text(json.dumps({"summary": {
+        "cells_tracked": 1,
+        "by_status": {"ACCUMULATING": 0, "FORWARD_CONFIRMED": 1,
+                      "FORWARD_CONTRADICTED": 0},
+        "confirmed": [{"name": "long_energy_oil", "archetype": "A1",
+                       "phase": "P1_shock", "n": 8, "hit_rate": 0.88,
+                       "wilson_lb": 0.62, "in_sample_verdict": "PREFER"}],
+        "contradicted": []}}))
+    conn = brain_map.connect(":memory:")
+    card = dg.build_digest(conn, today=date(2026, 7, 24), scoreboard_path=board)
+    assert "Strategy forward-clock (Stage B)" in card
+    assert "CONFIRMED live" in card and "long_energy_oil" in card
+
+
+def test_stage_b_block_absent_when_no_scoreboard(tmp_path):
+    conn = brain_map.connect(":memory:")
+    card = dg.build_digest(conn, today=date(2026, 7, 24),
+                           scoreboard_path=tmp_path / "nope.json")
+    assert "Strategy forward-clock" not in card       # honest silence

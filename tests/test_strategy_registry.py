@@ -152,16 +152,22 @@ def test_aggregate_carries_ev_and_wilson_lower_bound():
     assert 0.0 <= agg["wilson_lb"] <= agg["hit_rate"]      # LB never above headline
 
 
-def test_verdict_prefers_only_on_separation():
+def test_verdict_prefers_when_any_significant():
     assert SR._verdict([]) == "ABSTAIN"
-    weak = [{"wilson_lb": 0.3, "hit_rate": 0.6, "bh_significant": False}]
-    assert SR._verdict(weak) == "SHOW"                     # not significant -> SHOW
-    sep = [{"wilson_lb": 0.65, "hit_rate": 0.9, "bh_significant": True},
-           {"wilson_lb": 0.4, "hit_rate": 0.6, "bh_significant": False}]
-    assert SR._verdict(sep) == "PREFER"                    # top LB beats runner headline
-    noSep = [{"wilson_lb": 0.55, "hit_rate": 0.8, "bh_significant": True},
-             {"wilson_lb": 0.5, "hit_rate": 0.7, "bh_significant": True}]
-    assert SR._verdict(noSep) == "SHOW"                    # top LB below runner headline
+    none_sig = [{"significant": False}, {"significant": False}]
+    assert SR._verdict(none_sig) == "SHOW"                  # renders, none clear the gate
+    # a pattern can carry >=1 viable recipe -> PREFER (the multi-strategy vision)
+    one_sig = [{"significant": False}, {"significant": True}]
+    assert SR._verdict(one_sig) == "PREFER"
+
+
+def test_independent_significance_is_directional():
+    win = {"p_two_sided": 0.03, "hit_rate": 0.85}           # significant WINNER
+    assert SR._is_significant_independent(win)
+    lose = {"p_two_sided": 0.03, "hit_rate": 0.15}          # significant loser != edge
+    assert not SR._is_significant_independent(lose)
+    marg = {"p_two_sided": 0.09, "hit_rate": 0.8}           # p above threshold
+    assert not SR._is_significant_independent(marg)
 
 
 # ------------------------------------------------------------- builder (real data)

@@ -377,7 +377,8 @@ def declare(lake_dir=None, templates_path=None, playbooks_path=None,
                 "top_strategies": [
                     {"name": s.get("name"), "ev": s.get("ev"),
                      "hit_rate": s.get("hit_rate"),
-                     "wilson_lb": s.get("wilson_lb")}
+                     "wilson_lb": s.get("wilson_lb"),
+                     "significant": s.get("significant")}
                     for s in (ss.get("strategies") or [])[:3]]}
         with ledger.open("a") as fh:
             fh.write(json.dumps(ledger_line, default=str) + "\n")

@@ -7,9 +7,13 @@ Spec: docs/strategy_registry_spec.md.
 Generalizes macro_playbooks.py from ONE hardcoded strategy ("hold a sector
 through the phase") to a REGISTRY of declared, index-level trade recipes —
 scored across the same historical episodes with the same NULL-honest return
-math (macro_playbooks.episode_phase_returns), then ranked through the Dept-5
-stat_gates honesty layer (Wilson lower bound, support floor, Benjamini-
-Hochberg across the whole build, a placebo false-discovery meter).
+math (macro_playbooks.episode_phase_returns), ranked on the Wilson lower bound,
+and gated for significance by a SOURCE-SPLIT rule (owner ruling 2026-07-23):
+a-priori theses use a STANDARD INDEPENDENT threshold (p<=0.05, directional) —
+they are pre-registered, not mined, so the harsh Benjamini-Hochberg multiple-
+testing penalty would punish a data-snooping crime they never committed; BH
+stays PARKED for Stage-C auto-discovery, where snooping is the real risk. A
+placebo control set runs under the SAME gate as the false-discovery meter.
 
 A RegimeStrategy is DECLARATIVE data + a pure evaluator — NEVER arbitrary
 code in a cron (safety + look-ahead safety). Four index-level `kind`s in v1
@@ -60,7 +64,8 @@ VALID_KINDS = ("long_sector", "long_short_pair", "basket_rotation",
 # the NIFTY-level strategies still render.
 MIN_EPISODE_LEGS = 5
 STRUCTURAL_NULL = 0.5      # drift-removed: does the recipe beat a coin?
-FDR_Q = sg.FDR_Q          # Benjamini-Hochberg ceiling across the whole build
+INDEPENDENT_ALPHA = 0.05  # a-priori theses: standard threshold, NO BH penalty
+FDR_Q = sg.FDR_Q          # Benjamini-Hochberg ceiling — PARKED for Stage-C only
 TOP_K = 5                 # ranked strategies surfaced per cell in the artifact
 
 
@@ -297,27 +302,31 @@ def _aggregate_returns(legs):
 
 _PUBLIC_KEYS = ("strategy_id", "name", "kind", "params", "source", "thesis",
                 "n", "ev", "median", "min", "max", "hit_rate", "wilson_lb",
-                "bh_significant", "episodes")
+                "significant", "episodes")
 
 
 def _public_row(row):
     return {k: row[k] for k in _PUBLIC_KEYS if k in row}
 
 
+def _is_significant_independent(row):
+    """A-priori significance: a directional INDEPENDENT threshold, NO multiple-
+    testing penalty (owner ruling 2026-07-23 — pre-registered theses are not
+    mined). A WINNER only: significantly better than the drift-removed coin,
+    never a significant LOSER dressed up as an edge."""
+    return (row["p_two_sided"] <= INDEPENDENT_ALPHA
+            and row["hit_rate"] > STRUCTURAL_NULL)
+
+
 def _verdict(real_rows):
-    """PREFER / SHOW / ABSTAIN on a cell's REAL (non-placebo) rows, ranked.
-    PREFER only on genuine separation — the top's honest LOWER bound beats the
-    runner-up's HEADLINE rate AND the top cleared batch significance (the
-    strategy_evidence rule). SHOW = renders but no separation. ABSTAIN = the
-    cell has no real strategy above the floor."""
+    """PREFER / SHOW / ABSTAIN on a cell's REAL rows. A regime PREFERs when it
+    holds AT LEAST ONE significant winning recipe — the owner's vision that a
+    pattern can carry MULTIPLE viable strategies at once (each row's
+    `significant` flag names which). SHOW = recipes render but none clear the
+    gate. ABSTAIN = nothing above the support floor."""
     if not real_rows:
         return "ABSTAIN"
-    top = real_rows[0]
-    if not top.get("bh_significant"):
-        return "SHOW"
-    if len(real_rows) == 1:
-        return "PREFER"
-    return "PREFER" if top["wilson_lb"] > real_rows[1]["hit_rate"] else "SHOW"
+    return "PREFER" if any(r.get("significant") for r in real_rows) else "SHOW"
 
 
 # --------------------------------------------------------------- builder
@@ -358,15 +367,17 @@ def build_strategies(templates_path=None, lake_dir=None, out_path=None,
         for arch in block["archetypes"]:
             members_by_arch[(hz, arch["id"])] = arch["members"]
 
-    # score every (strategy, cell) above the floor. REAL and PLACEBO
-    # hypotheses get PARALLEL Benjamini-Hochberg batches (the placebo.py law:
-    # placebos are the false-discovery METER — they must NOT inflate the real
-    # correction's denominator, or a fistful of controls would make the real
-    # theses structurally impossible to clear). The real batch still corrects
-    # across the WHOLE build (every real strategy x cell at once), never
-    # per-cell — that is the anti-overfitting guard.
+    # score every (strategy, cell) above the floor, then apply the
+    # SOURCE-SPLIT significance gate (owner ruling 2026-07-23):
+    #   * a-priori theses (seed) + their placebo controls -> a STANDARD
+    #     INDEPENDENT threshold (directional p <= INDEPENDENT_ALPHA). These are
+    #     PRE-REGISTERED hypotheses, not mined, so the harsh multiple-testing
+    #     penalty would punish a data-snooping crime they never committed.
+    #   * discovered theses (Stage-C auto-discovery) -> Benjamini-Hochberg
+    #     stays PARKED here, where snooping across machine-generated
+    #     candidates is the real risk.
     raw_cells = {}
-    batches = {"real": {"p": [], "idx": []}, "placebo": {"p": [], "idx": []}}
+    discovered = {"p": [], "idx": []}
     for spec in specs:
         hz = spec["horizon"]
         phases = PB.PHASES_BY_HORIZON[hz]
@@ -385,23 +396,29 @@ def build_strategies(templates_path=None, lake_dir=None, out_path=None,
                        "thesis": spec.get("thesis"), **_aggregate_returns(legs)}
                 cell = raw_cells.setdefault((aid, phase), [])
                 cell.append(row)
-                lane = "placebo" if row["source"] == "placebo" else "real"
-                batches[lane]["p"].append(row["p_two_sided"])
-                batches[lane]["idx"].append((aid, phase, len(cell) - 1))
+                if row["source"] == "discovered":
+                    row["significant"] = False           # decided by the BH pass
+                    discovered["p"].append(row["p_two_sided"])
+                    discovered["idx"].append((aid, phase, len(cell) - 1))
+                else:
+                    row["significant"] = _is_significant_independent(row)
 
-    for b in batches.values():
-        passed = sg.benjamini_hochberg(b["p"], q=FDR_Q)
-        for (aid, phase, i), ok in zip(b["idx"], passed):
-            raw_cells[(aid, phase)][i]["bh_significant"] = bool(ok)
+    # BH stays PARKED for Stage-C 'discovered' theses only (data-snooping risk)
+    for (aid, phase, i), ok in zip(
+            discovered["idx"], sg.benjamini_hochberg(discovered["p"], q=FDR_Q)):
+        r = raw_cells[(aid, phase)][i]
+        r["significant"] = bool(ok) and r["hit_rate"] > STRUCTURAL_NULL
 
-    # rank each cell on the honest lower bound; split real vs placebo
+    # rank each cell on the honest lower bound; split real vs placebo. The
+    # placebo controls face the SAME a-priori gate, so their survival rate is
+    # the false-discovery thermometer FOR THAT GATE.
     table, placebo_total, placebo_survivors = {}, 0, 0
     for (aid, phase), rows in raw_cells.items():
         rows.sort(key=lambda r: (-r["wilson_lb"], -r["ev"]))
         real = [r for r in rows if r["source"] != "placebo"]
         placebo = [r for r in rows if r["source"] == "placebo"]
         placebo_total += len(placebo)
-        placebo_survivors += sum(1 for r in placebo if r["bh_significant"])
+        placebo_survivors += sum(1 for r in placebo if r["significant"])
         table.setdefault(aid, {})[phase] = {
             "verdict": _verdict(real),
             "strategies": [_public_row(r) for r in real[:TOP_K]],
@@ -411,7 +428,12 @@ def build_strategies(templates_path=None, lake_dir=None, out_path=None,
     doc = {
         "built_at": datetime.now().isoformat(timespec="seconds"),
         "params": {"min_episode_legs": MIN_EPISODE_LEGS,
-                   "structural_null": STRUCTURAL_NULL, "fdr_q": FDR_Q,
+                   "structural_null": STRUCTURAL_NULL,
+                   "significance": {
+                       "a_priori": f"independent two-sided p<={INDEPENDENT_ALPHA}"
+                                   " (directional); NO multiple-testing penalty",
+                       "discovered": f"benjamini_hochberg q={FDR_Q}"
+                                     " (parked for Stage-C auto-discovery)"},
                    "top_k": TOP_K,
                    "source_templates_built_at": templates["built_at"]},
         "strategies": [{"strategy_id": s["strategy_id"], "name": s["name"],
@@ -421,9 +443,10 @@ def build_strategies(templates_path=None, lake_dir=None, out_path=None,
         "table": table,
         "placebo_report": {
             "total": placebo_total, "survivors": placebo_survivors,
-            "note": ("placebo strategies are information-free controls; a "
-                     "survivor count near the seeds' means the ranking is "
-                     "measuring noise (kill criterion, spec §4).")},
+            "note": (f"information-free controls under the SAME a-priori gate "
+                     f"(p<={INDEPENDENT_ALPHA}); ~{int(INDEPENDENT_ALPHA * 100)}%"
+                     " may pass by chance — a survivor RATE far above that means"
+                     " the gate is too loose (the kill criterion).")},
         "advisory_note": ("descriptive history with n stated per cell, ranked "
                           "on the Wilson lower bound; NOT a forecast of return "
                           "and advises nothing until Dept-5 scoring passes."),

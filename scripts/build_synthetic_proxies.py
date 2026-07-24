@@ -37,8 +37,21 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 from src.analysis import macro_features as MF
+
+MANIFEST_PATH = ROOT / "data" / "macro_proxy_manifest.json"
+# INJECTION DISABLED (owner directive 2026-07-24). Pharma CLEARED the 0.90 bar
+# on the 2005+ overlap — but the deep-past USAGE region (pre-2005) has NO
+# official index to validate against AND the raw Yahoo data is glitch-ridden
+# (CIPLA carried a +1224% single-day print that inflated the cumulative proxy
+# ~3000x). A proxy validated where we don't need it and untrustworthy where we
+# do is not injectable. `inject()` stays as working tooling for the day a CLEAN
+# deep-past sector source exists; until then VALIDATED is empty and the
+# deep-past episodes carry NULL-honest sector legs — they strengthen the
+# CLUSTERING, not sector-strategy analog counts.
+VALIDATED = {}
 
 # sector lake KEY -> 5-8 legacy stalwarts (owner-provided core + expansion),
 # Yahoo .NS tickers. Point-in-time membership is automatic (late listers
@@ -199,11 +212,66 @@ def validate(threshold):
     return summary
 
 
+def inject(dry_run=False):
+    """Splice each VALIDATED proxy into its lake key BELOW the official floor,
+    scaled to meet the official index at the splice (continuity). Merge keeps
+    the official values authoritative (stored wins); only pre-official dates
+    are filled. Provenance is stamped in data/macro_proxy_manifest.json so the
+    synthetic ranges are never mistaken for official (the source='proxy' tag —
+    the lake CSV itself carries no source column)."""
+    import json
+    import pandas as pd
+    import yfinance as yf
+    from src.ingestion.index_history import merge_into_lake
+
+    manifest = {"note": "pre-<proxy_before> lake values for these keys are "
+                        "SYNTHETIC proxy (source='proxy'), NOT official.",
+                "keys": {}}
+    for key, scheme in VALIDATED.items():
+        schemes, _ = _proxy_schemes(CONSTITUENTS[key],
+                                    LOCAL_OVERRIDES.get(key, {}), yf, pd)
+        pr = schemes[scheme].dropna()
+        official = sorted((pd.Timestamp(d), v)
+                          for d, v in MF.read_series(key) if v is not None)
+        if not official or pr.empty:
+            print(f"  {key}: cannot inject (proxy/official missing)")
+            continue
+        splice_ts, anchor = official[0]
+        cum = (1 + pr).cumprod()
+        base = cum.index[cum.index <= splice_ts]
+        if len(base) == 0:
+            print(f"  {key}: proxy does not reach the splice date")
+            continue
+        level = cum * (anchor / cum.loc[base[-1]])         # meet official at splice
+        pre = level[level.index < splice_ts]
+        rows = [(ts.date().isoformat(), round(float(v), 4)) for ts, v in pre.items()]
+        summ = merge_into_lake(key, rows, dry_run=dry_run)
+        manifest["keys"][key] = {
+            "proxy_before": splice_ts.date().isoformat(), "scheme": scheme,
+            "constituents": CONSTITUENTS[key]
+            + [f"{n}(local)" for n in LOCAL_OVERRIDES.get(key, {})],
+            "added": summ["added"], "floor": summ["floor"], "source": "proxy"}
+        print(f"  {key}: +{summ['added']} proxy sessions before "
+              f"{splice_ts.date()} (lake floor now {summ['floor']})"
+              f"{' [dry-run]' if dry_run else ''}")
+    if not dry_run:
+        MANIFEST_PATH.write_text(json.dumps(manifest, indent=1, default=str))
+        print(f"  manifest -> {MANIFEST_PATH.name}")
+    return manifest
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--threshold", type=float, default=VALIDATION_THRESHOLD)
+    ap.add_argument("--inject", action="store_true",
+                    help="splice VALIDATED proxies into the lake below the "
+                         "official floor (+ provenance manifest)")
+    ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    validate(args.threshold)
+    if args.inject:
+        inject(dry_run=args.dry_run)
+    else:
+        validate(args.threshold)
 
 
 if __name__ == "__main__":

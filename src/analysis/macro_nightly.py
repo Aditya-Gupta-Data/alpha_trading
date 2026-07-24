@@ -38,7 +38,7 @@ def _now_iso():
     return ML._now_iso()
 
 
-def run(fred_fn=None, indices_fn=None, declare_fn=None,
+def run(fred_fn=None, indices_fn=None, declare_fn=None, scorer_fn=None,
         clock=None, heartbeat_path=None) -> dict:
     """One nightly cycle: ingest FRED + NSE indices, then declare.
     Each stage is caught independently so one dead source never aborts
@@ -98,6 +98,28 @@ def run(fred_fn=None, indices_fn=None, declare_fn=None,
                 "reseed the VM's fingerprint cache from the Mac")
     except Exception as exc:
         stages["declare"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+
+    # 4. Stage B (SB-2) — forward-score the declarations whose windows have now
+    #    elapsed, then rebuild the scoreboard. LAST and FAIL-OPEN: a scorer fault
+    #    can never touch the declaration or the clock. Pure shadow — reads the
+    #    lake, writes only its own ledgers (macro_strategy_scores.jsonl +
+    #    strategy_scoreboard.json). Runs AFTER declare so today's fresh regime is
+    #    already on the ledger before we resolve the matured past ones.
+    try:
+        if scorer_fn is None:
+            from src.analysis.strategy_scorer import run as _score
+            from src.analysis.strategy_scoreboard import build_scoreboard as _board
+
+            def scorer_fn():
+                s = _score()
+                bs = _board().get("summary", {})
+                return {"graded": s.get("graded"), "wins": s.get("wins"),
+                        "pending": s.get("pending_declarations"),
+                        "confirmed": bs.get("confirmed_count"),
+                        "contradicted": bs.get("contradicted_count")}
+        stages["score"] = scorer_fn()
+    except Exception as exc:
+        stages["score"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
 
     summary = {"ts": _now_iso(), "as_of": today.isoformat(),
                "stages": stages}

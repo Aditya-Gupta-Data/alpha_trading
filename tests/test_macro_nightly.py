@@ -52,3 +52,31 @@ def test_declare_failure_is_isolated(tmp_path):
         clock=lambda: date(2026, 7, 23), heartbeat_path=tmp_path / "hb.log")
     assert out["stages"]["fred"]["ok"] == ["BRENT"]
     assert "error" in out["stages"]["declare"]
+
+
+def test_stage_b_scorer_runs_as_stage_four(tmp_path):
+    """SB-2: the forward scorer runs after declare and its summary is recorded."""
+    out = MN.run(
+        fred_fn=lambda: {"ok": ["BRENT"], "failed": []},
+        indices_fn=lambda d: {"no_file": False, "rows_added": {"NIFTY": 1}},
+        declare_fn=lambda: {"declared": True, "horizons": {}},
+        scorer_fn=lambda: {"graded": 2, "wins": 1, "pending": 5,
+                           "confirmed": 0, "contradicted": 0},
+        clock=lambda: date(2026, 7, 23), heartbeat_path=tmp_path / "hb.log")
+    assert out["stages"]["score"]["graded"] == 2
+    assert out["stages"]["score"]["pending"] == 5
+
+
+def test_stage_b_scorer_failure_never_aborts_the_clock(tmp_path):
+    """SB-2 fail-open: a scorer fault is named, and the declaration still ran."""
+    def boom():
+        raise RuntimeError("scores ledger unreadable")
+    out = MN.run(
+        fred_fn=lambda: {"ok": ["BRENT"], "failed": []},
+        indices_fn=lambda d: {"no_file": False, "rows_added": {"NIFTY": 1}},
+        declare_fn=lambda: {"declared": True, "horizons": {}},
+        scorer_fn=boom,
+        clock=lambda: date(2026, 7, 23), heartbeat_path=tmp_path / "hb.log")
+    assert "error" in out["stages"]["score"]             # named, not raised
+    assert out["stages"]["declare"]["declared"] is True  # declaration untouched
+    assert (tmp_path / "hb.log").exists()

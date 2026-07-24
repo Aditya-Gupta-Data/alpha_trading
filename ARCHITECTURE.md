@@ -6,7 +6,11 @@ approach to change how that department behaves. You should never have to dig
 through 50 files: find the department, go to its manager.
 
 - **Why** behind each choice → `DECISIONS.md` (numbered).
-- **Per-file** one-liners → `MODULES.md` (grouped by these same departments).
+- **Per-file** one-liners and module *specifics* (config keys, thresholds,
+  verification state) → `MODULES.md` (grouped by these same departments). This
+  file states each department's design role and its one seam; it does NOT
+  restate those specifics — they have a single home in `MODULES.md` so they
+  can't drift out of sync.
 - **The rules** the code may never break → `OVERVIEW.md`.
 
 Written for the strategic brain, not the compiler: every department below says,
@@ -186,10 +190,15 @@ the market's structure.
 
 **The two layers of the door — a deliberate split:**
 - `dhan_client` is the **wire**: mechanics only. The proactive `_throttle()`
-  (1.1s minimum gap, process-wide, the DH-905 fix) lives HERE, below the guard,
-  on purpose — pacing must cover *every* caller, including ingestion clerks
-  that talk to the wire directly, so it sits at the lowest layer where nothing
-  can route around it. Known gap: the throttle sleeps silently — throttle
+  (1.1s minimum gap, the DH-905 fix) lives HERE, below the guard, on purpose —
+  pacing must cover *every* caller, including ingestion clerks that talk to the
+  wire directly, so it sits at the lowest layer where nothing can route around
+  it. It is **host-wide, not per-process** (2026-07-22): the one Dhan account
+  has one rate budget but the box runs several callers at once during market
+  hours (live loop, report cards, intraday tracker, equity desk), so the gate
+  reserves the next slot in an `flock`'d file (`data/.dhan_throttle`) — every
+  call on the host is spaced regardless of process; fail-open to per-process if
+  the FS/lock is unavailable. Known gap: the throttle sleeps silently — throttle
   events are unobservable until it logs a countable line (Dept 1 follow-up,
   flagged on the CEO Brief).
 - `dhan_guard` is the **judgment**: failure classification, retry-once,
@@ -636,8 +645,7 @@ the anti-orphan rule working as written.
   decision loop, risk gates, reporting cards, and the gateway via `systemd`
   services + a cron block (`scripts/setup_cron.sh` — 20 numbered jobs; the
   token renews once at 07:00 IST). It mints its Dhan token from GCP Secret
-  Manager. See `docs/gcp_vm_deployment` context / `HANDOVER.md` for the deploy
-  checklist.
+  Manager. See `HANDOVER.md` for the deploy checklist.
 - **The Mac** runs only what needs a local Ollama or interactive state: the
   evolution agent and edge miner. It is NOT the engine; closing it doesn't stop
   trading.

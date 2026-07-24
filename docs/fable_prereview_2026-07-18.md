@@ -26,7 +26,7 @@ contradicts. Please review against the corrected version.
 
 ---
 
-# 1. The Live State — what is actually running on the VM (`6d89eb4`)
+## 1. The Live State — what is actually running on the VM (`6d89eb4`)
 
 Deployed Friday 2026-07-17 ~13:35 IST by owner order ("rapid deployment"),
 superseding the wait-for-Saturday hold. 20 files, +1995/−24. Suite 1088 green
@@ -81,7 +81,7 @@ deploy time?
 
 ---
 
-# 2. The Staged State — `next_gen_engine/` Phases 1 & 2
+## 2. The Staged State — `next_gen_engine/` Phases 1 & 2
 
 **Status:** committed (`326315e`), **imported by nothing in `src/`**, unscheduled,
 undeployed. Every module is pure/injectable; 29 hermetic tests
@@ -108,7 +108,7 @@ Department 2 change.
 
 ---
 
-# 3. The Danger Zones — Phases 3 & 4
+## 3. The Danger Zones — Phases 3 & 4
 
 These carry the architectural risk: **Phase 3 touches the LLM seam; Phase 4
 introduces entirely new infrastructure.** I verified each module's claimed seam
@@ -171,7 +171,7 @@ Department 1's non-negotiable must be explicitly rewritten to say there are two 
 
 ---
 
-# 4. Architecture Gaps — `ARCHITECTURE.md` refinement targets
+## 4. Architecture Gaps — `ARCHITECTURE.md` refinement targets
 
 **`ARCHITECTURE.md` self-stamps: "Current as of `dbd531f` (2026-07-15), suite 1006
 green." Reality: `0cafdb6`, 1131 collected.** The document is 3 commits and ~125 tests
@@ -221,7 +221,7 @@ says a staging ground exists or what the rules for leaving it are.
 
 ---
 
-# 5. Deploy state — read before recommending anything ship
+## 5. Deploy state — read before recommending anything ship
 
 ```
 0cafdb6  next_gen_engine Phases 1-4 (Risk, Execution, Wisdom, Scaling)   ← Mac HEAD
@@ -241,7 +241,7 @@ VM for no live benefit. My recommendation is to **hold them until Fable rules on
 Sections 3b and 4b** — the redis bus and the missing `analysis/` department are both
 questions where the answer could change what the code should look like before it lands.
 
-# 5b. Built during the freeze — `ceo_brief.py` (Department 6)
+## 5b. Built during the freeze — `ceo_brief.py` (Department 6)
 
 Built 2026-07-18 at owner request, **staged locally, not scheduled, not
 deployed**. Suite 1174 green (43 new tests). Files: `src/ceo_brief.py` (new),
@@ -282,7 +282,7 @@ questions, not module questions:**
 in `setup_cron.sh` at all** — it appears to be unscheduled on the VM. Either
 the doc or the cron is wrong. Not touched during the freeze.
 
-# 6. Suggested review order
+## 6. Suggested review order
 
 1. **§4b** — where does `src/analysis/` live? Everything else depends on the answer.
 2. **§1b** — `regime_filters`, the one live behavior change this week.
@@ -292,7 +292,7 @@ the doc or the cron is wrong. Not touched during the freeze.
 6. **§5b** — the three Dept 6 / Dept 1 questions from `ceo_brief`.
 7. **§4a/4c/4f** — rewrite `ARCHITECTURE.md` to current HEAD / 1174 tests.
 
-# 7. Queued for Sunday (buffer day, per the weekly rhythm)
+## 7. Queued for Sunday (buffer day, per the weekly rhythm)
 
 **SPAN margin audit** — deferred from the deploy by owner order, queued for Sunday
 after this review. Not in scope here.

@@ -3,7 +3,8 @@
 Read this first. It answers "what is this project and what must never change."
 For system flow see `ARCHITECTURE.md`; for the component index see
 `MODULES.md`; for why specific calls were made see `DECISIONS.md`; for
-credentials/boot commands see `HANDOVER.md`.
+credentials/boot commands see `HANDOVER.md`; for where to record new work
+without creating drift see `docs/DOC_GUIDE.md`.
 
 ## What this is
 

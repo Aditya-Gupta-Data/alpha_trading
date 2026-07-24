@@ -1,5 +1,10 @@
 # 🚀 ADiTrader Phase 4: Master Handoff & PRD
 
+> **⚠️ SUPERSEDED — historical spec.** This is the original Phase-4 spec. The
+> system as actually built, and the current step order, live in `PLAN.md`;
+> where they differ, `PLAN.md` wins (e.g. the auto-tuner feeds `forecast.py`,
+> not `strategy.py`). Kept for history — do not build against it.
+
 > **How to use this document:** Copy relevant sections and paste them straight into **Claude Code** or your **Gemini CLI** context window. It contains explicit instructions telling the AI where to look, what to avoid, and which model is optimized for each task to keep your API tokens and wallet happy.
 
 ## 1. System Overview & Current State

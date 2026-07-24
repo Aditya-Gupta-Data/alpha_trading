@@ -31,6 +31,11 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    import fcntl  # POSIX (Linux VM + macOS) — the cross-process gate below
+except ImportError:  # pragma: no cover — non-POSIX host
+    fcntl = None
+
 ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT / ".env"
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -40,15 +45,57 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 # transient "too many requests" without failing the whole refresh.
 _RATE_PAUSE = 1.1
 
-# DH-905 live fix (2026-07-17): the retry above only RECOVERS from a limit
-# hit — with 18+ tracked equities the market loop fires calls back-to-back,
-# so every first attempt burned a rejection before the retry landed. Pace
-# calls proactively instead: every Dhan API call goes through _throttle(),
-# which enforces a minimum gap since the previous call process-wide.
-_last_api_call = 0.0
+# DH-905 fix, part 1 (2026-07-17): pace calls proactively — every Dhan API
+# call goes through _throttle() so a first attempt isn't burned on a rejection.
+_last_api_call = 0.0  # per-process fallback timestamp
+
+# DH-905 fix, part 2 (2026-07-22, ops sweep): the one Dhan account has ONE rate
+# budget, but during market hours the engine runs SEVERAL processes at once
+# (the live loop, the 2-hourly report cards, the 15-min intraday tracker, the
+# equity desk). A per-process gap can't see the others, so their calls collide
+# and Dhan answers DH-905 in bursts. This gate is shared across every process
+# on the host: each caller flock's a tiny file, reserves the next _RATE_PAUSE
+# time-slot, then sleeps (outside the lock) until its slot — so every Dhan call
+# on the box is spaced >= _RATE_PAUSE apart no matter which process makes it.
+_THROTTLE_FILE = ROOT / "data" / ".dhan_throttle"
 
 
 def _throttle() -> None:
+    """Space Dhan calls >= _RATE_PAUSE apart HOST-WIDE (all processes share the
+    same one-account budget). Fail-open to per-process pacing — throttle
+    bookkeeping must never break a real market-data call."""
+    global _last_api_call
+    if fcntl is None:
+        return _throttle_local()
+    try:
+        _THROTTLE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_THROTTLE_FILE, "a+") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                last = float(f.read().strip() or 0.0)
+            except (ValueError, OSError):
+                last = 0.0
+            now = time.time()
+            # self-heal a corrupt file or a backwards clock: a slot can never
+            # be more than one pause in the future.
+            if not (0.0 <= last <= now + _RATE_PAUSE):
+                last = now
+            slot = max(now, last + _RATE_PAUSE)
+            f.seek(0)
+            f.truncate()
+            f.write(f"{slot:.6f}")
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        delay = slot - time.time()
+        if delay > 0:
+            time.sleep(delay)
+        _last_api_call = time.monotonic()
+    except Exception:
+        _throttle_local()
+
+
+def _throttle_local() -> None:
+    """Per-process fallback: the original single-process pacing."""
     global _last_api_call
     wait = _RATE_PAUSE - (time.monotonic() - _last_api_call)
     if wait > 0:

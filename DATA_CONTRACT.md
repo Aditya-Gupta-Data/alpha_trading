@@ -544,7 +544,7 @@ accumulates the veto class's own scoreable record. Today no layer holds
 VETO power; the alignment line on proposal cards is the ANNOTATE stage of
 this vocabulary (facts, "evidence not gate").
 
-### 2.6 Coming later (do not build against yet)
+### 2.11 Coming later (do not build against yet)
 `data/brain_map.db` (SQLite, Phase 6 macro-event memory) — schema is still
 being designed; it will be exposed only through backend endpoints, never
 read directly by the client.

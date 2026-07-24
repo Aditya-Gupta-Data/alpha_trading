@@ -23,7 +23,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
 
 ## Date: 2026-07-09
 
-### Issue 5 — Mid-session token death (DH-906 again) after the timezone fix
+## Issue 5 — Mid-session token death (DH-906 again) after the timezone fix
 - **Symptom:** ~1h after the manually-launched 11:00 IST session started
   successfully, `master_scheduler.log` began repeating "no market state
   this cycle" with `DH-906 Invalid Token` underneath, at ~12:08 IST.
@@ -52,7 +52,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   instead of loading it once at startup — would make the process
   self-healing against any future external-renewal race.
 
-### Issue 6 — `get_expiry_list` double-nesting silently blocked EVERY proposal
+## Issue 6 — `get_expiry_list` double-nesting silently blocked EVERY proposal
 - **Symptom:** even once Issue 5's fresh token was flowing, the loop
   logged "no proposal (no usable expiry (need >= 7 days out))" every
   cycle, for both underlyings, despite NIFTY 50 having 18 listed
@@ -79,7 +79,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   firing now that both blockers (token + expiry parsing) are cleared —
   a quiet rest-of-day is now genuinely "no qualifying setup," not a bug.
 
-### Issue 1 — No trading session / no Approve-Reject cards this morning
+## Issue 1 — No trading session / no Approve-Reject cards this morning
 - **Symptom:** No 🟢 session-open card at 09:15 IST and no proposal cards.
   The overnight ops card arrived at 02:00 IST labeled "20:30". The 07:00
   token renewal and 08:00 suggestions also hadn't run by mid-morning.
@@ -99,7 +99,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
 - **Follow-up:** none needed if tomorrow's cards appear on schedule;
   optionally the setup script could assert the host timezone at install.
 
-### Issue 2 — The same trade-closed cards repeating every hour
+## Issue 2 — The same trade-closed cards repeating every hour
 - **Symptom:** Identical "Stop-Loss Hit — TCS (Rs.-775)" and "Trade
   Closed — MARUTI (Rs.+32,098, MISSED GAIN)" embeds posted at 08:30,
   09:30, 10:30 IST (and hourly before that).
@@ -122,7 +122,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
 - **Follow-up:** none — verified: all journal outcomes persisted, only
   the live ONGC.NS position remains open.
 
-### Issue 3 — Yesterday's DH-906 "Invalid Token" flood in suggest.log
+## Issue 3 — Yesterday's DH-906 "Invalid Token" flood in suggest.log
 - **Symptom:** The 21:40 IST (2026-07-08) ops card quoted dozens of
   DH-906 / connection-reset errors from `suggest.log` (Mac).
 - **Root cause:** Two FORGOTTEN Phase-1/2-era macOS LaunchAgents
@@ -138,7 +138,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
 - **Follow-up:** lesson recorded — a Mac task audit must include
   `launchctl list`, not just `crontab -l`.
 
-### Issue 4 — Sleep phase "Ollama call failed: Connection refused" (VM)
+## Issue 4 — Sleep phase "Ollama call failed: Connection refused" (VM)
 - **Symptom:** the 02:00 IST ops card flagged
   `sleep_phase.log: (local parser: Ollama call failed: [Errno 111])`.
 - **Root cause:** **expected behavior, not a bug** — the VM has no Ollama
@@ -149,7 +149,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   aren't re-triaged. (A quieter log message on the VM is a triage-week
   candidate if the noise annoys.)
 
-### Issue 7 — Analyst "/analyze" reports missing history for TCS.NS (message blames Yahoo; it's actually Dhan)
+## Issue 7 — Analyst "/analyze" reports missing history for TCS.NS (message blames Yahoo; it's actually Dhan)
 - **Symptom (user-reported):** Discord `/analyze` returned "TCS.NS: not
   enough price history to forecast (needs 200+ trading days on Yahoo
   Finance)" for a mega-cap with decades of history.
@@ -185,7 +185,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   which is already on Dhan.
 - **DO NOT FIX THIS WEEK** — logged for triage only (user directive).
 
-### Issue 8 — Session restart resets the in-memory cool-down → duplicate proposals (positions doubled)
+## Issue 8 — Session restart resets the in-memory cool-down → duplicate proposals (positions doubled)
 - **Symptom:** four approved positions at day's end instead of two — the
   12:16 IST session proposed NIFTY 50 + NIFTY BANK spreads (`25da25ec`,
   `7b84bd44`, user approved), then after the 12:34 restart (deployed the
@@ -206,7 +206,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   survives restarts with no new state file).
 - **Follow-up:** queued for triage; positions themselves are fine.
 
-### Day-1 wrap — 20:30 IST ops sweep triage (all 10 lines accounted for)
+## Day-1 wrap — 20:30 IST ops sweep triage (all 10 lines accounted for)
 - ⏰ renew_token / suggest "did not run today" → **Issue 1** (the
   timezone fix landed at 11:00 IST, after both jobs' 07:00/08:00 IST
   slots had already passed). One-time; both fire correctly tomorrow.
@@ -234,7 +234,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   the Issue-5 mystery renewal to ~12:00 IST today — consistent with the
   12:35 IST residential-IP SSH login; still unattributed, still open.)
 
-### Issue 9 — Edge miner's first "successful" run was a silent no-op (third unpinned-interpreter incident this week)
+## Issue 9 — Edge miner's first "successful" run was a silent no-op (third unpinned-interpreter incident this week)
 - **Symptom:** after the user granted `/bin/bash` Full Disk Access (fixing
   Issue "edge miner TCC block" from 2026-07-08), the LaunchAgent run
   completed with `status: ok` — but line 1 of its output was
@@ -271,7 +271,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   A sweep of all remaining launchers for bare `python3` is a cheap,
   high-value triage-week item.
 
-### Context for triage (not an issue)
+## Context for triage (not an issue)
 - The ops sweep's "silent job" heartbeats from the 02:00 IST card
   (renew/suggest/main/master_scheduler "did not run today") were all
   downstream of Issue 1's timezone shift, not independent failures.
@@ -283,14 +283,14 @@ deploy time went unrecorded, which is precisely the gap this log closes.
 
 ## Date: 2026-07-10
 
-### Context for triage (not an issue)
+## Context for triage (not an issue)
 - Today's two approved journal entries (`f0ae401e` NIFTY 50,
   `2df15c4d` NIFTY BANK) carry `"why": "Test"` — confirmed with the
   user this is an intentional label they're entering by hand during
   the observation week, not a pipeline bug or default string. Noting
   it here so a future triage pass doesn't misread it as a defect.
 
-### Issue 10 — 07:00 IST token renewal failed ("Invalid TOTP"); real cause is a second, undocumented renewal cron racing the documented one
+## Issue 10 — 07:00 IST token renewal failed ("Invalid TOTP"); real cause is a second, undocumented renewal cron racing the documented one
 - **Symptom:** `logs/renew_token.log` (the officially documented
   07:00 IST renewal job, per [[project_gcp_vm_deployment]]) shows a
   failure this morning: `Token renewal failed: no token in Dhan's V2
@@ -340,7 +340,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   races the other, and this morning's failure is consistent with
   exactly that race.
 
-### Issue 10 — UPDATE 2026-07-10 ~13:35 IST: the 12:00 IST firing DID land mid-session and BLINDED the live trading loop (Issue 5 recurrence). The morning "impact: none observed" assessment was incomplete.
+## Issue 10 — UPDATE 2026-07-10 ~13:35 IST: the 12:00 IST firing DID land mid-session and BLINDED the live trading loop (Issue 5 recurrence). The morning "impact: none observed" assessment was incomplete.
 - **Symptom (verified now, read-only):** today's running
   `master_scheduler` session (log line 45 `[Scheduler] session open`,
   started ~09:10 IST) is logging `[Market Loop] NIFTY 50: no market
@@ -422,7 +422,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   18:30 mint (expected; the phase-8 snapshot sync is the durable
   answer there, not token sharing).
 
-### Issue 10 — RESOLVED 2026-07-10 ~21:45–22:00 IST: weekend deploy executed, single-07:00 cadence restored (all steps verified on the VM)
+## Issue 10 — RESOLVED 2026-07-10 ~21:45–22:00 IST: weekend deploy executed, single-07:00 cadence restored (all steps verified on the VM)
 
 - **What ran (deploy, markets closed):** the 13 unpushed commits
   (`dfcdf9b` → `bf9dc77`) were pushed and pulled onto the VM
@@ -455,7 +455,7 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   mid-session mint; (c) auto-approve behaviour (`/pending` stays empty
   by design — proposals journal straight to APPROVED).
 
-### Issue 11 — FOUND AND FIXED 2026-07-11 ~11:30 IST: NSE deals fetch was broken three ways (caught on the first real backfill run)
+## Issue 11 — FOUND AND FIXED 2026-07-11 ~11:30 IST: NSE deals fetch was broken three ways (caught on the first real backfill run)
 
 - **What happened:** the first 3-year deals backfill attempt
   (HOLY_GRAIL Phase 1, run from the Mac) failed every window. Root

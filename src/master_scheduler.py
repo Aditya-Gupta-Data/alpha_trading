@@ -164,8 +164,14 @@ def _account_lines() -> list:
         # omitted, never guessed, when no snapshot mark exists).
         unreal, marked, unmarked = _unrealized_pnl()
         if unreal is not None:
-            cover = (f"{marked} marked"
-                     + (f", {unmarked} unmarked" if unmarked else ""))
+            # Reconcile coverage against the SAME "active trade(s)" count
+            # shown below (open margin locks), so the reader can see the
+            # unrealized figure may cover fewer positions than are open —
+            # e.g. "priced on 2 of 5" rather than a bare "2 marked" that
+            # silently ignores the 3 positions with no live quote this run.
+            active = s["open_locks"]
+            cover = (f"priced on {marked} of {active} "
+                     f"open trade{'s' if active != 1 else ''}")
             lines.append(f"Unrealized P&L Rs.{unreal:+,.2f} ({cover})")
             lines.append(f"**Net Equity Rs.{s['equity'] + unreal:,.2f}** "
                          "(realized + unrealized — true book value)")

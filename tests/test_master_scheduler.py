@@ -220,7 +220,9 @@ def test_account_lines_add_unrealized_and_net_equity():
     with p1, p2, p3:
         lines = ms._account_lines()
     text = "\n".join(lines)
-    assert "Unrealized P&L Rs.+1,100.00 (2 marked, 1 unmarked)" in text
+    # coverage is reconciled against open_locks (3 active trades), so the
+    # reader sees the +1,100 was priced on only 2 of the 3 open positions
+    assert "Unrealized P&L Rs.+1,100.00 (priced on 2 of 3 open trades)" in text
     # net equity = 1,000,000 realized + 1,100 unrealized
     assert "Net Equity Rs.1,001,100.00" in text
     assert "realized P&L Rs.5,000.00" in text

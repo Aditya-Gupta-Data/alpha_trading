@@ -223,6 +223,20 @@ it ran on.
 
 ---
 
+---
+
+## Daily log (auto-generated)
+
+Entries below are written by `scripts/wrap_session.sh` at the end of each
+working session — the raw record. The hand-written Acts above are the
+narrative, and the script never touches them: it splits this file at the
+marker and only ever edits what is below it. Re-running on the same day
+regenerates that day's entry rather than duplicating it.
+
+<!-- WRAP_SESSION:INSERT_BELOW -->
+
+---
+
 ## What the shape of this history says
 
 Three patterns are visible in the record and worth preserving:

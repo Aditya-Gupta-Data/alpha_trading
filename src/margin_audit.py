@@ -1,3 +1,4 @@
+# MANUAL OFFLINE TOOL — not on any cron/systemd path; keep out of dead-code sweeps (Phase-1 audit 2026-07-25)
 """
 src/margin_audit.py — the SPAN margin audit (Department 3, read-only)
 =====================================================================

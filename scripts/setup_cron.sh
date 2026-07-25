@@ -287,6 +287,16 @@ CRON_TZ=Asia/Kolkata
 #     Rate-safe: all its calls share the host-wide _throttle() gate (dhan
 #     DH-905 fix), so it can never starve the live loop.
 */15 9-15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.intraday_tracker >> "$REPO_ROOT/logs/intraday_15m.log" 2>&1
+
+# 24. Macro nightly heartbeat (Daily 19:50 IST) — the Dept-8 macro clock:
+#     FRED globals ingest -> NSE indices ingest -> regime declare() onto the
+#     immutable ledger -> Stage-B forward scoring (SB-2, fail-open last).
+#     Was running on the VM but WAS MISSING FROM THIS SCRIPT — added so the
+#     installer matches the VM's active crontab. NOTE: if a manual crontab
+#     line for macro_nightly exists on the VM, remove it so this isn't
+#     double-run. 19:50 shares the minute with firm_treasury (#21, Mon-Fri)
+#     deliberately: neither touches the Dhan token, so no contention.
+50 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.analysis.macro_nightly >> "$REPO_ROOT/logs/macro_nightly.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

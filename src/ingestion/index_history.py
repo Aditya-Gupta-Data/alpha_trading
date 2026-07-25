@@ -1,3 +1,4 @@
+# MANUAL OFFLINE TOOL — not on any cron/systemd path; keep out of dead-code sweeps (Phase-1 audit 2026-07-25)
 """
 src/ingestion/index_history.py — NSE historical-index CSV drop-folder clerk
 ===========================================================================

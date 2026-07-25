@@ -1,3 +1,4 @@
+# MANUAL OFFLINE TOOL — not on any cron/systemd path; keep out of dead-code sweeps (Phase-1 audit 2026-07-25)
 """
 src/analysis/auto_discovery.py — the unsupervised discovery engine
 ==================================================================

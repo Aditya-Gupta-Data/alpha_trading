@@ -1,3 +1,4 @@
+# MANUAL OFFLINE TOOL — not on any cron/systemd path; keep out of dead-code sweeps (Phase-1 audit 2026-07-25)
 """
 src/explain.py — why did this trade fire? One command, the whole story
 ======================================================================

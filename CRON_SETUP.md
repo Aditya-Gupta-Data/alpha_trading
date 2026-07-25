@@ -10,7 +10,7 @@ and `DECISIONS.md` #48/#51.
 
 ## The VM (the engine — always on)
 
-All 23 jobs are installed by the idempotent script (safe to re-run after every
+All 24 jobs are installed by the idempotent script (safe to re-run after every
 `git pull`):
 
 ```bash
@@ -39,6 +39,7 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | 19:35 daily | `src.ingestion.flows_tracker` | FII/DII daily cash flows; one row/day into `data/` + the lake. |
 | 19:45 daily | `src.ingestion.daily_archiver` | Snapshots perishable news/macro artifacts into the lake before sleep_phase. |
 | 19:50 Mon-Fri | `src.firm_treasury --rotate` | Re-routes the equity desk's budget after the Mac's ~19:20 artifact ship (#83). |
+| 19:50 daily | `src.analysis.macro_nightly` | The Dept-8 macro heartbeat: FRED ingest → NSE indices ingest → regime `declare()` → Stage-B forward scoring (fail-open last). No Dhan token, so the shared 19:50 slot is contention-free. |
 | 20:00 daily | `src.sleep_phase` | Brain Map pass — decay-only on the VM (no Ollama; edge mining runs opportunistically from the Mac). |
 | 20:20 daily | `src.discovery.nightly` | Gated Phase-5 miner pass (#76): skips (exit 0) unless ops heartbeats green + no INGESTION problems + `daily_context` ≥ 60 frames. Every 7th skip fires one Discord note. |
 | 20:30 daily | `src.ops_monitor` | Log sweep + job heartbeats → Discord health card. |

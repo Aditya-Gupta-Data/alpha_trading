@@ -99,9 +99,23 @@ def test_run_for_today_records_and_reports_fill():
         assert row["macro_source"] == "dhan"
 
 
+class _NoLLM:
+    """The extractor a host without Ollama has — which is the VM, by design.
+
+    Without this the test built a real LocalExtractor and, on a dev Mac where
+    Ollama IS up, ran real LLM inference for sleep-phase tasks A/B/D: 29s, and
+    a different code path than CI/VM take (2026-07-25). Task G, the only thing
+    asserted below, is pure DB + local file and is unaffected.
+    """
+    base_url = "http://127.0.0.1:11434"
+
+    def is_reachable(self):
+        return False
+
+
 def test_sleep_phase_runs_task_g():
     from src import sleep_phase
-    r = sleep_phase.run_sleep_phase(db_path=":memory:",
+    r = sleep_phase.run_sleep_phase(db_path=":memory:", extractor=_NoLLM(),
                                     today=date(2026, 7, 10))
     assert "daily_context" in r and r["daily_context"] is not None
     assert r["daily_context"]["date"] == "2026-07-10"

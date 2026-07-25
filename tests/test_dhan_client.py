@@ -11,11 +11,24 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import dhan_client as dc
 
 DATES = ["2026-07-14", "2026-07-21", "2026-07-28"]
+
+
+@pytest.fixture(autouse=True)
+def no_real_throttle():
+    """The SDK is mocked here, so the host-wide rate gate is pacing calls that
+    never leave the process — 1.1s of pure sleep each (15s across this file
+    before 2026-07-25). Its own behaviour is covered by
+    tests/test_dhan_throttle.py with a fake clock; here it is stubbed out.
+    """
+    with mock.patch.object(dc, "_throttle", return_value=None):
+        yield
 
 
 def _with_client(resolved=True):

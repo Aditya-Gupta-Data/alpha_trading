@@ -21,7 +21,12 @@ and declares against them.
 Every stage FAILS OPEN: a dead FRED key or an NSE holiday leaves the
 ledger honest (a no-data declaration or yesterday's marks), never
 crashes the cron. One heartbeat line per run to logs/macro_nightly.log
-so ops_monitor can see it ran. Fully injectable for offline tests.
+so ops_monitor can see it ran, PLUS one Discord health card (Phase-2
+observability, 2026-07-25) fired unconditionally at the end through
+notifier.fire_broadcast — the scannable per-stage line, e.g.
+[🟢 FRED: OK | 🔴 Indices: FAILED | 🟢 Declare: OK | 🟢 Scorer: OK];
+a Discord outage never fails the cron. Fully injectable for offline
+tests.
 
 CLI / cron:  python3 -m src.analysis.macro_nightly
 """
@@ -38,12 +43,58 @@ def _now_iso():
     return ML._now_iso()
 
 
+def heartbeat_line(stages: dict) -> tuple:
+    """The scannable one-line health string for the Discord card, plus
+    the all-green flag. Pure function over run()'s stages dict.
+
+    Per component: 🔴 when the stage raised (its dict carries "error"),
+    when FRED reported failed series, or when declare hit the cache-miss
+    ALERT (the silence ban: a cache miss must look RED, never routine).
+    An NSE holiday (indices no_file) and an honest declare abstention are
+    NOT failures — the engine breathed; the world just had nothing to say.
+    """
+    def _mark(name, stage, detail_ok="OK", detail_bad="FAILED"):
+        if not isinstance(stage, dict):
+            return f"🔴 {name}: MISSING", False
+        if "error" in stage:
+            return f"🔴 {name}: {detail_bad}", False
+        return f"🟢 {name}: {detail_ok}", True
+
+    parts, oks = [], []
+
+    fred = stages.get("fred")
+    line, ok = _mark("FRED", fred)
+    if ok and fred.get("failed"):
+        line, ok = f"🔴 FRED: {len(fred['failed'])} series FAILED", False
+    parts.append(line); oks.append(ok)
+
+    idx = stages.get("indices")
+    line, ok = _mark("Indices", idx)
+    if ok and idx.get("no_file"):
+        line = "🟢 Indices: OK (no file — holiday?)"
+    parts.append(line); oks.append(ok)
+
+    dec = stages.get("declare")
+    line, ok = _mark("Declare", dec)
+    if ok and dec.get("ALERT"):
+        line, ok = "🔴 Declare: CACHE MISS", False
+    parts.append(line); oks.append(ok)
+
+    line, ok = _mark("Scorer", stages.get("score"))
+    parts.append(line); oks.append(ok)
+
+    return "[" + " | ".join(parts) + "]", all(oks)
+
+
 def run(fred_fn=None, indices_fn=None, declare_fn=None, scorer_fn=None,
-        clock=None, heartbeat_path=None) -> dict:
+        clock=None, heartbeat_path=None, notify_fn=None) -> dict:
     """One nightly cycle: ingest FRED + NSE indices, then declare.
     Each stage is caught independently so one dead source never aborts
-    the others or the cron. Returns a summary and writes ONE heartbeat
-    line. All three stages are injectable (offline tests)."""
+    the others or the cron. Returns a summary, writes ONE heartbeat
+    line, and fires ONE Discord health card (notify_fn, default the
+    house fire_broadcast door) unconditionally at the end — 🔴 per
+    failed-open stage, 🟢 otherwise. All stages are injectable
+    (offline tests)."""
     today = (clock or date.today)()
     stages = {}
 
@@ -121,7 +172,9 @@ def run(fred_fn=None, indices_fn=None, declare_fn=None, scorer_fn=None,
     except Exception as exc:
         stages["score"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
 
+    status_line, all_ok = heartbeat_line(stages)
     summary = {"ts": _now_iso(), "as_of": today.isoformat(),
+               "status_line": status_line, "all_ok": all_ok,
                "stages": stages}
     path = Path(heartbeat_path) if heartbeat_path else HEARTBEAT_LOG
     try:
@@ -130,6 +183,18 @@ def run(fred_fn=None, indices_fn=None, declare_fn=None, scorer_fn=None,
             fh.write(json.dumps(summary, default=str) + "\n")
     except OSError:
         pass
+
+    # 5. The Discord health card — UNCONDITIONAL and LAST, through the one
+    #    Discord door (Dept 6 rule). Its own try/except: a Discord outage
+    #    can never fail the cron or un-write the heartbeat log line above.
+    try:
+        if notify_fn is None:
+            from src.notifier import fire_broadcast as notify_fn
+        notify_fn({"event": "macro_heartbeat", "ticker": "MACRO",
+                   "date": today.isoformat(), "all_ok": all_ok,
+                   "description": status_line})
+    except Exception as exc:
+        print(f"  (macro_nightly heartbeat card failed: {exc})")
     return summary
 
 

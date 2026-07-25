@@ -127,6 +127,7 @@ _COLOUR = {
     "wealth_sweep":     0xF1C40F,   # gold   — paper profit locked into GOLDBEES
     "portfolio_report": 0x9B59B6,   # purple — intraday portfolio report card
     "ceo_brief":        0x1ABC9C,   # teal   — daily cross-department CEO brief
+    "macro_heartbeat":  0x2ECC71,   # green  — nightly macro-engine health (red override on any 🔴 stage)
 }
 _COLOUR_WIN  = 0x2ECC71   # green override: winning closed trade
 _COLOUR_LOSS = 0xE74C3C   # red override:   losing closed trade
@@ -143,6 +144,8 @@ def _embed_colour(payload: dict) -> int:
         if "loss" in verdict or "stop" in verdict:
             return _COLOUR_LOSS
         return _COLOUR["closed"]
+    if event == "macro_heartbeat" and payload.get("all_ok") is False:
+        return _COLOUR_LOSS               # any 🔴 stage turns the card red
     return _COLOUR.get(event, 0x95A5A6)   # grey fallback for unknown events
 
 
@@ -172,6 +175,7 @@ def _build_embed(payload: dict) -> dict:
         "wealth_sweep":     f"🔒 Paper Wealth Sweep — {ticker}",
         "portfolio_report": f"🗂️ Portfolio Report Card — {payload.get('time', today)}",
         "ceo_brief":        f"🧭 Daily CEO Brief — {today}",
+        "macro_heartbeat":  f"🫀 Macro Nightly Heartbeat — {today}",
     }
     title = titles.get(event, f"📌 {event.title()} — {ticker}")
 
@@ -278,7 +282,7 @@ BUDGET_STATE_PATH = ROOT / "logs" / ".discord_budget.json"
 DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
 BUDGET_ALWAYS = {"system_crash"}
 BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest",
-                    "performance", "weekly_digest"}
+                    "performance", "weekly_digest", "macro_heartbeat"}
 BUDGET_DROP = {"portfolio_report"}
 
 

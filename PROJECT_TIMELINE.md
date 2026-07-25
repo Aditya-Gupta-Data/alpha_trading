@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-25 · 8 commits · 53 files touched
+### 2026-07-25 · 10 commits · 55 files touched
 
+- `34d08bb` feat(docs): Continuous Context protocol — wrap_session.sh + CLAUDE.md agent rules
+- `90339d0` chore: drop the back-dated wrap_session test entry
 - `d687dce` docs: restore the wrap_session insertion marker
 - `82b83a4` Revert "chore: EOD doc sync — 2026-07-25 (6 commits)"
 - `e9897dd` docs: Phase-4 documentation sync — the source of truth, LLM-optimized

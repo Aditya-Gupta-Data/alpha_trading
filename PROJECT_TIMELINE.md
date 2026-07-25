@@ -235,6 +235,18 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-07-25 · 8 commits · 53 files touched
+
+- `d687dce` docs: restore the wrap_session insertion marker
+- `82b83a4` Revert "chore: EOD doc sync — 2026-07-25 (6 commits)"
+- `e9897dd` docs: Phase-4 documentation sync — the source of truth, LLM-optimized
+- `c271068` docs: log Phase-3 test streamlining in the observation ledger
+- `48e15a8` perf(tests): Phase-3 streamlining — 14m09s suite to 1m23s (10x)
+- `331b42c` feat(observability): Phase-2 nightly macro heartbeat card
+- `1003611` chore(hygiene): Phase-1 Great Purge — research_archive/, cron drift closed, DH-905 landed
+- `ad9d586` fix(dhan): host-wide throttle to kill DH-905 rate-limit bursts
+
+
 ---
 
 ## What the shape of this history says

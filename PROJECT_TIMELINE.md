@@ -235,22 +235,6 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-24 · 12 commits · 17 files touched
-
-- `9ee1984` chore: gitignore coverage/pytest artifacts
-- `b153521` Clarify unrealized-P&L coverage on session-close card
-- `6759c3f` feat(macro): SB-3 — wire the Stage-B forward-clock block into the weekly digest
-- `1c7ae0c` feat(macro): SB-2 — wire forward-scoring into macro_nightly (fail-open stage 4)
-- `a8db26b` feat(macro): SB-3/SB-4 — forward scoreboard + graduation (strategy_scoreboard)
-- `b641f92` feat(macro): SB-1 — Stage-B forward-scoring core (strategy_scorer)
-- `2134ff8` feat(macro): deep-past episodes + taxonomy re-cluster (proxy injection disabled)
-- `f0dda00` feat(stage-a): local-CSV override — real Tata Motors data spliced into Auto proxy
-- `0c40f5d` fix(stage-a): Auto proxy — Tata Motors unfetchable on Yahoo, sub Bosch+TVS
-- `4ef1d02` feat(stage-a): proxy validation v2 — expanded baskets + liquidity weighting
-- `479813f` feat(stage-a): proxy validation protocol — out-of-sample tracking-error test
-- `6d2e9b6` feat(macro): split significance gate — independent p<=0.05 for a-priori theses
-
-
 ### 2026-07-25 · 8 commits · 53 files touched
 
 - `d687dce` docs: restore the wrap_session insertion marker

@@ -21,6 +21,7 @@ repository — only a market-data connection. Every "trade" is paper.
 | Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 24 VM jobs + 3 Mac jobs |
 | See how the project evolved | [PROJECT_TIMELINE.md](PROJECT_TIMELINE.md) — day by day, from git |
 | Know the rules code may not break | [OVERVIEW.md](OVERVIEW.md) |
+| **Work on this repo as an AI agent** | **[CLAUDE.md](CLAUDE.md)** — standing rules, loaded automatically |
 
 ## What it actually does
 
@@ -104,6 +105,17 @@ python3 -m src.suggest                    # daily suggestions digest
 python3 -m src.ops_monitor                # health sweep -> Discord card
 python3 -m src.bug_ledger --report        # what the machine thinks is broken
 ```
+
+## Ending a session
+
+```bash
+bash scripts/wrap_session.sh
+```
+
+Appends the day's commits to [PROJECT_TIMELINE.md](PROJECT_TIMELINE.md), runs
+the suite as a gate, and commits that one file. Documentation here is
+maintained continuously rather than in retroactive sweeps — see the Continuous
+Context protocol at the top of [HANDOVER.md](HANDOVER.md).
 
 ## Repository layout
 

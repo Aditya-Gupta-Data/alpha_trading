@@ -1,6 +1,42 @@
 # HANDOVER.md — Cold-Start Brief
 
-> **How to read this file.** It is REVERSE-CHRONOLOGICAL. The section
+## 🤖 THE CONTINUOUS CONTEXT PROTOCOL — read this first, agent or human
+
+*Established 2026-07-25, after a retroactive documentation cleanup found
+`README.md` had been wrong for 19 days. Docs are maintained continuously now,
+never in a big sweep. The binding copy of these rules lives in `CLAUDE.md`,
+which loads automatically into every AI session; this is the human-readable
+restatement.*
+
+> **AI AGENT INSTRUCTION — NEW SESSION.** Whenever a new session starts, the
+> very first action must be to read `HANDOVER.md` and `PROJECT_TIMELINE.md` to
+> establish context, before writing any code.
+
+> **AI AGENT INSTRUCTION — SESSION WRAP.** Whenever the user indicates the end
+> of a session or completes a deployment, you MUST automatically update
+> `HANDOVER.md` with the current exact state, open bugs, and next immediate
+> steps BEFORE closing the session.
+
+**For the owner — the one command at end of day:**
+
+```bash
+bash scripts/wrap_session.sh
+```
+
+It appends the day's commits to `PROJECT_TIMELINE.md`, runs the full suite as a
+gate, and commits that one file. Add `--push` to push, `--dry-run` to preview,
+`--skip-tests` on a docs-only day. It stages **only** the timeline — never your
+in-flight work — and re-running it on the same day regenerates that day's entry
+instead of duplicating it.
+
+It deliberately does **not** write this file. Deciding what is genuinely broken
+and what matters next needs judgment no script can extract from commit
+subjects; it will remind you if `HANDOVER.md` looks stale, and updating it is
+the agent's job under the Session Wrap rule above.
+
+---
+
+> **How to read the rest of this file.** It is REVERSE-CHRONOLOGICAL. The section
 > immediately below is the current state; everything after it is the historical
 > record, accurate as of its own date and left intact deliberately. If an older
 > section contradicts a newer one, **the newer one wins.** For the narrative

@@ -197,29 +197,28 @@ decides whether an in-sample "PREFER" actually confirmed live.
 
 ## Act VI — hygiene (07-25)
 
-### 2026-07-25 · 5 commits · *The CTO session*
-A four-phase hygiene sweep with no new trading logic.
+---
 
-**Phase 1 — the Great Purge.** An AST dependency trace from every real
-entrypoint (24 VM crons, 3 Mac crons, 2 LaunchAgents, systemd services,
-`.mcp.json`) classified all 152 `src/` files. 12 dead modules moved to
-`research_archive/` with their tests. Two findings the trace surfaced: the
-`macro_nightly` cron existed on the VM but was **missing from the installer**
-(it would have vanished on the next re-run), and `decay_engine.apply_decay_sweep`
-is scheduled by nothing — graph-edge decay has never run in production.
+---
 
-**Phase 2 — the heartbeat.** `macro_nightly` now fires one Discord health card
-per run: `[🟢 FRED: OK | 🟢 Indices: OK | 🟢 Declare: OK | 🟢 Scorer: OK]`.
+## Daily log (auto-generated)
 
-**Phase 3 — the speedup.** The suite went from **14m09s to 1m23s** with all
-1,589 tests still passing. Three files were reaching real external systems: one
-fired 84 live quote calls per test against the production watchlist, one slept
-on the real rate-limit throttle, and one ran real Ollama inference. All three
-were correctness bugs as much as speed bugs — what CI ran depended on the host
-it ran on.
+Entries below are appended by `scripts/wrap_session.sh` at the end of each
+working session. They are the raw record; the hand-written Acts above are the
+narrative. Re-running the script on the same day regenerates that day's entry
+rather than duplicating it.
 
-**Phase 4 — this documentation.**
-> `1003611` the Great Purge · `331b42c` heartbeat card · `48e15a8` 10x speedup
+<!-- WRAP_SESSION:INSERT_BELOW -->
+
+### 2026-07-25 · 6 commits · 53 files touched
+
+- `e9897dd` docs: Phase-4 documentation sync — the source of truth, LLM-optimized
+- `c271068` docs: log Phase-3 test streamlining in the observation ledger
+- `48e15a8` perf(tests): Phase-3 streamlining — 14m09s suite to 1m23s (10x)
+- `331b42c` feat(observability): Phase-2 nightly macro heartbeat card
+- `1003611` chore(hygiene): Phase-1 Great Purge — research_archive/, cron drift closed, DH-905 landed
+- `ad9d586` fix(dhan): host-wide throttle to kill DH-905 rate-limit bursts
+
 
 ---
 

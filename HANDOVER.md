@@ -1,5 +1,99 @@
 # HANDOVER.md — Cold-Start Brief
 
+> **How to read this file.** It is REVERSE-CHRONOLOGICAL. The section
+> immediately below is the current state; everything after it is the historical
+> record, accurate as of its own date and left intact deliberately. If an older
+> section contradicts a newer one, **the newer one wins.** For the narrative
+> arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
+
+## 📍 CURRENT STATE — 2026-07-25, after the CTO hygiene session
+
+**Where the system is:** live and autonomous on the VM, paper money, with the
+Macro Regime Engine (Stage A + Stage B) accumulating a forward track record it
+does not yet have enough of. The last four days added no trading logic — they
+added a forward clock, then cleaned the house.
+
+**Health at handover:** suite **1,589 green in ~83s**; `src/` is 141 modules,
+all on a live execution path; 24 VM cron jobs; the nightly macro clock now
+reports its own health to Discord every run.
+
+### ⚠️ Open items and known limitations, most important first
+
+1. **`decay_engine.apply_decay_sweep` is UNWIRED — a latent bug, decision
+   pending.** Nothing on any cron, systemd service or LaunchAgent calls it, so
+   knowledge-graph EDGE decay (`graph_edges.confidence_score`) **has never run
+   in production** — while `graph_engine.py` and `entity_affinity.py`
+   docstrings both describe it as live. It is NOT a duplicate of `sleep_phase`'s
+   semantic-NODE decay; they act on different tables. Found by the 07-25 AST
+   audit. Candidate fix: wire it as a step in the 20:00 `sleep_phase` pass.
+   Owner has agreed to do this in a future session.
+2. **The October clock is young and that is the whole point.** The Macro Engine
+   needs a 60-session forward-scored record before anything it says earns
+   authority. Until then `strategy_scoreboard` will honestly report
+   ACCUMULATING for nearly every cell. Do not tune against early readings; the
+   first real Strategy Registry build already returned "no edge at 6–8 analogs
+   yet", with placebos ranking alongside the seeds, and that verdict was
+   shipped rather than explained away.
+3. **VM cron de-duplication is required at the next deploy.** `setup_cron.sh`
+   now installs `intraday_tracker` (#23) and `macro_nightly` (#24), which were
+   previously added to the VM's crontab by hand. After the next
+   `bash scripts/setup_cron.sh`, **remove any manual crontab lines for those
+   two** or they will double-run.
+4. **Sector history before 2019 is proxy-based, not observed.** Stage A built
+   liquidity-weighted basket proxies with an out-of-sample tracking-error
+   validation protocol, plus a local-CSV override where Yahoo could not serve a
+   name. NSE pre-2019 index history is bot-walled on every scriptable path;
+   owner manual download through `ingestion/index_history` is the only route.
+   Treat pre-2019 sector numbers as reconstructions with stated error.
+5. **The options simulator's P&L is inflated and is not a forecast.** Synthetic
+   chains, roughly 10x, in the known 62–79% generosity band. It is proof the
+   engine mechanics work. It is not an expected return, and must never be
+   reported as one.
+6. **`strategy_registry` mostly abstains on rotations** until pre-2019 sector
+   CSVs land — the `MIN_EPISODE_LEGS=5` support floor bites where sector
+   history starts in 2019-10. This is correct behaviour, not a failure.
+7. **The parked branch `claude/hello-d9m45n` (PR #14) still holds unmerged
+   commits.** Only the DH-905 throttle fix (`1867335`) was cherry-picked out of
+   it on 07-25. Anything else on that branch is un-reviewed and un-landed.
+8. **`rss_ingester` classifies nothing on the VM by design** (#75 — it inherits
+   the `ollama` backend, which the VM does not run). Its heartbeat means "ran",
+   not "produced". Enabling a cloud backend is a cost decision, not a bug fix.
+
+### What changed on 2026-07-25 (the hygiene session)
+
+- **Phase 1 — the Great Purge.** An AST dependency trace from every real
+  entrypoint classified all 152 `src/` files; 12 dead modules moved to
+  `research_archive/` with their tests. `pytest.ini` keeps archived tests
+  uncollected. 16 intentional manual/offline tools now carry a
+  `# MANUAL OFFLINE TOOL` / `# TEST INFRA` first line so future sweeps skip
+  them. The stray `intelligent-nobel` worktree and branch were deleted.
+- **Phase 2 — the heartbeat.** `macro_nightly` fires one Discord card per run:
+  `[🟢 FRED: OK | 🟢 Indices: OK | 🟢 Declare: OK | 🟢 Scorer: OK]`. Holiday
+  and honest abstention stay green; a cache miss goes red. A Discord outage
+  cannot fail the cron.
+- **Phase 3 — the speedup.** Suite **14m09s → 1m23s**, all 1,589 tests still
+  passing. Three files were reaching real external systems (84 live quote calls
+  per test against the production watchlist; real rate-limit sleeps; real
+  Ollama inference). `pytest-xdist` was evaluated and **deliberately declined**
+  — at 83 seconds the risk of scattering known cross-test state leakage into
+  nondeterministic failures outweighs the gain.
+- **Phase 4 — documentation.** `README.md` rewritten (it still described
+  "Phase 1: alerting" and yfinance), `ARCHITECTURE.md` given an
+  agent-orientation preamble, the end-to-end macro data flow, and the testing
+  philosophy; `PROJECT_TIMELINE.md` created from git history.
+
+### The fastest way to orient
+
+```bash
+python3 -m pytest -q                       # 83s — proves the checkout works
+python3 -m src.bug_ledger --report         # what the machine thinks is broken
+tail -5 logs/macro_nightly.log             # did the clock tick, and how healthy
+```
+
+Then read `ARCHITECTURE.md` top to bottom. It is the map.
+
+---
+
 ## ⛔ STEALTH MODE — the operating posture as of 2026-07-23 (owner pivot, READ FIRST)
 
 **We are a PROPRIETARY DESK. No public surface for ≥6 months and NOT

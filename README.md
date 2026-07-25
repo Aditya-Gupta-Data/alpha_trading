@@ -1,197 +1,137 @@
-# Alpha Trading
+# alpha_trading — a proprietary systematic trading desk
 
-A personal tool for Indian stocks (NSE/BSE), built in phases:
+An autonomous, **paper-money** systematic trading research desk for Indian
+markets (NSE). It runs itself on a cloud VM: ingests market and macro data,
+proposes trades, gates them through risk, journals every outcome, and grades
+its own predictions against what actually happened.
 
-1. **Alerting** ← we are here
-2. Suggesting
-3. Trading
-4. (more steps as needed)
-
-Repo: https://github.com/Aditya-Gupta-Data/alpha_trading
-
----
-
-## What works right now (Phase 1)
-
-You keep a watchlist of stocks and rules in one plain file. The tool fetches the
-latest prices, checks your rules, and tells you which ones triggered. Right now
-alerts print to the screen; phone/email delivery is the next step.
-
-```
-config/watchlist.yaml   <- the only file you edit day-to-day
-src/data_fetcher.py     <- gets prices (yfinance, free, no API key)
-src/rules.py            <- the alert conditions + the engine that checks them
-src/notifier.py         <- sends alerts/digests (prints + emails via Gmail)
-src/main.py             <- Phase 1: alerting, ties it all together
-src/indicators.py       <- SMA + RSI technical indicators
-src/suggestions.py      <- Phase 2: combines trend + momentum into a plain-English read
-src/suggest.py          <- Phase 2: entry point, emails a daily suggestions digest
-src/portfolio.py        <- Phase 3: the fake-money portfolio (data/portfolio.json)
-src/strategy.py         <- Phase 3: turns signals into trade proposals
-src/trade.py            <- Phase 3: interactive session — engine proposes, YOU decide
-src/journal.py          <- Phase 3: logs every decision + your one-line "why"
-src/review.py           <- Phase 3: scores old decisions after a week (the scorecard)
-tests/test_rules.py     <- proves the rule logic works (no internet needed)
-tests/test_portfolio.py <- proves the portfolio math + safety rails work
-```
+**Nothing here touches real money.** There is no broker order path in this
+repository — only a market-data connection. Every "trade" is paper.
 
 ---
 
-## How to run it (one-time setup, then it's two commands)
+## Read this in order
 
-You need Python installed. If you're not sure you have it, search
-"install Python" for your computer and follow the official python.org installer.
+| If you want to… | Read |
+|---|---|
+| Understand the system to change it | **[ARCHITECTURE.md](ARCHITECTURE.md)** — the 8-department map + data flow. **Start here.** |
+| Know what a specific file does | [MODULES.md](MODULES.md) — one line per file, grouped by department |
+| Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 85 numbered decisions, append-only |
+| Pick up cold / know what's broken | [HANDOVER.md](HANDOVER.md) — current state, limitations, open items |
+| Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 24 VM jobs + 3 Mac jobs |
+| See how the project evolved | [PROJECT_TIMELINE.md](PROJECT_TIMELINE.md) — day by day, from git |
+| Know the rules code may not break | [OVERVIEW.md](OVERVIEW.md) |
 
-**1. Install the two libraries** (run this once, in the project folder):
+## What it actually does
 
-```
+Two desks trade paper capital, and one research engine studies the market
+regime they trade in.
+
+**The options desk** proposes NSE index option spreads during market hours,
+sized and gated by margin, exposure and volatility-stress rules, then tracks
+each position through to settlement.
+
+**The equity desk** runs a "darling" book: a quality screen over NSE cash
+equities, graded on a 7-tier lifecycle, funded out of a shared firm treasury
+that routes capital between the two desks based on measured performance.
+
+**The Macro Regime Engine** (Department 8) is the newest and largest research
+layer. It asks: *what kind of market are we in, and what has historically
+worked in this kind of market?* It answers by fingerprinting the current macro
+environment against a catalog of historical episodes using dynamic time
+warping, then measuring what each declared playbook actually returned —
+forward, out of sample, on an immutable ledger.
+
+Critically, **the Macro Engine has zero execution authority.** It cannot open a
+position. It writes opinions to an append-only ledger and waits to be proven
+right or wrong over a 60-session clock. That gate is deliberate, and it is
+enforced by Department 5 (Validation) rather than by convention.
+
+## The core discipline: honest measurement
+
+Most of this codebase exists to stop us fooling ourselves. The load-bearing
+ideas:
+
+- **Shadow before capital.** Every new signal runs as a paper shadow and must
+  clear statistical gates before it can size a position.
+- **Forward, not backward.** A backtest is a hypothesis. The engine grades its
+  *declarations* against what happened after they were made
+  (`logs/macro_regime_declarations.jsonl` → `logs/macro_strategy_scores.jsonl`),
+  which is why declarations are immutable and timestamped.
+- **Placebos run alongside.** Deliberately meaningless control strategies are
+  scored on the same rulebook. If the placebos rank alongside the real signals,
+  we have no edge — and the system says so out loud.
+- **Losses are permanent.** The outcomes ledger is append-only. A losing result
+  can never be deleted or overwritten (survivorship-bias guard).
+- **Abstention is a valid answer.** Missing data yields `None`, never a
+  fabricated number. "We don't know" appears all over this codebase.
+- **Fail open, never crash the clock.** Every nightly stage is caught
+  independently. A dead data source produces an honest gap, not a dead cron.
+
+## Where it runs
+
+- **The VM** (`alpha-trading-vm`, GCP, Debian, IST clock) is the engine: 24 cron
+  jobs plus three systemd services. It holds only a short-lived market-data
+  token — never the account credentials that could mint one.
+- **The Mac** is analysis-only. It builds the heavy artifacts (bhavcopy lake,
+  valuation, macro templates) and ships them to the VM. It also runs the
+  NSE-crawling jobs, which must never run from the VM's IP.
+
+Both schedules, and how to reinstall them, are in [CRON_SETUP.md](CRON_SETUP.md).
+
+## Running it locally
+
+```bash
 pip install -r requirements.txt
 ```
 
-**2. Check the logic works** (instant, no internet needed):
+The full test suite is the fastest way to confirm a working checkout:
 
-```
-python tests/test_rules.py
-```
-
-You should see all tests pass.
-
-**3. Run the alerter** (during or after Indian market hours for live numbers):
-
-```
-python -m src.main
+```bash
+python3 -m pytest -q
 ```
 
-It prints each stock's status and an `[ALERT]` line for anything that triggered.
+**1,589 tests in ~83 seconds, fully hermetic** — no network, no live token, no
+production data. If a test you write is slow, it is almost certainly reaching a
+real external system; see the testing philosophy in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
----
+Useful entry points:
 
-## Getting alerts by email
-
-Alerts always print to the screen. To also get them emailed to you:
-
-**1. Turn on 2-Step Verification** on your Google account (if not already on):
-https://myaccount.google.com/security
-
-**2. Create an App Password:**
-https://myaccount.google.com/apppasswords
-Name it "Alpha Trading" and copy the 16-character code it gives you.
-
-**3. Set up your `.env` file** (one time):
-
-```
-cp .env.example .env
+```bash
+python3 -m src.analysis.macro_nightly     # the nightly macro clock tick
+python3 -m src.suggest                    # daily suggestions digest
+python3 -m src.ops_monitor                # health sweep -> Discord card
+python3 -m src.bug_ledger --report        # what the machine thinks is broken
 ```
 
-Open `.env` in a text editor and fill in:
-- `ALERT_EMAIL_FROM` — your Gmail address
-- `ALERT_EMAIL_APP_PASSWORD` — the code from step 2
-- `ALERT_EMAIL_TO` — where alerts should land (defaults to `ALERT_EMAIL_FROM` if left blank)
+## Repository layout
 
-That's it — `python -m src.main` will now email you whenever a rule triggers,
-on top of printing to the screen. `.env` is git-ignored, so your password
-never gets uploaded anywhere.
-
----
-
-## Phase 2: Suggestions
-
-On top of alerts, the tool can also give you a daily plain-English read on
-each stock in your watchlist — combining trend (50-day vs 200-day moving
-average) and momentum (14-day RSI). It's advisory only: it never places a
-trade, it just tells you what it sees.
-
-Run it manually anytime with:
 ```
-python3 -m src.suggest
+src/                 141 modules, all on a live execution path
+  analysis/          Dept 8 — macro regime, valuation, darling research
+  ingestion/         Dept 1 — the data clerks (lake writers)
+  validation/        Dept 5 — the proving court (gates, trials, placebos)
+  discovery/         pattern miners (propose candidates only)
+  knowledge_graph/   entity affinity + causal edges
+tests/               132 files, 1,589 tests — the live suite
+research_archive/    parked code, kept for reuse, on NO execution path
+docs/                23 specs and plans (the "why" behind the big builds)
+data/                the lake + artifacts (mostly gitignored)
+logs/                append-only ledgers + job logs
 ```
 
-It's also scheduled to run automatically every weekday at 8:00 AM IST
-(before market open) and email you the digest, using the same Gmail setup as
-alerts. If you haven't already, load the schedule once with:
-```
-launchctl load ~/Library/LaunchAgents/com.alphatrading.dailysuggestions.plist
-```
+`research_archive/` is deliberately not imported by anything. It exists so we
+never rewrite logic from scratch — see its own README for the manifest.
 
----
+## Status
 
-## Phase 3: Paper trading (fake money, real prices)
+- **Live** on the VM since 2026-07-08; autonomous paper trading since 07-21.
+- **Capital:** ₹2,00,000 clean-sheet paper pool, ₹10,000 hard risk cap per trade.
+- **The October clock:** the Macro Engine needs a 60-session forward-scored
+  track record before anything it says earns authority. Evaluated Oct 1.
+- **Posture:** proprietary desk, stealth. No public surface.
 
-The engine proposes trades based on the Phase 2 signals — but **you** decide.
-For every proposal you answer y/n and give a one-line "why". Approved trades
-execute against a fake Rs. 1,00,000 portfolio; everything (including what you
-rejected, and your reasoning) goes into a journal.
-
-Start a trading session (best in the evening, after market close):
-```
-python3 -m src.trade
-```
-
-A week later, see how those decisions actually turned out:
-```
-python3 -m src.review
-```
-
-The scorecard rates every decision — the engine's signals AND your own calls
-("WIN", "LOSS", "GOOD SKIP", "MISSED GAIN"...) — so over time you learn which
-signals and which of your instincts to trust.
-
-Safety rails: no broker is connected anywhere in this project, so it cannot
-touch real money. Whole shares only, it can never overspend the fake cash, and
-no single stock may exceed 25% of the portfolio.
-
----
-
-## Hosting (the backend runs in the cloud)
-
-The DhanHQ-backed API server (`src/api.py`) runs 24/7 on a free-tier Google
-Cloud VM (`alpha-trading-vm`, project `project-37632031-10d0-47dd-b6f`),
-rebuilt fresh on 2026-07-06. It starts automatically on boot and restarts
-itself if it crashes (a systemd service called `alpha-trading`). Phase 3
-(paper trading) stays on your Mac since it's interactive.
-
-To get onto the VM: GCP Console → Compute Engine → VM instances → click the
-**SSH** button next to `alpha-trading-vm` (opens a terminal in your browser —
-no keys or extra tools needed).
-
-To check on it (in that SSH window):
-```
-systemctl status alpha-trading             # is the server running?
-sudo journalctl -u alpha-trading -n 40      # recent logs
-python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/api/health').read().decode())"
-```
-
-To ship code changes (nothing auto-deploys — push to GitHub first, then on
-the VM):
-```
-cd ~/alpha_trading && git pull && venv/bin/pip install -r requirements.txt
-sudo systemctl restart alpha-trading
-```
-
-Notes: the server isn't exposed to the internet yet (reachable only on the VM
-itself), and the old VM's scheduled email alerts/suggestions aren't running on
-this new VM yet. See `HANDOVER.md` → "GCP VM (cloud hosting)" for the full
-picture, the `.env` token-transfer gotcha, and next steps.
-
----
-
-## Editing your watchlist
-
-Open `config/watchlist.yaml` in any text editor. Each rule is three lines:
-a `ticker` (NSE ends in `.NS`, BSE ends in `.BO`), a `condition`, and a `value`.
-The file has comments explaining every option. No coding needed.
-
----
-
-## Roadmap / what's next
-
-- [x] Send alerts by email (Telegram is banned in India, so email is the channel)
-- [x] Run automatically on a schedule during market hours (daily via macOS launchd)
-- [x] Host it so your laptop doesn't have to stay open (running on a free-tier Google Cloud VM)
-- [ ] More condition types (volume spikes, etc.)
-- [x] Phase 2: suggestions (trend + momentum digest, emailed daily at 8am)
-- [x] Phase 3 (paper): human-in-the-loop paper trading with a reasoning journal + scorecard
-- [ ] Phase 3 (real): connect a broker — only after the paper scorecard earns trust
-
-See `HANDOVER.md` for the current state and `DECISIONS.md` for why things are
-built the way they are.
+One caveat worth stating plainly: the options simulator's historical P&L is
+synthetic-chain inflated and is **not** an expected return. Treat it as proof
+that the machinery works, never as a forecast.

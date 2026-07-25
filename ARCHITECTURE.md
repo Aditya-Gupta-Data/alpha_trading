@@ -11,8 +11,57 @@ through 50 files: find the department, go to its manager.
 
 Written for the strategic brain, not the compiler: every department below says,
 in plain English, what it does, what goes in, what comes out, and the ONE place
-to change it. Current as of `e0f29a5` (2026-07-23, Macro Regime Engine complete
-+ Stealth Mode), suite **1559 green**.
+to change it. Current as of `c271068` (2026-07-25, post-hygiene sweep), suite
+**1589 green in ~83s**.
+
+---
+
+## If you are an AI agent reading this repository, start here
+
+You are looking at an autonomous **paper-money** systematic trading desk. There
+is no broker order path anywhere in this repo — only market data in. Nothing
+you change here can move real money, but plenty of it can corrupt a research
+record that took months to accumulate. Nine things are worth knowing before you
+touch anything:
+
+1. **Find the department, then its Manager.** Eight departments, each with ONE
+   file/seam you approach to change its behaviour. Never dig through 50 files.
+   The table is in `MODULES.md`; the departments are described below.
+2. **The live execution path is the 24 VM cron jobs in `scripts/setup_cron.sh`**
+   plus 3 Mac cron jobs, 2 Mac LaunchAgents, three systemd services, and the
+   MCP server in `.mcp.json`. That list is the definition of "live". If a
+   module is not reachable from one of those, it is not running, whatever its
+   docstring claims.
+3. **`research_archive/` is parked code on NO execution path.** Never import it
+   from `src/`. Never resurrect something from it without moving its tests back
+   too.
+4. **Some `src/` files are intentionally not on a cron.** They carry a first
+   line reading `# MANUAL OFFLINE TOOL` or `# TEST INFRA`. Do not "clean them
+   up" as dead code — that tag is the answer to the question you are about to
+   ask.
+5. **The Macro Regime Engine has zero execution authority.** It writes opinions
+   to an immutable ledger. It cannot size or open a position, and wiring it to
+   one is a Department 5 decision requiring a passed statistical gate — not a
+   code change you may make on your own initiative.
+6. **Ledgers are append-only and immutable.** `logs/macro_regime_declarations.jsonl`,
+   `logs/macro_strategy_scores.jsonl`, and the outcomes ledger. Rewriting
+   history in any of them destroys the only out-of-sample record the system
+   has, and silently converts forward tests into backtests.
+7. **Abstention is correct behaviour.** Missing data must produce `None` or a
+   named skip reason — never a plausible-looking substitute. If you find code
+   returning a fabricated default, that is a bug.
+8. **Fail open, never crash the clock.** Every nightly stage is caught
+   independently. A dead source produces an honest gap in the record; it must
+   never abort the cron or the stages after it.
+9. **The suite is hermetic and fast (1,589 tests, ~83s).** If a test you write
+   is slow, you have reached a real external system. See "Testing philosophy"
+   near the end of this file.
+
+The single most useful orientation command:
+
+```bash
+python3 -m pytest -q          # 83s, proves the whole checkout works
+```
 
 > **2026-07-23 — the Macro Regime Engine, FINALIZED (spec:
 > `docs/macro_regime_engine_spec.md`; auto-discovery:
@@ -49,16 +98,52 @@ to change it. Current as of `e0f29a5` (2026-07-23, Macro Regime Engine complete
 > `docs/macro_clustering_report.md` has the numbers.
 >
 > **Auto-Discovery (`analysis/auto_discovery`, the true moat):** AD-1
-> FUNCTIONAL — unsupervised shock (change-point) + slow-burn (DTW motif)
-> scan proposing episodes with NO human labels; AD-2 (significance:
-> surrogates + OOS + stability), AD-3 (court), AD-4 (dual-catalog)
-> scaffolded. Reuses the ONE featurizer + ONE DTW.
+> through AD-4 all LIVE as of 2026-07-23. AD-1 = unsupervised shock
+> (change-point) + slow-burn (DTW motif) scan proposing episodes with NO
+> human labels. AD-2 = the significance layer: a candidate is admitted
+> only if it beats BOTH a block-bootstrap and a phase-randomized
+> surrogate null AND recurs out of sample. AD-3 routes admitted
+> candidates to the court; AD-4 unions the human and auto catalogs,
+> flagging auto regimes far from any human anchor. Reuses the ONE
+> featurizer + ONE DTW. Mac-side weekly job, never the nightly cron.
 >
-> **Upcoming (next build, post doc-review):** a fingerprint CACHE —
-> episode fingerprints are static (change only on catalog rebuild), so
-> they'll be persisted once on the Mac and READ by the VM nightly,
-> making `declare()` ultra-light and bulletproof on the e2-micro (the
-> October-clock reliability fix).
+> **The fingerprint CACHE is LIVE** (was the October-clock reliability
+> fix). Episode fingerprints are static between catalog rebuilds, so
+> they are persisted on the Mac and READ by the VM. `declare()` went
+> from ~1,840s to light enough for the e2-micro. The VM is a DUMB
+> EXECUTOR: it calls `declare(require_cache=True)`, so a stale or absent
+> cache ABSTAINS loudly with a named `cache_miss_*` reason rather than
+> triggering a 30-minute recompute that would starve the box.
+
+> **2026-07-24 — STAGE B, the forward clock (spec:
+> `docs/stage_b_forward_scoring_spec.md`). This is what turns the engine
+> from a backtest into a track record.**
+>
+> The registry (above) scores strategies IN SAMPLE, over historical
+> episodes. Stage B builds the out-of-sample twin it cannot build itself.
+>
+> `analysis/strategy_scorer` (SB-1) reads the immutable declaration
+> ledger and, for each past declaration whose phase window has now
+> ELAPSED on the benchmark calendar, measures what the declared recipe
+> ACTUALLY returned — using the identical math as the historical episodes
+> (`episode_phase_returns` anchored on the DECLARATION date), so there is
+> zero backtest-versus-forward drift by construction. Results accumulate
+> on `logs/macro_strategy_scores.jsonl`, keyed
+> decl_date × horizon × strategy_id, so re-runs are idempotent and can
+> never double-count.
+>
+> `analysis/strategy_scoreboard` (SB-3/SB-4) rolls those graded calls up
+> per (archetype, phase, recipe) and GRADUATES each cell against the
+> house rulebook: ACCUMULATING → FORWARD_CONFIRMED (Wilson lower bound
+> above the drift-removed null) / FORWARD_CONTRADICTED / INCONCLUSIVE.
+> **Forward and in-sample strata are reported side by side and NEVER
+> pooled** — the money question is whether an in-sample PREFER actually
+> confirmed live.
+>
+> Both are PURE SHADOW: they read the lake and write their own ledgers.
+> They touch no capital, journal or trade state. SB-1 is future-blind by
+> construction (a graded call is a function of its window only) and
+> timelock-tested.
 
 ## Phase 2: Qualitative Engine (The Knowledge Graph) — VISION, NOT BUILT
 
@@ -172,10 +257,11 @@ does it *safely*: it classifies failures (auth vs data outage), retries once on
 a rate-limit, and voids stale quotes. Separately, the `ingestion/` clerks
 capture end-of-day data that can never be re-bought later into a `lake/`
 archive: option chains, bulk deals, FII/DII flows (`flows_tracker` forward,
-`flows_backfill` for owner-supplied history), earnings dates, macro, news
+`flows_backfill` — ARCHIVED 2026-07-25, see research_archive/ — for
+owner-supplied history), earnings dates, macro, news
 (`rss_ingester`, decision #75 — publishers' OWN feeds, never scrapes),
 corporate announcements (`corporate_events` — catalyst/expansion/risk
-classified), full fundamental statements (`fundamental_parser`, yfinance), 15-minute
+classified), 15-minute
 intraday snapshots (`intraday_tracker`), annual-report PDFs
 (`report_downloader` — NSE's filings archive, Mac-only, throttled,
 honest outage codes; feeds Department 8's forensic reader), and
@@ -258,13 +344,14 @@ SMAs; stock vs sector relative strength), `macro_shocks` (the War Playbook —
 known crisis windows and which sectors historically survive them),
 `regime_filters` (the manager — composes those into the two live radars: the
 smart-money/sector VETO on bullish index spreads, and the CRISIS regime that
-disables short-premium structures), `annual_report_analyzer` (the forensic
+disables short-premium structures), `annual_report_analyzer` (**ARCHIVED 2026-07-25** — the parked forensic
 annual-report reader: section-aware condensation → LLM extraction through
 `text_intelligence` → a verbatim-quote validator that DROPS any finding whose
 quote isn't on the cited page — so a weak local model yields fewer findings,
 never fabricated evidence; conviction JSONs land in the lake, advisory-only),
-`cohort_comparator` (the side-by-side matrix of human deep-read scores and
-machine scores — two instruments, never rescaled into one number),
+`cohort_comparator` (**ARCHIVED 2026-07-25** — the side-by-side matrix of
+human deep-read scores and machine scores, two instruments never rescaled
+into one number),
 `fundamental_screener` (the Darling screen: mechanical pass rule over
 exchange-filed numbers + the forensic trust gate; writes every passer to
 `darlings_queue.json`, which the report_downloader consumes — quant finds
@@ -282,10 +369,10 @@ move daily; `weekly_recalibration` (Saturday 10:00) re-judges
 FUNDAMENTALS, because those only change when filings arrive — and it
 OVERRIDES the daily grade by PINNING a held name that fails its screen
 (the No-Orphan rule) until its paper position closes,
-plus two **research-stage orphans**:
-`institutional_alpha` (VWAP-pullback entry primitives — signal source for the
-Shadow Equity Engine's thesis) and `conviction` (a 0–1 multi-factor score that
-*aspires* to drive position sizing).
+plus two **research-stage orphans, both ARCHIVED 2026-07-25** (no live caller
+was ever wired; see `research_archive/`): `institutional_alpha` (VWAP-pullback
+entry primitives) and `conviction` (a 0–1 multi-factor score that *aspired* to
+drive position sizing — it never earned that authority).
 
 **The department's iron rules:**
 - **Read-only and point-in-time.** No module here writes trade state, and every
@@ -520,9 +607,10 @@ trades without touching real money; `digest` reports the weekly state.
 **Jurisdiction over Department 8 (review #2):** an analysis signal that wants
 more than veto power — sizing, entries, anything that ADDS risk — comes through
 this court like any mined pattern: frozen definition, out-of-sample trial,
-placebo control. `conviction` and `institutional_alpha` are the first two in
-that queue. Simulator results alone (known-inflated) are never sufficient
-evidence.
+placebo control. `conviction` and `institutional_alpha` were the first two in
+that queue; neither cleared it, and both were archived on 2026-07-25 rather
+than left to rot in `src/`. Simulator results alone (known-inflated) are never
+sufficient evidence.
 
 **Inputs:** resolved outcomes + daily context (to mine and test on).
 **Outputs:** patterns with a governed status; the honest win-rates and
@@ -548,7 +636,8 @@ IST, cron #19 — ONE cross-department card: operations heartbeats, bucketed
 issues, deployed SHAs per service, risk & capital), `performance` (#72, weekly
 Sharpe/Sortino/drawdown), `ops_monitor` (nightly health + job heartbeats),
 `validation/digest` (weekly harness state). On-demand CLIs: `explain <id>`,
-`book_context`, `view_positions`, `graph_viz`.
+`book_context`, `graph_viz`. (`view_positions` was archived 2026-07-25 —
+`positions` is the live read-only view.)
 
 **Two numbers, one owner:** any figure two cards both show is COMPUTED ONCE.
 `ceo_brief` reuses `eod_summary`'s journal readers rather than recomputing
@@ -635,17 +724,87 @@ the anti-orphan rule working as written.
 
 ---
 
+## The macro data flow, end to end
+
+The one pipeline to understand. Read it left to right; each arrow is a file
+boundary, and every stage writes an artifact the next stage reads. Nothing in
+this chain can open a position.
+
+```
+   FRED + NSE                the lake              the featurizer
+  (world data)          data/lake/macro/         ONE shared vocabulary
+       |                        |                        |
+       v                        v                        v
+ ingestion/macro_lake  ->  ingestion/         ->  analysis/macro_features
+ ingestion/indices_lake    index_history            (z-scored channels)
+ (the CLERKS: fetch,      (drop-folder clerk               |
+  normalise, append)       for owner CSVs)                 |
+                                                           v
+                                            analysis/macro_fingerprints  (M2)
+                                            banded multivariate DTW  ->  archetypes
+                                            (shock A* / slow_burn S*, never mixed)
+                                                           |
+                                          +----------------+----------------+
+                                          v                                 v
+                            analysis/macro_playbooks (M3)      analysis/strategy_registry (SR)
+                            per-(archetype,phase,sector)       declarative recipes, scored
+                            excess-vs-NIFTY, n stated          IN SAMPLE, BH-corrected,
+                                          |                    placebos alongside
+                                          v                                 |
+                            analysis/macro_regime (M4)  <-------------------+
+                            declare() -> THE IMMUTABLE LEDGER
+                            logs/macro_regime_declarations.jsonl
+                                          |
+                                          |  (time passes — the embargo)
+                                          v
+                            analysis/strategy_scorer (SB-1)
+                            resolves MATURED declarations, grades what
+                            they ACTUALLY returned, appends to
+                            logs/macro_strategy_scores.jsonl
+                                          |
+                                          v
+                            analysis/strategy_scoreboard (SB-3/4)
+                            rolls up + GRADUATES: ACCUMULATING /
+                            FORWARD_CONFIRMED / CONTRADICTED /
+                            INCONCLUSIVE  ->  data/strategy_scoreboard.json
+                                          |
+                                          v
+                              Dept 5 gates  ->  (someday) authority
+```
+
+**The driver:** `analysis/macro_nightly` on the VM cron at 19:50 IST. It runs
+four stages, each independently caught and fail-open — FRED ingest → indices
+ingest → `declare()` → Stage-B scoring — then writes one heartbeat line to
+`logs/macro_nightly.log` and fires one Discord health card:
+
+```
+[🟢 FRED: OK | 🟢 Indices: OK | 🟢 Declare: OK | 🟢 Scorer: OK]
+```
+
+A red mark means that stage failed open; the run still completed and the other
+stages still ran. An NSE holiday and an honest abstention stay green — the
+engine breathed, the world just had nothing to say.
+
+**The Mac/VM split is a boundary, not an accident.** Heavy artifact builds
+(deep macro lake, templates, playbooks, valuation, bhavcopy) happen on the Mac
+and are SHIPPED to the VM. All NSE crawling happens from the Mac, never the
+VM's IP. The VM reads artifacts and ticks the clock. This is why the VM is a
+"dumb executor" that abstains on a cache miss instead of recomputing.
+
+---
+
 ## Infrastructure (where the departments physically run)
 
 - **The VM (`alpha-trading-vm`, GCP) is the sole live engine.** It runs the
   decision loop, risk gates, reporting cards, and the gateway via `systemd`
-  services + a cron block (`scripts/setup_cron.sh` — 20 numbered jobs; the
+  services + a cron block (`scripts/setup_cron.sh` — **24 numbered jobs**; the
   token renews once at 07:00 IST). It mints its Dhan token from GCP Secret
-  Manager. See `docs/gcp_vm_deployment` context / `HANDOVER.md` for the deploy
-  checklist.
-- **The Mac** runs only what needs a local Ollama or interactive state: the
-  evolution agent and edge miner. It is NOT the engine; closing it doesn't stop
-  trading.
+  Manager. See `CRON_SETUP.md` for the full schedule and `HANDOVER.md` for the
+  deploy checklist. **The host clock must be IST**: Debian cron ignores
+  `CRON_TZ`, so the installer refuses to run at any other offset.
+- **The Mac** runs only what needs a local Ollama, interactive state, or an
+  NSE-safe IP: the evolution agent, edge miner, and the three Dept-8 research
+  crons. It is NOT the engine; closing it doesn't stop trading.
 - **State** is file-based under `data/` (git-ignored): `journal.jsonl`,
   `brain_map.db`, `market_snapshot.json`, `brain_weights.json`, plus the
   `lake/`. The shadow-telemetry ledger lives under `logs/`
@@ -682,3 +841,50 @@ the anti-orphan rule working as written.
 - `MODULES.md` and this file update in the SAME commit as any module change —
   an undocumented module is a review bug (Issue: `institutional_alpha` and
   `conviction` shipped unindexed in `6d89eb4`; fixed in review #2).
+- **`research_archive/` is on no execution path** (2026-07-25 purge). Nothing
+  in `src/` may import it. Files in `src/` that are deliberately not on a cron
+  carry a first line reading `# MANUAL OFFLINE TOOL` or `# TEST INFRA` — that
+  tag exists so the next dead-code sweep does not re-litigate them.
+
+---
+
+## Testing philosophy — zero drift, zero network
+
+`tests/` holds the live suite: **132 files, 1,589 tests, ~83 seconds.**
+`research_archive/tests/` holds frozen tests for archived modules and is
+excluded from collection by `pytest.ini` (`testpaths = tests`).
+
+```bash
+python3 -m pytest -q                      # the whole suite, ~83s
+python3 -m pytest tests/test_foo.py -q    # while iterating
+python3 -m pytest -q --durations=10       # find what got slow
+```
+
+Five rules, each of which was bought with a real incident:
+
+1. **Hermetic or it doesn't ship.** No network, no live token, no Ollama, no
+   production data files. A test that reads `data/journal.jsonl` or the real
+   watchlist is reading state that changes underneath it — it will pass on your
+   machine and fail in CI, or worse, pass in CI for the wrong reason. Inject a
+   `tmp_path`, patch the seam.
+2. **A slow test is a bug report.** The suite runs in 83 seconds. If a test
+   takes seconds, it is almost certainly reaching a real external system rather
+   than computing something hard. In July 2026 three files hid ~11 minutes of
+   live network calls, real rate-limit sleeps, and real LLM inference behind
+   docstrings that claimed "offline".
+3. **Test the path production takes.** A test that builds a real `LocalExtractor`
+   exercises the LLM path on a dev Mac and the deferral path on the VM — two
+   different code paths depending on who ran it. Inject the dependency
+   explicitly so the test states which path it means.
+4. **Sandbox every seam, not just the obvious one.** Cards, budget state,
+   digest queues and ledgers all write files. If a collector takes an injected
+   `logs_dir`, every path it derives must come from that dir — one un-injected
+   default is enough to leak live production state into a test.
+5. **Fail-open behaviour is behaviour — test it.** Every stage that swallows an
+   exception needs a test proving it swallows the exception *and* that the
+   stages after it still ran. "It fails open" is a claim until there is a test
+   named after it.
+
+The full-suite run is a **pre-deploy gate**, not an inner-loop tool: run scoped
+files while iterating, then the whole suite once before you push, with no repo
+edits in flight while it runs.

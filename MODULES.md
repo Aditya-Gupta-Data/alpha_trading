@@ -4,6 +4,11 @@ One-line-plus purpose for every file that matters. If a file isn't listed
 here, it's either generated (`__pycache__/`), static assets, or trivial. For
 system flow between these, see `ARCHITECTURE.md`.
 
+**Current as of 2026-07-25** (post-hygiene sweep): 141 modules in `src/`, all
+on a live execution path; 132 test files, 1,589 tests, ~83s. The definition of
+"live" is reachability from `scripts/setup_cron.sh` (24 VM jobs), the 3 Mac
+cron jobs, the 2 Mac LaunchAgents, the systemd services, or `.mcp.json`.
+
 **Maintenance rule (2026-07-10):** any commit that adds, moves, or
 repurposes a module updates this file IN THE SAME COMMIT. This index is
 the first stop for every code-review/search agent — point them here

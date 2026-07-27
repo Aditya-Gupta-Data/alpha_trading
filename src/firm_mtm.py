@@ -126,7 +126,14 @@ def compute(conn=None, entries=None, marks=None, ledger_path=None,
     if (days is not None and days >= CAGR_MIN_DAYS
             and abs_return is not None and mtm > 0):
         cagr = (mtm / base) ** (365.0 / days) - 1
+    # `equity_realized` is account equity (base + realized P&L) — the MTM
+    # composition uses it. `realized_pnl` is the PROFIT alone; the card must
+    # print that one. On 2026-07-27 the brief printed "realized Rs.244,215"
+    # against a Rs.200,000 base — account equity mislabeled as profit, a
+    # 6-day paper run dressed up as +Rs.244k. This system never flatters
+    # itself with false math.
     return {"base": base, "equity_realized": float(acct["equity"]),
+            "realized_pnl": round(float(acct["equity"]) - base, 2),
             "options_unrealized": opt_u, "equity_unrealized": eq_u,
             "mtm": mtm, "unmarked": unmarked, "days": days,
             "abs_return": abs_return, "cagr": cagr}
@@ -141,7 +148,7 @@ def render_line(m: dict = None, **kwargs) -> str:
                if m["abs_return"] is not None else "n/a")
         parts = [f"💹 Firm MTM Rs.{m['mtm']:,.0f} "
                  f"(base Rs.{m['base']:,.0f} · realized "
-                 f"Rs.{m['equity_realized']:,.0f}"
+                 f"{m['realized_pnl']:+,.0f}"
                  + (f" · options unreal {m['options_unrealized']:+,.0f}"
                     if m["options_unrealized"] is not None else "")
                  + (f" · equity unreal {m['equity_unrealized']:+,.0f}"

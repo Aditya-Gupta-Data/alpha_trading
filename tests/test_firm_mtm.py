@@ -54,6 +54,7 @@ def test_mtm_composes_cash_options_and_equity():
                        marks=[{"live_pnl_rs": 800.0}],
                        ledger_path=ledger, quote_fn=quote)
         assert m["equity_realized"] == 201500.0
+        assert m["realized_pnl"] == 1500.0     # profit alone, never base+profit
         assert m["options_unrealized"] == 800.0
         assert m["equity_unrealized"] == (2300.0 - 2269.0) * 10
         assert m["mtm"] == 201500.0 + 800.0 + 310.0
@@ -94,6 +95,24 @@ def test_render_line_states_the_edge_and_partial_marks():
                               entries=[], marks=[], ledger_path=ledger,
                               quote_fn=quote)
         assert "CAGR" in line and "Absolute" in line and "day 60" in line
+
+
+def test_realized_label_is_profit_not_account_equity():
+    """2026-07-27: the brief printed 'realized Rs.244,215' against a
+    Rs.200,000 base — account equity mislabeled as profit. The card must
+    print the P&L alone, signed, and never base+profit under 'realized'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger, quote = _ledger(tmp)
+        line = fm.render_line(conn=_acct(days_ago=2, realized=44215.0),
+                              entries=[], marks=[], ledger_path=ledger,
+                              quote_fn=quote)
+        assert "realized +44,215" in line
+        assert "realized Rs.244,215" not in line
+        # A losing run stays signed too.
+        loss = fm.render_line(conn=_acct(days_ago=2, realized=-756.57),
+                              entries=[], marks=[], ledger_path=ledger,
+                              quote_fn=quote)
+        assert "realized -757" in loss
 
 
 def test_digests_carry_the_mtm_line():

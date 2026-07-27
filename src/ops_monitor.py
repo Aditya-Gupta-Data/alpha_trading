@@ -73,9 +73,17 @@ PROBLEM_PATTERNS = re.compile(
 # One optional noun may sit between the count and the word, so
 # "0 window(s) failed" is scrubbed but "0 rows written, upload failed"
 # is NOT (the genuine failure survives and still fires).
+#
+# THIRD SHAPE (2026-07-27 false alarm): macro_nightly writes its clean
+# runs as '"failed": []' — an EMPTY LIST, not a zero count. Two of them
+# reached the CEO brief as "problems". A non-empty list ('"failed":
+# ["TCS.NS"]') still fires because only the literal empty brackets are
+# scrubbed.
 ZERO_STAT_PATTERNS = re.compile(
     r"(?i)(?:"
     r"['\"]?(?:failed|errors?|failures?)['\"]?\s*[:=]\s*0\b"
+    r"|"
+    r"['\"]?(?:failed|errors?|failures?)['\"]?\s*[:=]\s*\[\s*\]"
     r"|"
     r"\b0\s+(?:[\w()\-]+\s+)?(?:failed|failures?|errors?)\b"
     r")")

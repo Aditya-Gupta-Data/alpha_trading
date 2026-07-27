@@ -245,3 +245,22 @@ def test_count_first_zero_failures_are_not_problems():
     assert is_problem_line("backfill: 12 window(s) failed")
     assert is_problem_line("0 rows written, upload failed")
     assert is_problem_line("0 errors ingesting, but the NSE fetch timed out")
+
+
+def test_empty_list_failure_stats_are_not_problems():
+    """2026-07-27 false alarm: macro_nightly writes clean runs as
+    '"failed": []' — an empty LIST, not a zero count — and two of them
+    reached the CEO brief as problem lines. Empty brackets are scrubbed;
+    a populated list still fires."""
+    from src.ops_monitor import is_problem_line
+
+    # Verbatim shape from macro_nightly.log — a clean run.
+    assert not is_problem_line('"failed": []')
+    assert not is_problem_line(
+        '{"ts": "2026-07-25T01:48:04", "as_of": "2026-07-25", "stages": '
+        '{"fred": {"ok": ["BRENT", "DXY"], "failed": []}}}')
+    assert not is_problem_line("'errors': [ ]")   # spaced brackets too
+
+    # A NON-empty failure list is a genuine problem and must still fire.
+    assert is_problem_line('"failed": ["TCS.NS", "INFY.NS"]')
+    assert is_problem_line('{"stages": {"fred": {"failed": ["DXY"]}}}')

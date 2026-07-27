@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-27 · 7 commits · 30 files touched
+### 2026-07-27 · 10 commits · 36 files touched
 
+- `a4575a5` docs: session close 2026-07-27 — HANDOVER, ledger, trade-book export
+- `7e0d635` fix(validation): H4 loud-abort on data failure + spread-tuner design + floor 5->10
+- `9d8c13d` feat(validation): H4 simulator experiment harness (pyramid vs one-and-done)
 - `614bcf8` docs: HANDOVER — Intelligence & Autonomy trio complete (Directives 1-3)
 - `b4e0437` feat(risk): Opportunity Cost Tracking — blocked trades into the shadow ledger (Directive 1)
 - `66c60a3` feat(reporting): CEO-View Discord — plain English + Morning Brief (Directive 2)

@@ -73,10 +73,12 @@ Run: `python3 -m src.validation.h4_comparator --start 2025-01-01 --end 2025-06-3
 
 import argparse
 import hashlib
+import sys
 from datetime import date
 
 from src import brain_map
 from src import plan_tracker as pt
+from src.config import MOVING_AVERAGE_SLOW
 from src.options_proposer import build_proposal, market_view
 from src.performance import sharpe, sortino, max_drawdown
 from src.simulator import (
@@ -96,6 +98,45 @@ DEFAULTS = {
 }
 
 POLICIES = ("baseline", "pyramid")
+
+# Below this many bars, analysis_from_closes() returns None for EVERY day
+# (it needs MOVING_AVERAGE_SLOW+1 closes), so the run is guaranteed to
+# produce zero trades regardless of policy — an un-runnable experiment,
+# not a thin one.
+MIN_WARMUP_BARS = MOVING_AVERAGE_SLOW + 1
+
+
+class H4DataError(RuntimeError):
+    """The experiment cannot run because its market data is missing or too
+    short. Raised INSTEAD of walking zero bars to a clean-looking
+    'insufficient_data' report — a failed fetch and a genuinely thin
+    sample must never be indistinguishable in the output (2026-07-27:
+    an expired token produced a DH-901, `_fetch_bars` fail-open-returned
+    [], and the run printed a tidy n=0 report that read like a result)."""
+
+
+def _validate_bars(underlying: str, bars, self_fetched: bool) -> None:
+    """Abort loudly on unusable history. `self_fetched` distinguishes a
+    live-fetch failure (almost always auth/network — name the likely
+    cause) from injected bars that are simply too short."""
+    source = ("the Dhan fetch returned no usable history" if self_fetched
+              else "the injected bar series is empty")
+    if not bars:
+        raise H4DataError(
+            f"{underlying}: {source}. Nothing was simulated and NO verdict "
+            "is possible.\n"
+            "  If a DH-901 / Invalid_Authentication error is printed above, "
+            "the Dhan access token in .env is expired — regenerate it and "
+            "re-run.\n"
+            "  (A zero-bar run is a DATA FAILURE, not an experimental "
+            "result — refusing to emit a report.)")
+    if len(bars) < MIN_WARMUP_BARS:
+        raise H4DataError(
+            f"{underlying}: only {len(bars)} bar(s) available, but "
+            f"{MIN_WARMUP_BARS} are needed before the first signal can "
+            f"fire (the {MOVING_AVERAGE_SLOW}-day moving average warmup).\n"
+            "  Every day would be skipped and the run would report zero "
+            "trades. Start the range earlier.")
 
 _H4_COLUMNS = (
     ("policy", "TEXT"),
@@ -394,8 +435,12 @@ def run_h4_experiment(start: str, end: str, underlyings=("NIFTY 50",), *,
     if conn is None:
         conn = brain_map.connect()
     ensure_schema(conn)
-    if bars_by_underlying is None:
+    self_fetched = bars_by_underlying is None
+    if self_fetched:
         bars_by_underlying = {u: _fetch_bars(u, start) for u in underlyings}
+    # Abort BEFORE any policy walks a single day — see H4DataError.
+    for u in underlyings:
+        _validate_bars(u, bars_by_underlying.get(u), self_fetched)
     vix_by_date = vix_by_date or {}
 
     runs = []
@@ -490,8 +535,20 @@ def main() -> None:
 
     conn = brain_map.connect()
     vix_by_date = _fetch_vix_series(args.start)
-    out = run_h4_experiment(args.start, args.end, (args.underlying,),
-                            conn=conn, vix_by_date=vix_by_date)
+    if not vix_by_date:
+        # Not fatal (the VIX gate then blocks range-bound structures —
+        # documented live-outage behaviour), but it materially changes
+        # which structures can be proposed, so it must never be silent.
+        print("  ⚠️  WARNING: no India VIX history loaded — every day will "
+              "face the no-VIX gate. Results are NOT comparable to a "
+              "VIX-complete run.", file=sys.stderr)
+    try:
+        out = run_h4_experiment(args.start, args.end, (args.underlying,),
+                                conn=conn, vix_by_date=vix_by_date)
+    except H4DataError as e:
+        print(f"\n❌ H4 EXPERIMENT ABORTED — {e}", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
     conn.close()
     print(f"H4 experiment {args.start}..{args.end} on {args.underlying}")
     for run in out["runs"]:

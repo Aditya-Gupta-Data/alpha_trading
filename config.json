@@ -19,7 +19,7 @@
   "max_concurrent_positions": 4,
   "alt_entry_pullback_pct": 2.0,
   "plan_max_days": 30,
-  "tuner_min_samples": 5,
+  "tuner_min_samples": 10,
   "tuner_weight_sensitivity": 0.25,
   "tuner_weight_bounds": [0.5, 1.5],
   "equity_desk_enabled": true,

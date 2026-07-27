@@ -42,6 +42,45 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-07-27, after the deploy-gap close
+
+**Where the system is:** the VM now runs `170aa21` — the 14-commit deployment
+gap (VM stuck on `bb99555`/23-24 Jul while main accumulated the DH-905
+throttle, the Great Purge, the macro heartbeat and the test speedup) was found
+by reading the 07-27 CEO brief against `git merge-base` and closed the same
+day. Deploy verified live: cron block reinstalled by `setup_cron.sh`, the
+manual duplicate lines for `intraday_tracker`/`macro_nightly` deleted
+(open item 3 of 07-25 — **now done**, de-dup check returned exactly 2),
+both systemd services active, `/api/health` OK.
+
+**Today's two fixes (`170aa21`), both from reading the CEO brief honestly:**
+
+1. **`ops_monitor` empty-list false alarm.** `"failed": []` (macro_nightly's
+   clean-run shape) reached the brief as a problem line — the third shape of
+   the zero-stat false alarm (07-14 dict-count, 07-20 count-first). Empty
+   brackets now scrubbed; a populated failure list still fires.
+2. **`firm_mtm` mislabeled account equity as profit.** The card printed
+   "realized Rs.244,215" against a Rs.200,000 base — that figure was
+   `account.equity` (base + realized). New `realized_pnl` key carries the
+   profit alone (+44,215), signed, on the card; `equity_realized` unchanged
+   for MTM composition. Suite 1,591 green in ~96s.
+
+**Watch tonight/tomorrow (first post-deploy signals):**
+- 19:50 IST `macro_nightly` should fire the Discord heartbeat card for the
+  first time ever on the VM (it shipped in this deploy).
+- Tomorrow's CEO brief should show: DH-905 lines gone (throttle now live on
+  the VM), `realized +44,215` not `Rs.244,215`, no `"failed": []` alarms,
+  and — if the intraday capture misses (79-80/84, DIVISLAB/LUPIN/TATASTEEL)
+  were the un-throttled-client story — those gone too. If they persist,
+  they are a real data issue, not rate-limiting.
+
+**Open items:** unchanged from 07-25 below **except** item 3 (cron de-dup —
+done today). `decay_engine.apply_decay_sweep` is still unwired (item 1,
+owner-gated). The parked branch `claude/hello-d9m45n` still holds unmerged
+commits (item 7).
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-25, after the CTO hygiene session
 
 **Where the system is:** live and autonomous on the VM, paper money, with the

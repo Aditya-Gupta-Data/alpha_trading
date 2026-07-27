@@ -235,8 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-27 · 2 commits · 6 files touched
+### 2026-07-27 · 7 commits · 30 files touched
 
+- `614bcf8` docs: HANDOVER — Intelligence & Autonomy trio complete (Directives 1-3)
+- `b4e0437` feat(risk): Opportunity Cost Tracking — blocked trades into the shadow ledger (Directive 1)
+- `66c60a3` feat(reporting): CEO-View Discord — plain English + Morning Brief (Directive 2)
+- `f15182e` feat(risk): Walkaway Protocol — 🔴 SYSTEM PAUSED layer for the risk-of-ruin halt (Directive 3)
+- `d890129` docs: Intelligence & Autonomy strategic backlog — 3 owner directives (no new engines)
 - `abcfda2` docs: 07-27 session wrap — deploy-gap close, two reporting fixes logged
 - `170aa21` fix(reporting): two honesty fixes from the 07-27 CEO brief
 

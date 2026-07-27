@@ -10,7 +10,7 @@ and `DECISIONS.md` #48/#51.
 
 ## The VM (the engine — always on)
 
-All 24 jobs are installed by the idempotent script (safe to re-run after every
+All 25 jobs are installed by the idempotent script (safe to re-run after every
 `git pull`):
 
 ```bash
@@ -25,7 +25,8 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | IST | Job | What |
 |---|---|---|
 | 07:00 daily | `src.renew_token` | Mints the day's Dhan token — V2 creds fetched from **GCP Secret Manager** at runtime, never on disk. THE only scheduled renewal (never add a second — #48). |
-| 08:00 Mon-Fri | `src.suggest` | Daily momentum/trend suggestions digest. |
+| 08:00 Mon-Fri | `src.suggest` | Daily momentum/trend suggestions digest (per-ticker technical read). |
+| 08:05 Mon-Fri | `src.morning_brief` | **NEW (Directive 2, 2026-07-27):** the distinct pre-open account-level card — last night's macro read (gated: never names an analog unless `macro_regime.declare()` actually declared one, never claims execution — the engine has zero execution authority, Rule 5), today's watchlist/book results-date proximity, and the book going into the session. Reads only overnight artifacts, no live quotes. |
 | 09:10 Mon-Fri | `src.master_scheduler` | The full automated paper session; waits for the 09:15 open, self-terminates 15:30 (#45). |
 | every 15m, mkt hrs Mon-Fri | `src.ingestion.intraday_tracker` | Read-only 15-min price snapshot → `data/lake/intraday_15m.jsonl` (not traded on yet). Self-gates to 09:15–15:30; fail-open per ticker. All calls share the host-wide `_throttle()` gate (DH-905 fix). |
 | 15:35 Mon-Fri | `src.main` | Watchlist alert checks. |

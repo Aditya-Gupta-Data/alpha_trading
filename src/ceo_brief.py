@@ -125,6 +125,7 @@ MAX_LINE_CHARS = 110
 JOB_DUE_HOUR = {
     "renew_token.log": 7.0,
     "suggest.log": 8.0,
+    "morning_brief.log": 8.1,
     "master_scheduler.log": 9.2,
     "main.log": 15.6,
     "chain_archiver.log": 15.7,
@@ -739,7 +740,8 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
                      repo_root: Path = ROOT,
                      journal_path=None,
                      clock=None,
-                     halt_lines_fn=None) -> dict:
+                     halt_lines_fn=None,
+                     macro_sentence_fn=None) -> dict:
     """The whole brief as ONE notifier payload (event="ceo_brief").
 
     Every seam is a parameter so the entire card is assertable offline. Each
@@ -764,6 +766,20 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
 
     fields = [_ops_field(ops), _issues_field(issues),
               _deploy_field(dep), _risk_field(risk)]
+
+    # Directive 2 (CEO-View Discord, 2026-07-27): one macro sentence, gated
+    # by ceo_language's two honesty checks (regime declared + Stage-B
+    # graduation) — never named unless earned, never "executing". The live
+    # read is injected by main() only (same 07-23 rule as the halt banner:
+    # a build_* called from a test must never touch live state on its
+    # own); macro_sentence_fn=None = no field, byte-identical card.
+    try:
+        sentence = macro_sentence_fn() if macro_sentence_fn else None
+        if sentence:
+            fields.append({"name": "🌍 Macro Read", "value": sentence[:1024],
+                           "inline": False})
+    except Exception:
+        pass
 
     # Walkaway Protocol (Directive 3): a live risk-of-ruin halt leads the
     # brief — and reading it re-fires the daily 🔴 card (de-duped in pm).
@@ -834,7 +850,9 @@ def main(argv=None) -> int:
     # tests. The dry run gets it too (the banner is read-only; the card
     # re-fire inside it is its own de-duped, muzzle-aware door).
     from src import portfolio_manager as pm
-    kw = {"halt_lines_fn": pm.halt_banner_lines}
+    from src import ceo_language
+    kw = {"halt_lines_fn": pm.halt_banner_lines,
+         "macro_sentence_fn": ceo_language.macro_regime_sentence}
     payload = build_brief_card(**kw) if dry else send_brief(**kw)
     print(_render_text(payload), flush=True)
     if dry:

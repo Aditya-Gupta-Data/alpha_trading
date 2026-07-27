@@ -101,6 +101,7 @@ EXPECTED_JOBS = {
     "renew_token.log": False,        # daily 07:00 IST
     "sleep_phase.log": False,        # daily 20:00 IST (decay-only w/o Ollama)
     "suggest.log": True,             # Mon-Fri 08:00 IST
+    "morning_brief.log": True,       # Mon-Fri 08:05 IST (Directive 2, 07-27)
     "main.log": True,                # Mon-Fri 15:35 IST
     "master_scheduler.log": True,    # Mon-Fri 09:10 IST
     "chain_archiver.log": True,      # Mon-Fri 15:40 IST (Phase-0 capture)

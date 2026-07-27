@@ -161,6 +161,18 @@ def build_eod_card(db_path=None, halt_lines_fn=None) -> dict:
     # Build Discord field list.
     fields: list = []
 
+    # Directive 2 (CEO-View Discord, 2026-07-27): one narrated line over
+    # numbers this card already computes — no new data, plain English
+    # instead of a bare field grid.
+    try:
+        from src import ceo_language
+        fields.append({"name": "📋 Plain English",
+                       "value": ceo_language.book_summary_sentence(
+                           active_total, daily_pnl, net_delta),
+                       "inline": False})
+    except Exception:
+        pass
+
     if todays_exits:
         sign = "+" if daily_pnl >= 0 else ""
         fields.append({

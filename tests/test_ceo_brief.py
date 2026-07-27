@@ -130,7 +130,7 @@ def test_operations_flags_silent_job(logs):
 def test_evening_jobs_are_not_due_at_the_brief(logs):
     """The card must not cry wolf about jobs that haven't had their slot.
 
-    8 of the 13 monitored jobs run 18:50-20:30. At the 16:30 brief they are
+    8 of the 14 monitored jobs run 18:50-20:30. At the 16:30 brief they are
     pending, not silent — the 20:30 ops sweep is what judges them.
     """
     from src.ops_monitor import EXPECTED_JOBS
@@ -140,8 +140,9 @@ def test_evening_jobs_are_not_due_at_the_brief(logs):
         "rss_ingester.log", "news_processor.log", "earnings_calendar.log",
         "deals_tracker.log", "flows_tracker.log", "daily_archiver.log",
         "sleep_phase.log", "discovery_nightly.log"}
-    # Only the 5 morning/afternoon jobs are judged.
-    assert ops["expected_count"] == 5
+    # Only the 6 morning/afternoon jobs are judged (suggest + the new
+    # 08:05 morning_brief + main/master_scheduler/chain_archiver).
+    assert ops["expected_count"] == 6
     for name in ops["pending"]:
         assert all(name not in m for m in ops["missing"])
     assert "not due yet" in ceo_brief._ops_field(ops)["value"]
@@ -187,7 +188,7 @@ def test_1600_would_be_too_early_for_the_post_close_jobs():
     """WHY the cron says 16:30, not 16:00 (the owner's first suggestion).
 
     main (15:35) and chain_archiver (15:40) are still inside their 30-min
-    grace at 16:00, so a 16:00 brief could judge only 3 of 13 jobs. 16:30 is
+    grace at 16:00, so a 16:00 brief could judge only 4 of 14 jobs. 16:30 is
     the first slot that covers every post-close job.
     """
     from src.ops_monitor import EXPECTED_JOBS
@@ -195,8 +196,8 @@ def test_1600_would_be_too_early_for_the_post_close_jobs():
                                            dict(EXPECTED_JOBS))
     due_at_1630, _ = ceo_brief.jobs_due_by(_clock(hh=16, mm=30)(),
                                            dict(EXPECTED_JOBS))
-    assert len(due_at_1600) == 3
-    assert len(due_at_1630) == 5
+    assert len(due_at_1600) == 4
+    assert len(due_at_1630) == 6
     assert {"main.log", "chain_archiver.log"} <= set(due_at_1630)
 
 
@@ -437,6 +438,23 @@ def test_halt_banner_leads_the_brief_when_injected(logs, tmp_path):
     assert all(f["name"] != "🔴 SYSTEM PAUSED" for f in healthy["fields"])
     assert "SYSTEM PAUSED" not in healthy["description"]
     assert len(healthy["fields"]) == 4                  # shape unchanged
+
+
+def test_macro_read_leads_when_injected_and_absent_otherwise(logs, tmp_path):
+    """Directive 2: the macro sentence is a byte-identical no-op field
+    when not injected (07-23 sandbox rule) and appears verbatim from the
+    ONE gated source (ceo_language) when it is."""
+    (logs / "market.log").write_text("all fine\n")
+    kw = dict(logs_dir=logs, state_path=_warm_state(tmp_path / "s.json"),
+              deploy_log_path=tmp_path / "none.jsonl", repo_root=tmp_path,
+              journal_path=tmp_path / "none.jsonl", clock=_clock())
+    base = ceo_brief.build_brief_card(**kw)
+    assert all(f["name"] != "🌍 Macro Read" for f in base["fields"])
+    assert len(base["fields"]) == 4
+    injected = ceo_brief.build_brief_card(
+        macro_sentence_fn=lambda: "🌍 Macro regime matches Test 2018.", **kw)
+    field = [f for f in injected["fields"] if f["name"] == "🌍 Macro Read"][0]
+    assert "Test 2018" in field["value"]
 
 
 def test_digest_drain_is_sandboxed_to_the_injected_logs_dir(logs, tmp_path):

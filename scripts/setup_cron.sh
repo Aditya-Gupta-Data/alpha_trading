@@ -164,6 +164,15 @@ CRON_TZ=Asia/Kolkata
 # 3. Run daily momentum/trend suggestions (Mon-Fri at 08:00 AM IST)
 0 8 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.suggest >> "$REPO_ROOT/logs/suggest.log" 2>&1
 
+# 25. Morning Brief (Directive 2, 2026-07-27, Mon-Fri 08:05 IST) — the
+#     distinct pre-open account-level card: last night's macro read (via
+#     ceo_language's two honesty gates — never names an analog unless the
+#     regime engine declared it, never "executing"), today's watchlist/
+#     book results-date proximity, and the book going into the session.
+#     After renew_token (07:00) + suggest (08:00, the per-ticker technical
+#     read this does NOT duplicate); before master_scheduler (09:10).
+5 8 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.morning_brief >> "$REPO_ROOT/logs/morning_brief.log" 2>&1
+
 # 4. Sleep Phase — off-market Brain Map memory pass (Daily at 20:00 IST)
 #    Ingests journal text via local Ollama, consolidates themes, applies decay.
 #    On the VM (no Ollama) this gracefully degrades to the decay-only pass;

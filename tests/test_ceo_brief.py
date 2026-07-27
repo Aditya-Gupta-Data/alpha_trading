@@ -420,6 +420,25 @@ def test_build_brief_card_shape(logs, tmp_path):
         assert expected in names
 
 
+def test_halt_banner_leads_the_brief_when_injected(logs, tmp_path):
+    """Walkaway Protocol (Directive 3): a live risk-of-ruin halt leads the
+    brief — field 0 and the headline. The read is an injected seam; None
+    (every existing caller) or a healthy stub leaves the card
+    byte-identical to before the feature."""
+    (logs / "market.log").write_text("all fine\n")
+    kw = dict(logs_dir=logs, state_path=_warm_state(tmp_path / "s.json"),
+              deploy_log_path=tmp_path / "none.jsonl", repo_root=tmp_path,
+              journal_path=tmp_path / "none.jsonl", clock=_clock())
+    halted = ceo_brief.build_brief_card(
+        halt_lines_fn=lambda: ["🔴 SYSTEM PAUSED — test halt"], **kw)
+    assert halted["fields"][0]["name"] == "🔴 SYSTEM PAUSED"
+    assert "SYSTEM PAUSED" in halted["description"]
+    healthy = ceo_brief.build_brief_card(halt_lines_fn=lambda: [], **kw)
+    assert all(f["name"] != "🔴 SYSTEM PAUSED" for f in healthy["fields"])
+    assert "SYSTEM PAUSED" not in healthy["description"]
+    assert len(healthy["fields"]) == 4                  # shape unchanged
+
+
 def test_digest_drain_is_sandboxed_to_the_injected_logs_dir(logs, tmp_path):
     """The batched-signals field drains the digest queue from the
     INJECTED logs_dir, never the real logs/ (2026-07-23 regression: a

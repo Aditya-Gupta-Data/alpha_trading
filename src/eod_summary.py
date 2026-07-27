@@ -124,7 +124,7 @@ def compute_net_delta_exposure(open_spreads: list) -> float:
     return round(net, 2)
 
 
-def build_eod_card(db_path=None) -> dict:
+def build_eod_card(db_path=None, halt_lines_fn=None) -> dict:
     """Build the EOD broadcast payload from journal + brain_map.db.
 
     Returns a payload dict ready for broadcast_alert(payload). Exported so
@@ -208,6 +208,21 @@ def build_eod_card(db_path=None) -> dict:
     except Exception:
         pass
 
+    # Walkaway Protocol (Directive 3): while a risk-of-ruin halt is up,
+    # this card opens with the red banner — and reading the banner is what
+    # re-fires the daily 🔴 SYSTEM PAUSED card (self de-duped inside pm).
+    # The live read is INJECTED by the cron entrypoint only (07-23 lesson:
+    # a build_* called from a test must never touch live state on its
+    # own); halt_lines_fn=None or healthy = zero change to this card.
+    try:
+        halt_lines = halt_lines_fn() if halt_lines_fn else []
+        if halt_lines:
+            fields.insert(0, {"name": "🔴 SYSTEM PAUSED",
+                              "value": "\n".join(halt_lines)[:1024],
+                              "inline": False})
+    except Exception:
+        pass
+
     # One-firm-view (decision #82, VM-native since #83): the equity
     # desk's live book rides on this card too — all local, fail-open.
     try:
@@ -244,9 +259,15 @@ def build_eod_card(db_path=None) -> dict:
 
 
 async def broadcast_eod(db_path=None) -> bool:
-    """Build the EOD card and send it to Discord. Returns True on success."""
+    """Build the EOD card and send it to Discord. Returns True on success.
+
+    The PRODUCTION composition root: this is where the live halt-banner
+    read is injected (Walkaway Protocol) — build_eod_card itself stays
+    inert so tests can call it without touching brain_map."""
     from src.notifier import broadcast_alert
-    payload = build_eod_card(db_path=db_path)
+    from src import portfolio_manager as pm
+    payload = build_eod_card(db_path=db_path,
+                             halt_lines_fn=pm.halt_banner_lines)
     return await broadcast_alert(payload)
 
 

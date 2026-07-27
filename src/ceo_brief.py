@@ -738,7 +738,8 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
                      deploy_log_path: Path = DEPLOY_LOG_PATH,
                      repo_root: Path = ROOT,
                      journal_path=None,
-                     clock=None) -> dict:
+                     clock=None,
+                     halt_lines_fn=None) -> dict:
     """The whole brief as ONE notifier payload (event="ceo_brief").
 
     Every seam is a parameter so the entire card is assertable offline. Each
@@ -763,6 +764,21 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
 
     fields = [_ops_field(ops), _issues_field(issues),
               _deploy_field(dep), _risk_field(risk)]
+
+    # Walkaway Protocol (Directive 3): a live risk-of-ruin halt leads the
+    # brief — and reading it re-fires the daily 🔴 card (de-duped in pm).
+    # The live read is injected by main() only (07-23 lesson: a build_*
+    # called from a test must never touch live state on its own);
+    # halt_lines_fn=None or healthy = no field, byte-identical card.
+    try:
+        halt_lines = halt_lines_fn() if halt_lines_fn else []
+        if halt_lines:
+            fields.insert(0, {"name": "🔴 SYSTEM PAUSED",
+                              "value": "\n".join(halt_lines)[:1024],
+                              "inline": False})
+            description = "🔴 SYSTEM PAUSED — risk-of-ruin halt active."
+    except Exception:
+        pass
     # Directive 4 (#84): anything the Discord budget spooled since the
     # last digest (the 15:45 EOD drains first; this catches the rest).
     # The queue is a LOG file — drain it from the injected logs_dir so it
@@ -813,7 +829,13 @@ def main(argv=None) -> int:
     import sys
     argv = argv if argv is not None else sys.argv[1:]
     dry = "--dry-run" in argv
-    payload = build_brief_card() if dry else send_brief()
+    # PRODUCTION composition root: the live halt-banner read (Walkaway
+    # Protocol) is injected here only — build_brief_card stays inert for
+    # tests. The dry run gets it too (the banner is read-only; the card
+    # re-fire inside it is its own de-duped, muzzle-aware door).
+    from src import portfolio_manager as pm
+    kw = {"halt_lines_fn": pm.halt_banner_lines}
+    payload = build_brief_card(**kw) if dry else send_brief(**kw)
     print(_render_text(payload), flush=True)
     if dry:
         print("(dry run — nothing sent)")

@@ -283,6 +283,76 @@ def _daily_breaker_card(conn, verdict: dict) -> None:
         print(f"  (daily breaker card skipped: {e})")
 
 
+def _ruin_halt_card(conn) -> None:
+    """The 🔴 SYSTEM PAUSED card for the risk-of-ruin halt (Walkaway
+    Protocol, Directive 3 — docs/walkaway_protocol_design.md). Owner
+    rulings 2026-07-27: NO override door (resume = clean-sheet reset,
+    an owner decision this layer never automates) and the card RE-FIRES
+    once per IST day while the halt is active, so a 3-day walkaway can
+    never miss it. De-duped via account_events (`ruin_halt_card` row per
+    day — the `_daily_breaker_card` pattern); fail-open — a broken card
+    never touches the gate's verdict or a settlement."""
+    try:
+        today = ist_today()
+        seen = conn.execute(
+            "SELECT 1 FROM account_events WHERE event_type = "
+            "'ruin_halt_card' AND ts LIKE ?", (f"{today}%",)).fetchone()
+        if seen:
+            return
+        dd = drawdown_pct(conn)
+        log_event(conn, "ruin_halt_card",
+                  f"SYSTEM PAUSED card fired (drawdown {dd:.2f}%)")
+        from src.notifier import fire_broadcast
+        fire_broadcast({
+            "event": "ruin_halt", "ticker": "ACCOUNT", "date": today,
+            "description": (
+                f"🔴 SYSTEM PAUSED — risk-of-ruin halt\n"
+                f"Drawdown is {dd:.2f}% from peak equity (limit "
+                f"{MAX_DRAWDOWN_PCT:g}%). ALL new entries are blocked, "
+                "on both desks.\n"
+                "Open positions are still being managed — exits, stops "
+                "and settlements continue as normal.\n"
+                "This halt has NO automatic resume and no override "
+                "command: trading restarts only by an owner clean-sheet "
+                "decision (fresh capital era). This card repeats daily "
+                "while the halt is active."),
+        })
+    except Exception as e:
+        print(f"  (ruin halt card skipped: {e})")
+
+
+def halt_banner_lines(conn=None) -> list:
+    """Fail-safe seam for the daily digests (eod_summary / ceo_brief):
+    plain-English halt banner lines, [] when trading normally. Calling
+    this while halted ALSO re-fires the daily 🔴 card (self de-duped),
+    which is what makes the owner's daily-reminder ruling ride the
+    existing Mon-Fri digest crons instead of a new schedule. Never
+    raises; a broken read reports [] (the digests stay useful)."""
+    owns = conn is None
+    try:
+        if conn is None:
+            conn = brain_map.connect()
+        ensure_schema(conn)
+        if not trading_halted(conn):
+            return []
+        _ruin_halt_card(conn)
+        return [(f"🔴 SYSTEM PAUSED — risk-of-ruin halt active: drawdown "
+                 f"{drawdown_pct(conn):.2f}% ≥ {MAX_DRAWDOWN_PCT:g}% of peak "
+                 "equity. New entries are blocked on both desks; open "
+                 "positions are still managed (exits/stops/settlements "
+                 "run). Resume is an owner clean-sheet decision — there "
+                 "is no override command.")]
+    except Exception as e:
+        print(f"  (halt banner unavailable: {e})")
+        return []
+    finally:
+        if owns and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 # --- the composed entry-halt list (review #2 halt-stack rule) ------------
 # EVERY account-level entry halt lives in this one ordered list; a new halt
 # is a new entry here, never a new call site. Each check returns
@@ -330,6 +400,8 @@ def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
                       f"entry {journal_ref} rejected ({halt['reason']})")
             if halt["event"] == "daily_breaker_halt":
                 _daily_breaker_card(conn, halt["verdict"])
+            elif halt["event"] == "risk_of_ruin_halt":
+                _ruin_halt_card(conn)   # cold-start site: halt already up
             return {"approved": False, "reason": halt["reason"]}
 
     cash = available_cash(conn)
@@ -373,6 +445,7 @@ def release_margin(conn, journal_ref: str, pnl_net: float = 0.0) -> dict:
         log_event(conn, "risk_of_ruin_halt",
                   f"drawdown hit {snap['drawdown_pct']:.2f}% after settling "
                   f"{journal_ref} (pnl Rs.{pnl_net:,.2f}) — execution blocked")
+        _ruin_halt_card(conn)   # the moment it trips — never silent again
     return dict(snap, released=True, reason="settled",
                 halted=trading_halted(conn))
 

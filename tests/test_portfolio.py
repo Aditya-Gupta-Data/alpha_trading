@@ -439,6 +439,97 @@ def test_pm_decide_pending_approval_is_margin_gated():
          pm.gate_headless_entry) = saved
 
 
+# --- Walkaway Protocol (Directive 3, 2026-07-27) -------------------------
+# docs/walkaway_protocol_design.md — the risk-of-ruin halt must never be
+# silent, and exits-during-halt is a PROMISE, not an accident of history.
+
+def _trip_ruin_halt(conn):
+    """Drive a fresh account into a lifetime risk-of-ruin halt."""
+    pm.request_entry(conn, "wipeout", 200_000.0)
+    pm.release_margin(conn, "wipeout", -150_000.0)      # 15% drawdown
+    _backdate_settlement(conn, "wipeout")               # isolate lifetime halt
+    assert pm.trading_halted(conn)
+
+
+def test_ruin_halt_fires_one_system_paused_card(monkeypatch):
+    """The halt moment fires exactly ONE 🔴 card (de-duped per IST day
+    via account_events) — the 07-27 audit found this halt was log-only."""
+    sent = []
+    monkeypatch.setattr("src.notifier.fire_broadcast",
+                        lambda p: sent.append(p))
+    conn = pm_conn()
+    _trip_ruin_halt(conn)                               # transition site 1
+    assert len(sent) == 1
+    card = sent[0]
+    assert card["event"] == "ruin_halt"
+    assert "SYSTEM PAUSED" in card["description"]
+    assert "clean-sheet" in card["description"]         # no override door
+    # a rejected entry the same day finds the halt up — but never re-cards
+    assert not pm.request_entry(conn, "later", 1_000.0)["approved"]
+    assert len(sent) == 1
+    events = [e[0] for e in conn.execute(
+        "SELECT event_type FROM account_events").fetchall()]
+    assert events.count("ruin_halt_card") == 1
+
+
+def test_exits_still_settle_during_a_halt():
+    """THE walkaway promise: a halt starves entries only. Open positions
+    keep settling — release_margin has no halt check, and this test is
+    what keeps it that way."""
+    conn = pm_conn()
+    pm.request_entry(conn, "open_pos", 100_000.0)       # opened pre-halt
+    _trip_ruin_halt(conn)
+    curve_before = conn.execute(
+        "SELECT COUNT(*) FROM equity_curve").fetchone()[0]
+    verdict = pm.release_margin(conn, "open_pos", 4_000.0)
+    assert verdict["released"] is True                  # exit settled
+    assert pm.get_account(conn)["realized_pnl"] == -146_000.0
+    assert conn.execute("SELECT COUNT(*) FROM equity_curve").fetchone()[0] \
+        == curve_before + 1                             # curve still appends
+    assert pm.trading_halted(conn)                      # halt itself persists
+    assert not pm.request_entry(conn, "new", 1_000.0)["approved"]
+
+
+def test_halt_banner_lines_and_daily_refire(monkeypatch):
+    """Healthy account: no banner, no card. Halted: banner lines + the
+    daily re-fire rides the digest read (one card per day, banner every
+    read)."""
+    sent = []
+    monkeypatch.setattr("src.notifier.fire_broadcast",
+                        lambda p: sent.append(p))
+    conn = pm_conn()
+    assert pm.halt_banner_lines(conn=conn) == []        # healthy = silent
+    assert sent == []
+    _trip_ruin_halt(conn)                               # fires card #1
+    banner = pm.halt_banner_lines(conn=conn)
+    assert banner and "SYSTEM PAUSED" in banner[0]
+    assert "exits" in banner[0].lower()                 # says exits continue
+    assert len(sent) == 1                               # same-day: de-duped
+    assert pm.halt_banner_lines(conn=conn)              # second read: banner
+    assert len(sent) == 1                               # still one card today
+    # tomorrow: the digest read re-fires (owner ruling: daily reminder)
+    conn.execute("UPDATE account_events SET ts = '2000-01-01T10:00:00' "
+                 "WHERE event_type = 'ruin_halt_card'")
+    conn.commit()
+    assert pm.halt_banner_lines(conn=conn)
+    assert len(sent) == 2
+
+
+def test_eod_card_leads_with_halt_banner_when_injected(monkeypatch):
+    """The digests take the halt read through an injectable seam (07-23
+    sandbox lesson); a halted stub leads the card, a healthy stub changes
+    nothing."""
+    from src import eod_summary
+    monkeypatch.setattr(eod_summary, "_read_journal", lambda path=None: [])
+    monkeypatch.setattr(eod_summary, "query_todays_resolutions",
+                        lambda db_path=None: [])
+    halted = eod_summary.build_eod_card(
+        halt_lines_fn=lambda: ["🔴 SYSTEM PAUSED — test halt"])
+    assert halted["fields"][0]["name"] == "🔴 SYSTEM PAUSED"
+    healthy = eod_summary.build_eod_card(halt_lines_fn=lambda: [])
+    assert all(f["name"] != "🔴 SYSTEM PAUSED" for f in healthy["fields"])
+
+
 if __name__ == "__main__":
     # Simple runner so you don't even need pytest installed.
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

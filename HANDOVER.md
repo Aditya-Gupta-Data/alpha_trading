@@ -42,6 +42,62 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-07-27 late evening, H4 simulator experiment harness built
+
+**Where the system is:** design + code only — nothing deployed to the VM,
+nothing registered, no live-path change. The owner pivoted from the
+Intelligence & Autonomy trio (below) back to H4 (`docs/hypotheses.md` §H4:
+asymmetric position management — add on price-confirmed continuation, trim
+on adverse). This session did NOT touch H1/H2/H3, and confirmed by grep
+that `config/trade_hypotheses.json` still has no code reading it — that
+stays a pure human capture surface, owner's explicit call ("keeping
+administrative bloat to a zero").
+
+**Built, not yet run for real:**
+1. `docs/h4_simulator_experiment_design.md` — the design doc, owner-approved.
+2. `src/validation/h4_comparator.py` — the experiment harness. Runs
+   `baseline` (today's one-and-done #68 gate) vs `pyramid` (stacked adds,
+   capped at `H4_MAX_STACK`=3) through the SAME simulator machinery
+   (`src/simulator.py` + `src/plan_tracker.py`'s pricing/resolution
+   helpers) over identical bars. Continuation = mark improvement AND a
+   fresh N-day extreme (grid `[3, 5, 10]`, owner-specified) — signal
+   repetition alone changes nothing, the direct guard against the #68
+   pileup. Adverse is staged (owner-specified): ≥25% of max_loss trims 50%
+   of remaining lots once; ≥35% closes the rest. Full MODULES.md entry has
+   the complete mechanism.
+3. Verified end-to-end on synthetic in-memory bars (not real Dhan history —
+   no token in this session): the loop runs, both policies propose/resolve/
+   trim, `compute_report()` correctly returned a **"does_not_graduate"**
+   verdict on the toy data (pyramid's Sortino was lower, not higher, than
+   baseline's) — i.e. the harness does not rig itself to always pass.
+   Confirmed isolation: `data/journal.jsonl` untouched (`git status` clean
+   apart from the two new files), rows land under the `sim:h4:<hash>`
+   namespace so they can never collide with `src/simulator.py`'s own
+   production `sim:<hash>` rows, and `src/performance.py` still reads only
+   the real journal.
+4. Full suite green: 1,627 passed, ~93s (`h4_comparator.py` adds no new
+   tests yet — it's a research harness, not on any execution path, same
+   status as `simulator.py` itself).
+
+**Known, documented gap — not a bug, a scope cut:** no Vega/Delta ceiling
+(#71) on stack adds. `build_synthetic_chain()` (the simulator's modeled
+option chain) carries no per-strike Greeks, and `portfolio_greeks.aggregate()`
+needs real Dhan-shaped `greeks.{delta,...}` to price anything — there was no
+honest number to gate on without fabricating one. Only the count-based
+`H4_MAX_STACK` cap guards concentration in this first cut. A real Greeks
+ceiling needs the synthetic chain to grow modeled Greeks first, called out
+explicitly in the module docstring so it isn't silently forgotten.
+
+**Next steps (owner's call, not started):**
+- Run the harness against REAL Dhan daily history (needs a live token) over
+  a real multi-year range, not the synthetic toy series used to verify the
+  code path.
+- Once a real run produces a verdict, decide whether any lookback graduates
+  before touching `validation/registry.py` or live sizing — per the
+  owner's own H4 note, nothing here trades until it earns that.
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-27 evening, after the Intelligence & Autonomy trio
 
 **Where the system is:** the VM runs `b4e0437`. All three "Intelligence &

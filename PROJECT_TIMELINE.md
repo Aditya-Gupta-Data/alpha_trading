@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-07-27 · 2 commits · 6 files touched
+
+- `abcfda2` docs: 07-27 session wrap — deploy-gap close, two reporting fixes logged
+- `170aa21` fix(reporting): two honesty fixes from the 07-27 CEO brief
+
+
 ### 2026-07-25 · 10 commits · 55 files touched
 
 - `34d08bb` feat(docs): Continuous Context protocol — wrap_session.sh + CLAUDE.md agent rules

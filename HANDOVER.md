@@ -42,6 +42,89 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-07-27 night, session close (H4 harness + spread-tuner design)
+
+**Where the system is:** the VM is UNCHANGED — still on `b4e0437`. Everything
+this session produced is **local, committed to `main`, and UNPUSHED**. Two
+commits are ahead of `origin/main`:
+
+| Commit | What |
+|---|---|
+| `9d8c13d` | `feat(validation)` — the H4 simulator experiment harness |
+| `7e0d635` | `fix(validation)` — H4 loud-abort + spread-tuner design + floor 5→10 |
+
+**⚠️ FIRST THING NEXT SESSION:** decide whether to push. Nothing here touches
+the live execution path (the H4 harness is off-cron, `forecast.py` is
+deliberately not wired), so there is no urgency and no risk in the delay —
+but the work is only on this Mac until it is pushed.
+
+### What was built
+
+1. **H4 experiment harness** (`src/validation/h4_comparator.py`, design doc
+   `docs/h4_simulator_experiment_design.md`). Runs `baseline` (today's
+   one-and-done #68 gate) vs `pyramid` (staged adds/trims, stack capped at
+   3) through the SAME simulator/plan_tracker machinery over identical
+   bars. Continuation requires mark improvement **AND** a fresh N-day
+   extreme (grid 3/5/10) — signal repetition alone does nothing, the direct
+   guard against reproducing the #68 pileup. Adverse is staged: ≥25% of
+   max_loss trims 50% of remaining lots once, ≥35% closes the rest.
+2. **Loud-abort fix** (same module). See the ledger — a DH-901 expired token
+   made the first real run print a tidy `insufficient_data` report having
+   simulated nothing. Now `H4DataError` aborts before any policy walks a
+   day, names the likely cause, and exits 1.
+3. **`docs/spread_aware_tuner_design.md`** — scopes learning from spread
+   outcomes. Not built, design only.
+4. **`scripts/export_trade_book.py`** — a read-only journal→CSV audit export
+   (NOT written by this session's agent; found untracked and committed after
+   a full read + safety scan). Its output `trade_book_audit.csv` is now
+   git-ignored.
+
+### The three findings that matter most
+
+- **The live book is degenerate along every structural axis.** All 15
+  resolved spreads are `bear_put_spread`; all 7 regime-stamped ones are
+  `('bearish','mid')`. One structure, one regime, one direction. Any
+  archetype partition over today's book collapses to a single bucket, so
+  the spread-aware tuner design carries a **≥2-populated-bucket guard** —
+  without it the tuner would "learn" a single weight applied to every
+  trade, a uniform rescale that changes nothing while looking like
+  learning. **Expect the first tuner run to emit nothing but neutral
+  weights. That is a pass, not a failure.**
+- **`tuner.py` is deliberately off-cron, not broken.** Line 1 carries the
+  `# MANUAL OFFLINE TOOL` marker (Rule 5, Phase-1 audit 07-25). It is also
+  structurally blind to the options book (`_resolved_buy_outcomes` filters
+  `action != "BUY"`), so cronning it would rewrite `brain_weights.json`
+  with the same neutral values it has held since 2026-07-05. **No cron was
+  installed.** `tuner_min_samples` raised 5 → 10 (owner ruling); global
+  value, equity path has 3 trades so no behaviour change today.
+- **Two directives this session were built on false premises and were
+  refused/reported rather than executed** — a delete order citing a
+  non-existent forensic report (would have removed `decay_engine.py` and
+  `resonance.py`, both live with 4 importers and a green 27-test suite),
+  and a journaling fix for a `regime: None` leak that does not exist (my
+  own sampling error — I inspected the oldest entry and generalized). Both
+  are written up in the ledger, including my error, not silently dropped.
+
+### Open items unchanged by this session
+
+Items 1–8 from the 07-27 evening block below are all untouched. Note
+specifically that **`decay_engine` remains UNWIRED** (open item 1) — this
+session verified it is live-imported and refused to delete it, but did NOT
+wire it. That decision is still the owner's.
+
+### Next steps
+
+- **Push the two commits** (or decide not to).
+- **Regenerate the Dhan token**, then run the real H4 experiment:
+  `python3 -m src.validation.h4_comparator --start 2022-01-01 --end 2025-06-30 --underlying "NIFTY 50"`
+  — owner planned this for the weekend on the local Mac. It will now abort
+  loudly if the token is still dead, instead of faking a verdict.
+- **Spread-aware tuner step 2** is scoped and ready to build when the owner
+  wants it — advisory/shadow only; live wiring (`forecast.py` → proposer)
+  is **descoped by owner ruling** until the registry promotes it.
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-27 late evening, H4 simulator experiment harness built
 
 **Where the system is:** design + code only — nothing deployed to the VM,

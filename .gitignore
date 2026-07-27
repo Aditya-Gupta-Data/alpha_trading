@@ -23,6 +23,10 @@ logs/
 # are personal runtime data, not source code)
 data/
 
+# Trade-book audit export (scripts/export_trade_book.py) — a regenerable
+# flattening of the personal journal, same class of data as data/
+trade_book_audit.csv
+
 # Claude Code's local, machine-specific settings -- not part of the app
 .claude/
 

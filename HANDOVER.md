@@ -42,6 +42,86 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-07-27 evening, after the Intelligence & Autonomy trio
+
+**Where the system is:** the VM runs `b4e0437`. All three "Intelligence &
+Autonomy" directives from this morning's backlog (see the prior 07-27 section
+below) are designed, built, tested, deployed, and verified live — same day.
+The **NO NEW ENGINES** constraint held throughout: every directive reused an
+existing table, door, or resolver; nothing new was stood up.
+
+### Directive 3 — The Walkaway Protocol (`f15182e`)
+
+The risk-of-ruin halt was previously silent (a DB row, no card). Now:
+`portfolio_manager._ruin_halt_card` fires ONE 🔴 SYSTEM PAUSED Discord card
+per IST day (de-dup via `account_events`), from both transition sites, and
+`halt_banner_lines()` re-fires it daily through the existing Mon-Fri digest
+reads (owner ruling: daily reminder, no separate cron). **Owner ruling: NO
+override door** — resume is a clean-sheet decision only, never automated.
+Exits-during-halt is now regression-tested (`release_margin` deliberately has
+no halt check). Design: `docs/walkaway_protocol_design.md`.
+
+### Directive 2 — The CEO-View Discord (`66c60a3`)
+
+New `src/ceo_language.py` is the ONE place allowed to turn macro/strategy
+data into a sentence, enforcing two honesty gates: (1) an analog is named
+only when `macro_regime.declare()` itself declared a match, (2) a strategy
+is called more than an in-sample hunch only when its Stage-B scoreboard cell
+graduated to `FORWARD_CONFIRMED` (0 cells as of today — everything reads
+honestly as "still accumulating"). **Never says "executing"** — a deliberate
+correction to the owner's own example phrasing, because the Macro Regime
+Engine has zero execution authority (Rule 5); flagged in
+`docs/ceo_view_discord_design.md` rather than silently reworded. New
+`src/morning_brief.py` card at 08:05 Mon-Fri (cron #25, installed and
+verified on the VM); EOD + CEO brief got plain-English lead lines over
+numbers they already compute.
+
+### Directive 1 — Opportunity Cost Tracking (`b4e0437`)
+
+Gate-blocked trades now route into the EXISTING `shadow_trades` table
+(`trial.record_block`, additive `mode` column — the `host_ref` upgrade
+pattern) instead of being silently discarded. **Only the exposure gate is
+wired** — it is the one block type with a genuine host (the conflicting
+position, whose `trade_id` IS `outcomes.journal_ref`), so the untouched
+Sleep-Phase sweep resolves it with zero new resolver code. Halt/margin/
+sizing-veto blocks are deliberately NOT given a fabricated outcome — pricing
+those hypotheticals would need the synthetic-chain model, whose known ~10x
+generosity (item 5 below) would make every risk gate look artificially
+expensive. Corpus isolation is three independent layers (ref-prefix
+exclusion, namespaced pattern_id, explicit mode filter), all tested. Surfaces
+in the weekly harness digest, silent until something is actually blocked.
+Design: `docs/opportunity_cost_design.md`.
+
+**⚠️ Self-caught bug, same session:** the exposure-gate seam initially opened
+the REAL `brain_map.db` when untested, and a full suite run wrote 4 fixture
+rows into production — `python3 -m src.opportunity_cost` then reported a
+fabricated "4 duplicate trades refused." Found by checking the live DB after
+green tests rather than trusting the count. Fixed same hour (muzzled under
+`PYTEST_CURRENT_TEST`, same doctrine as the notifier's webhook muzzle), rows
+purged after verification, regression test added. Logged in the observation
+ledger as the **third** instance of this family (07-22 journal drift, 07-23
+digest-queue leak) — the standing lesson: a new seam that opens its own DB
+connection needs the pytest muzzle in its first commit, not a later fix.
+
+### What this means for the open items below
+
+Items 1, 2, 4, 6, 7, 8 (decay_engine wiring, the young macro clock, pre-2019
+sector proxies, the options-sim inflation caveat, strategy_registry
+abstention, the parked branch, rss_ingester) are **unchanged** — today's work
+did not touch any of them. Item 3 (cron de-dup) was already closed this
+morning. Item 5 (sim inflation) is now also load-bearing for Directive 1's
+design — it is the stated reason halt/margin/veto blocks get no fabricated
+P&L.
+
+### Next steps (not started, no directive yet)
+
+- Watch the opportunity-cost read accrue — realistically weeks before 5
+  resolved blocks exist for a verdict.
+- No further Intelligence & Autonomy work is queued. The next request is
+  the owner's to make.
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-27, after the deploy-gap close
 
 **Where the system is:** the VM now runs `170aa21` — the 14-commit deployment

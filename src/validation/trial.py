@@ -69,6 +69,13 @@ def ensure_schema(conn) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(shadow_trades)")}
     if "host_ref" not in cols:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN host_ref TEXT")
+    # Same additive upgrade, Directive 1 (2026-07-27, docs/
+    # opportunity_cost_design.md): `mode` separates opportunity-cost rows
+    # (a trade a GATE refused) from genuine pattern shadows. NULL = legacy
+    # pattern shadow; BLOCKED_MODE = a gate block. Pattern evidence reads
+    # exclude the latter explicitly — see shadow_evidence.
+    if "mode" not in cols:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN mode TEXT")
     conn.commit()
 
 
@@ -122,6 +129,51 @@ def record_shadow_fire(conn, pattern_id: str, fire_date: str, ticker: str,
     return {"ref": ref, "created": bool(cur.rowcount)}
 
 
+# --- Directive 1: opportunity-cost rows (docs/opportunity_cost_design.md)
+# A gate refused a trade. We record it in THIS table, resolved by THIS
+# table's existing host-linked sweep — no second database, no second
+# resolver, no parallel price math. Only blocks that have a genuine host
+# (the exposure gate's conflicting position) are recorded: fabricating an
+# outcome for a hostless block would need the synthetic-chain model, whose
+# known ~10x generosity (HANDOVER open item 5) would systematically make
+# every risk gate look more expensive than it is.
+
+BLOCKED_MODE = "BLOCKED_BY_RISK"
+
+
+def block_ref(gate: str, fire_date: str, ticker: str, direction: str) -> str:
+    """Deterministic blocked: ref — idempotent per (gate, day, ticker,
+    direction). The `blocked:` namespace is in
+    `stat_gates.EXCLUDED_REF_PREFIXES`, so every learning-corpus filter in
+    the house drops these rows without needing to know they exist."""
+    key = f"{gate}|{fire_date}|{ticker or ''}|{direction or ''}"
+    return "blocked:" + hashlib.sha1(key.encode()).hexdigest()[:14]
+
+
+def record_block(conn, gate: str, fire_date: str, ticker: str,
+                 direction: str = None, host_ref: str = None) -> dict:
+    """A GATE refused a proposal -> one opportunity-cost row. `host_ref`
+    is the real open trade whose outcome answers the counterfactual (for
+    the exposure gate: the conflicting position that caused the block);
+    the existing Sleep-Phase Task I sweep resolves the row from it.
+
+    A row with no host_ref is recorded but can never resolve — callers
+    should pass one or use the gate's own ledger instead. Idempotent per
+    (gate, day, ticker, direction). Returns {ref, created}."""
+    ensure_schema(conn)
+    ref = block_ref(gate, fire_date, ticker, direction)
+    cur = conn.execute(
+        "INSERT INTO shadow_trades (journal_ref, pattern_id, fire_date, "
+        "ticker, direction, created_at, host_ref, mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (journal_ref) DO NOTHING",
+        (ref, f"blocked:{gate}", fire_date, ticker, direction,
+         datetime.now(timezone.utc).isoformat(timespec="seconds"),
+         host_ref, BLOCKED_MODE))
+    conn.commit()
+    return {"ref": ref, "created": bool(cur.rowcount)}
+
+
 def resolve_shadow(conn, ref: str, result: str, r_multiple: float,
                    resolution_date: str) -> bool:
     """Fill a shadow firing's outcome (result in win/loss/scratch), using
@@ -143,11 +195,19 @@ def resolve_shadow(conn, ref: str, result: str, r_multiple: float,
 
 def shadow_evidence(conn, pattern_id: str, windows: dict = None) -> dict:
     """Resolved shadow outcomes for a pattern, restricted to the validation
-    window when given (out-of-discovery ONLY). Returns {n, wins}."""
+    window when given (out-of-discovery ONLY). Returns {n, wins}.
+
+    THE PATTERN-EVIDENCE DOOR — opportunity-cost rows (Directive 1) are
+    excluded explicitly by `mode`, not merely by their namespaced
+    pattern_id. A gate-blocked trade is bookkeeping about OUR risk rules,
+    never evidence that a discovered pattern works; if a future caller ever
+    passed a real pattern_id by accident, this filter still holds the line.
+    Corpus contamination is silent and permanent — hence the redundancy."""
     ensure_schema(conn)
     rows = conn.execute(
         "SELECT fire_date, result FROM shadow_trades WHERE pattern_id = ? "
-        "AND resolved = 1", (pattern_id,)).fetchall()
+        "AND resolved = 1 AND (mode IS NULL OR mode != ?)",
+        (pattern_id, BLOCKED_MODE)).fetchall()
     n = wins = 0
     for r in rows:
         if windows and not in_validation(r["fire_date"], windows):

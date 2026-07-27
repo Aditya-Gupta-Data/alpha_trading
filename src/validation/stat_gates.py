@@ -97,7 +97,12 @@ FDR_Q = 0.15
 
 # Journal-ref namespaces that are the system's own hypotheses/replays —
 # NEVER training data for tuner/skeptic/miners (self-poisoning guard).
-EXCLUDED_REF_PREFIXES = ("sim:", "shadow:", "trial:", "placebo:")
+# `blocked:` added 2026-07-27 (Directive 1, docs/opportunity_cost_design.md):
+# opportunity-cost rows record what a RISK GATE refused. They are our own
+# counterfactual bookkeeping — never evidence about a pattern, and never
+# training data. Registering the namespace here means every existing corpus
+# filter drops them without any of those call sites having to change.
+EXCLUDED_REF_PREFIXES = ("sim:", "shadow:", "trial:", "placebo:", "blocked:")
 # Tag namespaces the miners must not re-consume (tautological rediscovery).
 EXCLUDED_TAG_PREFIXES = ("auto:",)
 

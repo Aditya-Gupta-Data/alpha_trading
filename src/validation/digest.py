@@ -60,6 +60,23 @@ def _stage_b_block(scoreboard_path=None) -> str:
     return "\n\n**Strategy forward-clock (Stage B):**\n" + "\n".join(sb)
 
 
+def _opportunity_cost_block(conn) -> str:
+    """Directive 1: what the risk gates refused, and whether that saved or
+    cost money (docs/opportunity_cost_design.md). Fail-OPEN and silent
+    until something has actually been blocked — an empty section is not a
+    section. Reads the same brain_map conn; no capital, no writes."""
+    try:
+        from src import opportunity_cost
+        stats = opportunity_cost.collect(conn=conn)
+        if not stats.get("available") or not stats.get("blocked_total"):
+            return ""
+        lines = opportunity_cost.render_lines(stats)
+    except Exception:
+        return ""
+    return "\n\n**Opportunity cost (what the gates refused):**\n" + \
+        "\n".join(lines)
+
+
 def build_digest(conn, today: date = None, since_days: int = 7,
                  scoreboard_path=None) -> str:
     """Compose the weekly card. Never raises."""
@@ -82,7 +99,8 @@ def build_digest(conn, today: date = None, since_days: int = 7,
         return ("🔬 **Harness digest** — no patterns yet. The miners haven't "
                 "run / not enough history. Silence here is correct: nothing "
                 "is being surfaced that hasn't earned it."
-                + _stage_b_block(scoreboard_path))
+                + _stage_b_block(scoreboard_path)
+                + _opportunity_cost_block(conn))
 
     lines = [f"🔬 **Harness digest — week of {today.isoformat()}**"]
     lines.append(
@@ -131,7 +149,8 @@ def build_digest(conn, today: date = None, since_days: int = 7,
     else:
         lines.append(f"\n🎲 Placebo FDR: {fdr['state']} (n={fdr['n']})")
 
-    return "\n".join(lines) + _stage_b_block(scoreboard_path)
+    return ("\n".join(lines) + _stage_b_block(scoreboard_path)
+            + _opportunity_cost_block(conn))
 
 
 def run(conn=None, db_path=None, today: date = None, notify_fn=None) -> dict:

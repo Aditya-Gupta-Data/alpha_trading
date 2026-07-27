@@ -45,6 +45,7 @@ this module didn't exist", never "block a proposal" or "kill a cycle".
 """
 
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def conflicting_positions(ticker: str, direction: str,
 
 
 def gate_entry(proposal: dict, entries: list = None,
-               today: date = None, notify_fn=None) -> tuple:
+               today: date = None, notify_fn=None, record_fn=None) -> tuple:
     """(allowed, reason). ONE open position per underlying+direction —
     bullish, bearish and neutral each get one slot per index. Fail-OPEN
     by hard rule: ANY failure returns (True, ...) with a printed note,
@@ -116,6 +117,8 @@ def gate_entry(proposal: dict, entries: list = None,
         _log_block(ticker, direction, spread.get("strategy"),
                    ids, proposal.get("view"), today=today,
                    notify_fn=notify_fn, conflicts=conflicts)
+        _record_opportunity_cost(ticker, direction, conflicts, today=today,
+                                 record_fn=record_fn)
         return False, (
             f"exposure gate: {len(conflicts)} open {direction} "
             f"position(s) on {ticker} already (`{'`, `'.join(ids)}`) — "
@@ -123,6 +126,58 @@ def gate_entry(proposal: dict, entries: list = None,
     except Exception as e:
         print(f"  (exposure gate unavailable — failing open: {e})")
         return True, f"exposure gate unavailable ({e})"
+
+
+def _record_opportunity_cost(ticker, direction, conflicts, *, today=None,
+                             record_fn=None) -> None:
+    """Directive 1 (docs/opportunity_cost_design.md): route this block into
+    the EXISTING shadow_trades table, host-linked to the position that
+    caused it — so the existing Sleep-Phase sweep resolves it the night
+    that position resolves, and we can finally answer whether this gate
+    saves or costs money.
+
+    THE HOST IS THE POINT: `positions.trade_id` IS `outcomes.journal_ref`
+    (both the journal short_id), so no new resolver is needed. The
+    inherited outcome is an honest PROXY — same underlying, same
+    direction, overlapping window, different strikes.
+
+    Fail-open and verdict-neutral by the gate's hard rule: every failure
+    here is swallowed. Bookkeeping never changes whether a trade is
+    blocked."""
+    try:
+        host = next((str(p.get("trade_id")) for p in (conflicts or [])
+                     if p.get("trade_id")), None)
+        if not host:
+            return          # no host -> unresolvable -> do not record a ghost
+        day = (today or datetime.now(IST).date()).isoformat()
+        if record_fn is not None:
+            record_fn(gate="exposure_gate", fire_date=day, ticker=ticker,
+                      direction=direction, host_ref=host)
+            return
+        # THE MUZZLE — added the same hour this seam shipped, because it
+        # was already wrong: under pytest this path opened the REAL
+        # brain_map.db and wrote fixture rows into it (4 of them, host_ref
+        # 'ab12cd34'), and `python3 -m src.opportunity_cost` then reported
+        # "the exposure gate has refused 4 duplicate trade(s)" — a
+        # fabricated number in a risk report. The gate's own tests sandbox
+        # LEDGER_PATH but had no way to sandbox a DB connection this seam
+        # opened itself. Same doctrine as `notifier.webhooks_muzzled()`:
+        # everything under pytest is muzzled automatically, so no future
+        # test can re-poison the live record by forgetting a fixture.
+        # Tests exercise this seam through `record_fn=` (or their own conn).
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        from src import brain_map
+        from src.validation import trial
+        conn = brain_map.connect()
+        try:
+            trial.record_block(conn, gate="exposure_gate", fire_date=day,
+                               ticker=ticker, direction=direction,
+                               host_ref=host)
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"  (opportunity-cost row skipped: {e})")
 
 
 def _log_block(ticker, direction, strategy, blocked_by, view, *,

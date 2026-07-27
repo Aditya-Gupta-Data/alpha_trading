@@ -110,3 +110,28 @@ def test_stage_b_block_absent_when_no_scoreboard(tmp_path):
     card = dg.build_digest(conn, today=date(2026, 7, 24),
                            scoreboard_path=tmp_path / "nope.json")
     assert "Strategy forward-clock" not in card       # honest silence
+
+
+def test_opportunity_cost_block_appears_only_once_something_is_blocked(tmp_path):
+    """Directive 1: the weekly digest carries the gate-cost read — and is
+    silent until a gate has actually refused something (an empty section
+    is not a section)."""
+    from src.discovery import shadow_runner
+    from src.validation import trial
+    conn = brain_map.connect(":memory:")
+    board = tmp_path / "nope.json"
+    card = dg.build_digest(conn, today=date(2026, 7, 24), scoreboard_path=board)
+    assert "Opportunity cost" not in card              # honest silence
+
+    for i in range(6):
+        trial.record_block(conn, gate="exposure_gate",
+                           fire_date=f"2026-07-1{i}", ticker="NIFTY",
+                           direction="bullish", host_ref=f"H{i}")
+        conn.execute("INSERT INTO outcomes (journal_ref, date, ticker, "
+                     "r_multiple, result) VALUES (?, ?, 'NIFTY', -1.0, "
+                     "'loss')", (f"H{i}", f"2026-07-1{i}"))
+    conn.commit()
+    shadow_runner.resolve_from_outcomes(conn)
+    card = dg.build_digest(conn, today=date(2026, 7, 24), scoreboard_path=board)
+    assert "Opportunity cost (what the gates refused)" in card
+    assert "saving" in card                            # 6 losing hosts

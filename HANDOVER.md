@@ -79,6 +79,59 @@ done today). `decay_engine.apply_decay_sweep` is still unwired (item 1,
 owner-gated). The parked branch `claude/hello-d9m45n` still holds unmerged
 commits (item 7).
 
+### 🎯 STRATEGIC BACKLOG — "Intelligence & Autonomy" (owner roadmap, 2026-07-27)
+
+Owner directive, same day as the deploy-gap close. **Binding constraint:
+NO NEW ENGINES.** Every item below reuses existing infrastructure; a design
+that proposes a new database, engine, or parallel price-math path violates
+the directive and must be pushed back on.
+
+**Directive 1 — Opportunity Cost Tracking (REUSE the shadow architecture).**
+When a risk gate blocks a trade (exposure gate, margin gate, adaptive-sizing
+veto, equity-desk funding rejection), route the rejected proposal into the
+EXISTING shadow tracking so we learn whether the gates save or cost money.
+What already exists (verified 07-27, do not rebuild):
+- `exposure_gate` ledgers every block to `logs/exposure_blocks.jsonl` —
+  but nothing resolves what the blocked trade would have done.
+- The shadow architecture already does prospective outcome-tracking:
+  `shadow_trades` in brain_map (`validation/trial.record_shadow_fire`),
+  ONE resolver (`discovery/shadow_runner.resolve_from_outcomes` — no
+  parallel price math, runtime-spy tested to never touch journal/portfolio).
+- `adaptive_sizing` vetoes and `equity_desk.fund_entry` rejections already
+  keep telemetry rows with named reasons.
+The build is WIRING: blocked proposals become shadow rows (mode-tagged so
+they can never poison the pattern-learning corpus — the `shadow:`/`sim:`
+exclusions in `stat_gates` are the guard rail to extend, not bypass), then
+a scoreboard read answers "gates: saving or costing?". Forward Scoreboard
+(`analysis/strategy_scoreboard`, SB-2) is the reporting pattern to reuse.
+
+**Directive 2 — The CEO-View Discord (plain-English alerts).**
+The owner must glance at a phone after 3 days away and understand the
+state. Upgrade payload WORDING from raw data to human sentences (e.g.
+"Macro regime matches 2018; executing X") — the one-door rule stands:
+everything still flows through `notifier.fire_broadcast`, this is a
+wording/formatting layer, not a new notification path. Distinct **Morning
+Brief** (does not exist today — 08:00 slot alongside `suggest` is the
+natural home) and **EOD P&L Summary** (`eod_summary` 15:45 + `ceo_brief`
+16:30 already exist — upgrade their language, don't duplicate them).
+Macro sentences must respect the ACCUMULATING honesty: no "matches 2018"
+claim before the scoreboard actually supports it.
+
+**Directive 3 — The 3-Day Walkaway Protocol (circuit breakers).**
+The system must be safe to ignore for 3 days. What already exists
+(verified 07-27 in `portfolio_manager` — this is the halt STACK, reuse it):
+lifetime risk-of-ruin drawdown halt (10%), daily 3% breaker, silent
+margin-exhaustion, all already enforced at the single entry door. The gap
+is the COMMUNICATION and OVERRIDE layer: on any hard halt, (a) new entries
+stop (already true), (b) open-position exit management continues (verify —
+this must be tested, not assumed), (c) ONE `🔴 SYSTEM PAUSED` Discord card
+fires with the reason and the resume command, (d) resumption requires an
+explicit human override door — not an automatic timer. De-dup via ledger
+(the exposure-gate one-card-per-day pattern).
+
+Sequencing and per-directive design docs are future-session work; nothing
+above is started as of this writing.
+
 ---
 
 ## 📍 CURRENT STATE — 2026-07-25, after the CTO hygiene session

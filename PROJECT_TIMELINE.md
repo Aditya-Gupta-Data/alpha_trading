@@ -235,8 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-30 · 3 commits · 6 files touched
+### 2026-07-30 · 7 commits · 12 files touched
 
+- `cc67590` docs: 07-30 close — Task J/K verified live, edge-decay lambda question logged
+- `426fc34` feat(sleep_phase): Task K — wire knowledge-graph edge decay (owner-approved)
+- `b356b8d` fix(validation): H4 shadow must date fires by the BAR, not wall-clock today
+- `2962b7f` feat(validation): H4 pyramid-continuation shadow — lb-10 graduated, owner ruled shadow-only
 - `72f9673` docs: HANDOVER — 07-30 deploy of the suggest DH-905 fix to the VM
 - `8547473` fix(suggest): recover early-run DH-905 skips with an end-of-run retry pass
 - `b4930c6` docs: 07-30 status check — push-state correction, intraday-capture resolution, zombie VM removal

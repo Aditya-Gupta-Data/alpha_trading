@@ -523,6 +523,19 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  I. shadow sweep failed: {e}")
         results["shadow_sweep"] = None
+    try:
+        # Task J — H4 pyramid-continuation shadow (owner ruling 2026-07-30:
+        # shadow, don't wire). Records the hypothetical lb-10 add against
+        # each open spread whose mark improved on a fresh 10-day extreme;
+        # host-linked, so Task I resolves it for free. ZERO execution
+        # authority — forward evidence only. No-op on non-session days
+        # (no fresh bar -> named skip). VM-safe, no LLM.
+        from src.validation import h4_shadow
+        results["h4_shadow"] = h4_shadow.run_shadow_pass(conn, today=today)
+        print(f"  J. h4 shadow: {results['h4_shadow']}")
+    except Exception as e:
+        print(f"  J. h4 shadow failed: {e}")
+        results["h4_shadow"] = None
 
     conn.close()
     return results

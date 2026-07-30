@@ -150,6 +150,46 @@ def block_ref(gate: str, fire_date: str, ticker: str, direction: str) -> str:
     return "blocked:" + hashlib.sha1(key.encode()).hexdigest()[:14]
 
 
+# --- H4 shadow (2026-07-30): a validated-in-sim SIGNAL fired on a live
+# position. Same table, same host-linked sweep, THIRD mode. A signal fire
+# is neither an organic pattern shadow (mode NULL) nor a gate block
+# (BLOCKED_BY_RISK): it is forward evidence that a condition selects
+# winners. `shadow_evidence` can only see these rows if a caller asks for
+# their exact pattern_id, and the `shadow:` ref prefix is already in
+# stat_gates.EXCLUDED_REF_PREFIXES, so no learning corpus ingests them.
+
+SIGNAL_MODE = "SIGNAL_SHADOW"
+
+
+def signal_ref(signal: str, host_ref: str, fire_date: str) -> str:
+    """Deterministic shadow: ref — idempotent per (signal, host, day). A
+    signal may legitimately fire on the SAME host across several days
+    (each is a distinct hypothetical add); same-day re-runs dedup."""
+    key = f"{signal}|{host_ref}|{fire_date}"
+    return "shadow:" + hashlib.sha1(key.encode()).hexdigest()[:14]
+
+
+def record_signal_fire(conn, signal: str, fire_date: str, ticker: str,
+                       direction: str = None, host_ref: str = None) -> dict:
+    """A shadow SIGNAL fired against a live host position -> one row,
+    resolved by the existing Sleep-Phase host-linked sweep exactly like a
+    blocked trade. host_ref is required in spirit: a row with no host can
+    never resolve, so callers must pass the live position's short_id.
+    Returns {ref, created}."""
+    ensure_schema(conn)
+    ref = signal_ref(signal, host_ref or "", fire_date)
+    cur = conn.execute(
+        "INSERT INTO shadow_trades (journal_ref, pattern_id, fire_date, "
+        "ticker, direction, created_at, host_ref, mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (journal_ref) DO NOTHING",
+        (ref, f"signal:{signal}", fire_date, ticker, direction,
+         datetime.now(timezone.utc).isoformat(timespec="seconds"),
+         host_ref, SIGNAL_MODE))
+    conn.commit()
+    return {"ref": ref, "created": bool(cur.rowcount)}
+
+
 def record_block(conn, gate: str, fire_date: str, ticker: str,
                  direction: str = None, host_ref: str = None) -> dict:
     """A GATE refused a proposal -> one opportunity-cost row. `host_ref`

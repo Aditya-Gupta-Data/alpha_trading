@@ -73,6 +73,15 @@ brief: firm MTM ₹2,39,266 on a ₹2L base (realized +₹44,215), 2 spreads +
    window at run start hitting whichever early watchlist names fall in it.
    Fix: end-of-run retry pass + un-truncated error print (full ledger
    entry, 3 new tests, suite 1,630).
+4. **H4 got its first real-data verdict AND its shadow (evening).** The
+   comparator ran on real NIFTY 50 history 2022-2025: only lookback 10
+   graduated (Sortino 2.62 vs 2.42, drawdown 6.54R vs 6.69R; lb-3
+   reproduced the #68 pileup with 11.55R). Owner ruling: **shadow it** —
+   built `src/validation/h4_shadow.py` (sleep_phase Task J,
+   `trial.record_signal_fire` mode `SIGNAL_SHADOW`), host-linked rows
+   resolved by the existing Task I sweep, ZERO execution authority.
+   Graduation to `validation/registry.py`/sizing stays a Department 5
+   decision gated on the forward record this accumulates. Suite 1,640.
 
 **⚠️ VERIFY NEXT SESSION:** the first post-deploy 08:00 run (2026-07-31).
 Expect `recovered` lines in `suggest.log` instead of lost names; if the

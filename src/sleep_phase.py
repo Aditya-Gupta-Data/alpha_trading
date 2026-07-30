@@ -54,10 +54,12 @@ Run manually (or cron it for off-market hours):
 import hashlib
 import json
 import math
+import os
 from datetime import date, timedelta
 from pathlib import Path
 
 from src import brain_map
+from src import decay_engine
 from src import graph_engine
 from src.local_parser import LocalExtractor, process_unstructured_input
 
@@ -419,6 +421,61 @@ def write_causal_links(conn, extractor=None, window_days: int = None,
     return stats
 
 
+# ------------------------------------------- Task K: graph EDGE decay
+
+def _targets_the_real_brain_map(conn) -> bool:
+    """Is this connection pointed at the production brain_map.db?
+
+    THE MUZZLE'S SENSOR. Task J's seam opened its own connection, so an
+    env check was enough there; this task RECEIVES a connection, so the
+    honest question is not "am I under pytest" but "am I under pytest AND
+    holding the real database". `PRAGMA database_list` answers it from
+    the connection itself — no caller has to be trusted to declare it.
+
+    Fails SAFE, not open: if the path cannot be read or compared, we
+    return True (assume real, refuse to decay). Every other failure in
+    this module fails open because skipping bookkeeping is cheaper than
+    breaking the pass — but a muzzle that fails open is not a muzzle, and
+    the 2026-07-27 opportunity-cost incident is what that costs."""
+    try:
+        real = brain_map.DEFAULT_DB_PATH.resolve()
+        for _seq, name, filename in conn.execute("PRAGMA database_list"):
+            if name != "main":
+                continue
+            if not filename:          # ":memory:" reports an empty filename
+                return False
+            return Path(filename).resolve() == real
+        return True                   # no main database? cannot verify -> refuse
+    except Exception:
+        return True
+
+
+def run_edge_decay(conn) -> dict:
+    """Task K — knowledge-graph EDGE decay (`graph_edges.confidence_score`).
+
+    Wiring approved by the owner 2026-07-30, closing the latent bug flagged
+    by the Phase-1 audit on 07-25: `decay_engine.apply_decay_sweep` was on
+    NO cron/systemd/LaunchAgent path, so edge decay never ran in production
+    while `graph_engine.py` and `entity_affinity.py` both documented it as
+    live. This is the audit's own candidate fix — a step in the 20:00
+    sleep_phase pass — and it REUSES `decay_engine` unchanged. Distinct
+    from Task C, which decays semantic NODES (`semantic_nodes.confidence`);
+    the 07-25 archive ruling that called them duplicates was reversed on
+    verification, and MODULES.md records that reversal.
+
+    Runs LAST deliberately: Tasks D (causal links) and F (entity affinity)
+    are the edge WRITERS, and `apply_decay_sweep` stamps `valid_from` on
+    first touch without changing weight, so decaying after them ages
+    yesterday's edges rather than the ones just written.
+
+    Sweeping twice in a day is harmless — decay is a function of elapsed
+    time since `valid_from`, not of call count, so a re-run applies a
+    near-zero step rather than double-decaying."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and _targets_the_real_brain_map(conn):
+        return {"skipped": "muzzled_under_pytest"}
+    return decay_engine.apply_decay_sweep(conn)
+
+
 # --------------------------------------------------------------- runner
 
 def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
@@ -536,6 +593,17 @@ def run_sleep_phase(db_path=None, extractor=None, today: date = None) -> dict:
     except Exception as e:
         print(f"  J. h4 shadow failed: {e}")
         results["h4_shadow"] = None
+    try:
+        # Task K — knowledge-graph EDGE decay (owner-approved wiring
+        # 2026-07-30; closes the 07-25 audit's UNWIRED finding). Reuses
+        # decay_engine.apply_decay_sweep unchanged. Runs after the edge
+        # writers (D, F) by design. Fail-open like every other task: a
+        # crash here is logged and the pass still returns cleanly.
+        results["edge_decay"] = run_edge_decay(conn)
+        print(f"  K. edge decay:    {results['edge_decay']}")
+    except Exception as e:
+        print(f"  K. edge decay failed: {e}")
+        results["edge_decay"] = None
 
     conn.close()
     return results

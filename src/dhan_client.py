@@ -330,7 +330,14 @@ def _fetch_daily(instr: dict, from_date: str, to_date: str) -> list:
         if attempt == 0:
             time.sleep(_RATE_PAUSE)  # transient rate limit — retry once
     if not isinstance(resp, dict) or resp.get("status") != "success":
-        print(f"  Dhan historical returned: {str(resp)[:160]}")
+        # Name the exact request and keep enough of the response that Dhan's
+        # error_message survives whole — the old 160-char cut truncated DH-905
+        # replies right before the parameter they complain about (see the
+        # 2026-07-30 observation-ledger entry on the 08:00 suggest failures).
+        print(
+            f"  Dhan historical returned for id={instr['id']} "
+            f"{instr['seg']}/{instr['inst']} {from_date}->{to_date}: {str(resp)[:400]}"
+        )
         return []
     d = unwrap_payload(resp, inner_marker="timestamp")
     if not isinstance(d, dict):

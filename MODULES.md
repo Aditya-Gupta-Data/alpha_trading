@@ -116,7 +116,7 @@ approach its **Manager** — don't dig through files.
 |---|---|
 | `src/rules.py` | Alert rule evaluation: `price_above`, `price_below`, `percent_up`, `percent_down`. |
 | `src/suggestions.py` | Trend (50/200 SMA) + momentum (14-day RSI) read per stock; `analyze()`/`describe()`. |
-| `src/suggest.py` | Entry point: emails a daily suggestions digest (`python -m src.suggest`). |
+| `src/suggest.py` | Entry point: emails a daily suggestions digest (`python -m src.suggest`, VM cron 08:00 IST). 2026-07-30: second-chance pass — tickers skipped on the first sweep are retried ONCE at end of run (the transient early-run Dhan DH-905 window has closed by then; same doctrine as `intraday_tracker`'s in-sweep retry); recoveries print `recovered`, both-pass failures stay honestly skipped. Tests: `tests/test_suggest.py`. |
 | `src/news_processor.py` | Isolated: Google News RSS -> Gemini -> `data/news_sentiment.json`. v3 (2026-07-20): DUAL-HORIZON — `short_term_catalyst_score` (days; `sentiment_score` stays == it for back-compat) + `long_term_macro_score` (months; None = unknown, never 0), each read `prev`-linked to the prior fresh run with `reversal` flags per horizon (crossed neutral + moved ≥3 pts) → one 📰 Discord note per run when flagged. Owns freshness for every consumer: `entry_is_fresh()` (48h; Issue 22 — the `stale` flag never ages, so age is judged at read time). Imports NO core trading code (isolation principle; the notify is a lazy fail-open side-door). Consumer map: DATA_CONTRACT.md §2.3. |
 | `src/forecast.py` | Combines technicals + news sentiment into a transparent, rule-based checklist: bias/confidence/drivers/time-horizon. Reads `data/brain_weights.json` for learned per-archetype adjustments. |
 

@@ -44,19 +44,37 @@ def run_once():
 
     print(f"Analyzing {len(tickers)} stock(s)...\n")
     results = []
+    skipped = []
 
     for ticker in tickers:
         result = analyze(ticker)
         if result is None:
-            print(f"  skip  {ticker}: not enough price history yet")
+            skipped.append(ticker)
+            print(f"  skip  {ticker}: no usable price history this pass")
             continue
         print(f"  {describe(result)}")
         results.append(result)
 
+    # Second-chance pass (2026-07-30): the 08:00 run loses its FIRST few
+    # tickers to a transient Dhan-side DH-905 window that has always passed
+    # by the time the other ~80 names have gone through — so retrying the
+    # skips once at the END of the run recovers them deterministically.
+    # Same doctrine as intraday_tracker's in-sweep retry. A name that fails
+    # both passes stays skipped and says so; nothing is fabricated.
+    recovered = 0
+    for ticker in skipped:
+        result = analyze(ticker)
+        if result is None:
+            print(f"  still-skipped  {ticker}: no usable price history after retry")
+            continue
+        print(f"  recovered  {describe(result)}")
+        results.append(result)
+        recovered += 1
+
     if results:
         send_digest("Today's Stock Suggestions", build_email_body(results))
 
-    print("\nDone.")
+    print(f"\nDone. ({recovered} recovered on retry)" if recovered else "\nDone.")
 
 
 def build_email_body(results: list) -> list:

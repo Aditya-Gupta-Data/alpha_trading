@@ -69,6 +69,19 @@ UNGROUPED = "UNGROUPED"
 MIN_GROUP_DEALS = 3
 MIN_CONCENTRATION = 0.60
 
+# Structural affinity decays on a DIFFERENT clock from causal reasoning
+# (owner ruling 2026-07-30). `graph_engine`'s default λ=0.05/day is a
+# ~14-day half-life — right for a causal lesson, wrong for this edge
+# class: concentration here is an ALL-TIME structural statistic (see the
+# module docstring) that is only re-observed when a fresh disclosed deal
+# lands, which is rarer than 14 days. Under the default, the entire
+# deal-affinity layer sat permanently invalid between deals — visible on
+# 2026-07-30 when the newly-wired decay Task K expired 45 of 45
+# `concentrates_in` edges on its first sweep while every causal edge
+# survived. λ=0.002 is a ~347-day half-life: an affinity stays active for
+# roughly 3 years after its last deal, then honestly ages out.
+CONCENTRATION_DECAY_LAMBDA = 0.002
+
 # The direction signal is recent, not all-time: "unloading" must mean
 # unloading lately. Net below this fraction of gross flow is called "mixed"
 # (two-way churn, no clear side) rather than forced onto a direction.
@@ -314,6 +327,7 @@ def accumulate_entity_affinity(conn, history: list = None, groups: dict = None,
                     confidence_score=concentration,
                     context=f"{group_deals} deals; {int(concentration*100)}% concentration",
                     valid_from=last_seen,
+                    decay_lambda=CONCENTRATION_DECAY_LAMBDA,
                     source="affinity_projected")
                 edges += 1
         conn.commit()

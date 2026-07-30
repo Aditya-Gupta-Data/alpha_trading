@@ -120,26 +120,41 @@ def test_failed_window_is_counted_never_fatal():
 
 
 def test_backfilled_affinity_edges_age_from_their_deal_dates():
-    """The whole point of the as-of seam: a 2023-dead entity's link decays
-    out on the first sweep instead of reading as born-today."""
+    """The whole point of the as-of seam: a long-dead entity's link decays
+    out on the first sweep instead of reading as born-today.
+
+    Deal dates moved 2023 -> 2015 on 2026-07-30, when the owner slowed
+    structural-affinity decay to lambda=0.002 (~347-day half-life,
+    ~3.2-year expiry horizon). The ORIGINAL 2023 dates put this edge at
+    1,110 days — `1.0 * e^(-2.22)` = 0.1086 against a 0.100 threshold, i.e.
+    alive by 0.0086 and on the wrong side of a coin-flip. That also exposed
+    a latent flake predating this change: the anchor is a FIXED past date
+    but `apply_decay_sweep` stamps from the real clock, so the scenario's
+    age — and its verdict — drifted with the calendar and would have
+    flipped again around 2026-09-09 on its own. A 2015 anchor is
+    unambiguous for the next decade at either lambda; the invariant under
+    test (the edge ages from its DEAL date, not from today) is unchanged."""
     conn = brain_map.connect(":memory:")
     groups = {"ticker_to_group": {"ADANIENT.NS": "ADANI"},
               "groups": {"ADANI": ["ADANIENT.NS"]}, "client_aliases": {}}
     old_hist = [{"ticker": "ADANIENT.NS", "client": "GHOST FUND",
                  "side": "buy", "qty": 1000, "value_rs": 100000.0,
-                 "deal_type": "bulk", "as_of": "2023-07-14"}] * 3
+                 "deal_type": "bulk", "as_of": "2015-07-14"}] * 3
     # Give each row a distinct day so per-day idempotency doesn't collapse it.
     for i, r in enumerate(old_hist):
         r = dict(r)
-        r["as_of"] = f"2023-07-{14 + i:02d}"
+        r["as_of"] = f"2015-07-{14 + i:02d}"
         old_hist[i] = r
     acc = ea.accumulate_entity_affinity(conn, old_hist, groups,
                                         today=date(2026, 7, 10))
     assert acc["edges"] == 1
-    row = conn.execute("SELECT valid_from, invalid_at FROM graph_edges "
+    row = conn.execute("SELECT valid_from, invalid_at, decay_lambda "
+                       "FROM graph_edges "
                        "WHERE source_node = 'GHOST FUND'").fetchone()
-    assert row["valid_from"].startswith("2023-07-16")   # latest deal date
-    # One decay sweep, three years later: the stale link expires.
+    assert row["valid_from"].startswith("2015-07-16")   # latest deal date
+    assert row["decay_lambda"] == ea.CONCENTRATION_DECAY_LAMBDA
+    # One decay sweep, a decade later: the stale link expires even on the
+    # slow structural clock.
     decay_engine.apply_decay_sweep(conn)
     row = conn.execute("SELECT invalid_at FROM graph_edges "
                        "WHERE source_node = 'GHOST FUND'").fetchone()

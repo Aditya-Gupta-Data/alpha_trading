@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-30 · 7 commits · 12 files touched
+### 2026-07-30 · 9 commits · 21 files touched
 
+- `ccf1b92` feat(ops): Edge-to-Cloud handover queue + Stage-B clock tracker
+- `c72ee21` fix(graph): structural affinity decays on a 1-year clock, not 14 days
 - `cc67590` docs: 07-30 close — Task J/K verified live, edge-decay lambda question logged
 - `426fc34` feat(sleep_phase): Task K — wire knowledge-graph edge decay (owner-approved)
 - `b356b8d` fix(validation): H4 shadow must date fires by the BAR, not wall-clock today

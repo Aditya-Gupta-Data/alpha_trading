@@ -147,6 +147,21 @@ def run(fred_fn=None, indices_fn=None, declare_fn=None, scorer_fn=None,
             stages["declare"]["ALERT"] = (
                 f"Cache Miss/Stale - Aborting (horizons: {misses}) — "
                 "reseed the VM's fingerprint cache from the Mac")
+            # Edge-to-Cloud handover (owner directive 2026-07-30): the VM
+            # already declines the 30-min recompute here; post the work to
+            # the Mac queue so the REASON outlives the log line. Fail-open
+            # by construction (mac_queue never raises) and non-blocking —
+            # the run does not wait for the Mac, it just leaves a message.
+            try:
+                from src import mac_queue
+                mac_queue.enqueue(
+                    mac_queue.REBUILD_MACRO_ARTIFACTS,
+                    reason=f"fingerprint cache miss/stale on {misses}",
+                    detail="VM abstained rather than recompute on the "
+                           "e2-micro; rebuild on the Mac and ship the "
+                           "artifacts.")
+            except Exception:
+                pass          # queueing must never break the nightly run
     except Exception as exc:
         stages["declare"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
 

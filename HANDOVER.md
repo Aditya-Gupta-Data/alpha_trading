@@ -88,6 +88,71 @@ brief: firm MTM ₹2,39,266 on a ₹2L base (realized +₹44,215), 2 spreads +
    untouched. Path-aware DB muzzle (`PRAGMA database_list`, fails SAFE);
    9 tests. **Verified live in tonight's 20:00 run.**
 
+### Session summary — the three things that changed today
+
+1. **H4 shadow: the wall-clock fail-quiet trap, caught before it fired.**
+   `h4_shadow` shipped requiring `bars[-1].date == today`, but Dhan serves
+   only COMPLETED sessions — at 20:00 the newest bar is T-1. The task
+   would have logged a plausible `no_fresh_bar_today` skip **every night
+   forever** while the forward ledger stayed empty, and "selective signal"
+   would have been indistinguishable from "structurally dead". Fires are
+   now dated by their BAR (idempotent per signal+host+bar, mark computed
+   as-of that bar) plus real `stale_feed` / `bar_not_after_entry` guards.
+   Verified live tonight: `{'scanned': 2, 'fired': 0, 'skips':
+   {'no_fresh_extreme': 2}}` — the real condition, honestly evaluated.
+2. **Task K + structural amnesia fixed.** Edge decay was wired
+   (`426fc34`), and its first sweep expired 45 of 45 `concentrates_in`
+   edges while every causal edge lived — a RATE mismatch, not a sweep bug:
+   λ=0.05 (~14-day half-life) applied to an all-time statistic that is
+   only re-observed when a fresh deal lands, so the affinity layer sat
+   permanently invalid between deals. Owner ruling: λ=0.002 (~347-day
+   half-life). `scripts/resurrect_affinity.py` repaired it by REBUILDING
+   each edge from source of truth — the naive `SET decay_lambda,
+   invalid_at=NULL` was rejected as a self-reverting no-op (the sweep had
+   already crushed `confidence_score` and overwritten `valid_from`).
+   Applied on the VM: **11 of 45 restored** (32 genuinely stale >3y, 2 no
+   longer true), and **11/11 verified to survive the next sweep**.
+3. **Stage A verified already unlocked — natively, with zero VM disk
+   used.** All 132 mapped sector CSVs were ingested back on 07-24; tonight's
+   re-run added exactly **1** new date. No CSVs were copied to the VM (it
+   reads built artifacts; rebuilding on the e2-micro is the OOM risk), and
+   per owner ruling the roster was left untouched and artifacts were NOT
+   rebuilt. **Verification: 8 of 9 registry cells render with 5-10 legs at
+   `MIN_EPISODE_LEGS=5` — sector rotations are no longer abstaining.**
+
+4. **Edge-to-Cloud asynchronous architecture formalised.** Standing rules:
+   the e2-micro never runs heavy work, and the VM pipeline never depends on
+   the Mac being online. The VM already abstained correctly
+   (`require_cache=True`), but the reason scrolled away in a log.
+   `src/mac_queue.py` is the missing outbox — on the EXISTING cache-miss
+   branch the VM appends to `data/mac_pending_tasks.jsonl` and carries on.
+   Append-only, idempotent per (task, day), fail-open, pytest-muzzled.
+   **Not a new detector** (no new failure mode), and the non-dependency is
+   regression-tested: a test explodes the queue and proves the nightly run
+   still finishes. Daily read:
+
+```bash
+bash scripts/daily_health_and_queue.sh
+```
+
+### ⚠️ Stage B will NOT reach 60 sessions by Oct 1 — owner decision needed
+
+The new `scripts/stage_b_tracker.py` (read-only by construction) surfaced
+this on its first run. The clock is at **7 DISTINCT sessions, not the 12
+raw rows** — the 07-22/24 build era wrote 2-4 rows per session; since
+07-27 the cron is exactly 1/weekday and clean. **53 sessions are still
+needed with only 45 weekdays left before Oct 1**, so perfect uptime lands
+at ~52. Uptime alone cannot close this. Either accept the Dept-5 read at
+~52 sessions, or slip the verdict ~2 weeks to ≈Oct 13. Separately and more
+fundamentally: **graded calls are still 0** — sessions are not evidence;
+a verdict needs matured forward windows (`MIN_FWD_CALLS`=7).
+
+Check any time:
+
+```bash
+python3 scripts/stage_b_tracker.py
+```
+
 ### Tonight's 20:00 run — both new tasks verified live
 
 ```

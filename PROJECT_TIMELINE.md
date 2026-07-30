@@ -235,6 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-07-30 · 3 commits · 6 files touched
+
+- `72f9673` docs: HANDOVER — 07-30 deploy of the suggest DH-905 fix to the VM
+- `8547473` fix(suggest): recover early-run DH-905 skips with an end-of-run retry pass
+- `b4930c6` docs: 07-30 status check — push-state correction, intraday-capture resolution, zombie VM removal
+
+
 ### 2026-07-27 · 10 commits · 36 files touched
 
 - `a4575a5` docs: session close 2026-07-27 — HANDOVER, ledger, trade-book export

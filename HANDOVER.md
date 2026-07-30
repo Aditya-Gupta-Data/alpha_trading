@@ -42,18 +42,57 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-07-30, status check + infrastructure cleanup
+
+**Push status (corrects the 07-27 block below):** local `main` and
+`origin/main` are **identical at `609dd80`** — the two H4 commits
+(`9d8c13d`, `7e0d635`) are pushed. The 07-27 "UNPUSHED / decide whether to
+push" item is closed; nothing on this Mac is ahead of the remote.
+
+**Where the system is:** the production VM (`alpha-trading-vm`, project
+`project-37632031-10d0-47dd-b6f`) is healthy on `b4e0437` — both services
+active, `/api/health` ok, all 26 cron lines installed, every job due today
+ran. The VM is 4 commits behind `main`, all docs plus the deliberately
+off-cron H4 harness — **no deploy gap of substance** (verified by ancestry
+check, unlike the 14-commit gap of 07-25). Book per the 07-30 CEO brief:
+firm MTM ₹2,39,266 on a ₹2L base (realized +₹44,215), 2 spreads + 3 equity
+positions open, day 9.
+
+**Done this session (2026-07-30):**
+1. **Zombie VM deleted.** The abandoned original cron box (DECISIONS
+   #18/#24 — `alpha-trading-vm` in project `alpha-trading-app-2026`,
+   IP 35.202.72.49, no git, yfinance-era 14-file `src/`) was still RUNNING
+   with two daily cron jobs firing into its own logs. Identity was
+   positively confirmed against production (different project, different
+   external IP) before `gcloud compute instances delete`; project now
+   lists 0 instances; production untouched and verified RUNNING after.
+2. **07-27 intraday-capture mystery resolved as rate-limiting** — see the
+   observation ledger entry dated 2026-07-30. 84/84 every slot on the
+   throttled client.
+
+**Open items:** HDFCBANK.NS is skipped by `src.suggest` daily with a
+DH-905 `Input_Exception` (malformed request, NOT rate-limiting — 22
+occurrences in `suggest.log`; the scan silently loses the name behind
+"not enough price history yet"). Investigation is the next step. All
+07-27 open items below (decay_engine unwired, real H4 run pending a fresh
+local Dhan token, spread-tuner step 2 scoped-not-built) remain unchanged.
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-27 night, session close (H4 harness + spread-tuner design)
 
 **Where the system is:** the VM is UNCHANGED — still on `b4e0437`. Everything
-this session produced is **local, committed to `main`, and UNPUSHED**. Two
-commits are ahead of `origin/main`:
+this session produced is **local, committed to `main`, and UNPUSHED**
+*[superseded 2026-07-30: since pushed — `main` == `origin/main` at
+`609dd80`]*. Two commits are ahead of `origin/main`:
 
 | Commit | What |
 |---|---|
 | `9d8c13d` | `feat(validation)` — the H4 simulator experiment harness |
 | `7e0d635` | `fix(validation)` — H4 loud-abort + spread-tuner design + floor 5→10 |
 
-**⚠️ FIRST THING NEXT SESSION:** decide whether to push. Nothing here touches
+**⚠️ FIRST THING NEXT SESSION:** decide whether to push *[resolved
+2026-07-30: pushed]*. Nothing here touches
 the live execution path (the H4 harness is off-cron, `forecast.py` is
 deliberately not wired), so there is no urgency and no risk in the delay —
 but the work is only on this Mac until it is pushed.

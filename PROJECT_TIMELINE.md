@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-30 · 10 commits · 23 files touched
+### 2026-07-30 · 11 commits · 24 files touched
 
+- `2673367` fix(ops): office_close never slept the Mac; merge the two close-down tools
 - `d8592e0` docs(decisions): #86 Stage-B timeline — the standard does not slip, the calendar does
 - `ccf1b92` feat(ops): Edge-to-Cloud handover queue + Stage-B clock tracker
 - `c72ee21` fix(graph): structural affinity decays on a 1-year clock, not 14 days

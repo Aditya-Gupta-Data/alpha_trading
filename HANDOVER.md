@@ -50,13 +50,12 @@ the agent's job under the Session Wrap rule above.
 push" item is closed; nothing on this Mac is ahead of the remote.
 
 **Where the system is:** the production VM (`alpha-trading-vm`, project
-`project-37632031-10d0-47dd-b6f`) is healthy on `b4e0437` — both services
-active, `/api/health` ok, all 26 cron lines installed, every job due today
-ran. The VM is 4 commits behind `main`, all docs plus the deliberately
-off-cron H4 harness — **no deploy gap of substance** (verified by ancestry
-check, unlike the 14-commit gap of 07-25). Book per the 07-30 CEO brief:
-firm MTM ₹2,39,266 on a ₹2L base (realized +₹44,215), 2 spreads + 3 equity
-positions open, day 9.
+`project-37632031-10d0-47dd-b6f`) is healthy and **deployed to `8547473`**
+(evening pull, ff-only, clean tree; services untouched-and-active,
+`/api/health` ok, cron unchanged — the suggest fix is a cron-read module,
+no restart needed). `main` == `origin/main` == VM. Book per the 07-30 CEO
+brief: firm MTM ₹2,39,266 on a ₹2L base (realized +₹44,215), 2 spreads +
+3 equity positions open, day 9.
 
 **Done this session (2026-07-30):**
 1. **Zombie VM deleted.** The abandoned original cron box (DECISIONS
@@ -69,13 +68,18 @@ positions open, day 9.
 2. **07-27 intraday-capture mystery resolved as rate-limiting** — see the
    observation ledger entry dated 2026-07-30. 84/84 every slot on the
    throttled client.
+3. **08:00 suggest DH-905 skips root-caused and fixed (`8547473`,
+   deployed).** NOT an HDFCBANK/security-id bug — a transient Dhan-side
+   window at run start hitting whichever early watchlist names fall in it.
+   Fix: end-of-run retry pass + un-truncated error print (full ledger
+   entry, 3 new tests, suite 1,630).
 
-**Open items:** HDFCBANK.NS is skipped by `src.suggest` daily with a
-DH-905 `Input_Exception` (malformed request, NOT rate-limiting — 22
-occurrences in `suggest.log`; the scan silently loses the name behind
-"not enough price history yet"). Investigation is the next step. All
-07-27 open items below (decay_engine unwired, real H4 run pending a fresh
-local Dhan token, spread-tuner step 2 scoped-not-built) remain unchanged.
+**⚠️ VERIFY NEXT SESSION:** the first post-deploy 08:00 run (2026-07-31).
+Expect `recovered` lines in `suggest.log` instead of lost names; if the
+window fires, the widened error print will finally show WHICH parameter
+Dhan objects to — read it before theorizing further. All 07-27 open items
+below (decay_engine unwired, real H4 run pending a fresh local Dhan
+token, spread-tuner step 2 scoped-not-built) remain unchanged.
 
 ---
 

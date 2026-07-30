@@ -83,12 +83,47 @@ brief: firm MTM ₹2,39,266 on a ₹2L base (realized +₹44,215), 2 spreads +
    Graduation to `validation/registry.py`/sizing stays a Department 5
    decision gated on the forward record this accumulates. Suite 1,640.
 
+5. **`decay_engine` WIRED — the 07-25 open item is CLOSED** (`426fc34`,
+   owner-approved). Now sleep_phase **Task K**; `decay_engine.py` itself
+   untouched. Path-aware DB muzzle (`PRAGMA database_list`, fails SAFE);
+   9 tests. **Verified live in tonight's 20:00 run.**
+
+### Tonight's 20:00 run — both new tasks verified live
+
+```
+J. h4 shadow: {'scanned': 2, 'fired': 0, 'skips': {'no_fresh_extreme': 2}}
+K. edge decay:    {'swept': 86, 'decayed': 86, 'expired': 45}
+```
+
+- **Task J** evaluated the real condition (correct: both open spreads are
+  bearish, NIFTY 50 closed UP on 07-29, so no fresh 10-day low). 0 rows
+  written — an honest quiet night, not a stalled task.
+- **Task K's 45 expirations are BACKLOG, not breakage** — all 45 are
+  `concentrates_in` deal-affinity edges carrying historical `valid_from`
+  stamps (years of arrears cleared in one step, by design); all 44
+  causal-reasoning edges survived, as did all 4 decay-exempt (λ=0)
+  loss-permanence edges. Nothing deleted. **Expect `expired` ≈ 0 from
+  tomorrow — do NOT read tonight's number as an incident.**
+- **One OPEN QUESTION logged for the owner** (ledger, not acted on): is a
+  ~14-day half-life (λ=0.05) right for `concentrates_in` edges, which are
+  re-observed only when a new deal lands? One-line fix at the
+  `entity_affinity` write site if the owner wants it; current behaviour
+  stands until ruled on.
+
 **⚠️ VERIFY NEXT SESSION:** the first post-deploy 08:00 run (2026-07-31).
 Expect `recovered` lines in `suggest.log` instead of lost names; if the
 window fires, the widened error print will finally show WHICH parameter
-Dhan objects to — read it before theorizing further. All 07-27 open items
-below (decay_engine unwired, real H4 run pending a fresh local Dhan
-token, spread-tuner step 2 scoped-not-built) remain unchanged.
+Dhan objects to — read it before theorizing further. Also confirm Task K's
+`expired` count drops to ~0. Remaining 07-27 open items (real H4 run —
+**done tonight**, spread-tuner step 2 scoped-not-built) as noted.
+
+**No Strategy Registry rulings are pending** — a stale memory index said
+three were stalled since 07-23; verified false. All three were RECEIVED
+07-23 and locked into `docs/strategy_registry_spec.md` §9; SR1-3 shipped
+same day (`49ff347`), Stage A+B built 07-24, SR-4 cancelled by the owner.
+The only open gate is Stage B calendar time: **12 declarations, 24
+pending, 0 graded** (verified 07-30 — nothing has matured yet; the
+missing `macro_strategy_scores.jsonl` is correct, not a bug).
 
 ---
 

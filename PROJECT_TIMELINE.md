@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-07-30 · 9 commits · 21 files touched
+### 2026-07-30 · 10 commits · 23 files touched
 
+- `d8592e0` docs(decisions): #86 Stage-B timeline — the standard does not slip, the calendar does
 - `ccf1b92` feat(ops): Edge-to-Cloud handover queue + Stage-B clock tracker
 - `c72ee21` fix(graph): structural affinity decays on a 1-year clock, not 14 days
 - `cc67590` docs: 07-30 close — Task J/K verified live, edge-decay lambda question logged

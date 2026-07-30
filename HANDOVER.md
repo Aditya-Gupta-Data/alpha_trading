@@ -42,6 +42,54 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-07-30 late night, Mac OS-workflow merge
+
+**What changed:** `scripts/office_close.command` was merged with the
+Mac-local `Office Close.app` into ONE ordered end-of-day pass, and three
+defects were fixed. The headline one: **the script had never actually slept
+the Mac since it was written on 2026-07-21.** It backgrounded
+`( sleep 3; pmset sleepnow ) &` and then quit Terminal, which made Terminal
+raise "terminate running processes?" — and that dialog's DEFAULT button
+kills the pending `pmset`. Full reasoning and the two other fixes (quit
+guard, anchored orphan-sweep regex) are in
+`docs/observation_week_ledger.md`; the module rows are in `MODULES.md`.
+
+**Nothing in the trading path was touched.** This is OS workflow only — no
+sizing, treasury, strategy or ledger code was modified, and the suite is
+unchanged by it.
+
+**What the next person should know before trusting it:**
+1. **The full run is UNVERIFIED end-to-end.** Dialog, tracker append,
+   phases 1-4 and the guardrailed sweep were each exercised (dry-run +
+   stubbed dialog), but no real `pmset sleepnow` was issued and the
+   EOD-chain SLOW path never executed — the tier table was already fresh
+   (`as_of 2026-07-30T19:15:48`). **First real slow-path run is still
+   unobserved.** Use `--dry-run` first if in doubt.
+2. **"Shut the lid and let it finish" does NOT work and cannot be made to
+   work safely.** Closing the lid sleeps the Mac; in-flight work freezes
+   and resumes on wake. `caffeinate -i -s` now wraps the EOD chain (idle
+   sleep only; `-s` is AC-only), but no assertion survives a clamshell
+   close — only `sudo pmset -a disablesleep 1` would, and that was
+   deliberately not set. On the fast path the whole pass is ~10s and the
+   script sleeps the Mac itself, so this only bites on the slow path,
+   where a loud KEEP THE LID OPEN warning now prints.
+3. **Ollama auto-start was disabled by the owner** via Login Items &
+   Extensions / `launchctl disable gui/501/com.ollama.ollama`. It
+   registers through SMAppService/BTM (`com.ollama.ollama`), NOT a
+   LaunchAgent plist — there is no plist to hunt for. Relaunching the app
+   manually can re-register it; re-check with
+   `launchctl print-disabled gui/$UID | grep ollama`.
+4. Supporting Mac-local files live OUTSIDE the repo in `~/Scripts/`
+   (`jarvis_parse.py`, `vm_queue_sync.sh`, the two `.applescript`
+   sources) and are NOT version-controlled here. If the repo is cloned to
+   a new machine, `office_close.command` still runs — the Jarvis step is
+   fail-open and appends the raw note when the parser is absent.
+
+**Unchanged and still the open gate:** Stage-B calendar time (decision
+#86, target ~2026-10-13, Oct 1 preliminary). See the block below.
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-30, status check + infrastructure cleanup
 
 **Push status (corrects the 07-27 block below):** local `main` and

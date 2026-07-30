@@ -9,7 +9,8 @@ pyramid adds gated on a fresh **10-day** extreme (Sortino 2.62 vs baseline
 Owner ruling same day: **shadow it** (option 2 of record/shadow/graduate).
 
 What this module does, nightly (sleep_phase Task J):
-  for each OPEN journaled spread, if TODAY's completed bar shows
+  for each OPEN journaled spread, if the LATEST COMPLETED daily bar (Dhan
+  serves T-1 at 20:00 IST, so normally yesterday's session) shows
     (a) the position's modeled mark improved vs entry (plan_tracker's own
         linear-decay mark — the SAME pricing the live book resolves on), AND
     (b) a fresh 10-day close extreme in the trade's direction,
@@ -44,6 +45,19 @@ LOOKBACK_DAYS = 10          # the ONLY lookback that graduated 2026-07-30
 MAX_ADDS = 2                # H4_MAX_STACK=3 total = original + 2 adds
 BARS_WINDOW = LOOKBACK_DAYS + 5   # padding for holidays/weekends
 
+# THE SIGNAL IS DATED BY ITS BAR, NOT BY WALL-CLOCK TODAY (fixed 2026-07-30,
+# hours after the first version shipped — see the ledger). Dhan's
+# `historical_daily_data` only carries completed sessions: at 20:00 IST the
+# newest bar is the PREVIOUS trading day's, so the original
+# `bars[-1].date == today` freshness guard would have skipped every single
+# night and the shadow would never have fired — a silent no-op that looks
+# exactly like "the signal is being selective". Dating each fire by the
+# bar's own date makes the pass evaluate every trading day exactly once
+# (the night after), and idempotency-per-bar means weekend re-runs dedup
+# instead of double-counting. Staleness is now a real check: a feed stuck
+# for longer than this many calendar days is named, not silently trusted.
+MAX_BAR_AGE_DAYS = 5        # covers a Fri bar read on a Mon-holiday night
+
 
 def _direction(entry: dict) -> str:
     """bullish/bearish from the structure name — bear_put_spread etc."""
@@ -56,16 +70,19 @@ def _default_bars_fn(ticker: str) -> list:
     return get_daily_ohlc(ticker, days=BARS_WINDOW)
 
 
-def _mark_improved(entry: dict, close: float, today: date) -> bool:
-    """Has the spread's modeled mark improved vs entry? Uses plan_tracker's
-    own leg model (intrinsic + linearly-decaying entry time value) so the
-    shadow judges improvement on the SAME pricing the live book resolves
-    on — no second pricing model (one door per concern)."""
+def _mark_improved(entry: dict, close: float, as_of: date) -> bool:
+    """Has the spread's modeled mark improved vs entry, AS OF the bar's own
+    date? Uses plan_tracker's own leg model (intrinsic + linearly-decaying
+    entry time value) so the shadow judges improvement on the SAME pricing
+    the live book resolves on — no second pricing model (one door per
+    concern). `as_of` is the BAR's date, not today: the close and the
+    time-decay fraction must come from the same day or the mark is a
+    blend of two."""
     spread = entry["spread"]
     expiry = date.fromisoformat(spread["expiry"])
     entry_day = date.fromisoformat(entry["date"])
     total_days = max(1, (expiry - entry_day).days)
-    frac_left = max(0.0, (expiry - today).days / total_days)
+    frac_left = max(0.0, (expiry - as_of).days / total_days)
     return (_spread_mark(spread, float(close), frac_left)
             - _spread_entry_mark(spread)) > 0.0
 
@@ -124,23 +141,31 @@ def run_shadow_pass(conn=None, *, entries=None, bars_fn=None,
                     if not bars:
                         _skip("no_bars")
                         continue
-                    if bars[-1].get("date") != today_iso:
-                        # Weekend/holiday/stale feed: no completed bar for
-                        # today -> the signal state is yesterday's, already
-                        # recorded. Never re-fire on a stale bar.
-                        _skip("no_fresh_bar_today")
+                    bar_iso = bars[-1].get("date")
+                    if not bar_iso:
+                        _skip("bar_missing_date")
+                        continue
+                    bar_day = date.fromisoformat(bar_iso)
+                    if (today - bar_day).days > MAX_BAR_AGE_DAYS:
+                        # A genuinely stuck feed — named, never trusted.
+                        _skip("stale_feed")
+                        continue
+                    if bar_iso <= entry["date"]:
+                        # The entry day itself is not continuation; a bar
+                        # older than entry means the feed lags the trade.
+                        _skip("bar_not_after_entry")
                         continue
                     closes = [float(b["close"]) for b in bars]
                     bullish = _direction(entry) == "bullish"
                     if not _fresh_extreme(closes, LOOKBACK_DAYS, bullish):
                         _skip("no_fresh_extreme")
                         continue
-                    if not _mark_improved(entry, closes[-1], today):
+                    if not _mark_improved(entry, closes[-1], bar_day):
                         _skip("mark_not_improved")
                         continue
                     direction = "bullish" if bullish else "bearish"
                     if record_fn is not None:
-                        record_fn(signal=SIGNAL, fire_date=today_iso,
+                        record_fn(signal=SIGNAL, fire_date=bar_iso,
                                   ticker=ticker, direction=direction,
                                   host_ref=host)
                         summary["fired"] += 1
@@ -153,12 +178,12 @@ def run_shadow_pass(conn=None, *, entries=None, bars_fn=None,
                         _skip("stack_cap_reached")
                         continue
                     out = trial.record_signal_fire(
-                        conn, SIGNAL, today_iso, ticker,
+                        conn, SIGNAL, bar_iso, ticker,
                         direction=direction, host_ref=host)
                     if out["created"]:
                         summary["fired"] += 1
                     else:
-                        _skip("already_recorded_today")
+                        _skip("already_recorded_for_this_bar")
                 except Exception as e:      # one bad entry never voids the pass
                     _skip(f"entry_error:{type(e).__name__}")
         finally:

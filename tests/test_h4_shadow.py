@@ -105,25 +105,53 @@ def test_no_fire_when_mark_not_improved():
     assert s["skips"].get("mark_not_improved") == 1
 
 
-def test_stale_bar_never_refires():
-    """Weekend/holiday: the last completed bar predates `today`."""
+def test_yesterdays_bar_is_the_NORMAL_case_and_fires():
+    """THE REGRESSION THAT MATTERED (2026-07-30): Dhan's daily history only
+    carries COMPLETED sessions, so the 20:00 IST pass sees yesterday's bar.
+    The first version required bars[-1].date == today and would therefore
+    have skipped every night forever — a shadow that silently never fires.
+    A T-1 bar is normal operation, and the fire is dated by the BAR."""
     conn = _conn()
     s = h4_shadow.run_shadow_pass(
         conn, entries=[_spread_entry()],
         bars_fn=lambda t: _bars(FALLING, end=date(2026, 7, 29)),
         today=TODAY)
+    assert s["fired"] == 1
+    row = conn.execute("SELECT * FROM shadow_trades").fetchone()
+    assert row["fire_date"] == "2026-07-29"   # the bar's date, not TODAY
+
+
+def test_genuinely_stuck_feed_is_named():
+    conn = _conn()
+    s = h4_shadow.run_shadow_pass(
+        conn, entries=[_spread_entry()],
+        bars_fn=lambda t: _bars(FALLING, end=date(2026, 7, 20)),
+        today=TODAY)
     assert s["fired"] == 0
-    assert s["skips"].get("no_fresh_bar_today") == 1
+    assert s["skips"].get("stale_feed") == 1
 
 
-def test_same_day_rerun_dedups():
+def test_bar_at_or_before_entry_is_not_continuation():
+    conn = _conn()
+    entry = _spread_entry()
+    entry["date"] = "2026-07-29"        # entered the same day as the bar
+    s = h4_shadow.run_shadow_pass(
+        conn, entries=[entry],
+        bars_fn=lambda t: _bars(FALLING, end=date(2026, 7, 29)),
+        today=TODAY)
+    assert s["fired"] == 0
+    assert s["skips"].get("bar_not_after_entry") == 1
+
+
+def test_rerun_on_the_same_bar_dedups():
+    """Sat/Sun re-runs see Friday's bar again — they must not double-count."""
     conn = _conn()
     kw = dict(entries=[_spread_entry()], bars_fn=lambda t: _bars(FALLING),
               today=TODAY)
     assert h4_shadow.run_shadow_pass(conn, **kw)["fired"] == 1
     s2 = h4_shadow.run_shadow_pass(conn, **kw)
     assert s2["fired"] == 0
-    assert s2["skips"].get("already_recorded_today") == 1
+    assert s2["skips"].get("already_recorded_for_this_bar") == 1
     assert conn.execute("SELECT COUNT(*) FROM shadow_trades").fetchone()[0] == 1
 
 

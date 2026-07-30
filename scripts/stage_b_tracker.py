@@ -38,8 +38,14 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
+# OWNER RULING 2026-07-30 (decision #86): the STANDARD does not slip, the
+# CALENDAR does. 60 sessions remains the bar for a mature Stage-B verdict;
+# the completion date moved 2026-10-01 -> 2026-10-13 because the arithmetic
+# said Oct 1 was unreachable (53 sessions needed, 45 weekdays available)
+# even at 100% uptime. Oct 1 survives as a PRELIMINARY, non-binding read.
 TARGET_SESSIONS = 60
-TARGET_DATE = date(2026, 10, 1)
+TARGET_DATE = date(2026, 10, 13)
+PRELIM_READ_DATE = date(2026, 10, 1)
 STALE_AFTER_WEEKDAYS = 2      # missed cron canary
 
 
@@ -128,6 +134,10 @@ def collect(root: Path, today: date) -> dict:
         "failed_stages": failed_stages,
         "weekdays_to_target_date": _weekdays_between(today, TARGET_DATE),
         "target_date": TARGET_DATE.isoformat(),
+        "weekdays_to_prelim_read": _weekdays_between(today, PRELIM_READ_DATE),
+        "prelim_read_date": PRELIM_READ_DATE.isoformat(),
+        "sessions_projected_at_prelim": len(sessions) + _weekdays_between(
+            today, PRELIM_READ_DATE),
     }
 
 
@@ -171,17 +181,22 @@ def render(s: dict) -> str:
     if s["failed_stages"]:
         L.append(f"  !! FAILED STAGES: {', '.join(s['failed_stages'])}")
     L.append("")
-    L.append(f"PACE — {s['weekdays_to_target_date']} weekdays to "
-             f"{s['target_date']} (holidays not modelled)")
+    L.append(f"PACE — {s['weekdays_to_target_date']} weekdays to the "
+             f"{s['target_date']} target (holidays not modelled)")
     need, have = s["sessions_remaining"], s["weekdays_to_target_date"]
     if need == 0:
-        L.append("  target already met.")
+        L.append("  60-session target already met.")
     elif have >= need:
         L.append(f"  on track: {have} available vs {need} needed "
                  f"(slack {have - need}).")
     else:
         L.append(f"  !! BEHIND: {have} available vs {need} needed "
                  f"(short {need - have}).")
+    L.append(f"  preliminary read {s['prelim_read_date']} "
+             f"(~{s['sessions_projected_at_prelim']} sessions by then) — "
+             "NON-BINDING;")
+    L.append("  the 60-session standard does not slip (owner ruling, "
+             "decision #86).")
     return "\n".join(L)
 
 

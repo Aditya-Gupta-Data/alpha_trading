@@ -135,17 +135,29 @@ brief: firm MTM ₹2,39,266 on a ₹2L base (realized +₹44,215), 2 spreads +
 bash scripts/daily_health_and_queue.sh
 ```
 
-### ⚠️ Stage B will NOT reach 60 sessions by Oct 1 — owner decision needed
+### ✅ Stage B timeline — RULED (decision #86), no longer an open question
+
+**The standard does not slip, the calendar does.** The 60-session bar for a
+mature Stage-B verdict is HELD; the official completion target is now
+**~2026-10-13**. **Oct 1 remains a PRELIMINARY, NON-BINDING read** — if
+early forward windows show significance by then, good; otherwise wait for
+the 13th. **Zero graded calls is expected, not a concern** — forward
+windows need calendar time to mature. `stage_b_tracker.py` encodes both
+dates, so the tool now measures against the ruling. Full reasoning in
+DECISIONS.md #86.
+
+The arithmetic that drove it is below, kept because it is the evidence:
+
+### ⚠️ Why the date moved — 60 sessions was unreachable by Oct 1
 
 The new `scripts/stage_b_tracker.py` (read-only by construction) surfaced
 this on its first run. The clock is at **7 DISTINCT sessions, not the 12
 raw rows** — the 07-22/24 build era wrote 2-4 rows per session; since
-07-27 the cron is exactly 1/weekday and clean. **53 sessions are still
-needed with only 45 weekdays left before Oct 1**, so perfect uptime lands
-at ~52. Uptime alone cannot close this. Either accept the Dept-5 read at
-~52 sessions, or slip the verdict ~2 weeks to ≈Oct 13. Separately and more
-fundamentally: **graded calls are still 0** — sessions are not evidence;
-a verdict needs matured forward windows (`MIN_FWD_CALLS`=7).
+07-27 the cron is exactly 1/weekday and clean. **53 sessions were still
+needed with only 45 weekdays left before Oct 1**, so perfect uptime landed
+at ~52 — uptime alone could never have closed it, which is why the date
+moved rather than the bar. Sessions are also not the same thing as
+evidence: a verdict needs matured forward windows (`MIN_FWD_CALLS`=7).
 
 Check any time:
 

@@ -42,6 +42,41 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-07-31, first real close-down run, one bug found
+
+**The 2026-07-30 close-down ran for real and HALF worked — now fully fixed.**
+Proven working: the note was captured (21:57) and `pmset -g log` shows
+`Software Sleep pid=24128` at **21:57:13**, i.e. the script's own
+`pmset sleepnow`. The 07-21 "never slept the Mac" defect is genuinely
+closed. Proven broken: Chrome and Ollama were the same PIDs the next
+afternoon — `app_running()` used `ps … | grep -q` and, under the script's
+`set -o pipefail`, `grep -q`'s early exit gave `ps` a SIGPIPE and the
+pipeline returned 141, so **a running app reported as not running**. It is
+position-dependent (a race), which is why testing missed it. Fixed with a
+pipe-free `case "$(ps -axo comm=)"`. Full reasoning, plus the two
+hypotheses tested and rejected first (TCC automation; Chrome's
+`exit_type`), is in `docs/observation_week_ledger.md`.
+
+**The lesson worth carrying:** the close-down tool ends the session by
+sleeping the Mac, so a silent failure is unobservable by construction. It
+now tees to `logs/office_close.log`, surfaces `osascript` stderr instead
+of discarding it, and **verifies each quit by polling up to 10s**,
+reporting `!! <app> STILL RUNNING` plus a notification. Read that log
+after the next close before trusting it.
+
+**Still unverified:** the EOD-chain SLOW path has never executed in this
+script (the tier table has been fresh on every run so far). Everything
+else has now run for real at least once.
+
+**Unchanged:** Stage-B calendar time is still the only open gate
+(decision #86, target ~2026-10-13, Oct 1 preliminary). VM healthy,
+`service: active`, firm treasury ₹2,00,000 pool, equity desk 3 open.
+Noted in passing, NOT acted on: `logs/autonomous_bug_report.jsonl` on the
+VM is at **72 collected items** — nobody has triaged it since the 07-21
+autonomous run.
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-30 late night, Mac OS-workflow merge
 
 **What changed:** `scripts/office_close.command` was merged with the

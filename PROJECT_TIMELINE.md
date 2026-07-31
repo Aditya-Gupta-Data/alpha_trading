@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-07-31 · 1 commits · 3 files touched
+
+- `c342c71` fix(ops): office_close skipped Chrome/Ollama — pipefail + grep -q lied
+
+
 ### 2026-07-30 · 11 commits · 24 files touched
 
 - `2673367` fix(ops): office_close never slept the Mac; merge the two close-down tools

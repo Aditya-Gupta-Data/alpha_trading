@@ -17,8 +17,17 @@ echo "── Mac (analysis side) ───────────────�
 import json, datetime
 try:
     a = json.load(open('$REPO/data/darling_tiers.json')).get('as_of', '?')
-    today = datetime.date.today().isoformat()
-    ok = '✅ fresh' if str(a)[:10] == today else '⚠️ NOT today — Office Close missed?'
+    now = datetime.datetime.now()
+    today = now.date().isoformat()
+    # The EOD chain runs at 19:15. Before then, yesterday's tier table is
+    # the CORRECT state — flagging it as a miss all morning trained the
+    # eye to ignore a warning that is only meaningful after the cron.
+    if str(a)[:10] == today:
+        ok = '✅ fresh'
+    elif (now.hour, now.minute) < (19, 30):
+        ok = 'ok — yesterday\'s; today\'s EOD chain runs 19:15'
+    else:
+        ok = '⚠️ NOT today and it is past 19:30 — Office Close missed?'
     print(f'  tier table as_of: {a[:16]}  {ok}')
 except Exception as e:
     print(f'  tier table unreadable: {e}')"

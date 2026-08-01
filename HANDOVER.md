@@ -42,6 +42,75 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-01, AD-2 run in the wild: the gate is broken
+
+**No trading-path code changed today.** The only commit touching `src/` is a
+corrected docstring. Nothing was written to `discovered_episodes.json` or any
+data file. VM untouched and healthy.
+
+### The headline: AD-1 is validated, AD-2 cannot admit anything
+
+Owner ruled Option 1 — run AD-1+AD-2 on the real 25-year lake BEFORE building
+the motif gate or registry enrolment. That call paid for itself immediately.
+
+**AD-1 passed with distinction.** Unsupervised over four cross-asset channels
+with ZERO human labels, it independently found **2013-05-29 taper tantrum**
+(the medoid of our own human A2 archetype), the GFC as a coherent multi-phase
+cluster (2008-01-23/05-15/10-22, 2009-01-26), COVID, Ukraine 2022-03-08,
+demonetisation 2016-11-23, the 2007 quant quake, and — on the full lake —
+the **1991-07-03 India BoP crisis** at the highest stress in 64 years.
+
+**AD-2 returned 0 admitted of 25, and the null proves it is misspecified
+rather than strict:**
+- block-bootstrap max-stress **median 4.66** vs COVID (the most violent event
+  in the window) at **5.27**. The typical RANDOM surrogate nearly beats the
+  worst real crisis. From candidate #6 down, `p_block` is a flat **1.0000**.
+- Cause: `block_bootstrap` concatenates random 20-day blocks, so every
+  junction is an artificial discontinuity — and `system_stress` is built to
+  detect exactly that. ~268 splices per surrogate, and the statistic takes
+  the MAX. "Worst splice artifact in 268 tries" vs "worst real event in 20
+  years" is a rigged contest.
+- The tell: a too-strict-but-VALID gate clusters p-values near the 1/201
+  resolution floor. These saturate at the ceiling.
+- A second, independent defect: **AD-2 had never been runnable on the real
+  lake at all** — ragged channel coverage makes each surrogate a different
+  length and `_max_stress_of` overruns (`IndexError`). Worked around today by
+  restricting to the post-2006 full-observation window; NOT fixed.
+
+**Unresolved, and the most interesting thread: `2026-03-27`, stress 3.65 —
+second-highest in twenty years, no obvious human label.** The instrument
+cannot currently measure it. Re-test against a corrected null before drawing
+any conclusion.
+
+### ⏭️ NEXT SESSION — owner ruling, fix the statistical foundation
+
+1. Replace the block bootstrap with a **circular/stationary bootstrap** (one
+   wrap-point instead of ~268 splices).
+2. Implement the **ragged-missingness fix** (surrogates keep the input's
+   length and hole pattern) so the full 25-year history returns to scope.
+
+They interact: with missingness fixed, the 1991 BoP crisis re-enters and is a
+far stronger test of any corrected null than anything post-2006. Note the
+`_z_series` O(n²) cost — a 200-surrogate null over 5,363 sessions took 31 min;
+the null does NOT depend on the candidate, so build it once and share it.
+
+### Also verified today (both were pending in the ledger)
+
+- **Task K:** 07-31 sweep `{'swept': 55, 'expired': 0}` — the 45 expiries on
+  07-30 were backlog exactly as predicted. Structural amnesia closed.
+- **suggest DH-905 retry:** first post-deploy run clean (0 DH-905, HDFCBANK
+  read normally) — but the window did not fire, so the retry path is
+  **deployed, not proven**. Still awaiting its first real failure.
+- **NEW open item:** the Stage-B tracker does not model NSE holidays and slack
+  is pinned at **0**. Ganesh Chaturthi / Gandhi Jayanti / Diwali all fall
+  inside the window, so the 60th session realistically lands past Oct 13 with
+  zero failures. Either model the holiday calendar or accept Oct 13 as
+  approximate — owner's call, not acted on.
+- Untouched and still open from 07-31: `logs/autonomous_bug_report.jsonl` on
+  the VM is at **72 items**, untriaged since the 07-21 autonomous run.
+
+---
+
 ## 📍 CURRENT STATE — 2026-07-31, first real close-down run, one bug found
 
 **The 2026-07-30 close-down ran for real and HALF worked — now fully fixed.**

@@ -7,17 +7,31 @@ docs/auto_discovery_spec.md, made real. The engine proposes its OWN
 episodes from 25 years of cross-asset data — no human `macro_episodes.yaml`
 input. Human labels become post-hoc annotations, never inputs.
 
-Build state (2026-07-23, owner autonomous runbook #5):
-  * AD-1 — FUNCTIONAL: unsupervised shock scan (change-points) +
-    slow-burn motif scan (DTW self-similarity) → a candidate list.
-    Compute-only, writes `data/discovered_candidates.json`, ZERO
-    authority.
-  * AD-2 — SCAFFOLDED: the significance layer (OOS + phase-randomized
-    surrogates + stability). Structured with signatures + the null-model
-    plumbing; the full surrogate test is the next build. Nothing is
-    admitted as an episode until this passes.
-  * AD-3 — SCAFFOLDED: candidate-court wiring (validation/registry).
-  * AD-4 — SCAFFOLDED: dual-catalog tracker (human ∪ auto).
+Build state (corrected 2026-08-01 — the previous header claimed AD-2/3/4
+were "SCAFFOLDED" long after they were built in `d495de3`; it was written
+before that landed and never updated. BUILT-BUT-UNPROVEN is the honest
+state, and the distinction matters: none of this has met real data):
+  * AD-1 — BUILT, 25-yr lake run 2026-08-01: unsupervised shock scan
+    (change-points) + slow-burn motif scan (DTW self-similarity) → a
+    candidate list. Compute-only, writes `data/discovered_candidates.json`,
+    ZERO authority.
+  * AD-2 — BUILT for SHOCK candidates: block-bootstrap + phase-randomized
+    surrogates + a held-out (OOS) recurrence test; `significance_gate`
+    admits only on BOTH nulls AND the held-out test.
+    **NOT built: motif significance** — any non-shock candidate returns
+    `status="motif_gate_pending"` and can never be admitted today. The
+    DTW-statistic surrogate test is the missing slice (deliberately
+    deferred 2026-08-01: prove the shock gate on real data first).
+  * AD-3 — PARTIAL: `route_to_court` writes AD-2-admitted candidates to
+    `data/discovered_episodes.json`. Full Dept-5 `validation/registry`
+    enrolment — the lifecycle human episodes face — is NOT built.
+  * AD-4 — BUILT: `merged_catalog` unions human ∪ auto, tags `source`,
+    flags an auto anchor far from every human one as `discovery=True`.
+
+  ZERO EXECUTION AUTHORITY throughout, and on NO schedule (the marker
+  above is load-bearing). Nothing here feeds the Stage-B declaration
+  clock; an admitted candidate is a research artifact, not an episode.
+  11 tests (`tests/test_auto_discovery.py`) run on synthetic lakes.
 
 Stdlib only (no numpy); reuses macro_features (the ONE featurizer) and
 macro_fingerprints.dtw_distance (the ONE matcher) — no train/serve skew,

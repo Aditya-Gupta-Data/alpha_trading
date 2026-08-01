@@ -42,11 +42,86 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 📍 CURRENT STATE — 2026-08-01, AD-2 run in the wild: the gate is broken
+## 📍 CURRENT STATE — 2026-08-01 (evening): Auto-Discovery is a WORKING INSTRUMENT that admits nothing
 
-**No trading-path code changed today.** The only commit touching `src/` is a
-corrected docstring. Nothing was written to `discovered_episodes.json` or any
-data file. VM untouched and healthy.
+**Nothing in the trading path changed today, and nothing touched the VM.**
+This was a Mac-lane research arc start to finish. No data file was written —
+`discovered_episodes.json` still does not exist, because nothing was admitted
+and `route_to_court` correctly has nothing to route. Stage-B's clock is
+untouched (AD-* has zero execution authority and does not feed it).
+
+### Final state of AD-1 → AD-4
+
+| Stage | State |
+|---|---|
+| **AD-1** | **VALIDATED and accurate.** Unsupervised over 4 cross-asset channels, ZERO human labels — it independently finds COVID (2020-03-18), 2011 US-downgrade, GFC, 2014 oil collapse, 2010 Greek crisis, taper tantrum, demonetisation. Anchors land on the historically correct DAYS. |
+| **AD-2 (shock)** | **A FULLY WORKING INSTRUMENT with a brutally high bar — ZERO admissions.** Graded, beatable, honest p-values. Not broken: refusing. |
+| **AD-2 (motif)** | **DELIBERATELY UNBUILT.** Any non-shock candidate returns `motif_gate_pending` and can never be admitted. The DTW-statistic surrogate test is the missing slice — deferred on purpose, not forgotten. |
+| **AD-3** | Built (`route_to_court`); full Dept-5 registry enrolment still unbuilt. Nothing to route. |
+| **AD-4** | Built (`merged_catalog`, human ∪ auto with `discovery=True` flagging). |
+
+### The definitive verdict (500 surrogates, full lake, seed pinned)
+
+```
+null:  circular-shift  median 3.66  p95 5.32      phase-randomized  median 3.39  p95 5.46
+2020-03-18 COVID  co-stress 5.37   p_circ 0.0419 ✓   p_phase 0.0579 ✗   -> REFUSED
+ADMITTED: 0
+```
+
+**COVID split the two nulls by 0.008** — cleared circular-shift (20/500 beat
+it), failed phase-randomized (28/500). The AND-gate refused. That is "one null
+is not enough" doing its job, and the bar was fixed BEFORE the result was
+seen. The defensible statement: *over 38 years, even COVID's cross-asset
+co-movement sits at ~the 95th percentile of chance alignment — strong, not
+conclusive.* Verdict shipped as-is per the kill-criterion doctrine.
+
+### 👁️ OFFICIAL FORWARD-DATA WATCH ITEM — `2026-03-27`
+
+**Status: WATCH, not a regime.** Co-stress **3.59 — the #3 cross-asset
+co-movement in 38 years** (behind only COVID 5.37 and the 2011 US-downgrade
+3.78), with **no obvious human label**. AD-2 verdict: `p_circ 0.5768 /
+p_phase 0.3613` — comfortably INSIDE what chance alignment produces, so it is
+**not** an admitted regime and must not be described as a discovery.
+
+What makes it worth watching anyway: it is large, recent, unlabelled, and it
+survived the statistic redefinition (it ranked #10 under the old broken RMS
+and rose to #3 under the valid one — it is not an artifact of either). The
+honest read is "real event, not statistically exceptional versus chance." If
+it is the start of something, FORWARD data will say so — re-run the scan
+periodically and watch whether a cluster forms around it. Do NOT wire it to
+anything.
+
+### How today got here (three layers, each exposed by fixing the one above)
+
+1. Ragged missingness → AD-2 had never been runnable on the real lake.
+2. Block-bootstrap splices → fixed with `circular_shift`; the null got WORSE,
+   which is what proved the surrogates were never the real problem.
+3. **The statistic itself** — `system_stress` (RMS over channels PRESENT) has
+   a variable divisor, so it mis-dated crises, promoted 1960s single-channel
+   ghosts into AD-1's ranking, and made every null unbeatable. Replaced by
+   **`co_stress` = second-largest |z|, ≥3-channel floor** (owner ruling,
+   validated by a 50-surrogate preview before any production code). Scannable
+   window is now 1988-06+; `system_stress` kept as a superseded reference,
+   called by nothing.
+
+Also shipped: `_z_series` O(n²)→O(n·baseline), **bit-identical** to `zdelta`
+(test-pinned) — 33s→1.1s per pass, and a full-lake 200-surrogate null from a
+projected 3.7 h down to 8 min. `build_null` is candidate-independent and
+computed once; use `gate_many` for scans. 22 AD tests, suite **1,691**.
+
+### ⏭️ Next session options (none urgent, none blocking)
+
+- Motif significance (the DTW surrogate test) — the last unbuilt AD slice.
+- AD-3 registry enrolment — only worth it once something admits.
+- Re-run the scan later and check whether `2026-03-27` gains company.
+
+---
+
+## 📍 SUPERSEDED (same day, morning) — 2026-08-01, AD-2 run in the wild: the gate is broken
+
+> Kept for the record; the evening block above is the finished state. The
+> "two defects" below were both fixed hours later, and fixing them exposed
+> the third and real one (the statistic).
 
 ### The headline: AD-1 is validated, AD-2 cannot admit anything
 

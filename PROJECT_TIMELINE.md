@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-08-01 · 1 commits · 4 files touched
+### 2026-08-01 · 4 commits · 6 files touched
 
+- `0ec1a8b` docs(handover): 08-01 final — AD instrument validated, 0 admissions, 2026-03-27 logged as watch item
+- `afe7ad1` docs(ledger): AD-2 definitive 500-surrogate verdict — 0 admitted, COVID splits the nulls by 0.008
+- `ec57a56` feat(discovery): co_stress redefinition + the three AD-2 structural fixes
 - `327dc89` docs(discovery): AD-2 fails in the wild — splice-artifact null + ragged missingness
 
 

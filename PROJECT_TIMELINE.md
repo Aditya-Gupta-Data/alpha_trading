@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-08-01 · 1 commits · 4 files touched
+
+- `327dc89` docs(discovery): AD-2 fails in the wild — splice-artifact null + ragged missingness
+
+
 ### 2026-07-31 · 1 commits · 3 files touched
 
 - `c342c71` fix(ops): office_close skipped Chrome/Ollama — pipefail + grep -q lied

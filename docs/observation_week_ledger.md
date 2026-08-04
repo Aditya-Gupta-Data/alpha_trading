@@ -1056,6 +1056,19 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   (`test_local_parser`, `test_edge_miner`, `test_evolution`,
   `test_sleep_phase`, `test_text_intelligence`).
 
+- **Commit note (recorded because the commit message does not say
+  "Ollama"):** all six files of this fix landed in **`ca6558f`**,
+  whose subject is `chore(cron): migrate bhavcopy to the VM; stagger
+  the one real collision`. A parallel VM session staged the whole
+  working tree at 16:46 IST and swept this work into its own cron
+  commit, alongside its `scripts/setup_cron.sh`. The content is
+  intact and verified after the fact (`keep_alive: 0` present,
+  `exec` absent from both wrappers, `ollama_session.sh` complete at
+  152 lines). History was NOT rewritten to separate them: `ca6558f`
+  was already pushed to `origin/main` and a second session was live
+  in the same repo. So `git log --grep=ollama` finds nothing for
+  this change — search `ca6558f` or this entry instead.
+
 - **Follow-up / not done:** (a) Disabling the SMAppService background
   item is a **System Settings GUI action the owner must perform** — it
   cannot be scripted reliably and has NOT been done as of this entry;

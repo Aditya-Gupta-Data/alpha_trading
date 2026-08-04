@@ -42,6 +42,106 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-04: Ollama is now a strictly ON-DEMAND service; the desktop app's background agent MUST stay disabled
+
+**Nothing in the trading path changed today. No VM change, no sizing/treasury
+change, no data file written.** This was a Mac-lane operational fix only. The
+equity-desk / intraday-tracker work in `d7d888f` and `ca6558f` is a PARALLEL VM
+session's, not this one's — see the commit note below.
+
+### The architectural change, in one line
+
+**Ollama no longer runs in the background at all. It is started by the job that
+needs it, and killed the moment that job ends.**
+
+Before today it had served continuously since **7 Jul** (28 days) on Ollama's
+default **5-minute keep-alive**, holding ~2GB of model weights resident on an
+8GB Mac after every scheduled call.
+
+### The three layers, all live and verified
+
+| Layer | What it does |
+|---|---|
+| **`scripts/ollama_session.sh`** (new) | The ONE door for server lifetime. Sourced by both LLM-using LaunchAgent wrappers. Starts the server, waits until it genuinely **answers** `/api/tags`, and on exit kills it plus its `ollama runner` children. |
+| **`scripts/mine_edges.sh`, `scripts/run_evolution.sh`** | Source the switch, `trap ollama_session_stop EXIT INT TERM`, propagate the python exit code. |
+| **`src/local_parser.py:_chat()`** | Sends `"keep_alive": 0` in the request body — belt and braces against the server-env policy drifting again. |
+
+### ⚠️ THE STANDING CONSTRAINT — do not undo these three things
+
+1. **The Ollama desktop app's background agent must remain DISABLED.**
+   System Settings → General → Login Items & Extensions → **Allow in the
+   Background** → Ollama **OFF**. Owner performed this 2026-08-04; verified
+   the same day (`launchctl list | grep -i ollama` returns nothing, port
+   11434 closed, zero processes). **If it is ever re-enabled, the whole fix
+   is void** — the Electron app is a *supervisor*: it respawns `ollama serve`
+   within seconds of any kill (reproduced: killing the server produced a new
+   one with ppid = the app). Re-enabling it restores a 24/7 server.
+2. **Never put `exec` back in front of the python line in the two wrapper
+   scripts.** `exec` replaces the shell and silently discards the `trap`,
+   which orphans the exact server this design exists to kill. Both files
+   carry a comment saying so.
+3. **Never replace the targeted kill with `pkill ollama`.** The stop function
+   reaps only PIDs it recorded via `pgrep -P` before killing the parent. A
+   blanket `pkill` would kill the owner's own GUI session if they opened one
+   mid-run.
+
+### Terminology, stated precisely because it matters to the next agent
+
+The **service** is fail-closed / default-deny: absent unless a job explicitly
+starts it, so a stray API call from any other app gets connection-refused
+rather than waking anything. The **consumers** remain fail-OPEN: a failed
+start degrades to "skip the LLM extraction", never to a failed job — the same
+posture the VM has permanently (it runs no Ollama by design, decision #47).
+`ollama_session_start` is therefore called as `|| true` in both wrappers, and
+that is deliberate, not sloppiness.
+
+Adoption rule: if a server is **already** reachable when a job starts, that is
+the owner's own GUI session — the job uses it and does **not** kill it on exit.
+
+### Verified 2026-08-04 (run, not asserted)
+
+Owned path: start → `owned=1`, port answering, real `/v1/chat/completions`
+**HTTP 200 in 4.4s**, `/api/ps` → **`{"models":[]}`** two seconds later
+(weights unloaded immediately), stop → **zero processes, port closed**.
+Adopt path: pre-existing server correctly left running. **Full suite: 1,700
+passed** (note: `CLAUDE.md` still says 1,589 — that count is stale, not a
+regression).
+
+### Honest scope limit
+
+**Ollama was never the machine's actual swap consumer.** At triage it held
+4.7MB with zero models loaded; swap was 4,520MB and is *higher now* (4,836MB)
+with Ollama completely dead. That load is Chrome (~12 helpers) and Claude.app.
+This fix removes a real ~2GB **periodic** spike at 21:00 and Saturday 02:00 —
+it does not and will not reclaim that 4.5GB. If sustained swap is the real
+complaint, Chrome is the next thing to examine.
+
+### ⚠️ Commit-provenance warning for the next agent
+
+**`git log --grep=ollama` finds nothing for this change.** All six files landed
+in **`ca6558f`**, whose subject is `chore(cron): migrate bhavcopy to the VM…`.
+A parallel VM session staged the entire working tree at 16:46 IST and swept
+this work into its own commit. Content was verified intact afterwards. History
+was **not** rewritten to separate it — `ca6558f` was already pushed to
+`origin/main` with a second session live in the same repo, making a rewrite
+both destructive and unsafe. Full detail in ledger **Issue 23**.
+
+### Next immediate steps
+
+1. **Watch the first real on-demand run** — `com.adityagupta.alpha-edge-miner`
+   at 21:00 tonight. Check `logs/ollama_session.log` for
+   `started … / ready after Ns / stopped cleanly, port released`, then confirm
+   `pgrep -lf ollama` is empty afterwards. Tonight is the first unattended
+   exercise of the trap; today's proof was manual.
+2. **Saturday 02:00** — `com.alphatrading.evolution`, same check. This is the
+   run that previously left a model resident overnight.
+3. **Open decision, not acted on:** `com.adityagupta.alpha-edge-miner` still
+   has `RunAtLoad = true`, so the miner fires on **every login**, not just at
+   21:00. Now bounded by the on-demand server, but whether a login-time run is
+   wanted at all is unresolved.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-01 (evening): Auto-Discovery is a WORKING INSTRUMENT that admits nothing
 
 **Nothing in the trading path changed today, and nothing touched the VM.**

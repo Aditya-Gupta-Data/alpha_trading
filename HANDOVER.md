@@ -42,6 +42,77 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-04 (VM lane): equity desk is now PRICE-CAPTURED; bhavcopy migrated off the Mac
+
+**Two sessions ran today in parallel.** This block is the VM/ingestion lane
+(`d7d888f`, `ca6558f`). The Mac-lane Ollama block below (`dcf604d`) is a
+DIFFERENT session's work — both are real, neither supersedes the other.
+
+**Trigger:** the 15:45 EOD card printed `(3 unmarked)` with `—` for LAST and
+P&L on all three equity positions. Reported as a broken price fetcher. **It
+was not.** A step-by-step probe on the VM passed every gate
+(`security_id_for(FINEORG)='3744'`, `get_live_price_by_id → 4929.5`) and the
+card re-rendered fully populated 12 minutes later. The failure was real but
+TRANSIENT — and undiagnosable, because `live_quote` swallowed every exception.
+
+### What changed
+
+1. **`live_quote` names its failures** (`no_security_id` / provider-returned-
+   nothing / `<ExcType>: msg`) on stderr, still failing open. **The next
+   occurrence will say WHY** — the 15:45 cause remains an open unknown and
+   this is how we catch it.
+2. **The 15-min sweep now covers the equity desk's open funded book.**
+   `intraday_tracker.capture()` sweeps TWO universes through different doors:
+   the watchlist by symbol, the desk by scrip id (desk names are NOT in
+   `watchlist.yaml`). Desk rows carry `src="dhan_live_15m_desk"`. Exit logic
+   finally has a durable price series instead of an on-demand fetch.
+3. **NEW daily all-darlings tap** — cron #26, Mon-Fri 15:50 IST →
+   `data/lake/darlings_daily.jsonl`. One close for ALL ~105 darlings
+   **including the ones we do not hold**, so ENTRY zones are visible.
+   Verified live on the VM: `captured: 105, failed: 0`.
+4. **Bhavcopy MIGRATED to the VM** — cron #27, daily 19:15,
+   `--backfill 5` → `data/lake/bhavcopy/`. See below.
+5. **`firm_treasury` moved 19:50 → 19:56.** It was the ONLY pair on the box
+   sharing an exact minute (with `macro_nightly`), and the hazard was MEMORY,
+   not API: `macro_nightly` is the documented OOM risk on the 1 GB e2-micro.
+   **All 28 VM jobs now own their own minute.**
+6. **`equity_desk_snapshot.json` PARKED** (`.parked`, both machines) — it was
+   decision #82's Mac→VM transport, superseded hours later by #83; its
+   reader/writer functions are already gone from `src/`. NOT deleted. Delete
+   only after a clean observation period.
+
+### Bhavcopy: why it moved, and what was verified first
+
+The Mac captured only **7 of 11 recent weekdays**, and on the missed days
+`patience_eod.log` had **no entry at all** — the job never ran and never
+failed. That is macOS cron not firing while the machine sleeps, not a
+bhavcopy bug. Before wiring it, the real risk was tested: **NSE bot-blocks
+scripted access, so a GCP IP could have been refused.** It is not — the first
+VM run returned `captured: 2` and **recovered 2026-07-31, a day the Mac
+missed**. `--backfill 5` is deliberate: `fetch_day` is idempotent, so each
+run self-heals up to five days of holes.
+
+**The Mac still fetches its own copy** — `patience_basket --eod` calls
+`fetch_day` inline for tier grading, so removing it would break grading on
+the days the Mac IS awake. Two per-machine stores of immutable date-keyed NSE
+files; they cannot diverge. The VM is now the complete record.
+
+### ⚠️ Open / for the next person
+
+- **The 15:45 failure has NO confirmed cause.** The contention theory I first
+  offered was DISPROVED: `intraday_tracker` at 15:45 self-gates and makes zero
+  Dhan calls, `chain_archiver` finishes 15:40:42, `main` 15:39:37 —
+  `eod_summary` is the only Dhan caller in that window. Do not "fix" it again
+  without evidence; wait for the new logging to name it.
+- **Regression worth remembering:** the new `desk_tickers()` default read the
+  LIVE open book from inside pytest — six existing tests instantly grew 5
+  phantom failures. Fixed with the standing muzzle. **Fourth instance of that
+  family** (07-22, 07-23, 07-27): a new default that reaches live state is the
+  single most repeated defect in this codebase.
+- Suite **1,700 green**. 8 new tests.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-04: Ollama is now a strictly ON-DEMAND service; the desktop app's background agent MUST stay disabled
 
 **Nothing in the trading path changed today. No VM change, no sizing/treasury

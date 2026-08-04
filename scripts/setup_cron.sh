@@ -276,11 +276,16 @@ CRON_TZ=Asia/Kolkata
 #     no session to report and the evening jobs are the ops sweep's business.
 30 16 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ceo_brief >> "$REPO_ROOT/logs/ceo_brief.log" 2>&1
 
-# 21. Firm treasury rotation (Mon-Fri 19:50 IST, decision #83) — re-routes
+# 21. Firm treasury rotation (Mon-Fri 19:56 IST, decision #83) — re-routes
 #     the equity desk's budget AFTER the Mac's ~19:20 artifact ship (fresh
 #     tier table) and BEFORE the next session. One atomic budget move in
 #     brain_map.db; deadband/step-capped; one Discord card per rotation.
-50 19 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.firm_treasury --rotate >> "$REPO_ROOT/logs/firm_treasury.log" 2>&1
+#     MOVED 19:50 -> 19:56 on 2026-08-04. It was the ONLY pair on this box
+#     sharing an exact minute (with macro_nightly), and macro_nightly is the
+#     documented OOM risk on the 1 GB e2-micro — memory contention, not API
+#     contention, was the real hazard. macro_nightly runs ~170s, so 19:56
+#     clears it with margin.
+56 19 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.firm_treasury --rotate >> "$REPO_ROOT/logs/firm_treasury.log" 2>&1
 
 # 22. Internal bug ledger (Daily 20:40 IST, #84 Directive 5) — folds the
 #     20:30 ops sweep's problem lines + silent rejections/halts/vetoes
@@ -312,6 +317,24 @@ CRON_TZ=Asia/Kolkata
 #     15:50 keeps it clear of eod_summary (15:45) and the last intraday
 #     slot; rate-safe via the host-wide _throttle().
 50 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.intraday_tracker --darlings >> "$REPO_ROOT/logs/darlings_daily.log" 2>&1
+
+# 27. Bhavcopy EOD fetch (daily 19:15 IST) — MIGRATED FROM THE MAC 2026-08-04.
+#     The whole-exchange daily OHLC (~3,300 symbols/day) into
+#     data/lake/bhavcopy/. It ran on the Mac inside patience_basket's 19:15
+#     EOD chain, but macOS cron does not fire while the machine is asleep:
+#     audited 2026-08-04, the Mac captured only 7 of 11 recent weekdays and
+#     the missed days had NO log line at all (the job never ran, it did not
+#     fail). The VM never sleeps. Verified from this box before wiring:
+#     NSE serves the GCP IP (a real risk — NSE bot-blocks some scripted
+#     access), and the first run recovered 2026-07-31, a day the Mac missed.
+#     --backfill 5 is deliberate: fetch_day is idempotent ("already_have"),
+#     so each run self-heals up to 5 days of holes instead of only today.
+#     Source is NSE, NOT Dhan — no token, no rate-limit contention with any
+#     market-data job. 19:15 sits 5 min clear of news_processor (19:10) and
+#     earnings_calendar (19:20).
+#     NOTE: the Mac's patience_basket chain still fetches its own copy for
+#     tier grading; the two stores are per-machine and do not diverge.
+15 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.bhavcopy_clerk --backfill 5 >> "$REPO_ROOT/logs/bhavcopy_clerk.log" 2>&1
 
 # 24. Macro nightly heartbeat (Daily 19:50 IST) — the Dept-8 macro clock:
 #     FRED globals ingest -> NSE indices ingest -> regime declare() onto the

@@ -943,3 +943,128 @@ deploy time went unrecorded, which is precisely the gap this log closes.
 - **The merged `office_close` silently skipped Chrome and Ollama on its first real run — `set -o pipefail` + `grep -q` was returning "not running" for running apps, 2026-07-31.** Owner reported "office close didn't work". It had in fact half-worked, and the evidence separates the halves cleanly: the tracker was written at 21:57 with correct Jarvis formatting, and `pmset -g log` shows `Entering Sleep state due to 'Software Sleep pid=24128'` at **21:57:13** — that is the script's own `pmset sleepnow`, i.e. **the 07-21 never-slept defect really was fixed** (`Clamshell Sleep` follows at 21:57:36, the owner shutting the lid 23s later). But Chrome (PID 22970, started 21:48) and Ollama.app (PID 4797, started Jul 7) were still the SAME processes the next afternoon, so the quits never landed. **ROOT CAUSE, reproduced deterministically:** `app_running()` was `ps -axo comm= | grep -qF "..."`. `grep -q` exits on first match while `ps` is still writing, `ps` takes SIGPIPE, and under the script's `set -o pipefail` the pipeline returns **141** — so a RUNNING app reports as NOT running. Run side by side, the same function without `pipefail` reports Chrome/Claude/Ollama all running, and with `pipefail` reports **"Chrome: NOT running, Claude: running, Ollama: NOT running"** — which is exactly the observed outcome, Claude having been quit (its PID dates from the next day) while Chrome and Ollama survived. It is a RACE on where the match lands in `ps` output, which is why it never showed up in testing. FIX: no pipe at all — `case "$(ps -axo comm=)" in *marker*)`, which cannot raise SIGPIPE. Verified under `pipefail` against ground truth for five apps including two not running. **Two hypotheses tested and REJECTED before this one, rather than being shipped as the answer:** TCC/Automation permission (a read-only `tell application ... to get name` succeeded for both Chrome and Ollama) and Chrome's `exit_type: "Crashed"` in its Preferences (Chrome sets that WHILE RUNNING by design, so it carries no information about how the last session ended). **The deeper defect was that none of this was knowable:** every quit was `>/dev/null 2>&1` and the script wrote no log, so a tool that ends the session by sleeping the Mac left nothing to read the next morning. It now tees every line to `logs/office_close.log`, surfaces `osascript` stderr instead of discarding it, and — the actual behavioural fix — **VERIFIES each quit by polling for up to 10s and reporting `!! <app> STILL RUNNING`** plus a notification, instead of sending the event and assuming. A refusal no longer sleeps the Mac quietly on top of an app that ignored it.
 
 - **`office_open.command` cried wolf every morning — fixed 2026-07-31.** Its Mac-side line flagged `⚠️ NOT today — Office Close missed?` whenever `darling_tiers.json` was not dated today, but the EOD chain that writes it runs at **19:15**, so from midnight until then yesterday's table is the CORRECT state. The warning was therefore guaranteed to fire every morning regardless of whether anything was wrong, which is how a real signal gets trained out of the eye — and it contributed to the owner reading Office Open as broken. Now: `fresh` when today's, a plain "yesterday's; today's EOD chain runs 19:15" before 19:30, and the warning only after 19:30. Verified in both windows. No other behaviour changed; the VM half of the tool was already correct and its `gcloud` constants remain the canonical ones.
+
+## Issue 23 — Ollama served 24/7 with a 5-minute keep-alive on an 8GB Mac; the previous `OLLAMA_KEEP_ALIVE=0` fix had lapsed silently (2026-08-04, owner-reported "Ollama keeps eating my swap")
+
+- **Symptom:** owner reported Ollama starting in the background
+  unexpectedly and driving the Mac into swap, "and we've fixed this
+  before". Reported as a recurrence.
+
+- **Measured state at triage (facts, before any change):** `ollama serve`
+  (pid 4811) had been up since **7 Jul 2026** — 28 days. Supervisor app
+  `/Applications/Ollama.app/Contents/MacOS/Ollama` (pid 4797) also up
+  since 7 Jul, ppid 1. `server.log` recorded **2,159** POSTs to
+  `/v1/chat/completions` and **187** model loads, all from `127.0.0.1`.
+  Installed models: `qwen2.5:3b-instruct` 1.9GB, `phi3:mini` 2.2GB,
+  `llama3.2:3b` 2.0GB.
+
+- **ROOT CAUSE 1 — the previous fix never applied and could not persist.**
+  `launchctl getenv OLLAMA_KEEP_ALIVE` returned `0`, so the setting
+  looked present. It was not in effect. `ps -E -p 4811` showed the
+  running server's actual inherited environment to be only
+  `OLLAMA_MODELS`, `OLLAMA_NO_CLOUD`, `XPC_SERVICE_NAME` and
+  `__CFBundleIdentifier` — **no `OLLAMA_KEEP_ALIVE`**. Two independent
+  defects in one fix: (a) `launchctl setenv` applies only to processes
+  started *after* it runs, and pid 4811 predated it; (b) it is not
+  persisted anywhere (`grep` over `~/Library/LaunchAgents`, `.zshrc`,
+  `.zprofile`, `.bash_profile` found nothing), so it is wiped on every
+  reboot. The server therefore ran on Ollama's **default 5-minute
+  keep-alive** the whole time, holding ~2GB of weights resident after
+  every scheduled call.
+
+- **ROOT CAUSE 2 — the app is a supervisor; killing the server is
+  futile.** Reproduced deterministically during the fix: `kill -TERM`
+  on `ollama serve` (4811) was followed within seconds by a **new**
+  `ollama serve` (64951) whose ppid was **4797, the Electron app**.
+  `osascript -e 'quit app "Ollama"'` did **not** quit the app (4797
+  survived it) but did leave its serve child orphaned — so the
+  documented "graceful quit" both fails to stop the app and fails to
+  stop the server. Only `kill -TERM 4797` on the supervisor produced a
+  genuinely clean machine (zero ollama processes, port 11434 closed).
+  This is the mechanism behind "the issue is back": every
+  server-level fix is undone by the supervisor.
+
+- **ROOT CAUSE 3 — autostart is an app-level background item, not a
+  plist.** Nothing for Ollama exists in `~/Library/LaunchAgents` or
+  `/Library/Launch*`; `osascript` login-items listed only "Rave".
+  Autostart is `application.com.electron.ollama.30582007.30582013`
+  registered via **SMAppService**, visible only in `launchctl list` and
+  System Settings → General → Login Items & Extensions → Allow in the
+  Background. `launchctl print gui/501` also shows a separate
+  `"com.ollama.ollama" => disabled` — an earlier fix attempt that
+  disabled the wrong (already-inactive) service while the live app-level
+  item kept running.
+
+- **What actually triggered the model loads.** Not a third-party app and
+  not Addis: the callers are this repo's own LaunchAgents —
+  `com.adityagupta.alpha-edge-miner` (daily 21:00, **plus every login**,
+  `RunAtLoad = true`) via `src/edge_miner.py:205`, and
+  `com.alphatrading.evolution` (Saturdays 02:00) via
+  `src/evolution.py:774`, both reaching Ollama through
+  `src/local_parser.py`. Donna was checked and cleared — `grep` for
+  `11434|ollama` across `~/Documents/Claude/donna` returned **no hits**.
+
+- **Correction to the reported symptom, stated because it changes what
+  the fix is worth:** Ollama was **not** the live swap consumer at
+  triage. Idle server RSS was 4.7MB, app 17.6MB, `/api/ps` returned
+  `{"models":[]}`. The 4,520MB of swap in use was Chrome (~12 helpers)
+  and Claude.app (677MB + 239MB). Ollama's cost here is a real
+  ~2GB *periodic* spike around 21:00 and Saturday 02:00, not a
+  continuous one. No claim is made that this fix reclaims the 4.5GB.
+
+- **Resolution — strict on-demand architecture (owner directive
+  2026-08-04), all three layers verified on real runs:**
+  1. **`scripts/ollama_session.sh` (new)** — one door for server
+     lifetime, sourced by both LaunchAgent wrappers.
+     `ollama_session_start` polls `/api/tags` until the server genuinely
+     **answers** (Issue 9's lesson: a live pid is not a working service),
+     30s cap, and aborts early if the process dies during startup.
+     `ollama_session_stop` records `pgrep -P` children *before* killing
+     the parent — `ollama serve` forks an `ollama runner` per loaded
+     model, which would otherwise be reparented to launchd still holding
+     the model's RAM — then TERM, 10s grace, KILL, then reaps the
+     recorded runners. Deliberately **not** a blanket `pkill ollama`.
+     **Adoption rule:** if a server is already reachable at start it is
+     the owner's own GUI session; it is used and **not** killed on exit.
+     Sets `OLLAMA_HOST=127.0.0.1` (loopback only),
+     `OLLAMA_CONTEXT_LENGTH=4096` (the KV cache, not the weights, is
+     what pushes an 8GB Mac into swap), `MAX_LOADED_MODELS=1`,
+     `NUM_PARALLEL=1`.
+  2. **`scripts/mine_edges.sh` and `scripts/run_evolution.sh`** — source
+     the switch, `trap ollama_session_stop EXIT INT TERM`, then stop
+     explicitly and propagate the python exit code. **`exec` was removed
+     from both**, and this is the load-bearing detail: `exec` replaces
+     the shell, which silently discards the trap and would orphan the
+     exact server this change exists to kill. Both scripts `|| true` the
+     start — every consumer already fail-opens without Ollama (VM runs
+     none by design, decision #47), so a failed start must degrade to
+     "skip the LLM work", never to a failed job.
+  3. **`src/local_parser.py:_chat()`** — `"keep_alive": 0` added to the
+     request body. Sent per-request precisely because the server-env
+     version of this policy is what lapsed; a request-body flag cannot
+     drift out of sync with the process that honors it.
+
+- **Verification (actually run, not asserted):** adopt path — with a
+  server already up, `start` returned `owned=0` and `stop` left it
+  running. Owned path on a genuinely free port — `start` returned
+  `owned=1 pid=65018`, port answered, a real
+  `/v1/chat/completions` call returned **HTTP 200 in 4.4s**, `/api/ps`
+  returned **`{"models":[]}`** two seconds later (weights unloaded
+  immediately, confirming `keep_alive: 0` is honored on the
+  OpenAI-compat endpoint by this Ollama build), and after `stop`:
+  **zero ollama processes, port closed.** Scoped suite green: 72 passed
+  (`test_local_parser`, `test_edge_miner`, `test_evolution`,
+  `test_sleep_phase`, `test_text_intelligence`).
+
+- **Follow-up / not done:** (a) Disabling the SMAppService background
+  item is a **System Settings GUI action the owner must perform** — it
+  cannot be scripted reliably and has NOT been done as of this entry;
+  until it is, the app will resume supervising a 24/7 server at next
+  login and root cause 2 returns. The processes were killed at triage,
+  so the machine is clean *now*, but that state does not survive a
+  reboot on its own. (b) The stale `launchctl setenv OLLAMA_KEEP_ALIVE`
+  was left in place — harmless, and the architecture no longer depends
+  on it. (c) `com.adityagupta.alpha-edge-miner` still has
+  `RunAtLoad = true`, so the miner fires at every login; now bounded by
+  the on-demand server, but worth a separate decision on whether a
+  login-time run is wanted at all.

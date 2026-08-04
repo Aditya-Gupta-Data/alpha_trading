@@ -183,6 +183,17 @@ class LocalExtractor:
             # endpoint; older ones ignore it (the fence-stripping below
             # covers those).
             "response_format": {"type": "json_object"},
+            # Unload the weights the instant this call returns, instead of
+            # the server's default 5-minute keep-alive. Sent PER REQUEST
+            # on purpose: the same policy was set once as a server env var
+            # (`launchctl setenv OLLAMA_KEEP_ALIVE 0`) and lapsed silently
+            # — setenv does not survive a reboot and never reached the
+            # already-running server, so a ~2GB model sat resident on an
+            # 8GB Mac for a month (ledger Issue 23). A request-body flag
+            # cannot drift out of sync with the process that honors it.
+            # Costs a reload per call; on batch jobs that is the trade we
+            # want, and `unload()` above remains the explicit escape hatch.
+            "keep_alive": 0,
         }
         try:
             resp = httpx.post(f"{self.base_url}/chat/completions",

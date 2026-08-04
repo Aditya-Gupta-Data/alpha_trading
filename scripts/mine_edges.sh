@@ -7,9 +7,23 @@
 export PATH="/opt/homebrew/share/google-cloud-sdk/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:$PATH"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mkdir -p logs
+
+# STRICT ON-DEMAND OLLAMA (2026-08-04, ledger Issue 23). Ollama no longer
+# runs in the background; this script owns its lifetime. The trap fires on
+# every exit path — normal return, error, or launchd killing us — so the
+# server cannot outlive the job. NOTE: `exec` was deliberately REMOVED
+# below; exec replaces this shell and would silently skip the trap,
+# leaving the very orphaned server this change exists to prevent.
+. scripts/ollama_session.sh
+trap ollama_session_stop EXIT INT TERM
+ollama_session_start || true   # miner fail-opens; it re-checks ollama_up() itself
+
 # Interpreter PINNED, never resolved from PATH: /opt/homebrew/bin/python3
 # (bare, no packages) precedes the Framework python in the PATH above and
 # silently neutered the miner's LLM calls on 2026-07-09 — the third
 # unpinned-interpreter incident this week (Mac cron: CommandLineTools
 # python; VM cron: bare python3; LaunchAgent: Homebrew python).
-exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.edge_miner >> logs/edge_miner.log 2>&1
+/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.edge_miner >> logs/edge_miner.log 2>&1
+_rc=$?
+ollama_session_stop
+exit $_rc

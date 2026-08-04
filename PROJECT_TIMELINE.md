@@ -235,6 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-08-04 · 3 commits · 11 files touched
+
+- `dcf604d` docs(handover+ledger): Ollama is on-demand only — background agent must stay disabled
+- `ca6558f` chore(cron): migrate bhavcopy to the VM; stagger the one real collision
+- `d7d888f` feat(ingestion): capture desk + darling prices; name live_quote failures
+
+
 ### 2026-08-01 · 4 commits · 6 files touched
 
 - `0ec1a8b` docs(handover): 08-01 final — AD instrument validated, 0 admissions, 2026-03-27 logged as watch item

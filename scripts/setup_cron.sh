@@ -297,6 +297,22 @@ CRON_TZ=Asia/Kolkata
 #     DH-905 fix), so it can never starve the live loop.
 */15 9-15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.intraday_tracker >> "$REPO_ROOT/logs/intraday_15m.log" 2>&1
 
+# 26. Daily darling price tap (Mon-Fri 15:50 IST) — ONE close-of-session
+#     price for EVERY darling in data/darling_ids.json (~105 names), not
+#     just the funded book, into data/lake/darlings_daily.jsonl.
+#     WHY: the 15-minute sweep covers the watchlist + the desk's OPEN
+#     positions, so a darling we are merely WAITING on was never priced by
+#     anything on the VM — entry logic could not see a name reach its
+#     buying zone. That signal used to depend entirely on the Mac's 19:15
+#     bhavcopy chain, which only fires when the Mac is awake (audited
+#     2026-08-04: 4 of 11 recent weekdays missed, with no log line at all
+#     on the missed days). The VM is always up. Complements bhavcopy
+#     rather than replacing it: bhavcopy carries the whole exchange with
+#     OHLC, this carries the darlings with one close.
+#     15:50 keeps it clear of eod_summary (15:45) and the last intraday
+#     slot; rate-safe via the host-wide _throttle().
+50 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.intraday_tracker --darlings >> "$REPO_ROOT/logs/darlings_daily.log" 2>&1
+
 # 24. Macro nightly heartbeat (Daily 19:50 IST) — the Dept-8 macro clock:
 #     FRED globals ingest -> NSE indices ingest -> regime declare() onto the
 #     immutable ledger -> Stage-B forward scoring (SB-2, fail-open last).

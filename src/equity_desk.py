@@ -313,17 +313,36 @@ def market_data_muzzled() -> bool:
 def live_quote(ticker: str, ids_path=None, quote_by_id_fn=None):
     """LIVE price for a darling via its scrip-master id. None = honest
     absence (no id / no quote); raises never. Test environments never
-    place market calls."""
+    place market calls.
+
+    NAMES ITS FAILURES (2026-08-04). This seam used to swallow every
+    exception silently, so a rate-limit rejection, an expired token and a
+    socket timeout all reached the report card as the same bare `—` and
+    the cause could only be guessed at. It still fails OPEN — a dead
+    quote must never break a card — but it now says WHY on stderr, so
+    the next occurrence is diagnosable from the log instead of by
+    re-running the fetch by hand afterwards. Reason codes:
+      no_security_id  — the ticker is not in the darling id map
+      muzzled         — test environment, no market call attempted
+      <ExcType>: msg  — the provider call actually raised"""
     if quote_by_id_fn is None and market_data_muzzled():
         return None
     sid = security_id_for(ticker, ids_path=ids_path)
     if sid is None:
+        print(f"  (live_quote {ticker}: no_security_id — not in the "
+              "darling id map)")
         return None
     try:
         if quote_by_id_fn is None:
             from src.dhan_client import get_live_price_by_id as quote_by_id_fn
-        return quote_by_id_fn(sid)
-    except Exception:
+        px = quote_by_id_fn(sid)
+        if px is None:
+            print(f"  (live_quote {ticker} id={sid}: provider returned "
+                  "no price — rate limit or empty envelope)")
+        return px
+    except Exception as exc:
+        print(f"  (live_quote {ticker} id={sid} FAILED: "
+              f"{type(exc).__name__}: {exc})")
         return None
 
 

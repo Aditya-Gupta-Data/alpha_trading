@@ -301,3 +301,131 @@ def test_capture_depth_also_names_its_failures():
 def _tmp_lake():
     import tempfile, pathlib
     return pathlib.Path(tempfile.mkdtemp()) / "intraday.jsonl"
+
+
+# ---------------------------------------------------------------------
+# 2026-08-04 — the desk pass + the daily darling tap (owner directive
+# after a 15:45 fetch failure blanked the whole equity LAST/P&L column
+# with no stored price to fall back on).
+# ---------------------------------------------------------------------
+
+def _tmp_out():
+    """A throwaway lake path per test (the tracker appends, so each test
+    needs its own file)."""
+    import tempfile
+    from pathlib import Path as _P
+    return _P(tempfile.mkdtemp()) / "cap.jsonl"
+
+
+def _read_rows(path):
+    import json as _j
+    from pathlib import Path as _P
+    return [_j.loads(l) for l in _P(path).read_text().splitlines() if l.strip()]
+
+
+def test_desk_tickers_are_captured_with_their_own_src():
+    from src.ingestion import intraday_tracker as it
+    out = []
+    res = it.capture(price_fn=lambda t: 100.0, tickers=["AAA.NS"],
+                     desk=["FINEORG.NS"], desk_price_fn=lambda t: 4929.5,
+                     out_path=_tmp_out(), force=True, sleep_fn=lambda s: None)
+    rows = _read_rows(res["out"])
+    by_src = {r["src"]: r for r in rows}
+    assert by_src["dhan_live_15m"]["ticker"] == "AAA.NS"
+    assert by_src["dhan_live_15m_desk"]["ticker"] == "FINEORG.NS"
+    assert by_src["dhan_live_15m_desk"]["price"] == 4929.5
+    assert res["desk_tickers"] == 1 and res["desk_failed"] == 0
+
+
+def test_a_desk_ticker_already_in_the_watchlist_is_not_priced_twice():
+    from src.ingestion import intraday_tracker as it
+    calls = []
+    res = it.capture(price_fn=lambda t: 100.0, tickers=["FINEORG.NS"],
+                     desk=["FINEORG.NS"],
+                     desk_price_fn=lambda t: calls.append(t) or 1.0,
+                     out_path=_tmp_out(), force=True, sleep_fn=lambda s: None)
+    assert calls == []                       # desk door never consulted
+    assert res["desk_tickers"] == 0
+    assert len(_read_rows(res["out"])) == 1
+
+
+def test_a_dead_desk_quote_is_named_and_never_kills_the_watchlist_sweep():
+    from src.ingestion import intraday_tracker as it
+    res = it.capture(price_fn=lambda t: 100.0, tickers=["AAA.NS", "BBB.NS"],
+                     desk=["WABAG.NS"],
+                     desk_price_fn=lambda t: (_ for _ in ()).throw(
+                         RuntimeError("rate limited")),
+                     out_path=_tmp_out(), force=True, sleep_fn=lambda s: None)
+    assert res["captured"] == 2               # watchlist survived intact
+    assert res["desk_failed"] == 1
+    assert "WABAG.NS" in res["failed_tickers"]
+
+
+def test_a_transient_desk_failure_is_recovered_on_the_retry_pass():
+    from src.ingestion import intraday_tracker as it
+    seen = {"n": 0}
+
+    def flaky(t):
+        seen["n"] += 1
+        return None if seen["n"] == 1 else 2085.5
+
+    res = it.capture(price_fn=lambda t: 100.0, tickers=["AAA.NS"],
+                     desk=["WABAG.NS"], desk_price_fn=flaky,
+                     out_path=_tmp_out(), force=True, sleep_fn=lambda s: None)
+    assert res["desk_failed"] == 0
+    assert res["recovered"] == 1
+    assert any(r["src"] == "dhan_live_15m_desk" for r in _read_rows(res["out"]))
+
+
+def test_daily_darling_tap_prices_the_whole_universe():
+    from src.ingestion import intraday_tracker as it
+    from datetime import datetime
+    res = it.capture_darlings(price_fn=lambda t: 42.0,
+                              tickers=["FINEORG", "TCS", "WABAG"],
+                              clock=lambda: datetime(2026, 8, 4, 15, 50),
+                              out_path=_tmp_out(), sleep_fn=lambda s: None)
+    assert res["captured"] == 3 and res["failed"] == 0
+    rows = _read_rows(res["out"])
+    assert {r["ticker"] for r in rows} == {"FINEORG", "TCS", "WABAG"}
+    assert all(r["src"] == "dhan_darling_daily" for r in rows)
+    assert all(r["day"] == "2026-08-04" for r in rows)
+
+
+def test_daily_darling_tap_names_unmapped_symbols_never_guesses():
+    from src.ingestion import intraday_tracker as it
+    from datetime import datetime
+    res = it.capture_darlings(price_fn=lambda t: None if t == "GHOST" else 10.0,
+                              tickers=["TCS", "GHOST"],
+                              clock=lambda: datetime(2026, 8, 4, 15, 50),
+                              out_path=_tmp_out(), sleep_fn=lambda s: None)
+    assert res["captured"] == 1
+    assert res["failed_tickers"] == ["GHOST"]
+    assert all(r["price"] is not None for r in _read_rows(res["out"]))
+
+
+def test_daily_darling_tap_skips_the_weekend():
+    from src.ingestion import intraday_tracker as it
+    from datetime import datetime
+    res = it.capture_darlings(price_fn=lambda t: 1.0, tickers=["TCS"],
+                              clock=lambda: datetime(2026, 8, 1, 15, 50),
+                              out_path=_tmp_out())
+    assert res["skipped"] == "weekend" and res["captured"] == 0
+
+
+def test_live_quote_names_its_failure_instead_of_swallowing_it(capsys):
+    """The fail-quiet seam that made the 15:45 outage undiagnosable."""
+    from src import equity_desk
+    px = equity_desk.live_quote(
+        "FINEORG", quote_by_id_fn=lambda sid: (_ for _ in ()).throw(
+            RuntimeError("DH-905 rate limited")))
+    out = capsys.readouterr().out
+    assert px is None                          # still fails OPEN
+    assert "FINEORG" in out and "RuntimeError" in out
+    assert "DH-905 rate limited" in out
+
+
+def test_desk_universe_is_muzzled_under_pytest():
+    """A default that reads the live open book from inside the suite is
+    the 2026-07-27 failure class. Injection is the only way in."""
+    from src.ingestion import intraday_tracker as it
+    assert it.desk_tickers() == []

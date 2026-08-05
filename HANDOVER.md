@@ -42,6 +42,151 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-05: the STALENESS GUARD is live; the sector veto is DISABLED on purpose; and it immediately found a SECOND stale-data incident
+
+**No trading logic changed. No strategy added. No sizing, treasury or ledger
+touched.** One new module, one veto disarmed, one report section added.
+Suite **1,729 green** (was 1,700; +29 tests).
+
+### Why this session happened
+
+An X-ray of the whole data flow (`SYSTEM_XRAY.md`, written the same day) found
+that **`data/sector_index_bars.json` was 20 days stale and still feeding a LIVE
+bullish veto** — `analysis/sector_trend.is_sector_bullish` →
+`analysis/regime_filters._sector_bearish` → `advise()` →
+`options_proposer.build_proposal`. Nothing crashed, nothing logged, and every
+nightly ops card said ✅. A 50/200 SMA verdict computed on three-week-old bars
+is wrong QUIETLY, which is the worst failure mode this system has.
+
+### The immediate fix — the veto is OFF, deliberately, and it will re-arm itself
+
+"Fix the cron that refreshes it" was **not available: there is no such cron and
+never was.** Verified by grep over `src/`, `scripts/`, `archive/` and
+`research_archive/` — **`data/sector_index_bars.json` has no producer anywhere
+in the repository.** It was written once (yfinance, 2026-07-16) and has never
+been refreshed. `scripts/fetch_pre2019_sectors.py` writes NSE-format CSVs into
+`drop/` for `index_history`; it does not write this file.
+
+So the veto self-disables through the guard rather than through a hardcoded
+switch — **the moment a producer exists and the file goes fresh, the veto
+re-arms with no code change.** Today `advise()` returns:
+
+```
+block_bullish: False
+bullish_reason: smart-money/sector veto: no distribution;
+                sector veto SELF-DISABLED — data stale:
+                data/sector_index_bars.json is 19.7 days old
+                (limit 3.0 days = 3× its 24h cadence);
+                producer: NO PRODUCER on any schedule
+```
+
+**The smart-money half of the veto is untouched and still votes.** Only the
+sector leg is off. On the VM the file is ABSENT entirely, so the outcome there
+is identical (missing ⇒ stale) — the fix behaves the same on both boxes.
+
+### The new module — `src/staleness_guard.py`
+
+It does **not** invent a doctrine. The house already had one, correct, in four
+places (`equity_desk.TIERS_MAX_AGE_DAYS=3`, `IDS_MAX_AGE_DAYS=14`,
+`equity_entry_checks.LIQUIDITY_MAX_AGE_DAYS=7` fail-closed,
+`market_snapshot.read(max_age_seconds=)`). What was missing was a shared
+implementation and a REGISTRY, so that an artifact with **no** freshness check
+is visible as an omission instead of invisible.
+
+- **Stale ⇔ `age > tolerance × refresh_interval_hours`.** Tolerance forgives
+  missed runs, so weekends/holidays/one flaky night never cry wolf.
+- **Signal:** a caller-supplied content `as_of` when available (the more honest
+  one, and what the four existing checks use), else file mtime (O(1), no read).
+- **Two policies, and the DIRECTION is the whole point.** `IGNORE` = the
+  dependent component drops its opinion — used ONLY by `sector_index_bars`,
+  because a risk-reducing advisory's absence returns the system to its
+  documented baseline. `MONITOR` = alert only, never override — used wherever
+  the consumer already has its own correct check, because **self-disabling a
+  fail-CLOSED risk gate would make it fail OPEN, i.e. riskier.** There is
+  deliberately no policy that bypasses a fail-closed gate on staleness; if one
+  is ever wanted it is an owner ruling, not a flag. An anti-drift test locks
+  the `IGNORE` list to exactly one entry.
+- **The guard itself FAILS SAFE**, unlike almost everything else here: missing
+  file, unregistered name or a broken clock all yield `stale`. Precedent:
+  `sleep_phase._targets_the_real_brain_map` — a muzzle that fails open is not
+  a muzzle. Worst case the sector veto switches off, which is exactly where any
+  exception in `_sector_bearish` already landed.
+- **`producer=None` is a FINDING, not a blank.** A test refuses a registry row
+  with no producer unless it carries a note saying so.
+
+### The report — the ops card now screams
+
+`ops_monitor.run_sweep` scans the registry nightly and appends a 🚨 block naming
+every stale artifact and every component the guard switched off. A clean scan
+adds **nothing** — the card stays byte-identical to its pre-guard form. A stale
+FILE is never folded into the problem-LINE count: a log that says "failed" and
+a file that quietly froze are different diseases.
+
+### 🔴 WHAT THE GUARD FOUND ON DAY ONE — a second, unreported incident
+
+Running the registry against the live VM:
+
+| Artifact (VM) | Age | Consequence |
+|---|---|---|
+| `data/darling_tiers.json` | **`as_of` 2026-07-20 — 16 days** | `equity_desk` (`TIERS_MAX_AGE_DAYS=3`) has been refusing **all NEW equity entries since ~07-24**, silently |
+| `data/darlings_levels.json` | `as_of` 2026-07-20 | same vintage |
+| `data/darling_ids.json` | mtime 07-21, `as_of` **None** | ids file carries no build stamp |
+| `data/fo_liquidity.json` | **ABSENT on the VM** | `liquidity_filter` fail-closed (correct, but total) |
+| `data/sector_index_bars.json` | **ABSENT on the VM** | the veto this session disarmed |
+
+**The Mac → VM artifact ship has been dead for ~15 days.** The Mac's own copies
+are current (`darling_tiers.json` 08-04) — they are simply not arriving. That
+is why the 3 equity-desk positions opened 2026-07-22 are still the last equity
+entries the desk ever made: `equity_desk`'s own guard was working perfectly and
+**nothing reported it**, which is the identical disease this session was called
+in to fix.
+
+**NOT fixed here — out of scope, and it is infra, not the sector veto.** It is
+the single most valuable next action available.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/staleness_guard.py` | **NEW** — the guard + registry + alert payload + CLI |
+| `src/analysis/regime_filters.py` | `_sector_bearish(underlying, staleness_fn=)` consults the guard before letting `sector_trend` vote; docstring states the sector leg is off |
+| `src/ops_monitor.py` | `build_card(..., stale=)` additive section; `run_sweep(..., staleness_root=)` injectable seam; summary carries `stale_artifacts` / `disabled_components` / `stale_names` |
+| `tests/test_staleness_guard.py` | **NEW** — 21 tests |
+| `tests/test_regime_filters.py` | 5 new staleness tests; the 3 existing sector tests now inject a fresh verdict (their contract changed deliberately) |
+| `tests/test_ops_monitor.py` | 3 new tests; the 4 `run_sweep` call sites now pass `staleness_root=tmp` |
+| `MODULES.md` | rows for the new module + both test files; `regime_filters` row updated |
+| `SYSTEM_XRAY.md`, `PROP_ROADMAP.md` | **NEW** (earlier the same day) — the audit this fix came out of |
+
+### A regression this session deliberately avoided
+
+Wiring the scan into `run_sweep` made `ops_monitor`'s tests read the mtimes of
+real files in `data/` from inside pytest — **the fifth instance of the defect
+family HANDOVER has now recorded four times** (07-22, 07-23, 07-27, 08-04: a
+new default that reaches live state). Caught before it landed; the fix is the
+`staleness_root=` seam, and all four test call sites pass a tempdir.
+
+### ⚠️ Expected noise, so it is not a surprise
+
+Until a producer exists, the VM's nightly ops card will carry the 🚨 STALE DATA
+block **every night**. That is the correct cost of running with a radar down —
+it disappears the day the artifact is fixed or the registry row is removed with
+a reason. Do not silence it by loosening the tolerance.
+
+### ⏭️ Next immediate steps
+
+1. **Fix the Mac → VM artifact ship** (tiers/levels/ids/fo_liquidity, dead ~15
+   days). The equity desk cannot take a new entry until it lands.
+2. **Decide `sector_index_bars.json`'s fate** — either give it a producer (a
+   Mac-side yfinance refresher, since yfinance is a Mac-only dep and NSE
+   bot-blocks the VM) and the veto re-arms itself, or delete the artifact and
+   the sector leg of the veto together. Leaving it as-is is also a valid
+   choice, now that it is loud instead of silent.
+3. `data/darling_ids.json` carries **no `as_of`** — the guard falls back to
+   mtime for it. Adding a build stamp would make its check content-honest like
+   the others.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-04 (VM lane): equity desk is now PRICE-CAPTURED; bhavcopy migrated off the Mac
 
 **Two sessions ran today in parallel.** This block is the VM/ingestion lane

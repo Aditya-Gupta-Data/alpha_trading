@@ -235,8 +235,16 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-08-05 · 8 commits · 22 files touched
+### 2026-08-05 · 16 commits · 51 files touched
 
+- `b2e6ef1` docs(handover): 2026-08-05 final — V1 desk complete, Sunday code freeze in effect
+- `89d3dad` feat(dept2): the 3-D options desk — multi-index, macro routing, time horizons
+- `a22bef8` feat(dept2): equity options behind a physical-settlement gate; fix a test-isolation leak
+- `edd1290` fix(dept2): unblock G3 — range before direction, graded trend, butterfly wired
+- `84f55ff` feat(level-1): ATR trailing stops, dual-horizon sentiment storage, cross-asset tap
+- `44e64cc` feat(dept6): Sequence 1 — put the context back next to the numbers
+- `f6f7f38` fix(dept6): age the bug ledger — a fixed bug must stop looking like a live one
+- `8934884` feat(sequence-2): sanitize and re-wire the hanging orphans
 - `17af0f6` docs(handover): 08-05 — edge_miner transport hardened, Mac brain_map fresh again
 - `6a5ba3f` fix(infra): harden edge_miner's SSH transport — retries, keep-alives, no escaping timeout
 - `c2dcca2` docs(handover): 08-05 night — Dept 5 is waiting, not broken; the wait is now measured

@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-08-05 · 2 commits · 10 files touched
+
+- `6d5f29d` docs: SYSTEM_XRAY + PROP_ROADMAP, and the 08-05 handover block
+- `31ee6d2` fix(dept1): staleness guard — disarm the stale sector veto, scream on the ops card
+
+
 ### 2026-08-04 · 4 commits · 12 files touched
 
 - `b778e10` docs(handover): 08-04 VM lane — desk price capture, darling day-tap, bhavcopy migration

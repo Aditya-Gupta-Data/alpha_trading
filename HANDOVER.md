@@ -42,6 +42,163 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-05 (late): both loose threads CLOSED — the Mac→VM ship is alive, the sector veto RE-ARMED ITSELF
+
+**No trading logic changed. No strategy, sizing, treasury or ledger touched.**
+Suite **1,765 green** (was 1,729; +36). Two root causes found, both reproduced
+deterministically before anything was written.
+
+### 1. The Mac→VM ship — it did not "die 15 days ago". It NEVER ran.
+
+The ship is `firm_treasury.vm_push_file`, called at the end of
+`patience_basket.eod_chain`. `logs/patience_eod.log` shows
+**`artifacts_shipped: []` on every single run from 2026-07-22 onward** — the
+day after the feature landed (#83). There is no successful ship in the log,
+ever. It shipped broken and stayed broken.
+
+**Root cause, reproduced under a cron-like environment:**
+
+```
+ERROR: gcloud failed to load. You are running gcloud with Python 3.9,
+which is no longer supported by gcloud. ... set the CLOUDSDK_PYTHON
+environment variable to point to it.
+```
+
+`gcloud` is a `/bin/sh` wrapper that then goes looking for a Python **on
+PATH**. Under cron's minimal PATH it finds macOS's own `/usr/bin/python3` —
+**3.9.6**, a version gcloud dropped. Interactively it works, because
+Homebrew/Framework pythons sit earlier on PATH. So it failed **only
+unattended**, which is precisely why nobody saw it.
+
+`config.py` already carried the comment *"Absolute path because the 19:15
+cron's PATH is minimal"* — the team pinned **gcloud's own path** and stopped
+exactly one layer short of pinning **the interpreter gcloud itself picks up.**
+
+**Why it was invisible for 15 days** — a second, independent defect. The old
+body was `subprocess.run(cmd, capture_output=True, timeout=90)` plus a bare
+`except Exception: return False`. gcloud stated the cause in plain English
+every night and the function **captured it and threw it away.** Same disease
+as `live_quote` before 08-04.
+
+**Fixed:**
+
+| Fix | Where |
+|---|---|
+| `CLOUDSDK_PYTHON` pinned to `sys.executable` for every gcloud subprocess `src/` starts; an explicitly-set value is respected, never overwritten | `config.gcloud_env()` (new, beside `GCLOUD_PATH`) |
+| The push NAMES its failure (`vm ship FAILED [file] rc=N: <gcloud's own stderr>`); still fails open, never raises; timeout 90s → 120s (the edge miner has recorded real 120s SSH stalls to this VM) | `firm_treasury.vm_push_file` |
+| `artifacts_not_shipped` + a printed `VM SHIP INCOMPLETE — n/5 delivered; missing: …` | `patience_basket.eod_chain` |
+
+**Verified end to end under `env -i` with cron's PATH and no TTY: 5/5
+delivered.** On the VM afterwards:
+
+```
+darling_tiers.json      2026-08-05 15:00   as_of 2026-08-04T19:15:26
+darlings_levels.json    2026-08-05 15:00   as_of 2026-08-04T19:15:22
+darling_ids.json        2026-08-05 15:00
+fo_liquidity.json       2026-08-05 15:00   as_of 2026-08-04     ← FIRST TIME EVER
+sector_index_bars.json  2026-08-05 15:01                        ← FIRST TIME EVER
+```
+
+**`equity_desk`'s tier gate now reads `True` on the VM.** The desk has been
+refusing every new equity entry since ~07-24 against a 2026-07-20 tier table;
+it can trade again. Its own guard was working perfectly the whole time —
+nothing reported it.
+
+### The manifest grew 3 → 5 (`patience_basket.SHIP_MANIFEST`)
+
+- **`fo_liquidity.json`** — `equity_entry_checks.liquidity_filter` is
+  FAIL-CLOSED without it and it was **ABSENT on the VM entirely**, never
+  shipped once since the filter was wired on 07-20.
+- **`sector_index_bars.json`** — the new producer's output.
+
+### 2. `data/sector_index_bars.json` now has a producer — and the veto re-armed itself
+
+`scripts/fetch_sector_bars.py` (**MAC-ONLY**, never the VM: yfinance is a
+Mac-lane dep absent from `requirements.txt`, Yahoo blocks datacentre IPs, and
+`src/` must stay yfinance-free — the `fetch_pre2019_sectors.py` precedent).
+
+- Writes the **exact** shape `sector_trend` already reads. Close at index 3
+  and date at index 0 are load-bearing; an end-to-end test drives the real
+  `is_sector_bullish` so a tuple-order drift screams.
+- Indices and labels come from `config/sector_universe.json`, never a
+  hardcoded list; a shared index (BATTERY_EV/AUTO → `^CNXAUTO`) is fetched once.
+- **MERGE, not overwrite** (the `index_history` doctrine): union by date,
+  **stored wins on overlap**, atomic tmp+rename. A bad fetch can neither
+  shorten nor rewrite the 4,600-bar history.
+- **NULL-honest:** any missing/NaN/inf OHLC ⇒ the bar is DROPPED, never
+  zero-filled, never forward-filled.
+- Per-index fail-open, SB-404/SB-500 → `logs/sector_bars.jsonl`, and **a run
+  that refreshed nothing exits 1** (the `scrip_master` doctrine).
+
+**Live result: 7/7 indices refreshed to 2026-08-05**, and the payoff of last
+session's design landed with zero code change:
+
+```
+before:  sector veto SELF-DISABLED — data stale: … 19.7 days old
+after :  FINANCIALS sector trend ok
+```
+
+### ⚠️ Honest limitation of the data source
+
+**Yahoo's NSE sector coverage is genuinely sparse.** Over the same month
+`^CNXIT` returned 23 sessions but `^CNXAUTO` only 11 — and `^CNXFMCG`,
+`^CNXMETAL`, `^CNXENERGY` behave like AUTO (+5 sessions vs +14). The producer
+is doing the right thing by dropping incomplete bars; the holes are upstream.
+
+**This does not affect the live veto today:** `regime_filters.INDEX_SECTOR`
+maps only `NIFTY BANK → FINANCIALS` (`NIFTY 50 → None`), and **`^NSEBANK` is
+gap-free** — all 15 trading days from 07-16 to 08-05 present. If a future
+sector is ever wired into a decision, re-check its density first.
+
+### ⛏️ Owner action required — the new cron line (Mac cron install is TCC-blocked for Claude)
+
+```bash
+( crontab -l 2>/dev/null | grep -v 'fetch_sector_bars'; echo '10 19 * * 1-5 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 scripts/fetch_sector_bars.py >> logs/sector_bars.log 2>&1' ) | crontab -
+```
+
+19:10, five minutes ahead of the 19:15 EOD chain, so the chain ships a
+same-day file. `CRON_SETUP.md` carries the row and the full re-install line.
+
+### 🚩 The standing rule this session created
+
+**Any new code that shells out to `gcloud` must use `config.gcloud_env()`.**
+A bare `subprocess.run([GCLOUD_PATH, ...])` from cron is broken and will not
+say so. Written into `CRON_SETUP.md` beside the Mac crontab.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/config.py` | **NEW** `gcloud_env()` — pins `CLOUDSDK_PYTHON` |
+| `src/firm_treasury.py` | `vm_push_file` uses it, names failures, 120s timeout, `run_fn`/`env_fn` seams |
+| `src/analysis/patience_basket.py` | `SHIP_MANIFEST` constant (3→5), `artifacts_not_shipped`, loud incomplete-ship line |
+| `scripts/fetch_sector_bars.py` | **NEW** — the producer |
+| `tests/test_vm_ship.py` | **NEW** — 14 tests (the ship had ZERO) |
+| `tests/test_sector_bars_producer.py` | **NEW** — 22 tests |
+| `CRON_SETUP.md` | the 19:10 row, the re-install line, the gcloud-env rule |
+| `MODULES.md` | rows for the new script + both test files; `firm_treasury` and `patience_basket` rows updated |
+
+### ⏭️ Next immediate steps
+
+1. **Paste the cron line above.** Until then the sector file only refreshes
+   when someone runs the script by hand, and the guard will disarm the veto
+   again after 3 days.
+2. **Deploy to the VM** — `git pull` on `main`. The VM does not yet have
+   `staleness_guard`, so its 20:30 ops card is not scanning freshness yet.
+   The ship fix is Mac-side and is live from tonight's 19:15 run regardless.
+3. **Watch tonight's 19:15 chain** for `artifacts_shipped` with five entries
+   (or a loud `VM SHIP INCOMPLETE`). This is the first unattended exercise of
+   the fix; today's proof was a hand-run cron simulation.
+4. **Separate, untouched:** `edge_miner`'s VM pull is failing on real
+   **SSH/network timeouts** (`kex_exchange_identification: read: Operation
+   timed out`, `Broken pipe`) on 08-02 and 08-03 — a different fault from
+   this one, and out of scope here. It is why the Mac's `brain_map.db` copy
+   is stale, and it deserves its own look.
+5. `data/darling_ids.json` still carries **no `as_of`**; the guard falls back
+   to mtime for it.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-05: the STALENESS GUARD is live; the sector veto is DISABLED on purpose; and it immediately found a SECOND stale-data incident
 
 **No trading logic changed. No strategy added. No sizing, treasury or ledger

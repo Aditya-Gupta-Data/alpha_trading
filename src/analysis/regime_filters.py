@@ -13,6 +13,11 @@ directly — it only hands build_proposal a verdict.
      the index's heavyweight constituents. If >=2 of the top-3 show net
      institutional DISTRIBUTION (smart_money_trend) OR the parent sector is not
      structurally bullish (sector_trend), veto the bullish structure.
+     **The sector leg is guarded (2026-08-05):** `staleness_guard` checks
+     `sector_index_bars` before `sector_trend` is allowed to vote, and drops
+     its verdict when the bars are stale. That file currently has no producer
+     on any schedule, so the sector half of this veto is OFF until one exists;
+     the smart-money half is unaffected and still votes.
 
   2. WAR PLAYBOOK / CRISIS REGIME (Task 2): if VIX spikes abruptly, sits in
      panic, or the date falls in a known macro-shock window (macro_shocks),
@@ -53,11 +58,33 @@ def _distribution(underlying, deals_by_ticker, as_of=None):
             f"({', '.join(distributing)})" if distributing else "no distribution")
 
 
-def _sector_bearish(underlying):
-    """Parent sector NOT structurally bullish (below its 50/200 SMA). Fail-open."""
+def _sector_bearish(underlying, staleness_fn=None):
+    """Parent sector NOT structurally bullish (below its 50/200 SMA). Fail-open.
+
+    STALENESS GUARD (2026-08-05). `sector_trend` reads
+    `data/sector_index_bars.json`, which has NO producer on any schedule — it
+    was written once and has never been refreshed. A 50/200 SMA verdict off
+    stale bars is wrong QUIETLY, which is worse than absent, so the guard
+    self-disables this radar rather than let it vote. Dropping the verdict
+    returns the proposer to exactly the baseline behaviour it already has
+    whenever this function raises, so a disabled veto can never be worse than
+    a broken one. `staleness_fn` is the test seam.
+    """
     sector = INDEX_SECTOR.get(underlying)
     if not sector:
         return False, "no sector mapping"
+    try:
+        if staleness_fn is None:
+            from src import staleness_guard
+            staleness_fn = staleness_guard.check
+        verdict = staleness_fn("sector_index_bars")
+        if verdict.get("state") != "fresh":
+            return False, (f"sector veto SELF-DISABLED — data "
+                           f"{verdict.get('state')}: {verdict.get('reason')}")
+    except Exception as exc:
+        # The guard itself failing must not silently re-arm the veto it
+        # exists to police: no verdict, and say why.
+        return False, f"sector veto SELF-DISABLED — guard unavailable [{exc}]"
     try:
         from src.analysis import sector_trend
         v = sector_trend.is_sector_bullish(sector)

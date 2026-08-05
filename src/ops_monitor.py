@@ -23,7 +23,13 @@ One run (`python3 -m src.ops_monitor`, cron 20:30 IST):
      (weekday-aware): token renewal, suggestions, master scheduler,
      alerts, sleep phase. A job that silently never ran is a worse
      problem than one that logged an error.
-  4. CARD — posts a terse health card to Discord (fail-safe, and
+  4. STALENESS (2026-08-05) — runs `staleness_guard.scan()` over every
+     registered live-path data artifact and appends a 🚨 block to the card
+     naming anything that stopped updating, and which components the guard
+     SELF-DISABLED as a result. A job whose log looks healthy while its
+     output file quietly froze is invisible to steps 1-3; that is exactly
+     how `sector_index_bars.json` fed a live veto for 20 days.
+  5. CARD — posts a terse health card to Discord (fail-safe, and
      muzzled under pytest by the Phase 6J guard like everything else).
 
 Pure-Python + stdlib; every input (logs dir, clock, notifier)
@@ -305,12 +311,20 @@ def telemetry_line(t: dict) -> str:
 
 
 def build_card(problems: list, missing: list, when: str,
-               telemetry: dict = None) -> str:
-    """The terse nightly health card."""
+               telemetry: dict = None, stale: dict = None) -> str:
+    """The terse nightly health card.
+
+    `stale` is `staleness_guard.alert_payload(...)` — None (the default, and
+    the value on any clean scan) leaves this card BYTE-IDENTICAL to before the
+    guard existed. A stale artifact is never folded into the problem count: a
+    log line that says "failed" and a file that quietly stopped updating are
+    different diseases and the card must not blur them."""
     total = sum(p["count"] for p in problems)
     if not problems and not missing:
         card = (f"✅ **Ops sweep {when}** — all jobs ran, "
                 "no problem lines in any log.")
+        if stale:
+            card += "\n" + stale["text"]
         if telemetry:
             card += "\n" + telemetry_line(telemetry)
         return card
@@ -324,6 +338,8 @@ def build_card(problems: list, missing: list, when: str,
     if len(problems) > MAX_CARD_PROBLEMS:
         lines.append(f"…and {len(problems) - MAX_CARD_PROBLEMS} more — "
                      "see logs/problems.jsonl")
+    if stale:
+        lines.append(stale["text"])
     if telemetry:
         lines.append(telemetry_line(telemetry))
     return "\n".join(lines)
@@ -331,8 +347,14 @@ def build_card(problems: list, missing: list, when: str,
 
 def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
               problems_path: Path = PROBLEMS_PATH, now: datetime = None,
-              notify_fn=None) -> dict:
-    """The full nightly pass. Returns a summary dict (also printed)."""
+              notify_fn=None, staleness_root=None) -> dict:
+    """The full nightly pass. Returns a summary dict (also printed).
+
+    `staleness_root` is the guard's data root — None means the real repo, and
+    tests pass a tempdir so no assertion here ever depends on the mtime of a
+    file in `data/`. (Four separate regressions in this repo have come from a
+    new default that reaches live state from inside pytest; this is the seam
+    that stops the fifth.)"""
     now = now or datetime.now()
     when = now.strftime("%Y-%m-%d %H:%M")
     problems, new_state = sweep_logs(logs_dir, _load_state(state_path))
@@ -340,8 +362,20 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
     record_problems(problems, when, problems_path)
     _save_state(state_path, new_state)
 
+    # Data-freshness sweep (2026-08-05). Fail-open on the REPORT — a broken
+    # guard costs its own card section, never the ops sweep. (The guard's own
+    # per-artifact verdicts fail SAFE in the other direction; see its docstring.)
+    stale = None
+    stale_verdicts = []
+    try:
+        from src import staleness_guard
+        stale_verdicts = staleness_guard.scan(now=now, root=staleness_root)
+        stale = staleness_guard.alert_payload(stale_verdicts)
+    except Exception as e:
+        print(f"  (staleness scan skipped — failing open: {e})")
+
     telemetry = system_telemetry()
-    card = build_card(problems, missing, when, telemetry=telemetry)
+    card = build_card(problems, missing, when, telemetry=telemetry, stale=stale)
     print(card, flush=True)
     if notify_fn is None:
         def notify_fn(text):
@@ -359,6 +393,9 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
     return {"problem_lines": sum(p["count"] for p in problems),
             "distinct_problems": len(problems),
             "silent_jobs": len(missing), "when": when,
+            "stale_artifacts": (stale or {}).get("count", 0),
+            "disabled_components": (stale or {}).get("disabled", 0),
+            "stale_names": (stale or {}).get("names", []),
             "telemetry": telemetry}
 
 

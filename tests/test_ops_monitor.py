@@ -167,6 +167,48 @@ def test_card_formats_clean_and_dirty_nights():
     assert "more — see logs/problems.jsonl" in many
 
 
+def test_a_clean_staleness_scan_leaves_the_card_byte_identical():
+    """The guard is additive: stale=None (a clean scan) must produce exactly
+    the card that existed before staleness_guard was written."""
+    for args in ([], [{"log": "a.log", "line": "boom", "count": 3}]):
+        before = om.build_card(args, [], "2026-07-06 20:30")
+        assert om.build_card(args, [], "2026-07-06 20:30", stale=None) == before
+
+
+def test_a_stale_artifact_screams_on_the_health_card():
+    stale = {"count": 1, "disabled": 1, "names": ["sector_index_bars"],
+             "text": "🚨 **STALE DATA — 1 artifact(s), 1 component(s) "
+                     "SELF-DISABLED**\n• 🔴 DISABLED `sector_index_bars` — 20 days"}
+    clean_night = om.build_card([], [], "2026-08-05 20:30", stale=stale)
+    assert "✅" in clean_night           # jobs still ran — a different disease
+    assert "STALE DATA" in clean_night
+    assert "SELF-DISABLED" in clean_night
+
+    bad_night = om.build_card([{"log": "a.log", "line": "boom", "count": 1}],
+                              [], "2026-08-05 20:30", stale=stale)
+    assert "STALE DATA" in bad_night
+    # a stale FILE is never folded into the problem-LINE count
+    assert "1 problem line(s)" in bad_night
+
+
+def test_a_broken_staleness_guard_costs_its_section_not_the_sweep(monkeypatch):
+    """Fail-open on the REPORT: the ops sweep must survive a guard that
+    explodes, because the sweep is how we learn anything at all."""
+    from src import staleness_guard
+    monkeypatch.setattr(staleness_guard, "scan",
+                        lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    with tempfile.TemporaryDirectory() as tmp:
+        logs = make_logs(tmp, {"a.log": "an error appeared\n"})
+        out = om.run_sweep(logs_dir=logs,
+                           state_path=Path(tmp) / "state.json",
+                           problems_path=Path(tmp) / "problems.jsonl",
+                           now=datetime(2026, 8, 5, 20, 30),
+                           notify_fn=lambda text: True,
+                           staleness_root=tmp)
+    assert out["problem_lines"] >= 1
+    assert out["stale_artifacts"] == 0
+
+
 def test_run_sweep_end_to_end_persists_state_and_notifies():
     with tempfile.TemporaryDirectory() as tmp:
         logs = make_logs(tmp, {"a.log": "an error appeared\n"})
@@ -175,14 +217,14 @@ def test_run_sweep_end_to_end_persists_state_and_notifies():
         cards = []
         summary = om.run_sweep(logs_dir=logs, state_path=state_path,
                                problems_path=ledger, now=MONDAY,
-                               notify_fn=cards.append)
+                               notify_fn=cards.append, staleness_root=tmp)
         assert summary["distinct_problems"] == 1
         assert len(cards) == 1 and "Ops sweep" in cards[0]
         assert ledger.exists() and state_path.exists()
         # second run same night: nothing new, still a (clean-ish) card
         summary = om.run_sweep(logs_dir=logs, state_path=state_path,
                                problems_path=ledger, now=MONDAY,
-                               notify_fn=cards.append)
+                               notify_fn=cards.append, staleness_root=tmp)
         assert summary["distinct_problems"] == 0
         assert len(cards) == 2
 
@@ -196,7 +238,7 @@ def test_a_broken_notifier_never_breaks_the_sweep():
 
         summary = om.run_sweep(logs_dir=logs, state_path=logs / ".s.json",
                                problems_path=logs / "p.jsonl", now=MONDAY,
-                               notify_fn=boom)
+                               notify_fn=boom, staleness_root=tmp)
         assert summary["distinct_problems"] == 1  # sweep completed anyway
 
 

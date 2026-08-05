@@ -35,6 +35,19 @@ def _deal(side: str, value: float, days_ago: int = 5) -> dict:
 PERMISSIVE = {"block_bullish": False, "crisis": False}
 
 
+# Staleness-guard verdicts, injected so no test's outcome depends on the
+# mtime of a real file in data/ (the "a new default that reaches live state"
+# defect family — four instances in this repo already).
+def _FRESH(name):
+    return {"state": "fresh", "reason": f"{name} fresh (0.2 days old)"}
+
+
+def _STALE(name):
+    return {"state": "stale", "policy": "ignore",
+            "reason": f"data/{name}.json is 20.0 days old (limit 3.0 days); "
+                      "producer: NO PRODUCER on any schedule"}
+
+
 # ---------------------------------------------------------------- crisis_regime
 
 def test_crisis_on_vix_panic_level():
@@ -120,7 +133,7 @@ def test_sector_bearish_when_parent_sector_below_smas(monkeypatch):
     from src.analysis import sector_trend
     monkeypatch.setattr(sector_trend, "is_sector_bullish",
                         lambda s: {"bullish": False})
-    hit, why = RF._sector_bearish("NIFTY BANK")
+    hit, why = RF._sector_bearish("NIFTY BANK", staleness_fn=_FRESH)
     assert hit is True
     assert "FINANCIALS" in why
 
@@ -129,7 +142,7 @@ def test_sector_ok_when_parent_sector_bullish(monkeypatch):
     from src.analysis import sector_trend
     monkeypatch.setattr(sector_trend, "is_sector_bullish",
                         lambda s: {"bullish": True})
-    assert RF._sector_bearish("NIFTY BANK")[0] is False
+    assert RF._sector_bearish("NIFTY BANK", staleness_fn=_FRESH)[0] is False
 
 
 def test_sector_fails_open_on_missing_data(monkeypatch):
@@ -138,11 +151,86 @@ def test_sector_fails_open_on_missing_data(monkeypatch):
     def boom(s):
         raise FileNotFoundError("no sector bars on this box")
     monkeypatch.setattr(sector_trend, "is_sector_bullish", boom)
-    assert RF._sector_bearish("NIFTY BANK")[0] is False
+    assert RF._sector_bearish("NIFTY BANK", staleness_fn=_FRESH)[0] is False
 
 
 def test_nifty50_has_no_sector_mapping_by_design():
     assert RF._sector_bearish("NIFTY 50")[0] is False
+
+
+# ------------------------------------------------- the staleness guard (08-05)
+#
+# `sector_trend` reads data/sector_index_bars.json, which has NO producer on
+# any schedule. It sat 20 days stale while still voting on live proposals and
+# every ops card said ✅. These pin that it can no longer do that.
+
+def test_stale_sector_bars_disable_the_veto_entirely(monkeypatch):
+    """The bug, at the seam: even when sector_trend SCREAMS bearish, a stale
+    bars file means its verdict does not count."""
+    from src.analysis import sector_trend
+    monkeypatch.setattr(sector_trend, "is_sector_bullish",
+                        lambda s: {"bullish": False})     # would veto if fresh
+    hit, why = RF._sector_bearish("NIFTY BANK", staleness_fn=_STALE)
+    assert hit is False
+    assert "SELF-DISABLED" in why
+    assert "20.0 days old" in why
+
+
+def test_a_disabled_sector_veto_never_reaches_advise(monkeypatch):
+    """End to end through the REAL default path: stale bars + a bearish
+    sector + no distribution = a PERMISSIVE verdict, i.e. the proposer's
+    documented baseline."""
+    from src import staleness_guard
+    from src.analysis import sector_trend
+    monkeypatch.setattr(sector_trend, "is_sector_bullish",
+                        lambda s: {"bullish": False})     # would veto if fresh
+    monkeypatch.setattr(staleness_guard, "check", lambda name: _STALE(name))
+    v = RF.advise("NIFTY BANK", vix=14.0, deals_by_ticker={})
+    assert v["block_bullish"] is False
+    assert v["crisis"] is False
+    assert "SELF-DISABLED" in v["bullish_reason"]
+
+
+def test_the_smart_money_half_of_the_veto_still_votes_while_sector_is_off(monkeypatch):
+    """Disabling the sector radar must not disarm the distribution radar —
+    they are independent inputs to the same verdict."""
+    monkeypatch.setattr(RF, "_sector_bearish",
+                        lambda u, **kw: (False, "sector veto SELF-DISABLED — stale"))
+    deals = {"HDFCBANK.NS": [_deal("sell", 9e7)],
+             "ICICIBANK.NS": [_deal("sell", 8e7)],
+             "SBIN.NS": [_deal("buy", 5e7)]}
+    v = RF.advise("NIFTY BANK", vix=14.0, deals_by_ticker=deals)
+    assert v["block_bullish"] is True
+    assert "heavyweights distributing" in v["bullish_reason"]
+
+
+def test_a_broken_guard_disables_the_veto_rather_than_re_arming_it(monkeypatch):
+    """Fail-SAFE, not fail-open: if the guard itself explodes we must NOT
+    fall through to voting on data of unknown age."""
+    from src.analysis import sector_trend
+    monkeypatch.setattr(sector_trend, "is_sector_bullish",
+                        lambda s: {"bullish": False})
+
+    def boom(name):
+        raise RuntimeError("guard is on fire")
+    hit, why = RF._sector_bearish("NIFTY BANK", staleness_fn=boom)
+    assert hit is False
+    assert "SELF-DISABLED" in why and "guard unavailable" in why
+
+
+def test_the_default_path_consults_the_real_guard(monkeypatch):
+    """No injection: `_sector_bearish` must reach staleness_guard.check by
+    default, or the production path is unguarded no matter what the injected
+    tests prove."""
+    from src import staleness_guard
+    seen = []
+
+    def spy(name):
+        seen.append(name)
+        return {"state": "fresh", "reason": "spy"}
+    monkeypatch.setattr(staleness_guard, "check", spy)
+    RF._sector_bearish("NIFTY BANK")
+    assert seen == ["sector_index_bars"]
 
 
 # ------------------------------------------------------------------- advise()

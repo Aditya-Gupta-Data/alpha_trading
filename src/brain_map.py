@@ -118,6 +118,21 @@ def connect(db_path=None) -> sqlite3.Connection:
     for col in ("regime_trend", "regime_vix"):
         if col not in outcome_cols:
             conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} TEXT")
+    # DUAL-HORIZON SENTIMENT (Level 1, 2026-08-05). `news_processor` has
+    # emitted two scores since its v3 (2026-07-20) — short_term_catalyst
+    # (days/weeks: what a swing trade rides) and long_term_macro
+    # (months/structural) — but the Brain Map only ever stored the single
+    # collapsed `sentiment_score`, so the second dimension was computed
+    # nightly and thrown away at the door.
+    #
+    # ADDITIVE, exactly like post_mortem/regime above: two nullable REAL
+    # columns. Existing rows keep every value they have and simply read
+    # NULL here — NULL-honest, never backfilled with a guessed 0, which
+    # would be indistinguishable from a genuine neutral reading.
+    event_cols = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
+    for col in ("short_term_catalyst_score", "long_term_macro_score"):
+        if col not in event_cols:
+            conn.execute(f"ALTER TABLE events ADD COLUMN {col} REAL")
     conn.commit()
     return conn
 
@@ -409,6 +424,55 @@ def build_episode_snapshot(entry: dict, news=None) -> dict:
     }
 
 
+def set_event_horizons(conn, event_id, short_score, long_score) -> bool:
+    """Stamp the two dimensional sentiment scores onto an events row.
+
+    Separate from `_get_or_create_event` on purpose: that helper dedupes
+    on (date, ticker, type, tag) and returns an EXISTING id unchanged, so
+    a re-ingest must be able to refresh the scores without minting a new
+    event. NULL-honest — a None score is written as NULL, never 0, because
+    'we do not know' and 'genuinely neutral' are different readings and
+    the miners must be able to tell them apart. Never raises."""
+    if event_id is None:
+        return False
+    try:
+        conn.execute(
+            "UPDATE events SET short_term_catalyst_score = ?, "
+            "long_term_macro_score = ? WHERE id = ?",
+            (None if short_score is None else float(short_score),
+             None if long_score is None else float(long_score),
+             int(event_id)))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def horizon_divergence(conn, ticker: str = None, limit: int = 50) -> list:
+    """News events where the two horizons DISAGREE, newest first.
+
+    The reason the second dimension is worth storing: a +4 short-term
+    catalyst sitting on a -3 long-term macro read is a very different
+    trade from +4 on +3, and the collapsed single score cannot express
+    it. Read-only; returns [] on any error."""
+    try:
+        sql = ("SELECT id, date, ticker, tag, short_term_catalyst_score, "
+               "long_term_macro_score FROM events "
+               "WHERE event_type = 'news' "
+               "AND short_term_catalyst_score IS NOT NULL "
+               "AND long_term_macro_score IS NOT NULL "
+               "AND short_term_catalyst_score * long_term_macro_score < 0")
+        args = []
+        if ticker:
+            sql += " AND ticker = ?"
+            args.append(ticker)
+        sql += " ORDER BY date DESC, id DESC LIMIT ?"
+        args.append(int(limit))
+        return [dict(r) for r in conn.execute(sql, args)]
+    except Exception:
+        return []
+
+
 def ingest_existing(conn, journal_entries=None, news=None) -> dict:
     """Seed the Brain Map from data the engine already produces.
 
@@ -442,14 +506,25 @@ def ingest_existing(conn, journal_entries=None, news=None) -> dict:
 
     for ticker, info in (news.get("tickers") or {}).items():
         score = info.get("sentiment_score")
+        # Dual-horizon (2026-08-05): keep BOTH scores. `sentiment_score`
+        # stays == short-term for back-compat with every existing reader
+        # (daily_context.news_net, forecast, the evidence layer); the two
+        # dimensional columns are the new, additive truth.
+        short = info.get("short_term_catalyst_score", score)
+        long_ = info.get("long_term_macro_score")
         sentiment = None if score is None else (
             "positive" if score > 0 else "negative" if score < 0 else "neutral")
         focus = info.get("headline_focus") or "news"
         event_date = (info.get("last_updated") or news.get("generated") or "")[:10]
-        _get_or_create_event(conn, event_date, ticker, "news", _normalize_tag(focus),
-                             sentiment=sentiment,
-                             entities={"sentiment_score": score, "headline_focus": focus},
-                             source="news_sentiment")
+        eid = _get_or_create_event(
+            conn, event_date, ticker, "news", _normalize_tag(focus),
+            sentiment=sentiment,
+            entities={"sentiment_score": score,
+                      "short_term_catalyst_score": short,
+                      "long_term_macro_score": long_,
+                      "headline_focus": focus},
+            source="news_sentiment")
+        set_event_horizons(conn, eid, short, long_)
 
     after = _summary(conn)
     return {

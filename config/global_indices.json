@@ -1,0 +1,9 @@
+{
+  "_note": "Verified Dhan instrument ids for the cross-asset EOD tap (src/ingestion/cross_asset.py). SAME LAW as config/macro_securities.json: fill an entry ONLY with an id verified against Dhan's api-scrip-master-detailed.csv. A wrong id does not error — it silently prices the WRONG instrument (ledger Issues 14/15: LTIM delisted, TATAMOTORS demerged, both caught by a human, not by code). NEVER guess. Shape: {\"id\": \"...\", \"seg\": \"...\", \"inst\": \"...\", \"_symbol\": \"...\"}. An entry that is absent or incomplete is simply skipped by the clerk — that is the intended, honest default.",
+  "_status": "EMPTY BY DESIGN as of 2026-08-05. Global-index ids were NOT populated in this pass because no id was verified against the scrip master, and the project rule forbids writing an unverified one. The clerk therefore runs today with the two MCX commodity legs only (CRUDE, GOLD_INDIA, reused from macro_securities.json) and reports the global legs as absent rather than pricing something arbitrary.",
+  "_how_to_populate": "1) Download Dhan's api-scrip-master-detailed.csv. 2) Find the exact row for the index you want. 3) Copy SEM_SMST_SECURITY_ID -> id, the exchange segment string -> seg, the instrument string -> inst, and the trading symbol -> _symbol. 4) Add the entry below and re-run `python3 -m src.ingestion.cross_asset --dry-run` to confirm it returns bars before trusting it. 5) ENTITLEMENT CAVEAT: global/international segments are frequently NOT enabled on a retail Dhan account. If bars come back empty with a valid id, the account entitlement is the likely cause, not the id.",
+  "_candidates_not_yet_verified": [
+    "DOW JONES / S&P 500 / NASDAQ 100 — subject to the entitlement caveat above",
+    "NIFTY IT, NIFTY MIDCAP 50 and other NSE index futures are already reachable via NSE_EQ/IDX_I and do NOT belong in this file"
+  ]
+}

@@ -412,18 +412,117 @@ def _trackable(entry: dict) -> bool:
     return entry.get("outcome") is None and bool(plan and plan.get("stop_loss"))
 
 
+# ==================== ATR trailing stop (Level 1, 2026-08-05) ==========
+#
+# SCOPE, stated first because it is the safety property that matters:
+# this touches ONLY the plan-carrying LONG equity path (`_resolve`). It
+# does NOT touch `_resolve_spread`, which owns all 19 resolved options
+# trades and their 65% profit-take. That is not timidity, it is
+# correctness — a vertical spread is DEFINED-RISK: max loss is capped by
+# construction and the module already documents "defined-risk structures
+# need no stop trigger". A trailing stop on a capped-loss structure adds
+# no protection and would only cut winners early.
+#
+# WHAT IT DOES. The fixed bracket exits at the plan's original stop no
+# matter how far price has run. The trail ratchets a floor upward at
+# `TRAIL_ATR_MULT` x ATR below the highest high seen since entry, and
+# NEVER downward. Once armed it can only ever exit at or above the plan's
+# own stop, so it is strictly risk-REDUCING versus the bracket.
+#
+# ARMING IS OPT-IN AND PER-ENTRY: the plan must carry
+# `{"trailing": {"atr_mult": 2.0}}`. With it absent — every one of the
+# existing journal entries — `_resolve` is byte-identical to before.
+# Nothing retro-fits a trail onto a position that was opened without one.
+#
+# INTERACTION WITH THE EXISTING GATES (unchanged, and deliberately so):
+#   * the hard stop still wins if it trades first on the same bar (the
+#     module's standing pessimistic same-bar rule);
+#   * the target still closes the trade at the target;
+#   * `PLAN_MAX_DAYS` time-stop is untouched;
+#   * the 10% risk-of-ruin breaker and the 65% option profit-take live in
+#     `portfolio_manager` / `_resolve_spread` and are not on this path.
+
+TRAIL_ATR_N = 14
+TRAIL_ATR_MULT_DEFAULT = 2.0
+
+
+def atr_from_bars(bars: list, n: int = TRAIL_ATR_N):
+    """Wilder true range averaged over the last `n` bars of
+    (day, low, high, close) tuples. None below n+1 bars — an ATR from a
+    short history is a guess, and a guess must not move a stop.
+
+    Deliberately mirrors `analysis/dynamic_pricer.atr` (same TR formula,
+    same "None below n+1" rule); it is re-expressed here only because
+    that one takes dicts and this path carries tuples, and importing a
+    Dept-8 module into the settlement path would be a layering break."""
+    if not bars or len(bars) < n + 1:
+        return None
+    trs = []
+    for i in range(len(bars) - n, len(bars)):
+        prev_close = bars[i - 1][3]
+        low, high = bars[i][1], bars[i][2]
+        if prev_close is None or low is None or high is None:
+            return None
+        trs.append(max(high, prev_close) - min(low, prev_close))
+    return round(sum(trs) / n, 4)
+
+
+def trailing_config(entry: dict) -> dict | None:
+    """The entry's own trail spec, or None when it was opened without one."""
+    cfg = (entry.get("plan") or {}).get("trailing")
+    if not isinstance(cfg, dict):
+        return None
+    try:
+        mult = float(cfg.get("atr_mult", TRAIL_ATR_MULT_DEFAULT))
+    except (TypeError, ValueError):
+        mult = TRAIL_ATR_MULT_DEFAULT
+    if mult <= 0:
+        return None
+    return {"atr_mult": mult, "atr_n": int(cfg.get("atr_n", TRAIL_ATR_N))}
+
+
 def _resolve(entry: dict, bars: list):
     """(resolution, exit_price, exit_date) once the plan has resolved,
-    else None while it is still live."""
+    else None while it is still live.
+
+    Walks the bars once. When the entry carries a `trailing` spec, a
+    ratcheting ATR floor is maintained alongside the fixed bracket and
+    can trigger a `trail_hit` exit — see the block comment above for why
+    this is strictly risk-reducing and why spreads are excluded."""
     stop = entry["plan"]["stop_loss"]["price"]
     target = entry["plan"]["target"]["price"]
-    for day, low, high, _close in bars:
+    trail = trailing_config(entry)
+
+    trail_stop = None
+    peak = None
+    seen = []            # bars up to and including the current one, for ATR
+
+    for idx, (day, low, high, _close) in enumerate(bars):
+        seen.append(bars[idx])
         if day <= entry["date"]:
             continue  # never scan the entry day itself
+
+        # Same-bar pessimism, unchanged: the hard stop is checked first,
+        # then the trail (which always sits at or above it), then target.
         if low <= stop:
             return "stop_hit", stop, day
+        if trail_stop is not None and low <= trail_stop:
+            return "trail_hit", round(float(trail_stop), 2), day
         if high >= target:
             return "target_hit", target, day
+
+        # Ratchet AFTER the exit checks, so a floor can never be raised
+        # using the same bar it would then be tested against.
+        if trail:
+            peak = high if peak is None else max(peak, high)
+            a = atr_from_bars(seen, trail["atr_n"])
+            if a is not None:
+                candidate = peak - trail["atr_mult"] * a
+                # Never below the plan's own stop, and never downward.
+                candidate = max(candidate, float(stop))
+                trail_stop = (candidate if trail_stop is None
+                              else max(trail_stop, candidate))
+
     age = (date.today() - date.fromisoformat(entry["date"])).days
     if bars and age >= PLAN_MAX_DAYS:
         day, _low, _high, close = bars[-1]
@@ -439,6 +538,17 @@ def _verdict(entry: dict, resolution: str, pct: float) -> str:
     if resolution == "stop_hit":
         return ("LOSS — stop hit" if approved
                 else "GOOD SKIP — it would have hit the stop")
+    if resolution == "trail_hit":
+        # A trail exit is scored on the REALISED move, not assumed a win:
+        # a trail that ratchets and then gets hit below entry is still a
+        # loss, and calling it a win would flatter the record.
+        if pct >= MOVE_THRESHOLD:
+            return ("WIN — ATR trailing stop, gains locked" if approved
+                    else "MISSED GAIN — the trail would have banked it")
+        if pct <= -MOVE_THRESHOLD:
+            return ("LOSS — ATR trailing stop" if approved
+                    else "GOOD SKIP — the trail would have cut it")
+        return "flat (ATR trailing stop, went nowhere)"
     # time stop: score the drift, using review.py's same flat threshold
     if pct >= MOVE_THRESHOLD:
         return ("WIN — time stop, closed ahead" if approved
@@ -657,6 +767,9 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         try:
             from src.notifier import fire_broadcast
             fire_broadcast({
+                # A trail exit is a CLOSE, not a stop_loss page: the
+                # floor ratcheted above the plan's stop, so this is the
+                # trade working, not the thesis failing.
                 "event": "stop_loss" if resolution == "stop_hit" else "closed",
                 "ticker": entry["ticker"],
                 "date": exit_day,

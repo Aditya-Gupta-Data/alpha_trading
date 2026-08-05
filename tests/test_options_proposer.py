@@ -25,7 +25,22 @@ import src.plan_tracker as plan_tracker
 # the PIPELINE's mechanics — the cap's own binding behavior is tested
 # where it lives (test_equity_desk / the cap refusal below uses op's
 # module value directly).
-op.MAX_RISK_PER_TRADE_RS = 1_000_000.0
+#
+# 2026-08-05: this WAS a bare module-level assignment that never restored
+# the value, and import order leaked it into tests/test_simulator.py —
+# five tests there passed only in a full-suite run and failed alone. A
+# restoring fixture keeps the widening local to this file.
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _wide_risk_cap():
+    original = op.MAX_RISK_PER_TRADE_RS
+    op.MAX_RISK_PER_TRADE_RS = 1_000_000.0
+    try:
+        yield
+    finally:
+        op.MAX_RISK_PER_TRADE_RS = original
 
 
 def make_analysis(uptrend=True, fresh_cross=False, rsi=50.0, price=25000.0):
@@ -685,3 +700,154 @@ def test_the_live_read_now_carries_the_graded_inputs():
     from src import simulator
     sim = inspect.getsource(simulator.analysis_from_closes)
     assert "sma_fast_distance_pct" in sim      # replay must match live
+
+
+# ===== equity options + physical settlement (2026-08-05) ===============
+#
+# The desk was index-only. NSE STOCK options are PHYSICALLY SETTLED: an
+# ITM short leg held into expiry is a DELIVERY OBLIGATION on the full
+# notional — not the spread's max loss — and delivery margin escalates
+# through expiry week, so a "defined-risk" structure stops being
+# defined-risk exactly in its final days. Index options are CASH-settled
+# and carry none of this. Every test below pins that the two are treated
+# differently, in both directions.
+
+from src import plan_tracker as _pt
+
+
+def _in(days):
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
+def test_the_settlement_predicate_separates_stocks_from_indices():
+    assert op.is_equity_option("RELIANCE.NS") is True
+    assert op.is_equity_option("reliance.ns") is True          # case-blind
+    assert op.is_equity_option("NIFTY 50") is False
+    assert op.is_equity_option("NIFTY BANK") is False
+    assert op.is_equity_option(None) is False
+    # a name NOT on the curated liquid list is not tradeable as an option
+    assert op.is_equity_option("SUZLON.NS") is False
+
+
+def test_the_gate_BLOCKS_an_equity_option_inside_expiry_week():
+    ok, why = op.physical_settlement_gate("RELIANCE.NS", _in(6))
+    assert ok is False
+    assert "PHYSICAL SETTLEMENT GATE" in why
+    assert "delivery obligation" in why
+
+
+def test_the_gate_ALLOWS_an_index_option_at_the_same_distance():
+    """The whole point of the differentiation: identical expiry, opposite
+    verdict, because a cash-settled index has no delivery risk."""
+    assert op.physical_settlement_gate("NIFTY 50", _in(6)) == (True, None)
+    assert op.physical_settlement_gate("NIFTY BANK", _in(1)) == (True, None)
+    assert op.physical_settlement_gate("NIFTY 50", _in(0)) == (True, None)
+
+
+def test_the_gate_allows_an_equity_option_far_enough_out():
+    assert op.physical_settlement_gate("RELIANCE.NS", _in(7)) == (True, None)
+    assert op.physical_settlement_gate("RELIANCE.NS", _in(30)) == (True, None)
+
+
+def test_the_boundary_is_exactly_the_declared_minimum():
+    assert op.EQUITY_MIN_DAYS_TO_EXPIRY == 7
+    assert op.physical_settlement_gate("TCS.NS", _in(7))[0] is True
+    assert op.physical_settlement_gate("TCS.NS", _in(6))[0] is False
+
+
+def test_an_unreadable_expiry_on_a_STOCK_option_FAILS_CLOSED():
+    """An unknown settlement date on a physically-settled instrument is
+    precisely the case you must not guess at."""
+    for bad in (None, "", "not-a-date", 20260812):
+        ok, why = op.physical_settlement_gate("HDFCBANK.NS", bad)
+        assert ok is False and "fail-closed" in why
+    # ...but an index is unaffected: no delivery risk to assess
+    assert op.physical_settlement_gate("NIFTY 50", None) == (True, None)
+
+
+def test_the_gate_is_reachable_through_build_proposal():
+    """A gate nobody composed is not a gate."""
+    res = op.build_proposal(
+        "RELIANCE.NS", analysis=make_analysis(uptrend=False),
+        vix=13.0, expiry=_in(3), chain=make_chain(spot=1400.0, step=10.0),
+        book=dict(BIG_BOOK), prices={})
+    assert res["proposal"] is None
+    assert "PHYSICAL SETTLEMENT GATE" in res["reason"]
+
+
+def test_an_equity_option_far_from_expiry_DOES_build():
+    """Proves the gate blocks on settlement risk, not on being an equity."""
+    res = op.build_proposal(
+        "RELIANCE.NS", analysis=make_analysis(uptrend=False),
+        vix=13.0, expiry=_in(21), chain=make_chain(spot=1400.0, step=10.0),
+        book=dict(BIG_BOOK), prices={})
+    assert res["proposal"] is not None, res["reason"]
+    assert res["proposal"]["spread"]["strategy"] == "bear_put_spread"
+    assert res["proposal"]["spread"]["lot_size"] == 500      # RELIANCE lot
+
+
+def test_the_index_book_is_completely_unaffected_by_this_change():
+    """The 19 resolved index trades and every index cycle must route
+    exactly as before."""
+    res = op.build_proposal(
+        "NIFTY 50", analysis=make_analysis(uptrend=False), vix=13.0,
+        expiry=_in(8), chain=make_chain(), book=dict(BIG_BOOK), prices={})
+    assert res["proposal"] is not None
+    assert res["proposal"]["spread"]["lot_size"] == 65
+
+
+def test_expiry_selection_uses_the_stricter_clock_for_stocks():
+    expiries = [_in(3), _in(5), _in(9), _in(20)]
+    assert op.pick_expiry(expiries, underlying="NIFTY 50") == _in(9)
+    assert op.pick_expiry(expiries, underlying="RELIANCE.NS") == _in(9)
+    # only expiries inside the stock floor exist -> nothing usable
+    tight = [_in(3), _in(5)]
+    assert op.pick_expiry(tight, underlying="RELIANCE.NS") is None
+    # legacy call with no underlying keeps the original index clock
+    assert op.pick_expiry(expiries) == _in(9)
+
+
+# ------------------------------------------------ forced exit (open book)
+
+def test_an_open_STOCK_option_is_forced_out_before_expiry_WEEK():
+    """Entry protection alone is not enough: a position opened 30 days out
+    still walks into expiry week if nothing pushes it out."""
+    assert op.forced_exit_days_for("RELIANCE.NS") == 7
+    assert op.EQUITY_FORCED_EXIT_DAYS == 7
+
+
+def test_an_open_INDEX_option_keeps_the_two_day_rule():
+    assert op.forced_exit_days_for("NIFTY 50") == _pt.PRE_EXPIRY_EXIT_DAYS
+    assert _pt.PRE_EXPIRY_EXIT_DAYS == 2
+
+
+def test_the_tracker_and_the_live_bridge_ask_the_SAME_predicate():
+    """A live advisory and the settlement path that disagree about when a
+    position must be out is how you end up holding a delivery obligation."""
+    assert _pt._forced_exit_days("RELIANCE.NS") == 7
+    assert _pt._forced_exit_days("NIFTY 50") == 2
+    import inspect
+    from src import live_bridge
+    assert "_forced_exit_days" in inspect.getsource(live_bridge)
+
+
+def test_the_forced_exit_lookup_fails_SAFE_to_the_index_rule(monkeypatch):
+    """A broken import must never silently EXTEND a stock option's life."""
+    import builtins
+    real = builtins.__import__
+
+    def boom(name, *a, **k):
+        if name == "src.options_proposer":
+            raise ImportError("simulated")
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", boom)
+    assert _pt._forced_exit_days("RELIANCE.NS") == _pt.PRE_EXPIRY_EXIT_DAYS
+
+
+def test_the_curated_universe_carries_a_real_lot_size_for_every_name():
+    """An illiquid stock option cannot be exited at a fair price in the
+    week this guard forces you out — hence a short curated list."""
+    assert len(op.EQUITY_OPTION_UNDERLYINGS) <= 10
+    for sym, lot in op.EQUITY_OPTION_UNDERLYINGS.items():
+        assert sym.endswith(".NS") and isinstance(lot, int) and lot > 0
+    assert not (set(op.EQUITY_OPTION_UNDERLYINGS) & set(op.LOT_SIZES))

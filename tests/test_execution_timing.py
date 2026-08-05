@@ -19,10 +19,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
+
 from src import brain_map
 from src import execution_timing as et
+from src import options_proposer as op
 from src import simulator as sim
 from tests.test_simulator import make_history
+
+
+# Same isolation fix as tests/test_simulator.py (2026-08-05): this file
+# replays the SAME synthetic condor tape, whose max loss (~Rs.10.5k/lot)
+# sits just over the live Rs.10,000 cap (#84). It was passing only because
+# tests/test_options_proposer.py leaked a raised cap at module import. The
+# fixture makes the dependency explicit and restores the value after.
+
+@pytest.fixture(autouse=True)
+def _wide_risk_cap():
+    original = op.MAX_RISK_PER_TRADE_RS
+    op.MAX_RISK_PER_TRADE_RS = 1_000_000.0
+    try:
+        yield
+    finally:
+        op.MAX_RISK_PER_TRADE_RS = original
 
 
 # ------------------------------------------------------------ unit level

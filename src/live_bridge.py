@@ -278,7 +278,11 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
     if (max_profit_ps > 0
             and profit_ps >= pt.OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
         signal = "profit_take"
-    elif days_left <= pt.PRE_EXPIRY_EXIT_DAYS:
+    elif days_left <= pt._forced_exit_days(entry.get("ticker")):
+        # Stock options leave before expiry WEEK (physical settlement);
+        # index options keep the 2-day rule. Same one predicate as the
+        # tracker so the live advisory and the settlement path can never
+        # disagree about when a position must be out.
         signal = "pre_expiry_exit"
     else:
         signal = "hold"

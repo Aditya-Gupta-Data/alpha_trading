@@ -112,6 +112,19 @@ OPTION_PROFIT_TAKE_FRACTION = 0.65
 PRE_EXPIRY_EXIT_DAYS = 2
 
 
+def _forced_exit_days(underlying: str) -> int:
+    """Days-before-expiry at which an OPEN spread is force-closed.
+    Delegates to options_proposer, the ONE place that knows which
+    underlyings are physically settled — never re-derived from a suffix.
+    Fail-safe: any import problem keeps the index rule rather than
+    silently extending a stock option's life."""
+    try:
+        from src.options_proposer import forced_exit_days_for
+        return forced_exit_days_for(underlying)
+    except Exception:
+        return PRE_EXPIRY_EXIT_DAYS
+
+
 def _spread_trackable(entry: dict) -> bool:
     """Journal entries carrying a Phase 5 `spread` dict (strategy, legs,
     lot_size, lots, expiry, max_loss/max_profit — as built by
@@ -187,7 +200,14 @@ def _resolve_spread(entry: dict, bars: list):
         m_now = m_entry + profit_ps
         if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
             return "profit_take", m_now, frac_left, day
-        if days_left <= PRE_EXPIRY_EXIT_DAYS:
+        # PHYSICAL SETTLEMENT (2026-08-05): a STOCK option leaves before
+        # expiry WEEK, not two days out. An ITM short leg held to expiry
+        # is a delivery obligation on the full notional — not the spread's
+        # max loss — and NSE's delivery margin escalates through the final
+        # week, so a "defined-risk" structure stops being defined-risk
+        # exactly there. Index options are cash-settled and keep the
+        # existing 2-day rule.
+        if days_left <= _forced_exit_days(entry.get("ticker")):
             return "pre_expiry_exit", m_now, frac_left, day
     return None
 

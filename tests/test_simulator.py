@@ -22,8 +22,37 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
+
 from src import brain_map
+from src import options_proposer as op
 from src import simulator as sim
+
+
+# ---------------------------------------------------------------- isolation
+#
+# 2026-08-05: five tests in this file passed only in a FULL-SUITE run and
+# failed in isolation, because tests/test_options_proposer.py mutates
+# `op.MAX_RISK_PER_TRADE_RS` at MODULE level and never restores it. Import
+# order leaked the raised cap in here; run alone, this file got the real
+# Rs.10,000 cap and every synthetic condor (max loss ~Rs.10.5k/lot) was
+# correctly refused, so `proposed` was 0 and five assertions collapsed.
+#
+# The tests were not wrong — they were depending on another file's global.
+# This fixture makes the file self-sufficient AND restores the value, so
+# the dependency runs in neither direction. Same reason the synthetic
+# chains need it: they price a condor just over the live cap, and what
+# these tests exercise is the REPLAY PIPELINE, not the cap (whose own
+# binding behaviour is tested where it lives).
+
+@pytest.fixture(autouse=True)
+def _wide_risk_cap():
+    original = op.MAX_RISK_PER_TRADE_RS
+    op.MAX_RISK_PER_TRADE_RS = 1_000_000.0
+    try:
+        yield
+    finally:
+        op.MAX_RISK_PER_TRADE_RS = original
 
 
 def business_days(start: date, n: int) -> list:

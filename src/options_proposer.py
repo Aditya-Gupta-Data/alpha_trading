@@ -54,6 +54,109 @@ LOT_SIZES = {"NIFTY 50": 65, "NIFTY BANK": 30}
 # immediately close: skip expiries closer than this many days out.
 MIN_DAYS_TO_EXPIRY = 7
 
+
+# =========== EQUITY OPTIONS + PHYSICAL SETTLEMENT (2026-08-05) ==========
+#
+# The desk was index-only (NIFTY 50 / NIFTY BANK). Adding NSE stock options
+# adds ONE risk that indices do not have and that dwarfs every other
+# consideration here:
+#
+#   INDEX options are CASH-SETTLED. Worst case at expiry is a cash debit
+#   bounded by the structure's own max loss.
+#
+#   STOCK options are PHYSICALLY SETTLED. An in-the-money short leg held
+#   into expiry becomes a DELIVERY OBLIGATION — the full notional of the
+#   underlying, not the spread's max loss. NSE also escalates margin
+#   through expiry week (delivery margin phases in from ~E-4), so a
+#   defined-risk spread stops being defined-risk in its final days: the
+#   margin can multiply while the position is still "within max loss".
+#
+# So equity options get a STRICTER clock than the index book, in both
+# directions, and the two are kept apart by `is_equity_option()`:
+#
+#   ENTRY  : no NEW equity-option position inside
+#            EQUITY_MIN_DAYS_TO_EXPIRY (7). Index entries keep the
+#            existing MIN_DAYS_TO_EXPIRY.
+#   EXIT   : an OPEN equity-option position is forced out BEFORE expiry
+#            week — EQUITY_FORCED_EXIT_DAYS (7) — rather than the index
+#            book's PRE_EXPIRY_EXIT_DAYS (2). We leave before the delivery
+#            margin period starts, not during it.
+#
+# The universe is deliberately a SHORT hardcoded list of the most liquid
+# F&O names rather than "anything with options": an illiquid stock option
+# cannot be exited at a fair price in the week you must exit it, which is
+# exactly when this guard forces you to. Widening it is a deliberate edit.
+
+EQUITY_OPTION_UNDERLYINGS = {
+    "RELIANCE.NS": 500,
+    "HDFCBANK.NS": 550,
+    "ICICIBANK.NS": 700,
+    "INFY.NS": 400,
+    "TCS.NS": 175,
+}
+
+# Entry: no new stock-option position within this many days of expiry.
+EQUITY_MIN_DAYS_TO_EXPIRY = 7
+# Exit: force an open stock-option position out this many days before
+# expiry — i.e. before expiry week and its delivery-margin escalation.
+EQUITY_FORCED_EXIT_DAYS = 7
+
+
+def is_equity_option(underlying: str) -> bool:
+    """True for a PHYSICALLY-SETTLED stock option, False for a cash-settled
+    index. The one predicate every settlement-risk branch asks; nothing
+    else in the codebase may re-derive this from a string suffix."""
+    return str(underlying or "").upper() in EQUITY_OPTION_UNDERLYINGS
+
+
+def min_days_to_expiry_for(underlying: str) -> int:
+    """The entry clock for this underlying — stricter for stock options."""
+    return (EQUITY_MIN_DAYS_TO_EXPIRY if is_equity_option(underlying)
+            else MIN_DAYS_TO_EXPIRY)
+
+
+def physical_settlement_gate(underlying: str, expiry: str,
+                             today: date = None) -> tuple:
+    """(allowed, reason) for OPENING a position on `underlying`.
+
+    Index options pass unconditionally — they are cash-settled and the
+    existing expiry choice already handles them. Stock options must clear
+    EQUITY_MIN_DAYS_TO_EXPIRY. FAIL-CLOSED on an unparseable or missing
+    expiry: an unknown settlement date on a physically-settled instrument
+    is exactly the case you must not guess at."""
+    if not is_equity_option(underlying):
+        return True, None
+    today = today or date.today()
+    # Require the explicit YYYY-MM-DD form. Python 3.11+ also accepts the
+    # BASIC ISO form ("20260812"), so a stray int would parse and silently
+    # pass a safety gate — exactly the ambiguity a fail-closed check must
+    # refuse rather than resolve.
+    text = expiry if isinstance(expiry, str) else ""
+    try:
+        days = (date.fromisoformat(text) - today).days if text.count("-") == 2 \
+            else None
+    except ValueError:
+        days = None
+    if days is None:
+        return False, ("equity option with no readable expiry — physical "
+                       "settlement risk cannot be assessed (fail-closed)")
+    if days < EQUITY_MIN_DAYS_TO_EXPIRY:
+        return False, (f"PHYSICAL SETTLEMENT GATE: {days}d to expiry, "
+                       f"minimum {EQUITY_MIN_DAYS_TO_EXPIRY}d for a stock "
+                       "option — an ITM short leg becomes a delivery "
+                       "obligation, and delivery margin escalates through "
+                       "expiry week")
+    return True, None
+
+
+def forced_exit_days_for(underlying: str) -> int:
+    """How many days before expiry an OPEN position must be closed.
+    Stock options leave before expiry week; index options keep the
+    tracker's existing 2-day pre-expiry rule."""
+    from src.plan_tracker import PRE_EXPIRY_EXIT_DAYS
+    return (EQUITY_FORCED_EXIT_DAYS if is_equity_option(underlying)
+            else PRE_EXPIRY_EXIT_DAYS)
+
 # Condor short strikes sit ~this far OTM on each side (rounded to a real
 # chain strike); protective wings sit WING_STEPS strike-steps further out.
 SHORT_STRIKE_OTM_PCT = 2.0
@@ -155,12 +258,16 @@ def market_view(analysis: dict) -> str:
     return "bearish"
 
 
-def pick_expiry(expiries: list, today: date = None) -> str | None:
-    """First expiry at least MIN_DAYS_TO_EXPIRY days out, or None."""
+def pick_expiry(expiries: list, today: date = None,
+                underlying: str = None) -> str | None:
+    """First expiry at least `min_days_to_expiry_for(underlying)` days out,
+    or None. `underlying=None` keeps the original index clock, so every
+    existing caller is byte-identical."""
     today = today or date.today()
+    floor = min_days_to_expiry_for(underlying) if underlying else MIN_DAYS_TO_EXPIRY
     for exp in sorted(expiries or []):
         try:
-            if (date.fromisoformat(exp) - today).days >= MIN_DAYS_TO_EXPIRY:
+            if (date.fromisoformat(exp) - today).days >= floor:
                 return exp
         except ValueError:
             continue
@@ -218,7 +325,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                    book: dict = None, prices: dict = None,
                    risk_pct: float = None,
                    short_strike_otm_pct: float = None,
-                   advisory: dict = None) -> dict:
+                   advisory: dict = None, today: date = None) -> dict:
     """The full pipeline, every input injectable for offline tests.
 
     `risk_pct` overrides OPTIONS_RISK_PER_TRADE_PCT (e.g. vol_bridge may
@@ -257,11 +364,22 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                               f"crisis regime ({advisory.get('crisis_reason', '')})"}
 
     if expiry is None:
-        expiry = pick_expiry(get_expiry_list(underlying))
+        expiry = pick_expiry(get_expiry_list(underlying), underlying=underlying)
     if expiry is None:
         return {"proposal": None, "view": view, "vix": vix,
                 "reason": "no usable expiry (need >= "
-                          f"{MIN_DAYS_TO_EXPIRY} days out)"}
+                          f"{min_days_to_expiry_for(underlying)} days out)"}
+
+    # PHYSICAL SETTLEMENT GATE (2026-08-05). Checked AFTER the expiry is
+    # known and BEFORE a single leg is priced, because for a stock option
+    # this is the risk that is not bounded by the structure: an ITM short
+    # leg held into expiry is a delivery obligation, not a max loss. Index
+    # options pass through untouched — they are cash-settled.
+    settle_ok, settle_why = physical_settlement_gate(underlying, expiry,
+                                                     today=today)
+    if not settle_ok:
+        return {"proposal": None, "view": view, "vix": vix,
+                "reason": settle_why}
     if chain is None:
         chain = get_option_chain(underlying, expiry)
     if not chain or not chain.get("oc"):
@@ -275,7 +393,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                 "reason": "option chain too thin to build a spread"}
     spot = float(chain.get("last_price") or analysis["price"])
     atm = _nearest_strike(strikes, spot)
-    lot_size = LOT_SIZES.get(underlying, 75)
+    lot_size = LOT_SIZES.get(underlying) or EQUITY_OPTION_UNDERLYINGS.get(
+        str(underlying).upper(), 75)
     sc = StrategyConstructor(vix=vix, lot_size=lot_size)
 
     fill_bases = {}

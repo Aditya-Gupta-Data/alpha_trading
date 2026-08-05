@@ -247,3 +247,132 @@ if __name__ == "__main__":
         except AssertionError:
             print(f"FAIL  {t.__name__}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+# ------------------------------------------------ transport resilience
+#
+# 2026-08-05. The pull failed three nights running on three faces of one
+# problem — a fragile SSH hop from a home connection to us-central1:
+#   08-02  client_loop: send disconnect: Broken pipe
+#   08-02  subprocess.TimeoutExpired after 120s  (escaped as a TRACEBACK)
+#   08-03  kex_exchange_identification: read: Operation timed out
+# Each transient event killed the entire nightly cycle: no retry, no
+# keep-alive, and one uncaught exception path. The DB is 3.6MB and a healthy
+# pull measures ~10s, so this was never bandwidth — it was handshake
+# fragility. These pin the fix, with the clock injected so nothing sleeps.
+
+class _P:
+    def __init__(self, rc=0, stderr=""):
+        self.returncode, self.stderr, self.stdout = rc, stderr, ""
+
+
+def _sequence(*results):
+    """A runner that returns/raises each result in turn, recording calls."""
+    calls = []
+
+    def runner(cmd, **kw):
+        calls.append(cmd)
+        r = results[min(len(calls) - 1, len(results) - 1)]
+        if isinstance(r, Exception):
+            raise r
+        return r
+    return runner, calls
+
+
+def test_broken_pipe_is_retried_and_then_succeeds():
+    runner, calls = _sequence(
+        _P(255, "client_loop: send disconnect: Broken pipe"), _P(0))
+    slept = []
+    res = em.run_resilient(runner, ["gcloud"], "pull", sleep_fn=slept.append)
+    assert res.returncode == 0
+    assert len(calls) == 2
+    assert slept == [em.TRANSPORT_BACKOFF]
+
+
+def test_the_kex_handshake_timeout_is_retried():
+    runner, calls = _sequence(
+        _P(255, "kex_exchange_identification: read: Operation timed out"),
+        _P(255, "banner exchange: Connection to 35.239.254.99 port 22: "
+                "Operation timed out"),
+        _P(0))
+    res = em.run_resilient(runner, ["gcloud"], "pull", sleep_fn=lambda s: None)
+    assert res.returncode == 0 and len(calls) == 3
+
+
+def test_a_timeout_expired_no_longer_escapes_as_a_traceback():
+    """The 08-02 failure mode: subprocess.TimeoutExpired propagated straight
+    out of run_miner. It must become an ordinary failed result."""
+    import subprocess as sp
+    runner, calls = _sequence(sp.TimeoutExpired(["gcloud"], 180), _P(0))
+    res = em.run_resilient(runner, ["gcloud"], "pull", sleep_fn=lambda s: None)
+    assert res.returncode == 0 and len(calls) == 2
+
+
+def test_every_attempt_failing_returns_the_last_result_not_an_exception():
+    import subprocess as sp
+    runner, calls = _sequence(sp.TimeoutExpired(["gcloud"], 180))
+    res = em.run_resilient(runner, ["gcloud"], "pull", sleep_fn=lambda s: None)
+    assert res.returncode == 124
+    assert len(calls) == em.TRANSPORT_ATTEMPTS
+    assert "TimeoutExpired" in res.stderr
+
+
+def test_backoff_is_exponential_not_flat():
+    runner, _ = _sequence(_P(255, "Broken pipe"))
+    slept = []
+    em.run_resilient(runner, ["gcloud"], "pull", attempts=4, backoff=5,
+                     sleep_fn=slept.append)
+    assert slept == [5, 10, 20]
+
+
+def test_a_non_transient_failure_is_NOT_retried():
+    """Retrying a missing file or an auth refusal three times just costs
+    three minutes and hides the real reason."""
+    runner, calls = _sequence(_P(1, "ERROR: (gcloud.compute.scp) [Errno 2] "
+                                    "No such file or directory"))
+    res = em.run_resilient(runner, ["gcloud"], "pull", sleep_fn=lambda s: None)
+    assert res.returncode == 1
+    assert len(calls) == 1
+
+
+def test_the_transient_classifier_knows_the_three_real_failures():
+    for real in ("client_loop: send disconnect: Broken pipe",
+                 "kex_exchange_identification: read: Operation timed out",
+                 "banner exchange: Connection to 35.239.254.99 port 22: "
+                 "Operation timed out",
+                 "/usr/bin/scp: Connection closed",
+                 "exited with return code [255]"):
+        assert em._transient(real) is True
+    assert em._transient("No such file or directory") is False
+    assert em._transient("PERMISSION_DENIED") is False
+    assert em._transient("") is False
+
+
+def test_keepalive_flags_ride_on_both_transports_with_the_right_flag_name():
+    """`gcloud compute scp` does NOT accept the `-- -o ...` passthrough that
+    `gcloud compute ssh` does — it reads the flags as extra source paths
+    (verified live). The two flag names are not interchangeable."""
+    assert "--scp-flag=ServerAliveInterval=60" in em.SCP_FLAGS
+    assert "--ssh-flag=ServerAliveInterval=60" in em.SSH_FLAGS
+    assert "--scp-flag=ServerAliveCountMax=3" in em.SCP_FLAGS
+    assert "--scp-flag=ConnectTimeout=30" in em.SCP_FLAGS
+    assert all(f.startswith("--scp-flag=") for f in em.SCP_FLAGS)
+    assert all(f.startswith("--ssh-flag=") for f in em.SSH_FLAGS)
+
+
+def test_the_per_attempt_timeout_was_raised_above_the_one_that_expired():
+    assert em.TRANSPORT_TIMEOUT > 120
+
+
+def test_gcloud_runs_with_a_pinned_interpreter():
+    """The standing rule from the 08-05 ship fix — an unattended job must
+    not inherit whatever python happens to be on PATH."""
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return _P(0)
+    with mock.patch("subprocess.run", side_effect=fake_run):
+        em._run(["gcloud", "version"])
+    assert seen["env"]["CLOUDSDK_PYTHON"] == sys.executable
+    assert seen["timeout"] == em.TRANSPORT_TIMEOUT

@@ -183,9 +183,114 @@ def mine_new_triples(db_path: Path, extractor=None,
         conn.close()
 
 
-def _run(cmd: list, timeout: int = 120) -> subprocess.CompletedProcess:
+# --------------------------------------------------------------- transport
+#
+# THE 2026-08-05 FIX. The pull failed on three consecutive nights with three
+# different faces of one problem — a fragile SSH hop to a us-central1 box
+# from a home connection:
+#
+#   08-02  client_loop: send disconnect: Broken pipe          (stalled mid-copy)
+#   08-02  subprocess.TimeoutExpired after 120 seconds        (escaped as a
+#                                                              raw traceback)
+#   08-03  kex_exchange_identification: read: Operation timed out
+#          banner exchange: Connection to 35.239.254.99 port 22: timed out
+#
+# Each was a TRANSIENT network event that killed the whole nightly cycle,
+# because there was no retry, no keep-alive, and one uncaught exception path.
+# The DB is only 3.6 MB and a healthy pull measures ~10s, so none of this is
+# a bandwidth problem — it is handshake fragility.
+#
+# `gcloud compute scp` does NOT accept the `-- -o ...` passthrough that
+# `gcloud compute ssh` does (verified: it reads the flags as extra source
+# paths). Each tool has its own flag, and they are NOT interchangeable.
+SSH_TUNING = ("-o", "ServerAliveInterval=60",     # kill silent stalls before
+              "-o", "ServerAliveCountMax=3",      # the pipe breaks
+              "-o", "ConnectTimeout=30",          # fail the handshake fast...
+              "-o", "ConnectionAttempts=3")       # ...then let ssh itself retry
+
+SCP_FLAGS = [f"--scp-flag={f}" for f in SSH_TUNING]
+SSH_FLAGS = [f"--ssh-flag={f}" for f in SSH_TUNING]
+
+TRANSPORT_ATTEMPTS = 3           # total tries per transfer
+TRANSPORT_BACKOFF = 5.0          # seconds: 5, 10, (20) — exponential
+TRANSPORT_TIMEOUT = 180          # per attempt; was 120 and it expired
+
+
+def _run(cmd: list, timeout: int = TRANSPORT_TIMEOUT
+         ) -> subprocess.CompletedProcess:
+    """One gcloud invocation. `gcloud_env()` pins CLOUDSDK_PYTHON — the
+    standing rule from the 08-05 ship fix: gcloud's /bin/sh wrapper picks a
+    Python off PATH, and an unattended job must not inherit whatever that
+    is."""
+    from src.config import gcloud_env
     return subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=timeout)
+                          timeout=timeout, env=gcloud_env())
+
+
+def _transient(text: str) -> bool:
+    """Is this failure worth another try? Deliberately a NAMED list, not
+    'retry everything' — an auth failure or a missing file will fail
+    identically three times and just cost three minutes."""
+    t = (text or "").lower()
+    return any(s in t for s in (
+        "broken pipe", "kex_exchange_identification", "banner exchange",
+        "connection closed", "connection reset", "connection timed out",
+        "operation timed out", "timed out", "connection refused",
+        "temporary failure in name resolution", "network is unreachable",
+        "port 22", "exited with return code [255]"))
+
+
+def run_resilient(runner, cmd: list, what: str,
+                  attempts: int = TRANSPORT_ATTEMPTS,
+                  backoff: float = TRANSPORT_BACKOFF, sleep_fn=None):
+    """Retry a gcloud transfer through transient network faults.
+
+    Returns the last CompletedProcess (or a synthetic one carrying the
+    timeout as stderr) — it NEVER raises, so a TimeoutExpired can no longer
+    escape as a traceback the way it did on 08-02.
+
+    Every call site is retry-SAFE and each says why at the call site: the
+    pulls are read-only, the /tmp push overwrites, and the remote apply
+    replays `graph_engine.add_edge`, which is documented idempotent
+    (reinforce, never duplicate). Retrying a remote WRITE is only ever
+    acceptable because of that property — do not extend this to a writer
+    that lacks it."""
+    sleep_fn = sleep_fn or time.sleep
+    res = None
+    for attempt in range(1, max(1, attempts) + 1):
+        forced = False
+        try:
+            res = runner(cmd)
+            if getattr(res, "returncode", 1) == 0:
+                if attempt > 1:
+                    print(f"  (edge_miner: {what} succeeded on attempt "
+                          f"{attempt}/{attempts})", flush=True)
+                return res
+            detail = (getattr(res, "stderr", "") or "")[-300:]
+        except subprocess.TimeoutExpired as exc:
+            # Transient BY CONSTRUCTION, never by string match — a hung
+            # transfer is exactly the 08-02 failure this retry exists for,
+            # and its message carries none of the network vocabulary below.
+            detail = f"TimeoutExpired after {exc.timeout}s"
+            res = subprocess.CompletedProcess(cmd, 124, "", detail)
+            forced = True
+        except Exception as exc:                      # never raise upward
+            detail = f"{type(exc).__name__}: {str(exc)[:200]}"
+            res = subprocess.CompletedProcess(cmd, 125, "", detail)
+
+        last = attempt >= attempts
+        retryable = forced or _transient(detail)
+        print(f"  (edge_miner: {what} attempt {attempt}/{attempts} FAILED — "
+              f"{detail.strip()[:200]})", flush=True)
+        if last or not retryable:
+            if not retryable and not last:
+                print(f"  (edge_miner: {what} — not a transient fault, "
+                      "not retrying)", flush=True)
+            return res
+        delay = backoff * (2 ** (attempt - 1))
+        print(f"  (edge_miner: retrying {what} in {delay:g}s)", flush=True)
+        sleep_fn(delay)
+    return res
 
 
 def run_miner(force: bool = False, runner=_run, extractor=None,
@@ -212,18 +317,21 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
     if gcloud is None:
         return {"status": "skipped", "reason": "gcloud CLI not found"}
 
-    scp_base = [gcloud, "compute", "scp", f"--project={GCP_PROJECT}",
-                f"--zone={GCP_ZONE}", "--quiet"]
-    ssh_base = [gcloud, "compute", "ssh", VM, f"--project={GCP_PROJECT}",
-                f"--zone={GCP_ZONE}", "--quiet", "--command"]
+    scp_base = ([gcloud, "compute", "scp", f"--project={GCP_PROJECT}",
+                 f"--zone={GCP_ZONE}", "--quiet"] + SCP_FLAGS)
+    ssh_base = ([gcloud, "compute", "ssh", VM, f"--project={GCP_PROJECT}",
+                 f"--zone={GCP_ZONE}", "--quiet"] + SSH_FLAGS + ["--command"])
 
     with tempfile.TemporaryDirectory(prefix="edge_miner.") as tmp:
         tmp = Path(tmp)
         pulled = tmp / "brain_map.db"
 
         # 2. PULL the live DB
-        res = runner(scp_base + [f"{VM}:{VM_REPO}/data/brain_map.db",
-                                 str(pulled)])
+        # Retry-safe: a read-only pull of a 3.6MB file. This is the hop
+        # that failed on 08-02/08-03 and killed the whole cycle each time.
+        res = run_resilient(runner, scp_base +
+                            [f"{VM}:{VM_REPO}/data/brain_map.db", str(pulled)],
+                            "pull VM brain_map.db")
         if res.returncode != 0 or not pulled.exists():
             return {"status": "failed", "reason": "could not pull VM DB",
                     "detail": (res.stderr or "")[-300:]}
@@ -242,15 +350,22 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
             payload.write_text(json.dumps(new_triples))
             applier = tmp / "apply_edges.py"
             applier.write_text(_REMOTE_APPLY)
-            res = runner(scp_base + [str(payload), str(applier),
-                                     f"{VM}:/tmp/"])
+            # Retry-safe: an overwriting copy into the VM's /tmp.
+            res = run_resilient(runner, scp_base +
+                                [str(payload), str(applier), f"{VM}:/tmp/"],
+                                "ship edges to VM")
             if res.returncode != 0:
                 return {"status": "failed", "reason": "could not ship edges",
                         "detail": (res.stderr or "")[-300:]}
             apply_cmd = (f"cd {VM_REPO} && venv/bin/python3 "
                          "/tmp/apply_edges.py /tmp/new_edges.json; "
                          "rm -f /tmp/apply_edges.py /tmp/new_edges.json")
-            res = runner(ssh_base + [apply_cmd])
+            # Retry-safe ONLY because graph_engine.add_edge is an
+            # idempotent writer (reinforce, never duplicate): if the first
+            # attempt landed on the VM but the connection dropped before we
+            # saw the exit code, replaying writes nothing new.
+            res = run_resilient(runner, ssh_base + [apply_cmd],
+                                "apply edges on VM")
             if res.returncode != 0:
                 return {"status": "failed", "reason": "remote apply failed",
                         "detail": (res.stderr or res.stdout or "")[-300:]}
@@ -263,15 +378,28 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
                 src = DATA_DIR / name
                 if src.exists():
                     shutil.copy2(src, ARCHIVE_DIR / name)
-        runner(scp_base + [f"{VM}:{VM_REPO}/data/brain_map.db",
-                           f"{VM}:{VM_REPO}/data/journal.jsonl",
-                           str(DATA_DIR) + "/"])
+        # Retry-safe: read-only pulls. This return value used to be
+        # DISCARDED, so the Mac's data/ copies could silently stay stale
+        # while the run still reported "ok" — the same silent-failure family
+        # as the ship bug. Now it is checked and named (still non-fatal: the
+        # mining above already succeeded and is applied on the VM).
+        refresh = run_resilient(
+            runner, scp_base + [f"{VM}:{VM_REPO}/data/brain_map.db",
+                                f"{VM}:{VM_REPO}/data/journal.jsonl",
+                                str(DATA_DIR) + "/"],
+            "refresh Mac copies")
+        refreshed = getattr(refresh, "returncode", 1) == 0
+        if not refreshed:
+            print("  (edge_miner: LOCAL COPIES NOT REFRESHED — the Mac's "
+                  "brain_map.db/journal.jsonl are still yesterday's; the VM "
+                  "is unaffected and remains authoritative)", flush=True)
 
     _mark_success(now=now)
     summary = {"status": "ok", "outcomes_considered":
                stats.get("outcomes_considered"),
                "triples_written_locally": stats.get("triples_written"),
-               "new_edges_applied_to_vm": applied}
+               "new_edges_applied_to_vm": applied,
+               "local_copies_refreshed": refreshed}
     return summary
 
 

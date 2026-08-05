@@ -42,6 +42,57 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-05 (final): V1 OPTIONS DESK COMPLETE — Sunday code freeze is in effect
+
+**The last block of a very long day.** After the morning's infra work (below),
+five more commits landed and are LIVE on the VM (`89d3dad`):
+
+| Commit | What |
+|---|---|
+| `44e64cc` | Sequence 1 reporting honesty (Wilson bounds, drawdown, blocked-count, position age, performance countdown) |
+| `f6f7f38` | Bug-ledger aging — 74 rows triaged, ALL traced to already-fixed causes; 72 retired, 2 active |
+| `edd1290` | **G3 unblocked** — range-before-direction `market_view`, graded `classify_trend` wired, iron butterfly routed (90-session replay: 77/12/1 → 40/24/26 bearish/neutral/bullish) |
+| `a22bef8` | Equity options behind a **physical-settlement gate** (7d entry floor + 7d forced exit for stocks; indices keep cash-settled rules) + the test-isolation leak fixed at root |
+| `89d3dad` | **The 3-D desk**: universe 2→9 (FINNIFTY id 27 / MIDCPNIFTY id 442 verified), macro-trend `underlying_router` (reorders, never filters), time horizons (`horizon_for` + LEAPS-capable `pick_expiry`), **lot sizes verified against the scrip master — HDFCBANK 550→650 and TCS 175→225 were WRONG and are now corrected + test-pinned** |
+
+Suite **1,931 green**. Token renewed by the owner and live-verified (VIX 12.06).
+
+### ⛔ THE SUNDAY V1 CODE FREEZE (owner directive, this session's close)
+
+**No new execution features.** Thursday/Friday are observation sessions:
+watch the new equity-option and multi-index routing breathe in a live market.
+Hotfix only on real breakage — the 07-20 freeze doctrine applies.
+
+### Facts the next person must not re-learn
+
+1. **FINNIFTY/MIDCPNIFTY are MONTHLY-only.** NIFTY is the only NSE index still
+   carrying weeklies. The expansion bought breadth, not expiry frequency.
+2. **LEAPS (90–200d) fully satisfiable only on NIFTY** (chain reaches 2031);
+   BANKNIFTY ~11 months; everything else ~3 months by exchange listing.
+3. **The G3 routing change is live and NOT shadow-fired** (#63 flag raised
+   twice, owner deployed). The first sessions under it are the ones to watch.
+4. `market_view` falls back byte-identically for any analysis dict without the
+   SMA distances — the 19 journalled trades are untouched.
+5. NIFTY MID SELECT's router momentum leg honestly reads 0 until a midcap
+   series is added to `config/sector_universe.json` (owner watchlist item).
+6. The router's macro leg is empty until news rows carry
+   `long_term_macro_score` for these exact tickers; it degrades to pure
+   momentum ordering today.
+
+### ⏭️ Next session (Thursday, observation mode)
+
+1. Watch 09:10 `master_scheduler` — first live session with 9 underlyings,
+   the router, and the new `market_view`. Expect condor/butterfly proposals
+   if VIX sits in band and the flat read holds.
+2. Watch the first equity-option proposal: settlement gate reasons should
+   appear in refusals, never a stock entry inside 7d of expiry.
+3. `bash scripts/daily_health_and_queue.sh` as usual; the ops card now
+   carries the staleness scan.
+4. Midcap sector-universe addition is APPROVED work (analysis-side, not an
+   execution feature — freeze-compatible).
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-05 (night, later): edge_miner's SSH transport is hardened; the Mac's brain_map.db is FRESH again
 
 **Deployed to the VM this session** (`55e7a17`, `git pull` + `setup_cron.sh`,

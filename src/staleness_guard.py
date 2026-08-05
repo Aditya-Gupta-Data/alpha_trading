@@ -214,6 +214,20 @@ REGISTRY = {
             producer="VM cron — analysis.macro_nightly (19:50)",
         ),
         Artifact(
+            name="corporate_events",
+            rel_path="data/lake/events",
+            refresh_interval_hours=24, tolerance=4,
+            policy=MONITOR,
+            consumer="analysis.equity_entry_checks.corporate_risk_halt "
+                     "(HARD equity entry halt on STRUCTURAL_RISK/LEGAL_RISK)",
+            producer="VM cron — ingestion.corporate_events (19:25)",
+            note="Wired 2026-08-05. The consumer FAILS CLOSED on a stale "
+                 "feed by its own logic, so the policy here is MONITOR: the "
+                 "guard reports, the halt decides. Directory artifact — "
+                 "mtime is the newest partition's, which is what a "
+                 "date-partitioned lake updates on each write.",
+        ),
+        Artifact(
             name="bars_cache",
             rel_path="data/bars_cache.json",
             refresh_interval_hours=24, tolerance=30,

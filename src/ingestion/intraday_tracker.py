@@ -27,6 +27,77 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OUT_PATH = ROOT / "data" / "lake" / "intraday_15m.jsonl"
 
+
+# ------------------------------------------------ date partitioning (08-05)
+#
+# `intraday_15m.jsonl` was ONE flat append-only file: 25,782 rows / 2.8 MB
+# after three weeks, growing ~130 KB a day forever, on a VM with ~2 GB of
+# free disk. It is also the only dataset in `data/lake/` that was NOT
+# date-partitioned, so `lake.scan`/`read_day` could not read it and no
+# consumer could ever ask for "just that day".
+#
+# Rotation reuses the lake's own layout — `<dataset>/date=YYYY-MM-DD/<name>`
+# — so these files become readable through `lake.read_day("intraday_15m",
+# day)` like every other dataset, with no new reader and no new format.
+#
+# `out_path` keeps its meaning as the BASE for every caller and test; the
+# dated partition is derived from it, and the returned `out` is the real
+# file written.
+
+def partition_path(base_path, day: str):
+    """`.../intraday_15m.jsonl` + a day -> `.../intraday_15m/date=<day>/part.jsonl`"""
+    base = Path(base_path)
+    dataset = base.parent / base.name[:-len(".jsonl")] if \
+        base.name.endswith(".jsonl") else base.parent / base.name
+    return dataset / f"date={day}" / "part.jsonl"
+
+
+def append_rows(base_path, rows: list, day: str):
+    """Append `rows` to the day's partition. Returns the path written."""
+    target = partition_path(base_path, day)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "a") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    return target
+
+
+def migrate_flat_file(base_path=None, keep_original: bool = True) -> dict:
+    """ONE-SHOT, LOSSLESS: fan the legacy flat file out into day partitions.
+
+    Every row is routed by its OWN `ts` date, so the history keeps its true
+    shape rather than all landing on the migration day. A row with no usable
+    `ts` goes to `date=unknown` — never dropped and never guessed into a
+    date it might not belong to.
+
+    The original is RENAMED to `.migrated`, never deleted (RULE 4: look
+    before you overwrite, and leave the evidence). Idempotent: with the flat
+    file already gone this is a no-op.
+    """
+    base = Path(base_path or OUT_PATH)
+    if not base.exists():
+        return {"migrated": 0, "days": 0, "status": "no_flat_file"}
+    by_day, bad = {}, 0
+    for line in base.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            day = str(row.get("ts") or "")[:10]
+            if len(day) != 10 or day[4] != "-":
+                day, bad = "unknown", bad + 1
+        except ValueError:
+            row, day, bad = {"_unparsed": line}, "unknown", bad + 1
+        by_day.setdefault(day, []).append(row)
+    for day, rows in by_day.items():
+        append_rows(base, rows, day)
+    total = sum(len(v) for v in by_day.values())
+    if keep_original:
+        base.rename(base.with_suffix(base.suffix + ".migrated"))
+    return {"migrated": total, "days": len(by_day), "undated": bad,
+            "status": "ok"}
+
 # How many failed ticker names a summary line may carry. Enough to diagnose
 # the usual "the same 2 are always dead", short enough that a token outage
 # (every ticker fails) doesn't write a wall of text every 15 minutes.
@@ -190,10 +261,10 @@ def capture(price_fn=None, clock=None, tickers=None,
         desk_failed = still
 
     # Append-only lake write (one line per ticker); atomic enough for a
-    # 15-min cadence — each line is a self-contained JSON record.
-    with open(out_path, "a") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+    # 15-min cadence — each line is a self-contained JSON record. Since
+    # 2026-08-05 it lands in the DAY's partition (see partition_path) so the
+    # file cannot grow without bound and lake.read_day can read it.
+    out_path = append_rows(out_path, rows, ts[:10])
 
     # NAME THE DEAD (2026-07-20). This used to report only `failed: 2`, so
     # the VM logged the same two silent tickers every 15 minutes for days
@@ -250,9 +321,7 @@ def capture_depth(quote_fn=None, clock=None, tickers=None,
         rows.append({"ts": ts, "ticker": t, "best_bid": best_bid,
                      "best_ask": best_ask, "spread": spread,
                      "bids5": bids, "asks5": asks, "src": "dhan_depth_15m"})
-    with open(out_path, "a") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+    out_path = append_rows(out_path, rows, ts[:10])
     return {"ts": ts, "captured": len(rows), "failed": len(failed_tickers),
             "failed_tickers": failed_tickers[:MAX_NAMED_FAILURES],
             "out": str(out_path)}
@@ -338,9 +407,7 @@ def capture_darlings(price_fn=None, clock=None, tickers=None, out_path=None,
             recovered += 1
         failed = still
 
-    with open(out_path, "a") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+    out_path = append_rows(out_path, rows, day)
     return {"ts": ts, "day": day, "captured": len(rows), "failed": len(failed),
             "failed_tickers": failed[:MAX_NAMED_FAILURES],
             "recovered": recovered, "tickers": len(tickers),

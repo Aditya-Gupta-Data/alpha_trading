@@ -70,10 +70,10 @@ STALE_FRAME_DAYS = 3         # newest frame older than this => accrual STOPPED
 # "today's frames may be degraded or missing". Problem lines elsewhere
 # (scheduler, tracker, renewals) are real but not discovery's business.
 INGESTION_LOGS = frozenset({
-    "news_processor.log", "rss_ingester.log", "deals_tracker.log",
+    "news_processor.log", "deals_tracker.log", "corporate_events.log",
     "flows_tracker.log", "earnings_calendar.log", "daily_archiver.log",
     "chain_archiver.log",
-})
+})   # rss_ingester dropped 2026-08-05 with its cron; corporate_events added
 
 
 # ----------------------------------------------------------- skip ledger

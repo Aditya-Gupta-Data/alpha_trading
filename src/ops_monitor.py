@@ -116,7 +116,13 @@ EXPECTED_JOBS = {
     "earnings_calendar.log": False,  # daily 19:20 IST (results dates)
     "flows_tracker.log": False,      # daily 19:35 IST (FII/DII cash flows)
     "news_processor.log": False,     # daily 19:10 IST (Gemini news sentiment)
-    "rss_ingester.log": False,       # daily 18:50 IST (official-RSS news pull)
+    # rss_ingester.log REMOVED 2026-08-05 with its cron (Sequence 2).
+    # A heartbeat for a job that no longer runs flags SILENT every
+    # night — and health_gate turns that into a permanent block on
+    # discovery/nightly, so the miner would never run even at 60
+    # frames. Restore this line and the cron together, or neither.
+    "corporate_events.log": False,   # daily 19:25 IST (NSE announcements
+                                     # -> the corporate_risk_halt feed)
     "discovery_nightly.log": False,  # daily 20:20 IST (gated miner pass #76,
                                      # pre-sweep like every job here — the log
                                      # is touched even on a gate-skip, so

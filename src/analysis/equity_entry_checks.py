@@ -142,9 +142,137 @@ def never_short_darling(proposal: dict, queue_path=None, **_) -> tuple:
     return (True, None)
 
 
+# --------------------------------------------------- corporate risk (08-05)
+
+RISK_FLAGS = ("STRUCTURAL_RISK", "LEGAL_RISK")
+RISK_LOOKBACK_DAYS = 90        # how long a filed risk event keeps blocking
+
+
+def _events_as_of(lake_root=None):
+    """The newest partition day in the events lake, or None when there is
+    no lake at all (None => the guard falls back to mtime, and a missing
+    directory reads as `missing`, which the halt treats as not-fresh)."""
+    try:
+        from src import lake
+        days = lake.list_days("events", root=lake_root)
+        return days[-1] if days else None
+    except Exception:
+        return None
+
+
+def recent_risk_events(symbol: str, today: date = None,
+                       lookback_days: int = RISK_LOOKBACK_DAYS,
+                       lake_root=None) -> list:
+    """Every STRUCTURAL_RISK / LEGAL_RISK announcement filed for `symbol`
+    inside the lookback window, newest first.
+
+    Reads the `events` lake that `ingestion/corporate_events` writes —
+    demerger / scheme of arrangement / slump sale (STRUCTURAL_RISK) and
+    SEBI order / fraud / insolvency / NCLT / auditor resignation
+    (LEGAL_RISK). Point-in-time: an announcement is only visible from its
+    own `as_of` day forward, so a backtest can never see tomorrow's filing.
+    Never raises — an unreadable lake returns []."""
+    from src import lake
+    today = today or date.today()
+    start = (today - timedelta(days=lookback_days)).isoformat()
+    end = today.isoformat()
+    sym = (symbol or "").upper().replace(".NS", "")
+    if not sym:
+        return []
+    hits = []
+    try:
+        for _, row in lake.scan("events", start=start, end=end,
+                                root=lake_root):
+            if not isinstance(row, dict):
+                continue
+            if (row.get("symbol") or "").upper() != sym:
+                continue
+            if any(f in RISK_FLAGS for f in (row.get("flags") or [])):
+                hits.append(row)
+    except Exception:
+        return []
+    return sorted(hits, key=lambda r: str(r.get("as_of") or ""), reverse=True)
+
+
+def corporate_risk_halt(proposal: dict, today: date = None,
+                        lake_root=None, staleness_fn=None, **_) -> tuple:
+    """HARD ENTRY HALT on a filed structural or legal risk event.
+
+    A demerger reprices the instrument underneath us (ledger Issue 15:
+    TATAMOTORS demerged into TMPV/TMCV and we were still quoting the old
+    id). A SEBI order or an auditor resignation is the market telling us
+    the fundamentals we screened on may not be real. Neither is something
+    a price-based entry model can see, so this blocks on the FILING, not
+    on the chart.
+
+    FRESHNESS IS PART OF THE VERDICT. `corporate_events` has no producer
+    on any schedule — the lake currently ends 2026-07-16 — and a halt that
+    reads a dead feed returns "no risk found" for every ticker forever.
+    That is not a safety feature, it is theatre, and it is exactly the
+    failure `staleness_guard` exists to stop. So:
+
+      fresh feed + risk event   -> BLOCK (fail-closed, as directed)
+      fresh feed + no event     -> allow
+      STALE/absent feed         -> BLOCK, and say the feed is stale
+
+    The stale branch is fail-CLOSED on purpose and it is the one debatable
+    call in this module. The alternative — allowing entries while claiming
+    a risk check ran — is how `sector_index_bars` fed a live veto for 20
+    days. A halt whose evidence is missing must not pretend it cleared
+    anything. If this proves too blunt in practice it is an owner ruling
+    to soften, not a quiet edit.
+    """
+    if proposal.get("direction") == "short":
+        return (True, None)               # this halt guards LONG entries only
+    symbol = proposal.get("symbol")
+    if not symbol:
+        return (True, None)
+
+    # PYTEST MUZZLE (the desk_tickers / sleep_phase Task-K precedent). With
+    # neither seam injected this default reads the REAL events lake and the
+    # REAL staleness registry — the "a new default that reaches live state"
+    # defect family, five instances already. Under pytest an uninjected call
+    # ABSTAINS so the suite stays hermetic; tests that mean to exercise this
+    # halt pass lake_root= and staleness_fn= explicitly, and every one of
+    # them does. PYTEST_CURRENT_TEST is set by pytest alone, so production
+    # can never take this branch.
+    import os
+    if os.environ.get("PYTEST_CURRENT_TEST") and \
+            lake_root is None and staleness_fn is None:
+        return (True, None)
+
+    try:
+        if staleness_fn is None:
+            from src import staleness_guard
+            staleness_fn = staleness_guard.check
+        # The lake's newest PARTITION DAY is the honest freshness signal for
+        # a date-partitioned dataset — a directory's mtime only says when a
+        # folder was last touched, not what day the data covers.
+        verdict = staleness_fn("corporate_events",
+                               as_of=_events_as_of(lake_root))
+        if verdict.get("state") != "fresh":
+            return (False, "corporate-risk feed "
+                           f"{verdict.get('state')} — cannot clear "
+                           f"{symbol} of filed risk events "
+                           f"({verdict.get('reason')})")
+    except Exception as exc:
+        return (False, f"corporate-risk feed unreadable [{exc}] — "
+                       f"cannot clear {symbol}")
+
+    hits = recent_risk_events(symbol, today=today, lake_root=lake_root)
+    if hits:
+        top = hits[0]
+        flags = "/".join(f for f in (top.get("flags") or [])
+                         if f in RISK_FLAGS)
+        return (False, f"{flags} filed {top.get('as_of')}: "
+                       f"{str(top.get('subject'))[:120]}")
+    return (True, None)
+
+
 # The composed halt stack — order matters, first block wins.
-EQUITY_ENTRY_CHECKS = (never_short_darling, liquidity_filter,
-                       expiry_week_halt, overextension_halt)
+EQUITY_ENTRY_CHECKS = (never_short_darling, corporate_risk_halt,
+                       liquidity_filter, expiry_week_halt,
+                       overextension_halt)
 
 
 def check_entry(proposal: dict, **kwargs) -> dict:

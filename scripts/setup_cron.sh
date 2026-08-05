@@ -195,6 +195,16 @@ CRON_TZ=Asia/Kolkata
 #    the large-deal report after close (~19:00); this pulls it, aggregates
 #    the per-ticker net smart-money footprint, and writes data/bulk_deals.json.
 #    Advisory-only (decision #60), fails open, runs before the 20:00 sleep phase.
+# 28. NSE corporate announcements (Daily 19:25 IST, WIRED 2026-08-05).
+#     Was a one-shot backfill only: data/lake/events/ held 2,601
+#     partitions ending 2026-07-16 and NOTHING read them. Now it is
+#     the evidence for equity_entry_checks.corporate_risk_halt, which
+#     FAILS CLOSED on a stale feed — so this job existing is what
+#     makes that halt a safety feature instead of theatre. Same NSE
+#     cookie-handshake doctrine as deals_tracker (19:30) and its own
+#     minute so the two never share the tape.
+25 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.corporate_events >> "$REPO_ROOT/logs/corporate_events.log" 2>&1
+
 30 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.deals_tracker >> "$REPO_ROOT/logs/deals_tracker.log" 2>&1
 
 # 9. EOD option-chain capture (Mon-Fri 15:40 IST) — the one dataset that is
@@ -249,7 +259,19 @@ CRON_TZ=Asia/Kolkata
 #     so on the VM classification just skips (zero API spend) until the owner
 #     enables the cloud backend after confirming API credits. RSS only — no
 #     scraping, so no IP ban.
-50 18 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.rss_ingester >> "$REPO_ROOT/logs/rss_ingester.log" 2>&1
+#     *** DISABLED 2026-08-05 (owner ruling, Sequence 2) ***
+#     It provided no edge to M1. rss_backend inherits the global
+#     "ollama" backend and the VM runs no Ollama by design (#47), so
+#     classification was a permanent no-op: the job spent a nightly
+#     NSE-free fetch to append UNCLASSIFIED headlines to
+#     data/rss_signals.jsonl (183KB), which nothing reads. Capture
+#     with no consumer and no classifier is not a pipeline.
+#     Re-enable by uncommenting AND restoring rss_ingester.log to
+#     ops_monitor.EXPECTED_JOBS (removed in the same commit — a
+#     heartbeat for a job that no longer runs would flag SILENT
+#     every night and, through discovery/nightly.health_gate, block
+#     the miner forever).
+# 50 18 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.rss_ingester >> "$REPO_ROOT/logs/rss_ingester.log" 2>&1
 
 # 18. Gated nightly discovery pass (Daily 20:20 IST, decision #76) — the
 #     Phase-5 miners behind three gates: ops heartbeats green + no INGESTION

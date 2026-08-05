@@ -129,9 +129,9 @@ JOB_DUE_HOUR = {
     "master_scheduler.log": 9.2,
     "main.log": 15.6,
     "chain_archiver.log": 15.7,
-    "rss_ingester.log": 18.8,
     "news_processor.log": 19.2,
     "earnings_calendar.log": 19.3,
+    "corporate_events.log": 19.4,   # 19:25 (WIRED 2026-08-05)
     "deals_tracker.log": 19.5,
     "flows_tracker.log": 19.6,
     "daily_archiver.log": 19.75,

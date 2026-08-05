@@ -130,14 +130,16 @@ def test_operations_flags_silent_job(logs):
 def test_evening_jobs_are_not_due_at_the_brief(logs):
     """The card must not cry wolf about jobs that haven't had their slot.
 
-    8 of the 14 monitored jobs run 18:50-20:30. At the 16:30 brief they are
+    8 of the 14 monitored jobs run 19:10-20:30. At the 16:30 brief they are
     pending, not silent — the 20:30 ops sweep is what judges them.
+    (2026-08-05: rss_ingester left the roster with its cron; corporate_events
+    joined it at 19:25. The count is unchanged at 8.)
     """
     from src.ops_monitor import EXPECTED_JOBS
     ops = ceo_brief.collect_operations(logs_dir=logs, clock=_clock(hh=16, mm=30),
                                        expected=dict(EXPECTED_JOBS))
     assert set(ops["pending"]) == {
-        "rss_ingester.log", "news_processor.log", "earnings_calendar.log",
+        "corporate_events.log", "news_processor.log", "earnings_calendar.log",
         "deals_tracker.log", "flows_tracker.log", "daily_archiver.log",
         "sleep_phase.log", "discovery_nightly.log"}
     # Only the 6 morning/afternoon jobs are judged (suggest + the new

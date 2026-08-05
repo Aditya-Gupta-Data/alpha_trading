@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-08-05 · 2 commits · 10 files touched
+### 2026-08-05 · 4 commits · 18 files touched
 
+- `a53d41f` docs(handover): 08-05 late — ship resurrected, sector producer built, veto re-armed
+- `03a42f9` fix(infra): resurrect the Mac->VM ship, and give sector_index_bars a producer
 - `6d5f29d` docs: SYSTEM_XRAY + PROP_ROADMAP, and the 08-05 handover block
 - `31ee6d2` fix(dept1): staleness guard — disarm the stale sector veto, scream on the ops card
 

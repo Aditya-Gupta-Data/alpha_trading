@@ -42,7 +42,37 @@ MARKET_CLOSE = dtime(15, 30)
 
 POLL_INTERVAL_SECONDS = 900     # look at the market every 15 minutes
 COOLDOWN_SECONDS = 7200         # at most one proposal per index per 2 hours
-UNDERLYINGS = ("NIFTY 50", "NIFTY BANK")
+# THE OPTIONS UNIVERSE (expanded 2026-08-05).
+#
+# INDICES — all four ids verified against api-scrip-master-detailed.csv
+# the same day, and their OPTIDX lot sizes with them (see
+# options_proposer.LOT_SIZES).
+#
+# ⚠️ FACTUAL CORRECTION to the brief that requested this: adding FINNIFTY
+# and MIDCPNIFTY does NOT unlock daily or weekly expiries. Measured in the
+# scrip master on 2026-08-05, NIFTY is the ONLY index still carrying
+# weeklies (2026-08-11, 08-18, 08-25, 09-01, 09-08...). BANKNIFTY,
+# FINNIFTY and MIDCPNIFTY are MONTHLY ONLY (08-25, 09-29, 10-27) — the
+# NSE weekly rationalisation left one index standing. What the expansion
+# actually buys is BREADTH (financials and midcaps as separate expressions
+# of a view), not expiry frequency.
+INDEX_UNDERLYINGS = ("NIFTY 50", "NIFTY BANK",
+                     "NIFTY FIN SERVICE", "NIFTY MID SELECT")
+
+# EQUITY OPTIONS — activated 2026-08-05 (closes blocker A1). These are
+# PHYSICALLY SETTLED and are guarded by options_proposer's
+# physical_settlement_gate (no entry inside 7 days to expiry) and its
+# 7-day forced exit before expiry week. Do not add a name here without
+# adding it to EQUITY_OPTION_UNDERLYINGS with a VERIFIED lot size.
+#
+# BLOCKER A2 — CLOSED 2026-08-05. All five lot sizes were verified against
+# api-scrip-master-detailed.csv and TWO were wrong (HDFCBANK 550->650,
+# TCS 175->225). They are correct as of that date; the exchange revises
+# contract specs periodically, so re-verify from the scrip master rather
+# than trusting these forever.
+from src.options_proposer import EQUITY_OPTION_UNDERLYINGS  # noqa: E402
+
+UNDERLYINGS = INDEX_UNDERLYINGS + tuple(sorted(EQUITY_OPTION_UNDERLYINGS))
 
 
 def ist_now() -> datetime:
@@ -197,6 +227,16 @@ async def run_market_loop(underlyings=UNDERLYINGS,
     while True:
         now = now_fn()
         if is_market_open(now):
+            # MACRO ROUTER (2026-08-05): reorder, never filter. With 9
+            # underlyings, scanning in a fixed order spends the risk
+            # budget on whatever happens to be first rather than on what
+            # is actually moving. Advisory + fail-open — no signal means
+            # the original order survives, i.e. today's behaviour.
+            try:
+                from src.analysis import underlying_router
+                underlyings = underlying_router.prioritise(underlyings)
+            except Exception as e:
+                print(f"[Market Loop] router failed open ({e}).", flush=True)
             for underlying in underlyings:
                 if not cooldown.ready(underlying, now):
                     continue  # still cooling down — stay quiet

@@ -48,7 +48,12 @@ from src.suggestions import analyze
 # R-multiples or win-rates the validation harness actually scores (both are
 # lot-size-invariant), so the learning signal is unaffected. If a change is
 # announced, update HERE — it is the single source every consumer imports.
-LOT_SIZES = {"NIFTY 50": 65, "NIFTY BANK": 30}
+# 2026-08-05: multi-index expansion, and ALL FOUR lot sizes RE-VERIFIED
+# against api-scrip-master-detailed.csv the same day (NSE OPTIDX rows,
+# uniform across every live contract): NIFTY 65 (4,008 contracts),
+# BANKNIFTY 30 (2,358), FINNIFTY 60 (1,084), MIDCPNIFTY 120 (1,510).
+LOT_SIZES = {"NIFTY 50": 65, "NIFTY BANK": 30,
+             "NIFTY FIN SERVICE": 60, "NIFTY MID SELECT": 120}
 
 # Never open a position that the 2-days-before-expiry rule would
 # immediately close: skip expiries closer than this many days out.
@@ -87,12 +92,21 @@ MIN_DAYS_TO_EXPIRY = 7
 # cannot be exited at a fair price in the week you must exit it, which is
 # exactly when this guard forces you to. Widening it is a deliberate edit.
 
+# LOT SIZES VERIFIED 2026-08-05 against Dhan's
+# api-scrip-master-detailed.csv (NSE, INSTRUMENT=OPTSTK, uniform across
+# every live contract for each name). This CLOSED blocker A2 and caught
+# TWO wrong values that had been guessed:
+#     HDFCBANK  550 -> 650   (316 contracts, all lot 650)
+#     TCS       175 -> 225   (442 contracts, all lot 225)
+# RELIANCE 500 / ICICIBANK 700 / INFY 400 were already correct.
+# A wrong lot size mis-sizes every position on that name, so re-verify
+# here — never guess — whenever the exchange revises contract specs.
 EQUITY_OPTION_UNDERLYINGS = {
     "RELIANCE.NS": 500,
-    "HDFCBANK.NS": 550,
+    "HDFCBANK.NS": 650,
     "ICICIBANK.NS": 700,
     "INFY.NS": 400,
-    "TCS.NS": 175,
+    "TCS.NS": 225,
 }
 
 # Entry: no new stock-option position within this many days of expiry.
@@ -258,20 +272,105 @@ def market_view(analysis: dict) -> str:
     return "bearish"
 
 
+# ============ TIME HORIZONS (2026-08-05) ================================
+#
+# A signal's SHELF LIFE should pick its expiry. An RSI bounce plays out in
+# days and wants the near contract; a structural macro read plays out over
+# months and is destroyed by buying a 30-day option and paying theta four
+# times to stay in the trade.
+#
+# MEASURED against the scrip master the same day — the available depth is
+# very uneven, and this is the constraint the horizon logic must respect:
+#     NIFTY        18 expiries, out to 2031-06-24   <- real LEAPS
+#     BANKNIFTY     6 expiries, out to 2027-06-29   <- ~11 months
+#     FINNIFTY      3 expiries, out to 2026-10-27   <- ~3 months only
+#     MIDCPNIFTY    3 expiries, out to 2026-10-27   <- ~3 months only
+#     stock options 3 expiries, out to 2026-10-27   <- ~3 months only
+#
+# So a "3-6 month" target is only fully satisfiable on NIFTY. Rather than
+# refuse a long-horizon trade everywhere else, `pick_expiry` takes the
+# FURTHEST AVAILABLE contract inside the window and — when nothing reaches
+# the window at all — the furthest that exists, which is the honest
+# best-effort. It never invents an expiry and never silently falls back to
+# the near month while claiming a long horizon.
+LONG_HORIZON_MIN_DAYS = 90       # 3 months
+LONG_HORIZON_MAX_DAYS = 200      # ~6.5 months, a little slack over 6
+
+HORIZONS = ("short", "long")
+
+
+# A macro read this strong (|long_term_macro_score|, the -5..+5 dimension
+# news_processor emits and brain_map now stores) is treated as structural
+# rather than tactical, and buys time instead of paying theta four times.
+LONG_HORIZON_MACRO_SCORE = 3.0
+# A trend this deep is structural on its own, macro score or not.
+LONG_HORIZON_SLOW_SMA_PCT = 5.0
+
+
+def horizon_for(analysis: dict, macro_score: float = None) -> str:
+    """"short" | "long" — which shelf life this signal has.
+
+    SHORT-LIVED SIGNALS KEEP THE NEAR CONTRACT. An RSI bounce or a fresh
+    cross is a days-to-weeks event; putting it in a 4-month option pays for
+    time the thesis will never use. Those are checked FIRST and win, even
+    under a strong macro score, because the trigger is what defines the
+    holding period — not the backdrop.
+
+    LONG is chosen only when the driver itself is structural: a
+    |long_term_macro_score| >= 3, or spot more than 5% from its 200-SMA.
+    Defaults to "short" on absent inputs — the pre-2026-08-05 behaviour."""
+    a = analysis or {}
+    from src.config import RSI_OVERBOUGHT, RSI_OVERSOLD
+    rsi = a.get("rsi")
+    if a.get("fresh_cross"):
+        return "short"
+    if rsi is not None and (rsi <= RSI_OVERSOLD or rsi >= RSI_OVERBOUGHT):
+        return "short"
+    try:
+        if macro_score is not None and abs(float(macro_score)) >= LONG_HORIZON_MACRO_SCORE:
+            return "long"
+    except (TypeError, ValueError):
+        pass
+    slow = a.get("sma_slow_distance_pct")
+    try:
+        if slow is not None and abs(float(slow)) >= LONG_HORIZON_SLOW_SMA_PCT:
+            return "long"
+    except (TypeError, ValueError):
+        pass
+    return "short"
+
+
 def pick_expiry(expiries: list, today: date = None,
-                underlying: str = None) -> str | None:
-    """First expiry at least `min_days_to_expiry_for(underlying)` days out,
-    or None. `underlying=None` keeps the original index clock, so every
-    existing caller is byte-identical."""
+                underlying: str = None, horizon: str = "short") -> str | None:
+    """`horizon="short"` (default): the FIRST expiry at least
+    `min_days_to_expiry_for(underlying)` days out — byte-identical to the
+    pre-2026-08-05 behaviour for every existing caller.
+
+    `horizon="long"`: the FURTHEST expiry inside the 90-200 day window, or
+    — when the chain does not reach that far, which is the case for
+    FINNIFTY / MIDCPNIFTY / every stock option — the furthest contract that
+    exists beyond the entry floor. Returns None only when nothing clears
+    the floor at all."""
     today = today or date.today()
     floor = min_days_to_expiry_for(underlying) if underlying else MIN_DAYS_TO_EXPIRY
+
+    dated = []
     for exp in sorted(expiries or []):
         try:
-            if (date.fromisoformat(exp) - today).days >= floor:
-                return exp
+            dated.append((exp, (date.fromisoformat(exp) - today).days))
         except ValueError:
             continue
-    return None
+    eligible = [(e, d) for e, d in dated if d >= floor]
+    if not eligible:
+        return None
+    if horizon != "long":
+        return eligible[0][0]
+
+    in_window = [e for e, d in eligible
+                 if LONG_HORIZON_MIN_DAYS <= d <= LONG_HORIZON_MAX_DAYS]
+    if in_window:
+        return in_window[-1]          # furthest INSIDE the window
+    return eligible[-1][0]            # honest best effort: furthest there is
 
 
 def _strikes(chain: dict) -> list:
@@ -325,7 +424,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                    book: dict = None, prices: dict = None,
                    risk_pct: float = None,
                    short_strike_otm_pct: float = None,
-                   advisory: dict = None, today: date = None) -> dict:
+                   advisory: dict = None, today: date = None,
+                   horizon: str = None, macro_score: float = None) -> dict:
     """The full pipeline, every input injectable for offline tests.
 
     `risk_pct` overrides OPTIONS_RISK_PER_TRADE_PCT (e.g. vol_bridge may
@@ -363,8 +463,10 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                     "reason": "war playbook — short-premium (iron condor) disabled in "
                               f"crisis regime ({advisory.get('crisis_reason', '')})"}
 
+    horizon = horizon or horizon_for(analysis, macro_score=macro_score)
     if expiry is None:
-        expiry = pick_expiry(get_expiry_list(underlying), underlying=underlying)
+        expiry = pick_expiry(get_expiry_list(underlying), underlying=underlying,
+                             horizon=horizon)
     if expiry is None:
         return {"proposal": None, "view": view, "vix": vix,
                 "reason": "no usable expiry (need >= "
@@ -531,7 +633,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         "vix": vix,
         "lots": lots,
     }
-    return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok"}
+    return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
+            "horizon": horizon}
 
 
 def to_journal_entry(proposal: dict, decision: str, why: str) -> dict:

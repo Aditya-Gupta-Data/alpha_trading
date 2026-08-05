@@ -222,6 +222,14 @@ SECURITY_ID_MAP = {
     "GOLDBEES.NS":   {"id": "14428" , "seg": "NSE_EQ", "inst": "EQUITY"},
     "NIFTY 50":      {"id": "13",    "seg": "IDX_I",  "inst": "INDEX"},
     "NIFTY BANK":    {"id": "25",    "seg": "IDX_I",  "inst": "INDEX"},
+    # Multi-index expansion (2026-08-05). Both ids VERIFIED against
+    # api-scrip-master-detailed.csv the same day (NSE, segment I,
+    # INSTRUMENT=INDEX): 27 = SYMBOL_NAME "FINNIFTY" / DISPLAY "Finnifty",
+    # 442 = "MIDCPNIFTY" / "Nifty Midcap Select". Cross-checked against the
+    # UNDERLYING_SECURITY_ID their OPTIDX contracts point at (26037 and
+    # 26074 respectively) — the option rows and the spot rows agree.
+    "NIFTY FIN SERVICE": {"id": "27",  "seg": "IDX_I", "inst": "INDEX"},
+    "NIFTY MID SELECT":  {"id": "442", "seg": "IDX_I", "inst": "INDEX"},
     # id 21 verified against api-scrip-master-detailed.csv on 2026-07-06
     # (NSE, segment I, SYMBOL_NAME "INDIA VIX").
     "INDIA VIX":     {"id": "21",    "seg": "IDX_I",  "inst": "INDEX"},
@@ -233,6 +241,8 @@ SECURITY_ID_MAP = {
 _ALIASES = {
     "^NSEI": "NIFTY 50", "NIFTY": "NIFTY 50", "NIFTY50": "NIFTY 50",
     "^NSEBANK": "NIFTY BANK", "BANKNIFTY": "NIFTY BANK",
+    "FINNIFTY": "NIFTY FIN SERVICE", "^CNXFIN": "NIFTY FIN SERVICE",
+    "MIDCPNIFTY": "NIFTY MID SELECT", "NIFTY MIDCAP SELECT": "NIFTY MID SELECT",
     "^INDIAVIX": "INDIA VIX", "INDIAVIX": "INDIA VIX", "VIX": "INDIA VIX",
 }
 

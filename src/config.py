@@ -122,6 +122,35 @@ TREASURY_MAX_STEP_RS = float(_CONFIG.get("treasury_max_step_rs", 100000.0))
 GCLOUD_PATH = str(_CONFIG.get(
     "gcloud_path", "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"))
 
+
+def gcloud_env(env=None, executable=None) -> dict:
+    """The environment `gcloud` must be invoked with from an unattended Mac
+    process. **Pinning GCLOUD_PATH was one layer short of enough.**
+
+    `gcloud` is a /bin/sh wrapper that then goes looking for a Python on
+    PATH. Under cron's minimal PATH it finds macOS's own
+    `/usr/bin/python3` — which is **3.9.6**, a version gcloud dropped:
+
+        ERROR: gcloud failed to load. You are running gcloud with
+        Python 3.9, which is no longer supported by gcloud. ... set the
+        CLOUDSDK_PYTHON environment variable to point to it.
+
+    Interactively it works (Homebrew/Framework pythons sit earlier on
+    PATH), so this fails ONLY unattended — which is how the Mac→VM
+    artifact ship ran dead from the day it shipped (2026-07-21) to
+    2026-08-05 without a single visible error.
+
+    Pins CLOUDSDK_PYTHON to the interpreter running us (`sys.executable`,
+    the 3.14 framework python the cron line already names by absolute
+    path). An explicitly-set CLOUDSDK_PYTHON in the environment is
+    respected and never overwritten — the owner's choice outranks ours.
+    """
+    import os
+    import sys
+    out = dict(os.environ if env is None else env)
+    out.setdefault("CLOUDSDK_PYTHON", executable or sys.executable)
+    return out
+
 # Adaptive sizing (owner Directive 2, 2026-07-20): the autopsy-driven
 # sizing feedback loop. Optional key; code default OFF — a stale config
 # copy must never start resizing trades on its own.

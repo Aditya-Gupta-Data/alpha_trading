@@ -47,7 +47,7 @@ from src import portfolio_manager as pm
 from src.config import (EQUITY_DESK_CAPITAL_RS, GCLOUD_PATH,
                         TREASURY_DEADBAND_RS, TREASURY_ENABLED,
                         TREASURY_EQUITY_MAX_PCT, TREASURY_EQUITY_MIN_PCT,
-                        TREASURY_MAX_STEP_RS, TREASURY_ROUND_RS)
+                        TREASURY_MAX_STEP_RS, TREASURY_ROUND_RS, gcloud_env)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 ROOT = Path(__file__).resolve().parent.parent
@@ -324,17 +324,46 @@ def _broadcast(broadcast_fn, description: str) -> None:
 
 # ------------------------------------------------ the Mac artifact lane
 
-def vm_push_file(local_path, remote_rel: str = "data/") -> bool:
-    """Mac→VM artifact shipping (tier table, levels, weekly darling ids):
-    pure data delivery, no state invariants. False on any failure — the
-    VM freshness-gates everything it consumes."""
+def vm_push_file(local_path, remote_rel: str = "data/", run_fn=None,
+                 env_fn=None) -> bool:
+    """Mac→VM artifact shipping (tier table, levels, F&O liquidity, sector
+    bars, weekly darling ids): pure data delivery, no state invariants.
+    False on any failure — the VM freshness-gates everything it consumes.
+
+    TWO FIXES, 2026-08-05, after this ran dead for 15 days in total silence:
+
+    1. **It now runs gcloud with a supported interpreter.** See
+       `config.gcloud_env` — the wrapper picked macOS's Python 3.9 off
+       cron's minimal PATH and refused to load. Pinning GCLOUD_PATH alone
+       was one layer short.
+    2. **It NAMES its failure on stderr.** The old body was
+       `capture_output=True` plus a bare `except Exception: return False`,
+       so gcloud's own error message — which stated the cause in plain
+       English every single night — was captured and thrown away. Same
+       disease as `live_quote` before 08-04. Still fails open (returns
+       False, never raises): a missed ship must not break the EOD chain.
+
+    `run_fn`/`env_fn` are test seams; nothing in production passes them.
+    """
     cmd = [GCLOUD_PATH, "compute", "scp", str(local_path),
            f"{VM_SSH_TARGET}:~/alpha_trading/{remote_rel}",
            f"--project={VM_SSH_PROJECT}", f"--zone={VM_SSH_ZONE}"]
+    name = Path(local_path).name
     try:
-        return subprocess.run(cmd, capture_output=True,
-                              timeout=90).returncode == 0
-    except Exception:
+        env = (env_fn or gcloud_env)()
+        run = run_fn or subprocess.run
+        proc = run(cmd, capture_output=True, timeout=120, env=env)
+        if proc.returncode == 0:
+            return True
+        err = (proc.stderr or b"")
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        print(f"  (vm ship FAILED [{name}] rc={proc.returncode}: "
+              f"{err.strip()[:400] or 'no stderr'})")
+        return False
+    except Exception as exc:
+        print(f"  (vm ship FAILED [{name}] {type(exc).__name__}: "
+              f"{str(exc)[:300]})")
         return False
 
 

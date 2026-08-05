@@ -23,6 +23,21 @@ CLI:  python3 -m src.analysis.patience_basket [--eod] [--dry-run]
       (no flag: re-grade from existing artifacts, no fetches)
 """
 
+# THE Mac→VM ship manifest (decision #83). Every Mac-produced artifact the
+# VM reads on a live path belongs here — the VM freshness-gates each one, so
+# an artifact that never arrives silently disables whatever consumes it.
+# Grew 2026-08-05 after the ship was found dead for 15 days:
+#   fo_liquidity.json      — equity_entry_checks.liquidity_filter is
+#                            FAIL-CLOSED without it, and it was ABSENT on the
+#                            VM entirely (never shipped since the filter was
+#                            wired on 2026-07-20).
+#   sector_index_bars.json — the new scripts/fetch_sector_bars.py producer's
+#                            output; the sector veto stays self-disabled on
+#                            the VM until this lands there fresh.
+SHIP_MANIFEST = ("darling_tiers.json", "darlings_levels.json",
+                 "darling_ids.json", "fo_liquidity.json",
+                 "sector_index_bars.json")
+
 
 def eod_chain() -> dict:
     """The Mac evening chain: today's bhavcopy -> F&O bundle -> pricer ->
@@ -54,7 +69,7 @@ def eod_chain() -> dict:
     # copy and its own staleness gates judge it.
     from pathlib import Path as _Path
     data_dir = _Path(__file__).resolve().parents[2] / "data"
-    shipped = []
+    shipped, ship_failed = [], []
     try:
         from src import firm_treasury
         from src.ingestion import scrip_master
@@ -62,14 +77,25 @@ def eod_chain() -> dict:
             scrip_master.ensure_darling_ids()
         except Exception as exc:
             print(f"  (darling ids refresh failed [{exc}])")
-        for art in ("darling_tiers.json", "darlings_levels.json",
-                    "darling_ids.json"):
+        for art in SHIP_MANIFEST:
             p = data_dir / art
-            if p.exists() and firm_treasury.vm_push_file(p):
+            if not p.exists():
+                ship_failed.append(f"{art}:absent")
+            elif firm_treasury.vm_push_file(p):
                 shipped.append(art)
+            else:
+                ship_failed.append(f"{art}:push_failed")
     except Exception as exc:
         print(f"  (artifact ship failed [{exc}])")
+        ship_failed.append(f"chain:{type(exc).__name__}")
     report["artifacts_shipped"] = shipped
+    # An empty ship list used to be indistinguishable from a clean run —
+    # `artifacts_shipped: []` sat in this log every night for 15 days and
+    # said nothing. Name what did NOT go, and say so out loud.
+    if ship_failed:
+        report["artifacts_not_shipped"] = ship_failed
+        print(f"  (VM SHIP INCOMPLETE — {len(shipped)}/{len(SHIP_MANIFEST)} "
+              f"delivered; missing: {', '.join(ship_failed)})")
     # MACRO LEG (2026-07-23, Macro Regime Engine M4): ingest tonight's
     # cross-asset rows (FRED + NSE indices) and put the regime
     # declaration ON THE RECORD — the 60-session public scoring clock

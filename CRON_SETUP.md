@@ -81,6 +81,7 @@ VM's IP:
 
 | When | Job | What |
 |---|---|---|
+| 19:10 Mon–Fri | `scripts/fetch_sector_bars.py` | **NEW 2026-08-05:** THE producer for `data/sector_index_bars.json` — the artifact that had none, and that feeds the live sector veto. Runs BEFORE the 19:15 chain so that chain ships a same-day file. Mac-only (yfinance is a Mac-lane dep; Yahoo blocks datacentre IPs). Log: `logs/sector_bars.log` |
 | 19:15 Mon–Fri | `src.analysis.patience_basket --eod` | THE DAILY CLOCK: today's bhavcopy → F&O bundle → pricer → valuation → 7-tier grading → darling shadow leg (Buy-tier entries, Strong-Sell forced exits). Log: `logs/patience_eod.log` |
 | 10:00 Saturday | `src.analysis.weekly_recalibration` | THE WEEKLY CLOCK: refresh quarterly filings → re-screen fundamentals → No-Orphan pins → rebuild pricer/valuation/tiers → one summary card. Log: `logs/weekly_recalibration.log` |
 | 09:30 Saturday | `src.ingestion.scrip_master` | SCRIP RECONCILIATION: diffs every `SECURITY_ID_MAP` id against Dhan's public scrip master; de-duped review card on any mismatch. Log: `logs/scrip_master.log` |
@@ -93,8 +94,19 @@ and both lines invoke python by ABSOLUTE path
 safely (replaces rather than duplicates):
 
 ```bash
-( crontab -l 2>/dev/null | grep -v -e 'src.analysis.patience_basket' -e 'src.analysis.weekly_recalibration' -e 'src.ingestion.scrip_master' -e '^SHELL='; echo 'SHELL=/bin/bash'; echo '15 19 * * 1-5 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.analysis.patience_basket --eod >> logs/patience_eod.log 2>&1'; echo '30 9 * * 6 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.ingestion.scrip_master >> logs/scrip_master.log 2>&1'; echo '0 10 * * 6 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.analysis.weekly_recalibration >> logs/weekly_recalibration.log 2>&1' ) | crontab -
+( crontab -l 2>/dev/null | grep -v -e 'src.analysis.patience_basket' -e 'src.analysis.weekly_recalibration' -e 'src.ingestion.scrip_master' -e 'fetch_sector_bars' -e '^SHELL='; echo 'SHELL=/bin/bash'; echo '10 19 * * 1-5 /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 scripts/fetch_sector_bars.py >> logs/sector_bars.log 2>&1'; echo '15 19 * * 1-5 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.analysis.patience_basket --eod >> logs/patience_eod.log 2>&1'; echo '30 9 * * 6 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.ingestion.scrip_master >> logs/scrip_master.log 2>&1'; echo '0 10 * * 6 cd /Users/adityagupta/Documents/Claude/alpha_trading && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.analysis.weekly_recalibration >> logs/weekly_recalibration.log 2>&1' ) | crontab -
 ```
+
+**2026-08-05 — why every Mac job must invoke python by ABSOLUTE path, and why
+that was still not enough.** The crontab already pinned the interpreter for
+its own python. It did NOT pin the interpreter `gcloud` picks: `gcloud` is a
+`/bin/sh` wrapper that searches PATH, and under cron's minimal PATH it finds
+macOS's `/usr/bin/python3` (**3.9.6**), which gcloud refuses to load. That
+silently killed the Mac→VM artifact ship from 2026-07-21 to 2026-08-05.
+`src/config.gcloud_env()` now pins `CLOUDSDK_PYTHON` for every gcloud
+subprocess `src/` starts. **Any NEW code that shells out to gcloud must use
+it** — a bare `subprocess.run([GCLOUD_PATH, ...])` from cron is broken and
+will not say so.
 
 **NEVER schedule on the Mac:** token renewal or push. The Mac used to run its own
 07:00 renewal + 07:10 push as "redundancy" — removed 2026-07-09 after discovering

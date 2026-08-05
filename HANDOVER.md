@@ -42,6 +42,117 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-05 (night): the pattern-miner is NOT broken. It is waiting, and now it says so out loud.
+
+**Queue item #2. The headline is a negative finding, and it is the honest one:
+there is no cron failure, no silent crash, no path/environment fault and no
+swallowed exit code.** Suite **1,773 green** (+8). Nothing was "repaired",
+because nothing was broken.
+
+### What the diagnosis actually found
+
+| Hypothesis in the brief | Verdict |
+|---|---|
+| Silent crash | **No.** `logs/discovery_nightly.log` holds 16 clean SKIPPED records; the job exits 0 and prints its reason every night. |
+| Path/environment issue (like the gcloud bug) | **No.** Cron line #18 is installed and firing; `.discovery_nightly_state.json` updates every night (`last_skip: 2026-08-04T20:20:01`). |
+| Bad exit code being swallowed | **No.** A skip is *designed* to be exit 0 — cron must stay quiet — and the every-7th Discord note is the escalation path. |
+
+**The real state:** the health gate passes (`silent_jobs: []`,
+`ingestion_problems: 0`) and the **depth gate correctly refuses** at 25/60
+`daily_context` frames. It is doing precisely what decision #76 built it to do.
+
+### Frame starvation — backfill is EXHAUSTED, and that is a fact about the lake
+
+Read-only survey of the VM before touching anything:
+
+```
+FRAMES        25   2026-07-11 -> 2026-08-04   contiguous, ZERO gaps
+macro_daily   25   2026-07-11 -> 2026-08-04
+deals_census  25   2026-07-11 -> 2026-08-04
+news_daily    17   2026-07-16 -> 2026-08-04
+flows         17   2026-07-10 -> 2026-08-03
+chains/*      17   2026-07-13 -> 2026-08-04
+UNION of lake days: 26 (2026-07-10 -> 2026-08-04)
+lake days with NO frame: 1  ['2026-07-10']
+```
+
+`fold_lake` was run on the VM (idempotent upsert; `daily_context` is a derived
+refreshable table, not an append-only ledger). **Result: 25 → 26 frames.**
+That is the entire available backfill.
+
+**Frames cannot predate the data they are built from.** The Phase-0 lake begins
+2026-07-10. Anything beyond that would be fabrication (RULE 3), so it was not
+done and must not be done later.
+
+Frame **quality** is good, checked field by field: trading days carry 16/16
+populated columns, weekends 12/16 (no VIX/chains/flows — market shut, correctly
+NULL). The collection mechanism is completely unblocked — sleep-phase Task G
+records one frame per calendar day with no gaps.
+
+**60 frames arrives organically at the observed 1.0/day: ~34 more nights,
+≈2026-09-07.** No engineering shortens that. Only lowering `MIN_CONTEXT_FRAMES`
+would, and that is an owner ruling against decision #76's panel rule, not a
+change an agent makes on its own initiative.
+
+### So what WAS fixed — the thing that actually deserved fixing
+
+**The starvation was unmeasurable from outside, and a dead corpus was
+indistinguishable from a healthy countdown.** Both printed
+`daily_context 25/60 frames`. If sleep-phase Task G ever died, frames would
+freeze and the skip line would not change by one character. That is the same
+silent-failure disease as the last two sessions, one layer up.
+
+`depth_gate` now MEASURES instead of only counting:
+
+| New field | Meaning |
+|---|---|
+| `first_frame` / `last_frame` | the real span in the table |
+| `accrual_per_day` | **observed** from that span — never assumed |
+| `days_to_go` / `projected_ready` | when the floor is genuinely reached |
+| `accruing` | False when the newest frame is older than `STALE_FRAME_DAYS` (3) — frames have STOPPED arriving |
+
+Two deliberately different sentences, because a corpse and a countdown must
+never read alike:
+
+```
+growing:  daily_context 26/60 frames — accruing 1/day, ~34 more nights (≈2026-09-07)
+stalled:  daily_context 20/60 frames — ⚠️ NOT ACCRUING, newest frame 2026-07-30
+                                        (sleep-phase Task G is not recording)
+```
+
+The every-7th Discord note escalates the same way: 🔴 *"the context corpus has
+STOPPED GROWING … check Task G, not the miner"* versus ⏳ *"this is a countdown,
+not a fault."*
+
+**It proved itself on first run.** Executed against the Mac's own brain_map
+copy, it correctly reported `accruing: false, last_frame 2026-07-30` — because
+that copy really has stopped updating (`edge_miner`'s VM pull is broken on SSH
+timeouts, logged 08-02/08-03). The detector's first live catch was a real
+stall, not a synthetic one.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/discovery/nightly.py` | `depth_gate` measures accrual/ETA/staleness; new `depth_reason()`; the every-7th note distinguishes incident from countdown; `STALE_FRAME_DAYS = 3` |
+| `tests/test_discovery_nightly.py` | 8 new tests (countdown vs corpse, the staleness boundary, slower-accrual ETA, empty table, single frame, the Discord wording split); 1 existing test relaxed from an exact-dict assert |
+| `MODULES.md` | `nightly.py` row updated |
+| VM `data/brain_map.db` | `fold_lake` → `daily_context` 25 → 26 rows |
+
+### ⏭️ Next immediate steps
+
+1. **Deploy** — `git pull` on the VM. Tonight's 20:20 pass then prints the
+   countdown line instead of the bare fraction. (Still unpushed; see below.)
+2. **Nothing else to do on Department 5 until ~2026-09-07.** The correct
+   action is to leave it alone. If the owner wants patterns sooner, the only
+   lever is `MIN_CONTEXT_FRAMES`, and lowering it means mining on a corpus too
+   thin to clear the support floors — every run finds nothing and the surface
+   trains you to ignore it. That is the trade #76 already weighed.
+3. **Watch for `NOT ACCRUING`.** If it ever appears on the VM, the fault is
+   sleep-phase Task G, not the miner.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-05 (late): both loose threads CLOSED — the Mac→VM ship is alive, the sector veto RE-ARMED ITSELF
 
 **No trading logic changed. No strategy, sizing, treasury or ledger touched.**

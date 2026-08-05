@@ -685,3 +685,133 @@ if __name__ == "__main__":
     test_eod_net_delta_bull_call_spread_is_positive()
     test_eod_net_delta_bear_put_spread_is_negative()
     print("Standalone tests passed (mocker-dependent tests skipped).")
+
+
+# ================= Sequence 1: reporting honesty (2026-08-05) ==========
+#
+# SYSTEM_XRAY §9: the daily cards showed numbers without the context that
+# decides what they mean — a win rate with no n and no lower bound, an
+# absolute return with no drawdown, 645 gate blocks the owner had never
+# seen counted, and positions open 14 days with no age anywhere.
+
+from src import eod_summary as _eod
+
+
+def test_a_win_rate_never_ships_without_its_n_and_lower_bound():
+    """`stat_gates.wilson_lower_bound` is documented as THE number every
+    displayed win-rate must carry, and the one card the owner reads daily
+    was the one place it wasn't applied. 63% off 19 trades is not evidence
+    of a 63% edge."""
+    line = _eod.wilson_line(12, 7)
+    assert "12W/7L" in line and "(n=19)" in line and "63%" in line
+    assert "lower bound" in line
+    from src.validation.stat_gates import wilson_lower_bound
+    assert f"{wilson_lower_bound(12, 19) * 100:.0f}%" in line
+
+
+def test_the_bound_is_withheld_when_n_is_too_small_to_mean_anything():
+    line = _eod.wilson_line(2, 1)
+    assert "(n=3)" in line and "lower bound" not in line
+    assert "too few" in line
+
+
+def test_no_resolutions_means_no_win_rate_line_at_all():
+    assert _eod.wilson_line(0, 0) is None
+
+
+def test_a_perfect_record_still_carries_an_honest_bound():
+    line = _eod.wilson_line(8, 0)
+    assert "100%" in line and "lower bound" in line
+    assert "lower bound 100%" not in line       # never claims certainty
+
+
+def test_drawdown_reads_the_equity_curve_and_names_the_peak(tmp_path):
+    db = tmp_path / "b.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE equity_curve (ts TEXT NOT NULL, "
+                 "equity REAL NOT NULL, peak_equity REAL NOT NULL, "
+                 "drawdown_pct REAL NOT NULL)")
+    conn.executemany("INSERT INTO equity_curve VALUES (?,?,?,?)", [
+        ("2026-08-01T00:00:00", 244215.34, 244215.34, 0.0),
+        ("2026-08-04T00:00:00", 239423.99, 244215.34, 1.9619)])
+    conn.commit(); conn.close()
+    line = _eod.drawdown_line(db_path=db)
+    assert "peak Rs.244,215" in line and "now Rs.239,424" in line
+    assert "drawdown -1.96%" in line
+    assert "(at peak)" not in line
+
+
+def test_sitting_at_the_peak_is_said_out_loud(tmp_path):
+    db = tmp_path / "b.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE equity_curve (ts TEXT NOT NULL, "
+                 "equity REAL NOT NULL, peak_equity REAL NOT NULL, "
+                 "drawdown_pct REAL NOT NULL)")
+    conn.execute("INSERT INTO equity_curve VALUES "
+                 "('2026-08-04T00:00:00', 100.0, 100.0, 0.0)")
+    conn.commit(); conn.close()
+    assert "(at peak)" in _eod.drawdown_line(db_path=db)
+
+
+def test_drawdown_fails_open_on_a_missing_or_empty_curve(tmp_path):
+    assert _eod.drawdown_line(db_path=tmp_path / "nope.db") is None
+    db = tmp_path / "empty.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE equity_curve (ts TEXT NOT NULL, "
+                 "equity REAL NOT NULL, peak_equity REAL NOT NULL, "
+                 "drawdown_pct REAL NOT NULL)")
+    conn.commit(); conn.close()
+    assert _eod.drawdown_line(db_path=db) is None
+
+
+def test_blocked_trades_are_counted_today_and_in_total(tmp_path):
+    """645 blocks against ~25 entries, and the owner only ever saw at most
+    one Discord note per (ticker, direction) per day."""
+    p = tmp_path / "exposure_blocks.jsonl"
+    p.write_text("\n".join([
+        '{"ts": "2026-08-04T09:15:11", "ticker": "NIFTY 50"}',
+        '{"ts": "2026-08-05T09:15:11", "ticker": "NIFTY 50"}',
+        '{"ts": "2026-08-05T11:20:00", "ticker": "NIFTY BANK"}',
+    ]) + "\n")
+    assert _eod.blocked_line("2026-08-05", p) == "Blocked today: 2 (total 3)"
+    assert _eod.blocked_line("2026-08-06", p) == "Blocked today: 0 (total 3)"
+
+
+def test_no_block_ledger_means_no_line(tmp_path):
+    assert _eod.blocked_line("2026-08-05", tmp_path / "nope.jsonl") is None
+
+
+def test_position_age_is_reported_oldest_first():
+    """An equity-desk position has been open since 2026-07-22 and no card
+    has ever said so."""
+    entries = [
+        {"date": "2026-07-22", "ticker": "MACPOWER", "plan": {}},
+        {"date": "2026-08-04", "ticker": "NIFTY BANK",
+         "spread": {"strategy": "bear_put_spread"}},
+    ]
+    lines = _eod.position_age_lines(entries, today="2026-08-05")
+    assert lines[0] == "• MACPOWER delivery — 14d open"
+    assert lines[1] == "• NIFTY BANK bear_put_spread — 1d open"
+
+
+def test_position_age_caps_the_list_and_says_how_many_it_hid():
+    entries = [{"date": "2026-08-01", "ticker": f"T{i}", "plan": {}}
+               for i in range(9)]
+    lines = _eod.position_age_lines(entries, today="2026-08-05", max_lines=4)
+    assert len(lines) == 5 and lines[-1] == "…and 5 more"
+
+
+def test_position_age_skips_undated_entries_never_guesses():
+    entries = [{"ticker": "NODATE", "plan": {}},
+               {"date": "bad", "ticker": "JUNK", "plan": {}}]
+    assert _eod.position_age_lines(entries, today="2026-08-05") == []
+
+
+def test_the_eod_card_carries_the_new_sections_without_raising(tmp_path):
+    """Dry render: the card must build cleanly with the new fields even
+    when every new data source is absent."""
+    card = _eod.build_eod_card(db_path=tmp_path / "nope.db",
+                               blocks_path=tmp_path / "nope.jsonl")
+    assert card["event"] == "eod"
+    assert all("name" in f and "value" in f for f in card["fields"])
+    assert all(len(f["value"]) <= 1024 for f in card["fields"])

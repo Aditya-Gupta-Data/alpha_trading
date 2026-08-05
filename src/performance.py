@@ -166,8 +166,19 @@ def compute(entries: list = None, min_trades: int = None,
 def build_card(m: dict) -> str:
     """Plain-English advisory card."""
     if m.get("verdict") == "abstain":
-        return ("📏 **Track-record metrics** — abstaining: "
-                f"{m.get('reason')}.")
+        # Sequence 1 (2026-08-05): an abstain now COUNTS DOWN. It used to
+        # print a reason and then never post (see run()), so a Saturday
+        # with no track record looked identical to a Saturday with one —
+        # silence read as health. The owner cannot act on "not yet"; they
+        # can act on "1 more trade".
+        n, floor = int(m.get("n") or 0), int(m.get("min_trades") or 0)
+        gap = max(0, floor - n)
+        trades = "trade" if gap == 1 else "trades"
+        return ("📏 **Track-record metrics — not unlocked yet.**\n"
+                f"_{n}/{floor} resolved real trades — {gap} more {trades} "
+                "to unlock Sharpe / Sortino / max-drawdown._\n"
+                "_Below the floor these numbers would be noise dressed as "
+                "evidence, so they are withheld rather than shown._")
 
     def fmt(x):
         return "n/a" if x is None else f"{x:+.2f}"
@@ -186,13 +197,18 @@ def build_card(m: dict) -> str:
 
 
 def run(entries: list = None, *, notify_fn=None, config: dict = None) -> dict:
-    """Compute → optionally post a Discord card. Posts ONLY when there is a
-    real verdict (an abstain read stays silent on Discord — no weeks of
-    'not enough data' spam), printing either way. Fail-open."""
+    """Compute → post a Discord card.
+
+    UNTIL 2026-08-05 an abstain stayed SILENT ("no weeks of 'not enough
+    data' spam"). The intent was right and the effect was wrong: the card
+    is weekly, so silence cost one line a week and bought a system whose
+    quietest state was indistinguishable from its healthiest. The abstain
+    now posts as a COUNTDOWN — one line, once a week, that answers "when?"
+    instead of saying nothing. Fail-open."""
     try:
         m = compute(entries, config=config)
         card = build_card(m)
-        if notify_fn and m.get("verdict") == "ok":
+        if notify_fn and m.get("verdict") in ("ok", "abstain"):
             try:
                 notify_fn(card)
             except Exception:

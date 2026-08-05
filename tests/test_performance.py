@@ -101,20 +101,34 @@ def test_compute_respects_config_floor():
 # ----------------------------------------------------------- card + run
 
 def test_card_abstain_and_ok():
-    ab = perf.build_card({"verdict": "abstain", "reason": "only 3", "n": 3})
-    assert "abstaining" in ab
+    # 2026-08-05 (Sequence 1): an abstain is now a COUNTDOWN, not a shrug.
+    # "not enough data" told the owner nothing they could act on; "1 more
+    # trade" does.
+    ab = perf.build_card({"verdict": "abstain", "reason": "only 3",
+                          "n": 19, "min_trades": 20})
+    assert "not unlocked yet" in ab
+    assert "19/20 resolved real trades" in ab
+    assert "1 more trade to unlock" in ab          # singular at a gap of one
+    assert "Sharpe" in ab
+    many = perf.build_card({"verdict": "abstain", "n": 3, "min_trades": 20})
+    assert "17 more trades" in many                # plural everywhere else
     entries = ([entry(1.0, 500, f"2026-07-{d:02d}") for d in range(1, 7)]
                + [entry(-1.0, -500, f"2026-07-{d:02d}") for d in range(7, 11)])
     ok = perf.build_card(perf.compute(entries, min_trades=10))
     assert "Sharpe" in ok and "resolved paper trades" in ok
 
 
-def test_run_posts_only_on_ok_verdict():
+def test_run_posts_the_countdown_as_well_as_the_verdict():
+    """Until 2026-08-05 an abstain stayed SILENT. The intent (no weekly
+    spam) was right; the effect was that the system's quietest state was
+    indistinguishable from its healthiest. One line a week, that answers
+    "when?", is the correct trade."""
     sent = []
-    # abstain -> no post
     perf.run([entry(1.0, 1, "2026-07-01")], notify_fn=sent.append,
              config={"performance_min_trades": 20})
-    assert sent == []
+    assert len(sent) == 1
+    assert "not unlocked yet" in sent[0] and "1/20" in sent[0]
+    sent.clear()
     # ok -> posts
     entries = ([entry(1.0, 500, f"2026-07-{d:02d}") for d in range(1, 7)]
                + [entry(-1.0, -500, f"2026-07-{d:02d}") for d in range(7, 11)])

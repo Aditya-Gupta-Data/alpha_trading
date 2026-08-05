@@ -566,12 +566,29 @@ def collect_risk(journal_path=None) -> dict:
             float((e.get("outcome") or {}).get("pnl_rs") or 0.0)
             for e in todays_exits
         )
+        # Sequence 1 (2026-08-05): the honesty lines, all reused from
+        # eod_summary rather than recomputed here (the "computes no money"
+        # constraint). Each is None-safe; a missing one drops its line.
+        wins = losses = 0
+        try:
+            for r in eod_summary.query_todays_resolutions():
+                if r.get("result") == "win":
+                    wins += 1
+                elif r.get("result") == "loss":
+                    losses += 1
+        except Exception:
+            pass
         return {
             "daily_pnl": daily_pnl,
             "resolved": len(todays_exits),
             "open_spreads": len(open_spreads),
             "open_equities": len(open_equities),
             "net_delta": eod_summary.compute_net_delta_exposure(open_spreads),
+            "wilson": eod_summary.wilson_line(wins, losses),
+            "drawdown": eod_summary.drawdown_line(),
+            "blocked": eod_summary.blocked_line(today),
+            "ages": eod_summary.position_age_lines(
+                open_spreads + open_equities, today, max_lines=4),
             "available": True,
         }
     except Exception as exc:
@@ -717,6 +734,17 @@ def _risk_field(risk: dict) -> dict:
              f"({risk['open_spreads']} option spread(s), "
              f"{risk['open_equities']} share position(s)).\n"
              f"Overall the book is {bias}.")
+    # Sequence 1 (2026-08-05): a return without its drawdown flatters, a
+    # win rate without its lower bound overstates, and a gate nobody can
+    # count cannot be evaluated. All three ride here, each dropping its
+    # own line when absent.
+    for extra in (risk.get("wilson"), risk.get("drawdown"),
+                  risk.get("blocked")):
+        if extra:
+            value += "\n" + extra
+    if risk.get("ages"):
+        value += "\n" + " · ".join(
+            a.lstrip("• ") for a in risk["ages"])
     # One-firm-view (decision #82, VM-native since #83): the equity
     # desk's headline rides on the brief (the 2h card has the table).
     try:

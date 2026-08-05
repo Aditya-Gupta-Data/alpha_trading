@@ -30,6 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = ROOT / "data" / "brain_map.db"
 JOURNAL_PATH    = ROOT / "data" / "journal.jsonl"
+BLOCKS_PATH     = ROOT / "logs" / "exposure_blocks.jsonl"
 
 # Strategy-level net-delta bias approximation.
 # bull call / bear put spreads carry directional exposure; iron condor /
@@ -124,7 +125,137 @@ def compute_net_delta_exposure(open_spreads: list) -> float:
     return round(net, 2)
 
 
-def build_eod_card(db_path=None, halt_lines_fn=None) -> dict:
+# ============================= Sequence 1: reporting honesty (2026-08-05)
+#
+# SYSTEM_XRAY §9 found the daily cards showing numbers without the context
+# that decides what they mean. Four gaps, all closed here from data the
+# system ALREADY writes — no new collector, no new cron, no new risk.
+#
+#   * a raw win rate with no n and no lower bound (and `stat_gates
+#     .wilson_lower_bound` existed the whole time, described in MODULES.md
+#     as "THE number every displayed win-rate must carry")
+#   * an absolute return with no drawdown beside it, while `equity_curve`
+#     held peak and drawdown_pct per settlement
+#   * 645 risk-gate blocks the owner had never seen as a number
+#   * positions open 14+ days with no age anywhere on a card
+#
+# Every helper below is pure + injectable and fails open to None, so a
+# broken section costs its own line and never the card.
+
+WILSON_MIN_N = 5          # below this a bound is wider than it is useful
+
+
+def wilson_line(wins: int, losses: int) -> str | None:
+    """`12W/7L (n=19) · 63% · 95% lower bound 41%` — or None when there is
+    nothing honest to say.
+
+    The lower bound is the whole point: 63% off 19 trades is not evidence
+    of a 63% edge, and the card must say so in the same breath. Below
+    WILSON_MIN_N the bound is so wide it misleads in the other direction,
+    so we print the raw counts and explicitly withhold it."""
+    n = int(wins) + int(losses)
+    if n <= 0:
+        return None
+    raw = wins / n * 100
+    base = f"{wins}W/{losses}L (n={n}) · {raw:.0f}%"
+    if n < WILSON_MIN_N:
+        return base + f" · too few for a bound (n<{WILSON_MIN_N})"
+    try:
+        from src.validation.stat_gates import wilson_lower_bound
+        lo = wilson_lower_bound(int(wins), n) * 100
+    except Exception:
+        return base
+    return base + f" · 95% lower bound {lo:.0f}%"
+
+
+def drawdown_line(db_path=None) -> str | None:
+    """`peak Rs.244,215 · now Rs.239,424 · drawdown -1.96%` from the
+    equity_curve table, or None when the curve is empty.
+
+    The EOD card has shown `Absolute return +18%` for weeks with no
+    drawdown beside it. The data was already there — 18 rows carrying
+    equity, peak_equity and drawdown_pct — and nothing read it."""
+    path = Path(db_path or DEFAULT_DB_PATH)
+    if not path.exists():
+        return None
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT equity, peak_equity, drawdown_pct FROM equity_curve "
+                "ORDER BY ts DESC LIMIT 1").fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    equity, peak, dd = row
+    if equity is None or peak is None:
+        return None
+    dd = float(dd or 0.0)
+    flat = " (at peak)" if dd <= 0.0001 else ""
+    return (f"peak Rs.{float(peak):,.0f} · now Rs.{float(equity):,.0f} · "
+            f"drawdown -{dd:.2f}%{flat}")
+
+
+def blocked_line(today: str = None, blocks_path=None) -> str | None:
+    """`Blocked today: 3 (total 645)` from the exposure gate's ledger.
+
+    The single most under-reported number in the system: 645 blocks
+    against ~25 entries, and the owner only ever saw at most one Discord
+    note per (ticker, direction) per day. A gate nobody can count is a
+    gate nobody can evaluate."""
+    path = Path(blocks_path) if blocks_path else BLOCKS_PATH
+    today = today or _today()
+    total = todays = 0
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            total += 1
+            if f'"ts": "{today}' in line or f'"ts":"{today}' in line:
+                todays += 1
+    except OSError:
+        return None
+    if total == 0:
+        return None
+    return f"Blocked today: {todays} (total {total})"
+
+
+def position_age_lines(entries: list, today: str = None,
+                       max_lines: int = 6) -> list:
+    """`NIFTY BANK bear_put_spread — 12d open` per open position.
+
+    `book_context.position_dossier` already computed `days_in_trade` and
+    was CLI-only. An equity-desk position has been open since 2026-07-22
+    and no card has ever said so."""
+    from datetime import date as _date
+    try:
+        t = _date.fromisoformat(today) if today else _date.fromisoformat(_today())
+    except ValueError:
+        return []
+    out = []
+    for e in entries or []:
+        opened = (e.get("date") or "")[:10]
+        try:
+            age = max(0, (t - _date.fromisoformat(opened)).days)
+        except ValueError:
+            continue
+        what = ((e.get("spread") or {}).get("strategy")
+                or ("delivery" if e.get("plan") is not None else "position"))
+        tick = e.get("ticker") or (e.get("spread") or {}).get("underlying") or "?"
+        out.append((age, f"• {tick} {what} — {age}d open"))
+    out.sort(key=lambda x: -x[0])
+    lines = [s for _, s in out[:max_lines]]
+    if len(out) > max_lines:
+        lines.append(f"…and {len(out) - max_lines} more")
+    return lines
+
+
+def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None) -> dict:
     """Build the EOD broadcast payload from journal + brain_map.db.
 
     Returns a payload dict ready for broadcast_alert(payload). Exported so
@@ -191,8 +322,8 @@ def build_eod_card(db_path=None, halt_lines_fn=None) -> dict:
     if wins + losses > 0:
         fields.append({
             "name":   "Brain Map W/L",
-            "value":  f"{wins}W / {losses}L",
-            "inline": True,
+            "value":  wilson_line(wins, losses) or f"{wins}W / {losses}L",
+            "inline": False,
         })
 
     fields += [
@@ -210,6 +341,26 @@ def build_eod_card(db_path=None, halt_lines_fn=None) -> dict:
         })
     else:
         fields.append({"name": "Net Delta", "value": "±0 (flat)", "inline": True})
+
+    # Sequence 1 (2026-08-05): risk context the card never carried.
+    # Drawdown rides WITH the return — an absolute return shown alone is
+    # the number that flatters; the pair is the number that informs.
+    try:
+        risk = [x for x in (drawdown_line(db_path),
+                            blocked_line(today, blocks_path)) if x]
+        if risk:
+            fields.append({"name": "📉 Drawdown & Gate Activity",
+                           "value": "\n".join(risk)[:1024], "inline": False})
+    except Exception:
+        pass
+
+    try:
+        ages = position_age_lines(open_spreads + open_equities, today)
+        if ages:
+            fields.append({"name": "⏳ Position Age",
+                           "value": "\n".join(ages)[:1024], "inline": False})
+    except Exception:
+        pass
 
     # Directive 6 (#84): the firm's MTM + return line, prominent (first
     # field). Read-only compute, fail-open like every section here.

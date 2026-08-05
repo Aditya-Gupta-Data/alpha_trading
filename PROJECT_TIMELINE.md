@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-08-05 · 6 commits · 20 files touched
+### 2026-08-05 · 8 commits · 22 files touched
 
+- `17af0f6` docs(handover): 08-05 — edge_miner transport hardened, Mac brain_map fresh again
+- `6a5ba3f` fix(infra): harden edge_miner's SSH transport — retries, keep-alives, no escaping timeout
 - `c2dcca2` docs(handover): 08-05 night — Dept 5 is waiting, not broken; the wait is now measured
 - `d1cab11` fix(dept5): the depth gate MEASURES the wait — countdown vs corpse
 - `a53d41f` docs(handover): 08-05 late — ship resurrected, sector producer built, veto re-armed

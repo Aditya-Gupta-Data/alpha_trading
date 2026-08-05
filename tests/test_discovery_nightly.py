@@ -12,9 +12,10 @@ Run:
 """
 
 import json
+import sqlite3
 import sys
 import tempfile
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -141,8 +142,131 @@ def test_depth_gate_blocks_below_the_frame_floor():
         result, calls, _ = _run(tmp, frames=12)
     assert result["ran"] is False
     assert calls["mined"] == 0
-    assert result["gates"]["depth"] == {"ok": False, "frames": 12,
-                                        "min_frames": nightly.MIN_CONTEXT_FRAMES}
+    depth = result["gates"]["depth"]
+    assert depth["ok"] is False
+    assert depth["frames"] == 12
+    assert depth["min_frames"] == nightly.MIN_CONTEXT_FRAMES
+
+
+# ------------------------------------- countdown vs corpse (2026-08-05)
+#
+# The miner skipped 17 consecutive nights and the skip line said only
+# "daily_context 25/60 frames" — which reads IDENTICALLY whether the corpus
+# is growing on schedule or died three weeks ago. Nothing was broken; it was
+# simply unmeasurable. These pin the distinction.
+
+def _frames_conn(dates):
+    """An in-memory daily_context holding exactly these dates."""
+    conn = sqlite3.connect(":memory:")
+    from src import daily_context as dc
+    dc.ensure_schema(conn)
+    for d in dates:
+        conn.execute("INSERT INTO daily_context (date, payload) VALUES (?, ?)",
+                     (d, "{}"))
+    conn.commit()
+    return conn
+
+
+def _span(start: str, n: int) -> list:
+    d0 = date.fromisoformat(start)
+    return [(d0 + timedelta(days=i)).isoformat() for i in range(n)]
+
+
+def test_a_growing_corpus_reports_an_observed_rate_and_a_projected_date():
+    """The real 2026-08-05 state: 25 contiguous daily frames, still arriving.
+    The rate is MEASURED from the table's own span, never assumed."""
+    conn = _frames_conn(_span("2026-07-11", 25))
+    g = nightly.depth_gate(conn, today=date(2026, 8, 5))
+
+    assert g["ok"] is False and g["frames"] == 25
+    assert g["first_frame"] == "2026-07-11" and g["last_frame"] == "2026-08-04"
+    assert g["accruing"] is True
+    assert g["accrual_per_day"] == 1.0                # 24 frames over 24 days
+    assert g["days_to_go"] == 35                      # 60 - 25, at 1.0/day
+    assert g["projected_ready"] == "2026-09-08"
+
+    line = nightly.depth_reason(g)
+    assert "25/60" in line and "35 more nights" in line and "2026-09-08" in line
+    assert "NOT ACCRUING" not in line
+
+
+def test_a_stalled_corpus_is_named_as_stalled_not_as_a_countdown():
+    """The failure mode that was indistinguishable: Task G dies, frames
+    freeze, and the skip line looks exactly like a healthy wait."""
+    conn = _frames_conn(_span("2026-06-01", 25))      # newest = 2026-06-25
+    g = nightly.depth_gate(conn, today=date(2026, 8, 5))
+
+    assert g["ok"] is False and g["frames"] == 25
+    assert g["accruing"] is False
+    line = nightly.depth_reason(g)
+    assert "NOT ACCRUING" in line
+    assert "Task G" in line
+    assert "more nights" not in line                  # no false promise
+
+
+def test_the_staleness_boundary_is_the_declared_tolerance():
+    """Weekends and one flaky night must not read as death."""
+    frames = _span("2026-06-01", 25)                  # newest = 2026-06-25
+    on_time = nightly.depth_gate(
+        _frames_conn(frames), today=date(2026, 6, 28))     # 3 days old
+    late = nightly.depth_gate(
+        _frames_conn(frames), today=date(2026, 6, 29))     # 4 days old
+    assert nightly.STALE_FRAME_DAYS == 3
+    assert on_time["accruing"] is True
+    assert late["accruing"] is False
+
+
+def test_a_slower_corpus_projects_a_later_date_not_the_same_one():
+    """Every-other-day accrual must not silently report the daily ETA."""
+    every_other = [d for i, d in enumerate(_span("2026-07-01", 49)) if i % 2 == 0]
+    g = nightly.depth_gate(_frames_conn(every_other), today=date(2026, 8, 18))
+    assert g["frames"] == 25
+    assert g["accrual_per_day"] == 0.5
+    assert g["days_to_go"] == 70                      # (60-25)/0.5
+
+
+def test_a_met_floor_carries_no_countdown_at_all():
+    g = nightly.depth_gate(_frames_conn(_span("2026-05-01", 60)),
+                           today=date(2026, 6, 30))
+    assert g["ok"] is True
+    assert g["days_to_go"] is None and g["projected_ready"] is None
+
+
+def test_an_empty_table_never_divides_by_zero():
+    g = nightly.depth_gate(_frames_conn([]), today=date(2026, 8, 5))
+    assert g["ok"] is False and g["frames"] == 0
+    assert g["days_to_go"] is None
+    assert nightly.depth_reason(g) == "daily_context 0/60 frames"
+
+
+def test_a_single_frame_has_no_measurable_rate_and_claims_none():
+    g = nightly.depth_gate(_frames_conn(["2026-08-04"]), today=date(2026, 8, 5))
+    assert g["frames"] == 1
+    assert g["accruing"] is True                      # it IS fresh
+    assert g["accrual_per_day"] is None               # ...but one point is no trend
+    assert "more nights" not in nightly.depth_reason(g)
+
+
+def test_the_stalled_discord_note_reads_differently_from_the_countdown_one():
+    """The every-7th note is the only thing about this that ever reaches the
+    owner. A corpse and a countdown must not produce the same sentence."""
+    sent = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for _ in range(7):
+            logs = Path(tmp) / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            (logs / "deals_tracker.log").write_text("ran\n")
+            conn = _frames_conn(_span("2026-01-01", 12))   # long dead
+            nightly.run_nightly(
+                conn=conn, logs_dir=logs, now=NOW,
+                state_path=Path(tmp) / "state.json",
+                notify_fn=sent.append,
+                expected={"deals_tracker.log": False})
+            conn.close()
+    assert len(sent) == 1
+    assert "STOPPED GROWING" in sent[0]
+    assert "Task G" in sent[0]
+    assert "countdown, not" not in sent[0]
 
 
 # ------------------------------------------------- anti-silent-death

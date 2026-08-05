@@ -55,7 +55,7 @@ Manual:  python3 -m src.discovery.nightly
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -64,6 +64,7 @@ STATE_PATH = LOGS_DIR / ".discovery_nightly_state.json"
 
 MIN_CONTEXT_FRAMES = 60      # the depth floor (the panel rule as a number)
 NOTIFY_EVERY_SKIPS = 7       # one Discord note per 7 consecutive skips
+STALE_FRAME_DAYS = 3         # newest frame older than this => accrual STOPPED
 
 # The miners' upstream — the Data-department logs whose problem lines mean
 # "today's frames may be degraded or missing". Problem lines elsewhere
@@ -147,18 +148,88 @@ def health_gate(logs_dir: Path = None, now: datetime = None,
             "silent_jobs": silent, "ingestion_problems": problems}
 
 
-def depth_gate(conn, min_frames: int = MIN_CONTEXT_FRAMES) -> dict:
-    """{ok, frames}: is the daily_context series deep enough that mining
-    can plausibly clear the support floors? Missing table -> 0 frames."""
+def depth_gate(conn, min_frames: int = MIN_CONTEXT_FRAMES, today=None) -> dict:
+    """Is the daily_context series deep enough for mining to plausibly clear
+    the support floors? Missing table -> 0 frames.
+
+    MEASURED, not just counted (2026-08-05). `{ok, frames}` alone could not
+    tell the owner the one thing that matters: **is this a countdown or a
+    corpse?** A healthy 35-nights-to-go wait and a dead sleep-phase Task G
+    produced a byte-identical skip line, and the miner had skipped 17 nights
+    with no way to distinguish them from outside. So the gate now also
+    reports:
+
+      first_frame / last_frame  the real span in the table
+      accrual_per_day           OBSERVED from that span, never assumed
+      days_to_go/projected_ready  when the floor is actually reached
+      accruing                  False when the newest frame has gone stale —
+                                i.e. frames have STOPPED arriving, which is a
+                                genuine failure wearing a countdown's clothes
+
+    Read-only and fail-open: any failure degrades to the old {ok, frames}
+    shape with the extras None, never an exception into the nightly pass.
+    """
+    from datetime import date as _date
+
     from src import daily_context as dc
+    frames, first_f, last_f = 0, None, None
     try:
         dc.ensure_schema(conn)
-        frames = conn.execute(
-            "SELECT COUNT(*) FROM daily_context").fetchone()[0]
+        frames, first_f, last_f = conn.execute(
+            "SELECT COUNT(*), MIN(date), MAX(date) FROM daily_context"
+        ).fetchone()
+        frames = int(frames or 0)
     except Exception:
         frames = 0
-    return {"ok": frames >= min_frames, "frames": frames,
-            "min_frames": min_frames}
+
+    out = {"ok": frames >= min_frames, "frames": frames,
+           "min_frames": min_frames, "first_frame": first_f,
+           "last_frame": last_f, "accrual_per_day": None,
+           "days_to_go": None, "projected_ready": None, "accruing": None}
+    if out["ok"] or not (first_f and last_f):
+        return out
+
+    try:
+        today = today or _date.today()
+        if isinstance(today, str):
+            today = _date.fromisoformat(today)
+        first_d = _date.fromisoformat(str(first_f)[:10])
+        last_d = _date.fromisoformat(str(last_f)[:10])
+
+        age = (today - last_d).days
+        out["accruing"] = age <= STALE_FRAME_DAYS
+
+        span = (last_d - first_d).days
+        if span > 0 and frames > 1:
+            rate = (frames - 1) / span
+            out["accrual_per_day"] = round(rate, 3)
+            if rate > 0:
+                import math
+                to_go = math.ceil((min_frames - frames) / rate)
+                out["days_to_go"] = to_go
+                out["projected_ready"] = (
+                    last_d + timedelta(days=to_go)).isoformat()
+    except Exception:
+        pass                      # the extras are advisory; the gate is not
+    return out
+
+
+def depth_reason(depth: dict) -> str:
+    """The depth gate as one human line.
+
+    Two different sentences on purpose. `25/60 frames` alone reads the same
+    whether the corpus is growing on schedule or died three weeks ago, and
+    for 17 nights nobody could tell which. Now the line either carries a
+    projected date, or it says the corpus has stopped."""
+    base = f"daily_context {depth.get('frames')}/{depth.get('min_frames')} frames"
+    if depth.get("accruing") is False:
+        return (base + f" — ⚠️ NOT ACCRUING, newest frame {depth.get('last_frame')}"
+                       " (sleep-phase Task G is not recording)")
+    rate, eta, when = (depth.get("accrual_per_day"), depth.get("days_to_go"),
+                       depth.get("projected_ready"))
+    if rate and eta is not None:
+        return base + f" — accruing {rate:g}/day, ~{eta} more nights (≈{when})"
+    return base
 
 
 # ------------------------------------------------------------- the pass
@@ -190,7 +261,7 @@ def run_nightly(conn=None, logs_dir: Path = None, now: datetime = None,
         conn = brain_map.connect()
     try:
         health = health_gate(logs_dir, now=now, expected=expected)
-        depth = depth_gate(conn, min_frames=min_frames)
+        depth = depth_gate(conn, min_frames=min_frames, today=now.date())
         gates = {"health": health, "depth": depth}
 
         state = _load_state(state_path)
@@ -206,17 +277,26 @@ def run_nightly(conn=None, logs_dir: Path = None, now: datetime = None,
                 reasons.append(f"{health['ingestion_problems']} ingestion "
                                "problem line(s) today")
             if not depth["ok"]:
-                reasons.append(f"daily_context {depth['frames']}/"
-                               f"{depth['min_frames']} frames")
+                reasons.append(depth_reason(depth))
             line = ("(discovery nightly: SKIPPED — " + "; ".join(reasons)
                     + f" — {skips} consecutive)")
             print(line, flush=True)
             if skips % NOTIFY_EVERY_SKIPS == 0:
-                notify_fn(f"⛔ **Discovery pass has skipped {skips} nights "
-                          f"in a row** — {'; '.join(reasons)}. The gate is "
-                          "doing its job, but check whether the underlying "
-                          "condition (ingestion health / context depth) is "
-                          "being worked on.")
+                # A stalled corpus is an INCIDENT; a countdown is not. The
+                # note must not read the same for both — that equivalence is
+                # exactly what let 17 skips pass as normal.
+                stalled = depth.get("accruing") is False
+                head = ("🔴 **Discovery pass: the context corpus has STOPPED "
+                        f"GROWING** ({skips} skipped nights)"
+                        if stalled else
+                        f"⏳ **Discovery pass has skipped {skips} nights "
+                        "in a row**")
+                tail = ("Frames are no longer arriving — sleep-phase Task G "
+                        "(daily_context) is the thing to check, not the miner."
+                        if stalled else
+                        "The gate is doing its job; this is a countdown, not "
+                        "a fault. Check only that the corpus is still growing.")
+                notify_fn(f"{head} — {'; '.join(reasons)}. {tail}")
             return {"ran": False, "gates": gates, "consecutive_skips": skips}
 
         from src.discovery import run_miners

@@ -208,7 +208,20 @@ def test_analysis_from_closes_matches_live_contract():
     closes = [100.0 + 0.5 * i for i in range(220)]
     a = sim.analysis_from_closes("NIFTY 50", closes)
     assert a["uptrend"] is True and a["price"] == closes[-1]
-    assert set(a) == {"ticker", "uptrend", "fresh_cross", "rsi", "price"}
+    # 2026-08-05 (G3 wiring): both the live read and this replay clone
+    # grew the SMA DISTANCES that options_proposer.market_view now routes
+    # on. They must grow TOGETHER — a replay that emits a different key
+    # set silently falls back to the legacy binary branch and would route
+    # a different structure than the live engine did.
+    assert set(a) == {"ticker", "uptrend", "fresh_cross", "rsi", "price",
+                      "sma_fast", "sma_slow",
+                      "sma_fast_distance_pct", "sma_slow_distance_pct"}
+    import inspect
+
+    from src import suggestions
+    live_src = inspect.getsource(suggestions.analyze)
+    for key in set(a):
+        assert f'"{key}"' in live_src, f"{key} missing from the LIVE analyze()"
     assert sim.analysis_from_closes("NIFTY 50", closes[:150]) is None
 
 

@@ -514,3 +514,174 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}  {e}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+# ============ G3 diversity wiring (2026-08-05) ==========================
+#
+# 19 of 19 resolved trades were bear_put_spread; bull calls, condors and
+# butterflies had fired ZERO times. The diagnostic falsified the obvious
+# suspect (VIX never once exceeded the 16 gate — 12 readings, 12.00-14.16)
+# and found the cause in market_view: `if not analysis["uptrend"]: return
+# "bearish"` ran first and unconditionally, and "neutral" sat at the END of
+# the cascade, reachable only when uptrend was TRUE. RANGE was subordinated
+# to DIRECTION, so a sideways market below its 200-SMA — exactly when a
+# condor is right — could not be seen at all.
+
+def graded(fast_pct, slow_pct, rsi=50.0, fresh_cross=False, price=25000.0):
+    """An analyze() dict carrying the SMA DISTANCES the live read now
+    returns. `uptrend` is derived so the fixture can never disagree with
+    itself."""
+    return {"ticker": "NIFTY 50", "uptrend": slow_pct > 0,
+            "fresh_cross": fresh_cross, "rsi": rsi, "price": price,
+            "sma_fast_distance_pct": fast_pct,
+            "sma_slow_distance_pct": slow_pct}
+
+
+def test_a_flat_market_BELOW_its_200sma_is_now_neutral_not_bearish():
+    """THE headline fix. NIFTY BANK's real state on 2026-08-05: spot
+    hugging both averages, sma50 1.05% under sma200. The old code called
+    this 'bearish' 77 sessions out of 90."""
+    assert op.market_view(graded(fast_pct=-0.6, slow_pct=-1.05)) == "neutral"
+    assert op.market_view(graded(fast_pct=+0.4, slow_pct=-0.9)) == "neutral"
+
+
+def test_a_flat_market_ABOVE_its_200sma_is_also_neutral():
+    """Symmetry: range is judged on distance, not on which side."""
+    assert op.market_view(graded(fast_pct=0.7, slow_pct=1.1)) == "neutral"
+
+
+def test_a_flat_market_below_the_200sma_ROUTES_TO_IRON_CONDOR():
+    """End to end through build_proposal — the structure, not just the
+    label. This is the trade the engine could not previously make."""
+    res = build(graded(fast_pct=-0.6, slow_pct=-1.05), vix=13.5)
+    assert res["view"] == "neutral"
+    assert res["proposal"] is not None, res["reason"]
+    assert res["proposal"]["spread"]["strategy"] == "iron_condor"
+
+
+def test_a_real_downtrend_is_still_bearish():
+    """The gate got SIGHTED, not looser. A genuine collapse must still
+    route to the bear put spread."""
+    assert op.market_view(graded(fast_pct=-4.0, slow_pct=-8.0)) == "bearish"
+    res = build(graded(fast_pct=-4.0, slow_pct=-8.0), vix=13.0)
+    assert res["proposal"]["spread"]["strategy"] == "bear_put_spread"
+
+
+def test_a_real_uptrend_is_still_bullish():
+    assert op.market_view(graded(fast_pct=3.0, slow_pct=6.0)) == "bullish"
+    res = build(graded(fast_pct=3.0, slow_pct=6.0), vix=12.0)
+    assert res["proposal"]["spread"]["strategy"] == "bull_call_spread"
+
+
+def test_mixed_sign_averages_are_the_classifiers_own_range_read():
+    """spot above one average and below the other IS range-bound —
+    trade_planner.classify_trend has always said so, and nothing consumed
+    it until now."""
+    assert op.market_view(graded(fast_pct=2.5, slow_pct=-2.5)) == "neutral"
+
+
+# ------------------------------------------------ mean reversion (item 4)
+
+def test_oversold_in_a_MILD_downtrend_now_routes_to_a_bull_call():
+    """RSI 25 below the 200-SMA used to be UNREACHABLE: the `uptrend`
+    branch returned bearish before RSI was ever consulted."""
+    a = graded(fast_pct=-1.7, slow_pct=-1.8, rsi=25.0)
+    assert op.market_view(a) == "bullish"
+    res = build(a, vix=12.0)
+    assert res["proposal"]["spread"]["strategy"] == "bull_call_spread"
+
+
+def test_the_mean_reversion_window_is_narrow_and_that_is_documented():
+    """KNOWN LIMITATION, pinned so it is a decision and not a surprise.
+    Mean reversion needs a read that is directional (outside the 1.5% flat
+    band) but not `strong_bearish` (trade_planner.STRONG_TREND_PCT = 2.0).
+    That leaves only ~0.5pp of slow-SMA distance where an oversold bounce
+    can fire. Widening it means moving STRONG_TREND_PCT, which is shared
+    with the planner's own matrix — an owner call, not a wiring change."""
+    from src.trade_planner import STRONG_TREND_PCT
+    assert op.FLAT_BAND_PCT == 1.5 and STRONG_TREND_PCT == 2.0
+    assert op.market_view(graded(-1.4, -1.4, rsi=25.0)) == "neutral"      # flat
+    assert op.market_view(graded(-1.7, -1.8, rsi=25.0)) == "bullish"      # window
+    assert op.market_view(graded(-1.0, -3.0, rsi=25.0)) == "bearish"      # strong
+
+
+def test_oversold_in_a_STRONG_downtrend_stays_bearish():
+    """Deliberately NOT a falling knife. The graded read is exactly the
+    distinction the old binary `uptrend` bit could not express."""
+    a = graded(fast_pct=-5.0, slow_pct=-9.0, rsi=22.0)
+    assert op.market_view(a) == "bearish"
+
+
+def test_a_fresh_cross_still_leads_when_the_trend_agrees():
+    a = graded(fast_pct=1.0, slow_pct=2.5, fresh_cross=True, rsi=60.0)
+    assert op.market_view(a) == "bullish"
+
+
+# ------------------------------------------------ iron butterfly (item 3)
+
+def test_high_IV_neutral_routes_to_IRON_BUTTERFLY():
+    """construct_iron_butterfly was fully implemented, tested, and callable
+    from NOWHERE — no threshold could ever have fired it."""
+    res = build(graded(fast_pct=-0.6, slow_pct=-1.05), vix=15.2)
+    assert res["view"] == "neutral"
+    assert res["proposal"] is not None, res["reason"]
+    spread = res["proposal"]["spread"]
+    assert spread["strategy"] == "iron_butterfly"
+    # the body is ATM on BOTH sides, wings equidistant
+    sells = [l for l in spread["legs"] if l["side"] == "SELL"]
+    buys = [l for l in spread["legs"] if l["side"] == "BUY"]
+    assert len({l["strike"] for l in sells}) == 1          # one body strike
+    assert {l["option_type"] for l in sells} == {"CE", "PE"}
+    body = sells[0]["strike"]
+    assert sorted(l["strike"] for l in buys) == [
+        body - op.WING_STEPS * 50.0, body + op.WING_STEPS * 50.0]
+
+
+def test_the_butterfly_takes_only_the_UPPER_HALF_of_the_tradeable_band():
+    """(13, 16] is tradeable; >= 14.5 is its upper half. Below that a
+    condor's wider OTM shorts are the better range structure."""
+    assert op.BUTTERFLY_MIN_VIX == 14.5
+    flat = graded(fast_pct=-0.6, slow_pct=-1.05)
+    assert build(flat, vix=14.4)["proposal"]["spread"]["strategy"] == "iron_condor"
+    assert build(flat, vix=14.5)["proposal"]["spread"]["strategy"] == "iron_butterfly"
+
+
+def test_the_hard_VIX_16_gate_still_blocks_BOTH_range_structures():
+    """The gate that never actually fired in production must still work.
+    Neither credit structure may pass it."""
+    flat = graded(fast_pct=-0.6, slow_pct=-1.05)
+    for vix in (16.5, 25.0):
+        res = build(flat, vix=vix)
+        assert res["proposal"] is None
+        assert "range-bound structure blocked" in res["reason"]
+
+
+def test_an_unknown_vix_refuses_both_range_structures_fail_safe():
+    res = build(graded(fast_pct=-0.6, slow_pct=-1.05), vix=None)
+    assert res["proposal"] is None
+    assert "range-bound structure blocked" in res["reason"]
+
+
+# ------------------------------------------------ back-compat guard
+
+def test_a_legacy_analysis_dict_behaves_EXACTLY_as_before():
+    """Any caller or fixture without the SMA distances — including the
+    19 trades already in the journal — must route identically."""
+    assert op.market_view(make_analysis(uptrend=True, rsi=25)) == "bullish"
+    assert op.market_view(make_analysis(uptrend=True, fresh_cross=True)) == "bullish"
+    assert op.market_view(make_analysis(uptrend=False)) == "bearish"
+    assert op.market_view(make_analysis(uptrend=False, fresh_cross=True)) == "bearish"
+    assert op.market_view(make_analysis(uptrend=True, rsi=55)) == "neutral"
+    assert op.market_view(make_analysis(uptrend=True, rsi=None)) == "neutral"
+
+
+def test_the_live_read_now_carries_the_graded_inputs():
+    """analyze() must actually emit what market_view now consumes, or the
+    live path silently falls back to the legacy branch forever."""
+    import inspect
+    from src import suggestions
+    src = inspect.getsource(suggestions.analyze)
+    assert "sma_fast_distance_pct" in src and "sma_slow_distance_pct" in src
+    from src import simulator
+    sim = inspect.getsource(simulator.analysis_from_closes)
+    assert "sma_fast_distance_pct" in sim      # replay must match live

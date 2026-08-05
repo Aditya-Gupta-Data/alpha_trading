@@ -143,12 +143,24 @@ def analysis_from_closes(underlying: str, closes: list) -> dict | None:
     uptrend_today = sma(closes, MOVING_AVERAGE_FAST) > sma(closes, MOVING_AVERAGE_SLOW)
     uptrend_yesterday = (sma(closes[:-1], MOVING_AVERAGE_FAST)
                          > sma(closes[:-1], MOVING_AVERAGE_SLOW))
+    # Mirrors suggestions.analyze()'s 2026-08-05 addition exactly — the
+    # simulator must produce the SAME read as live or a replay would route
+    # a different structure than the engine would have.
+    fast = sma(closes, MOVING_AVERAGE_FAST)
+    slow = sma(closes, MOVING_AVERAGE_SLOW)
+    spot = closes[-1]
     return {
         "ticker": underlying,
         "uptrend": uptrend_today,
         "fresh_cross": uptrend_today != uptrend_yesterday,
         "rsi": rsi(closes[-(RSI_PERIOD * 3):], RSI_PERIOD),
-        "price": closes[-1],
+        "price": spot,
+        "sma_fast": fast,
+        "sma_slow": slow,
+        "sma_fast_distance_pct": (round((spot / fast - 1) * 100, 4)
+                                  if fast else None),
+        "sma_slow_distance_pct": (round((spot / slow - 1) * 100, 4)
+                                  if slow else None),
     }
 
 

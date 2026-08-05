@@ -60,20 +60,99 @@ SHORT_STRIKE_OTM_PCT = 2.0
 WING_STEPS = 4
 
 
+# ============ G3 diversity wiring (2026-08-05) ==========================
+#
+# THE BUG THIS FIXES, measured before it was touched. 19 of 19 resolved
+# trades were `bear_put_spread`; bull calls, condors and butterflies had
+# fired ZERO times. The diagnostic falsified the obvious suspect — VIX
+# never once exceeded the 16 gate (12 readings, 12.00-14.16) — and found
+# the cause in this function:
+#
+#     if not analysis["uptrend"]: return "bearish"     # unconditional
+#
+# `uptrend` is ONE BIT: sma50 > sma200. NIFTY BANK has been below its
+# 200-SMA since 2026-04-15, so every cycle for four months took that first
+# branch. Worse, "neutral" sat at the END of the cascade, reachable only
+# when uptrend was TRUE — so RANGE was subordinated to DIRECTION and a
+# sideways market below its 200-SMA (exactly when a condor is right) could
+# not be seen at all. Replay over 90 sessions: 77 bearish, 12 neutral, 1
+# bullish, and all 12 neutrals fell inside the brief window where
+# sma50 > sma200 still held.
+#
+# THE FIX, in the order the checks now run:
+#   1. RANGE FIRST, direction second. `classify_trend` (the graded
+#      classifier that already lived in trade_planner and was wired to
+#      NOTHING) plus an explicit flat band. A market hugging its averages
+#      is neutral whichever side of them it sits on.
+#   2. MEAN-REVERSION, but not into a falling knife. An oversold reading
+#      turns bullish only when the graded read is `bearish`, never
+#      `strong_bearish` — the grade is exactly the distinction the old
+#      binary bit could not express.
+#   3. GRADED DIRECTION for everything else.
+#
+# `uptrend`/`fresh_cross` are still honoured; the entry criteria did not
+# get looser, they got SIGHTED. A structure the market is not offering
+# must still not be proposed.
+
+# Spot within this % of BOTH averages = flat, regardless of sign. Sized
+# from the observed regime: NIFTY BANK's current sma50/sma200 deficit is
+# 1.05%, i.e. the market that produced 19 identical trades is genuinely
+# range-bound, not trending.
+FLAT_BAND_PCT = 1.5
+
+# The tradeable IV band is (IV_LOW_BELOW, VIX_BLOCK_ABOVE] = (13, 16].
+# Its UPPER HALF is where an ATM butterfly beats a condor: the body is
+# richest exactly when premium is dear, and the tighter structure takes more
+# credit for the same wing width.
+BUTTERFLY_MIN_VIX = 14.5
+
+
 def market_view(analysis: dict) -> str:
     """suggestions.analyze() result -> 'bullish' / 'bearish' / 'neutral'.
-    Same signal logic as the equity engine: a fresh golden cross or an
-    uptrend dip is bullish, any downtrend read is bearish, and a trend
-    with no actionable momentum is a range (mean-reversion) view."""
+
+    Range is judged BEFORE direction (see the block comment above). Falls
+    back to the original binary read when the graded inputs are absent, so
+    an injected/legacy analysis dict without the SMA distances behaves
+    exactly as it did before this change."""
     from src.config import RSI_OVERSOLD
-    if not analysis["uptrend"]:
-        return "bearish"
-    if analysis["fresh_cross"]:
+    from src.trade_planner import classify_trend
+
+    fast_pct = analysis.get("sma_fast_distance_pct")
+    slow_pct = analysis.get("sma_slow_distance_pct")
+    rsi = analysis.get("rsi")
+
+    if fast_pct is None or slow_pct is None:
+        # Legacy path, byte-identical to the pre-2026-08-05 behaviour.
+        if not analysis["uptrend"]:
+            return "bearish"
+        if analysis["fresh_cross"]:
+            return "bullish"
+        if rsi is not None and rsi <= RSI_OVERSOLD:
+            return "bullish"
+        return "neutral"
+
+    grade = classify_trend(fast_pct, slow_pct)
+
+    # 1. RANGE FIRST — a market pinned to its averages is a range whether
+    #    it sits above or below them. This is the decoupling.
+    if abs(slow_pct) < FLAT_BAND_PCT and abs(fast_pct) < FLAT_BAND_PCT:
+        return "neutral"
+    if grade == "neutral":          # mixed signs = the classifier's own range
+        return "neutral"
+
+    # 2. A fresh golden cross is still the strongest bullish tell.
+    if analysis.get("fresh_cross") and grade in ("bullish", "strong_bullish"):
         return "bullish"
-    rsi = analysis["rsi"]
-    if rsi is not None and rsi <= RSI_OVERSOLD:
+
+    # 3. MEAN REVERSION, deliberately NOT in a strong downtrend. Oversold
+    #    inside a mild pullback is a bounce; oversold inside a collapse is
+    #    a falling knife, and the graded read is what tells them apart.
+    if rsi is not None and rsi <= RSI_OVERSOLD and grade != "strong_bearish":
         return "bullish"
-    return "neutral"
+
+    if grade in ("bullish", "strong_bullish"):
+        return "bullish"
+    return "bearish"
 
 
 def pick_expiry(expiries: list, today: date = None) -> str | None:
@@ -233,6 +312,30 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         spread = sc.construct_bear_put_spread(hi, lo, prems[0], prems[1])
         signal = (f"bearish trend read on {underlying} — bear put spread "
                   f"{hi:g}/{lo:g} PE, defined risk")
+    elif view == "neutral" and vix is not None and vix >= BUTTERFLY_MIN_VIX:
+        # IRON BUTTERFLY (wired 2026-08-05). `construct_iron_butterfly`
+        # was fully implemented, tested and reachable from NOWHERE — no
+        # threshold could ever have fired it. It takes the upper half of
+        # the tradeable IV band (>= BUTTERFLY_MIN_VIX, still under the
+        # hard 16 gate): the ATM body is richest exactly when premium is
+        # dear, so a tighter structure earns more credit for the same
+        # wing width than a condor's OTM shorts would.
+        allowed, why_regime = sc.validate_regime("iron_butterfly")
+        if not allowed:
+            return {"proposal": None, "view": view, "vix": vix,
+                    "reason": f"range-bound structure blocked: {why_regime}"}
+        wing = WING_STEPS * step
+        prems = leg_premiums([(atm, "ce", "SELL"), (atm, "pe", "SELL"),
+                              (atm + wing, "ce", "BUY"),
+                              (atm - wing, "pe", "BUY")])
+        if prems is None:
+            return {"proposal": None, "view": view, "vix": vix,
+                    "reason": "no tradeable quotes at the chosen strikes"}
+        spread = sc.construct_iron_butterfly(atm, wing, prems[0], prems[1],
+                                             prems[2], prems[3])
+        signal = (f"neutral range read on {underlying} (VIX {vix:.1f}, upper "
+                  f"half of the tradeable band) — iron butterfly {atm:g} body, "
+                  f"wings {wing:g} wide")
     else:  # neutral -> iron condor, VIX-gated inside the constructor
         allowed, why_regime = sc.validate_regime("iron_condor")
         if not allowed:

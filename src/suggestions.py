@@ -47,12 +47,25 @@ def analyze(ticker: str):
     uptrend_today = sma(prices, TREND_WINDOW_SHORT) > sma(prices, TREND_WINDOW_LONG)
     uptrend_yesterday = sma(prices[:-1], TREND_WINDOW_SHORT) > sma(prices[:-1], TREND_WINDOW_LONG)
 
+    # ADDITIVE (2026-08-05, G3 wiring): the SMA DISTANCES, not just the
+    # binary cross. `uptrend` collapses the whole trend read into one bit,
+    # which is why a sideways market 1% under its 200-SMA was
+    # indistinguishable from a 20% collapse — see options_proposer
+    # .market_view. Every existing key is unchanged; these are extra.
+    fast, slow = sma(prices, TREND_WINDOW_SHORT), sma(prices, TREND_WINDOW_LONG)
+    spot = prices[-1]
     return {
         "ticker": ticker,
         "uptrend": uptrend_today,
         "fresh_cross": uptrend_today != uptrend_yesterday,
         "rsi": rsi(prices[-(RSI_PERIOD * 3):], RSI_PERIOD),
-        "price": prices[-1],
+        "price": spot,
+        "sma_fast": fast,
+        "sma_slow": slow,
+        "sma_fast_distance_pct": (round((spot / fast - 1) * 100, 4)
+                                  if fast else None),
+        "sma_slow_distance_pct": (round((spot / slow - 1) * 100, 4)
+                                  if slow else None),
     }
 
 

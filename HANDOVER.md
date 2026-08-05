@@ -42,6 +42,110 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-05 (night, later): edge_miner's SSH transport is hardened; the Mac's brain_map.db is FRESH again
+
+**Deployed to the VM this session** (`55e7a17`, `git pull` + `setup_cron.sh`,
+27 cron lines, 3 services active) and the Mac cron line for
+`fetch_sector_bars.py` is **installed**. Suite **1,783 green** (+10).
+
+### The diagnosis — one problem wearing three faces
+
+The pull died on three consecutive nights, and the three log lines look like
+three different bugs. They are one: a fragile SSH hop from a home connection
+to a `us-central1` box.
+
+```
+08-02  client_loop: send disconnect: Broken pipe        (stalled mid-copy)
+08-02  subprocess.TimeoutExpired after 120 seconds      (escaped as a raw
+                                                         TRACEBACK, not a result)
+08-03  kex_exchange_identification: read: Operation timed out
+       banner exchange: Connection to 35.239.254.99 port 22: Operation timed out
+```
+
+**This was never bandwidth.** `brain_map.db` is 3.6 MB and a healthy pull
+measures ~10s (timed). It is handshake fragility, and any one transient event
+killed the entire nightly cycle because there was no retry, no keep-alive, and
+one uncaught exception path.
+
+### The fix
+
+| Defect | Fix |
+|---|---|
+| No keep-alive → stalls became `Broken pipe` | `SSH_TUNING`: `ServerAliveInterval=60`, `ServerAliveCountMax=3`, `ConnectTimeout=30`, `ConnectionAttempts=3` |
+| No retry → one bad handshake killed the run | `run_resilient()` — 3 attempts, exponential backoff (5s, 10s), each failure NAMED on stdout |
+| `TimeoutExpired` escaped as a traceback | Caught and converted to an ordinary failed result. **Transient BY CONSTRUCTION, not by string match** — its message carries none of the network vocabulary the classifier looks for, which is exactly how it would have slipped through a naive fix |
+| 120s per attempt expired on 08-02 | Raised to 180s |
+| gcloud interpreter unpinned | `_run` now uses `config.gcloud_env()` — the standing rule from the ship fix |
+
+**A live finding worth writing down: `gcloud compute scp` does NOT accept the
+`-- -o …` passthrough that `gcloud compute ssh` does.** It reads the flags as
+extra source paths and errors out. Verified before building on it. Each tool
+has its own flag (`--scp-flag=` / `--ssh-flag=`) and they are not
+interchangeable — a plausible-looking single-flag fix would have silently
+disabled the keep-alives on the very hop that was failing.
+
+**Retry safety is stated at each of the four call sites.** The two pulls are
+read-only; the `/tmp` push overwrites; the remote apply replays
+`graph_engine.add_edge`, which is documented idempotent (reinforce, never
+duplicate). **Retrying a remote WRITE is only acceptable because of that
+property** — do not extend `run_resilient` to a writer that lacks it.
+
+### Also closed: a silent-failure sibling in the same file
+
+Step 5 (refresh the Mac's `data/` copies) **discarded its return value
+entirely.** `brain_map.db` could stay stale while the run reported
+`"status": "ok"` — the same disease as the ship bug and `live_quote`. Now
+checked, named on failure, and surfaced as `local_copies_refreshed` in the
+summary. It is still non-fatal (the mining already landed on the VM), but it
+can no longer be invisible.
+
+### Verified by a real forced run, not a mock
+
+```
+{"status": "ok", "outcomes_considered": 20, "triples_written_locally": 55,
+ "new_edges_applied_to_vm": 24, "local_copies_refreshed": true}
+```
+
+| | before | after |
+|---|---|---|
+| `data/brain_map.db` mtime | **2026-07-30 21:02** | **2026-08-05 15:46** |
+| `graph_edges` | 89 | **115** |
+| `daily_context` | 20 (max 07-30) | **26 (max 08-04)** — matches the VM |
+| `outcomes` | 384 | 385 |
+
+**24 new causal edges were applied to the VM** — a real production write, via
+the designed idempotent path. Ollama started on demand and stopped cleanly
+(`pgrep -lf ollama` empty afterwards), so the 08-04 standing constraint holds.
+
+**The two fixes verified each other.** An hour earlier the new Dept-5 stall
+detector had correctly called the Mac's copy `NOT ACCRUING, newest frame
+2026-07-30`. After this sync the same detector reads
+`26/60 frames — accruing 1/day, ~34 more nights (≈2026-09-07)`. The detector
+found a real stall, and the transport fix cleared it.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/edge_miner.py` | `SSH_TUNING`/`SCP_FLAGS`/`SSH_FLAGS`, `_transient()`, `run_resilient()`, all four transfers wrapped, step-5 return value checked, `gcloud_env()` |
+| `tests/test_edge_miner.py` | +10 transport tests (clock injected — nothing sleeps) |
+| `MODULES.md` | `edge_miner` + its test row |
+| Mac crontab | `fetch_sector_bars.py` at 19:10 Mon-Fri **installed** |
+| VM | pulled to `55e7a17`; 24 new `graph_edges` |
+
+### ⏭️ Next immediate steps
+
+1. **Watch tonight's 21:00 LaunchAgent run** — the first unattended exercise
+   of the retry path. Today's proof was a forced run.
+2. **The 19:10 sector-bars cron fires tonight for the first time.** Check
+   `logs/sector_bars.log`.
+3. Queue is otherwise as reported: reporting gaps (SYSTEM_XRAY §9 fixes 1–5)
+   is the recommended next item; then the 74-item bug ledger; then the orphan
+   decisions (RSS on/off, `report_downloader`'s dead crawl, corporate-events →
+   `equity_entry_checks` halt).
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-05 (night): the pattern-miner is NOT broken. It is waiting, and now it says so out loud.
 
 **Queue item #2. The headline is a negative finding, and it is the honest one:

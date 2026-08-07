@@ -216,25 +216,26 @@ Two halves were missing, not one:
 Measured live: **RELIANCE −12.0, HDFCBANK −8.5, TCS −7.7, INFY −6.4,
 ICICIBANK +11.3** vs their sectors.
 
-⚠️ **Most of them exceed the ±5% saturation band**, so they tie at rank
-1.00 and sort ahead of the four bar-less indices *without discriminating
-among themselves*. `RS_SATURATION_PCT` is a strategy parameter and was
-left alone. If the architect wants the router to rank stocks against each
-other, that constant is the lever — a freeze-breaking change.
-
-Verified on the VM after the backfill (4.1s, and it **does reorder** —
-RELIANCE fell below TCS, which the flat ranking could never do):
+**CORRECTED — the earlier saturation note was measured mid-backfill.**
+The VM's bhavcopy backfill finished at 16:07 IST (100 day-files,
+2026-03-23 → 2026-08-07). Against the COMPLETE lake the ranking
+discriminates properly and only two names saturate:
 
 ```
 underlying router: HDFCBANK.NS (rank 1.00, rs -1.00) > ICICIBANK.NS (1.00,
-+1.00) > INFY.NS (1.00, -1.00) > TCS.NS (1.00, -1.00) > RELIANCE.NS (0.81,
--0.81) > NIFTY 50 (0.00, rs — (no bars)) > … the three other indices
++1.00) > INFY.NS (0.77, -0.77) > RELIANCE.NS (0.33, -0.33) > TCS.NS (0.06,
+-0.06) > NIFTY 50 (0.00, rs — (no bars)) > … the three other indices
 ```
 
-The VM and Mac readings differ slightly for RELIANCE (−0.81 vs saturated)
-because the two lakes are different depths, so the 63-session window
-starts on a different date. Expected, not a defect — but it does mean the
-ranking is only as reproducible as the lake behind it.
+The 63-session spreads behind it: ICICIBANK **+11.78**, HDFCBANK −5.38,
+INFY −3.86, RELIANCE −1.63, TCS −0.28. So `RS_SATURATION_PCT = 5.0` is
+NOT the blunt instrument the mid-backfill reading suggested — it clips
+the two genuine outliers and leaves the middle of the field ordered. **No
+change to that constant is needed.** Readings taken while the lake was
+still filling are not comparable to these; the earlier numbers in this
+file are left as written but should not be quoted.
+
+The ranking is only as good as the lake behind it — that part stands.
 
 Indices honestly return **no bars** (an equity bhavcopy does not carry
 them) and print `rs — (no bars)` rather than a fabricated `+0.00`. That

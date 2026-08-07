@@ -593,7 +593,14 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         prices = {}
     lots = sc.size_lots(spread, book, prices, risk_pct=_risk_pct)
     if lots <= 0:
+        # `rejected_spread` (2026-08-07) is ADDITIVE OBSERVABILITY: the
+        # structure the engine built and then refused. Nothing reads it on
+        # the trading path — it exists so `ghost_tracker` can mark a
+        # refused trade to market instead of guessing what it was. Without
+        # it a rejection is just a sentence, and "what would it have done?"
+        # is unanswerable.
         return {"proposal": None, "view": view, "vix": vix,
+                "rejected_spread": spread, "expiry": expiry,
                 "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot doesn't fit "
                            f"the {_risk_pct:g}% options risk "
                            f"budget (or SPAN margin exceeds cash)")}
@@ -603,6 +610,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         lots = min(lots, int(MAX_RISK_PER_TRADE_RS // spread["max_loss"]))
     if lots <= 0:
         return {"proposal": None, "view": view, "vix": vix,
+                "rejected_spread": spread, "expiry": expiry,
                 "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot exceeds "
                            f"the Rs.{MAX_RISK_PER_TRADE_RS:,.0f} hard "
                            f"per-trade risk cap")}
@@ -616,6 +624,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         _sizing = None
     if lots <= 0:
         return {"proposal": None, "view": view, "vix": vix,
+                "rejected_spread": spread, "expiry": expiry,
                 "reason": ("adaptive sizing veto: "
                            + (_sizing or {}).get("detail", "earned veto"))}
 
@@ -850,6 +859,41 @@ def paper_auto_approve_enabled() -> bool:
             .strip().lower() in ("1", "true", "yes"))
 
 
+def _rejected_facts(underlying: str, result: dict, proposal: dict = None) -> dict:
+    """The refused structure, flattened for the proposal ledger.
+
+    A refusal used to be a sentence and nothing else, so "what would that
+    trade have done?" had no answer — there were no strikes to price. This
+    carries the legs the engine actually built. It is OBSERVABILITY ONLY:
+    nothing on the trading path reads it, and it never raises, because a
+    telemetry helper that can break a refusal path would be strictly worse
+    than no telemetry at all.
+
+    `lots` is deliberately absent for a size-refused trade: the engine
+    computed zero lots, and the ghost tracker prices ONE lot and says so
+    rather than inventing a size the sizer never authorised."""
+    try:
+        spread = (proposal or {}).get("spread") or result.get("rejected_spread")
+        if not spread:
+            return {}
+        return {
+            "strategy": spread.get("strategy"),
+            "direction": spread.get("direction"),
+            "legs": spread.get("legs"),
+            "lot_size": spread.get("lot_size"),
+            "max_loss": spread.get("max_loss"),
+            "max_profit": spread.get("max_profit"),
+            "net_credit": spread.get("net_credit"),
+            "net_debit": spread.get("net_debit"),
+            "lots": (proposal or {}).get("lots"),
+            "expiry": (proposal or {}).get("expiry") or result.get("expiry"),
+            "spot": (proposal or {}).get("spot") or result.get("spot"),
+            "view": result.get("view"),
+        }
+    except Exception:
+        return {}
+
+
 def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     """The market loop's entry point: build the proposal, fire the rich
     Discord alert, journal the entry as PENDING_APPROVAL, and return
@@ -879,7 +923,11 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
                  if k in vol_overrides}
     result = build_proposal(underlying, **state, **bp_extras)
     if result["proposal"] is None:
-        return {"proposed": False, "reason": result["reason"], "entry": None}
+        # `rejected` rides along for the proposal ledger / ghost tracker
+        # (2026-08-07). Additive only — every caller reads `proposed`,
+        # `reason` and `entry`, and none of them looks at this.
+        return {"proposed": False, "reason": result["reason"], "entry": None,
+                "rejected": _rejected_facts(underlying, result)}
     p = result["proposal"]
     # Decision #68: one open position per underlying+direction. Sits
     # BEFORE enrichment, the evidence stamp and the margin gate — a
@@ -891,7 +939,8 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
         allowed, exp_reason = exposure_gate.gate_entry(
             p, notify_fn=_notify_discord)
         if not allowed:
-            return {"proposed": False, "reason": exp_reason, "entry": None}
+            return {"proposed": False, "reason": exp_reason, "entry": None,
+                    "rejected": _rejected_facts(underlying, result, p)}
     # Book context (annotate-only, #63 stage 1): what the real book already
     # holds and why, so the newcomer is judged in context. Sandbox books are
     # exempt (their journal isn't their book); fail-open — a broken book
@@ -957,7 +1006,8 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
         allowed, gate_reason = pm.gate_headless_entry(
             entry["short_id"], pm.required_margin_for(p))
         if not allowed:
-            return {"proposed": False, "reason": gate_reason, "entry": None}
+            return {"proposed": False, "reason": gate_reason, "entry": None,
+                    "rejected": _rejected_facts(underlying, result, p)}
     journal.log(entry)
     # Auto-approve NEVER applies to an injected book: decide_pending's
     # margin gate only knows the REAL Rs.10L account, so auto-approving a

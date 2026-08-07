@@ -136,12 +136,45 @@ def _entry_facts(entry: dict) -> dict:
     }
 
 
+def _rejected_facts(result: dict) -> dict:
+    """The refused structure the proposer now hands back (2026-08-07).
+
+    Without this a refusal is a sentence with no strikes in it, and
+    `ghost_tracker` has nothing to mark to market. The legs ride onto the
+    row verbatim; `entry_net` is the per-lot premium the structure was
+    built at, signed the way P&L reads it (a credit is money in)."""
+    rej = (result or {}).get("rejected") or {}
+    if not rej or not rej.get("legs"):
+        return {}
+    credit, debit = rej.get("net_credit"), rej.get("net_debit")
+    entry_net = credit if credit is not None else (
+        -debit if debit is not None else None)
+    return {
+        "strategy": rej.get("strategy"),
+        "direction": rej.get("direction"),
+        "legs": rej.get("legs"),
+        "lot_size": rej.get("lot_size"),
+        "lots": rej.get("lots"),
+        "expiry": rej.get("expiry"),
+        "entry_net": entry_net,
+        "max_loss": rej.get("max_loss"),
+        "max_profit": rej.get("max_profit"),
+    }
+
+
 def row_for(underlying: str, result: dict, state: dict = None,
             now=None) -> dict:
     """The ledger row. Pure — no I/O, so it is trivially testable."""
     ts = _now(now)
     reason = None if result is None else result.get("reason")
     facts = _entry_facts((result or {}).get("entry"))
+    rejected = _rejected_facts(result)
+    # The refused structure fills in what the entry object would have
+    # carried — strategy/direction/expiry — WITHOUT overwriting a real
+    # entry's own values on a proposal that actually fired.
+    for k, v in rejected.items():
+        if facts.get(k) is None:
+            facts[k] = v
     row = {
         "ts": ts.isoformat(timespec="seconds"),
         "session_date": ts.date().isoformat(),

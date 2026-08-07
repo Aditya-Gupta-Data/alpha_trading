@@ -209,3 +209,58 @@ def test_audit_greedy_replay_squeezes_entries_out_of_a_small_pool(monkeypatch):
     r = MA.audit([_entry("a", 10_000.0), _entry("b", 10_000.0)], pool=25_000.0)
     assert r["n_squeezed_out_at_panic"] == 1
     assert r["squeezed_out_ids"] == ["b"]
+
+
+# ------------------------------------------------- capital injection (08-07)
+# The architect raised the pool from decision #84's Rs.2,00,000 to
+# Rs.10,00,000 after Friday's session refused entries for margin with
+# Rs.2,957 liquid against Rs.2,36,466 locked. Before this the only door was
+# hand-SQL, which leaves no trace of who moved what.
+
+def test_injection_raises_the_base_and_the_liquid_cash(conn):
+    pm.request_entry(conn, "t1", 50_000.0)
+    before = pm.account_summary(conn)
+    out = pm.inject_capital(800_000.0, why="architect: 2L -> 10L", conn=conn)
+    after = out["after"]
+    assert after["starting_capital"] == before["starting_capital"] + 800_000.0
+    assert after["available_cash"] == before["available_cash"] + 800_000.0
+    assert after["locked_margin"] == before["locked_margin"]   # locks intact
+
+
+def test_an_injection_is_not_a_profit(conn):
+    """Folding it into realized_pnl would corrupt every performance number
+    computed off this row."""
+    conn.execute("UPDATE account_state SET realized_pnl = 39423.99 WHERE id = 1")
+    conn.commit()
+    pm.inject_capital(800_000.0, conn=conn)
+    assert pm.account_summary(conn)["realized_pnl"] == 39423.99
+
+
+def test_the_peak_ratchets_so_the_ruin_halt_still_arms(conn):
+    """A 2L-era peak under a 10L book would leave equity permanently above
+    the peak — a drawdown halt that can never arm."""
+    pm.inject_capital(800_000.0, conn=conn)
+    after = pm.account_summary(conn)
+    assert after["peak_equity"] >= after["equity"]
+    assert after["drawdown_pct"] == 0.0
+
+
+def test_every_injection_is_written_to_the_append_only_trail(conn):
+    pm.inject_capital(800_000.0, why="architect order", conn=conn)
+    rows = conn.execute("SELECT event_type, detail FROM account_events "
+                        "WHERE event_type = 'capital_injection'").fetchall()
+    assert len(rows) == 1
+    assert "architect order" in rows[0][1] and "800,000.00" in rows[0][1]
+
+
+def test_a_zero_injection_changes_nothing_and_logs_nothing(conn):
+    out = pm.inject_capital(0, conn=conn)
+    assert out["before"] == out["after"]
+    assert conn.execute("SELECT COUNT(*) FROM account_events WHERE "
+                        "event_type = 'capital_injection'").fetchone()[0] == 0
+
+
+def test_a_withdrawal_is_the_same_door_in_reverse(conn):
+    pm.inject_capital(800_000.0, conn=conn)
+    pm.inject_capital(-300_000.0, why="trim", conn=conn)
+    assert pm.account_summary(conn)["starting_capital"] == 1_500_000.0

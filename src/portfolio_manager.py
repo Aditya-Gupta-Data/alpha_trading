@@ -450,6 +450,66 @@ def release_margin(conn, journal_ref: str, pnl_net: float = 0.0) -> dict:
                 halted=trading_halted(conn))
 
 
+def inject_capital(amount: float, why: str = "", conn=None,
+                   now_iso=None) -> dict:
+    """Add (or withdraw, if negative) capital to the paper account.
+
+    THE OWNER'S DOOR, added 2026-08-07 when the architect raised the pool
+    from the ₹2,00,000 of decision #84 to ₹10,00,000. Before this the only
+    way to change the base was hand-SQL against `account_state`, which
+    leaves no trace of who changed what or when.
+
+    It moves `starting_capital` and NOTHING else that matters:
+
+      * `realized_pnl` is UNTOUCHED — an injection is not a profit, and
+        folding it into P&L would corrupt every performance number
+        computed off this row.
+      * open `margin_locks` are UNTOUCHED — live positions keep their
+        locks and settle normally. Available cash rises because equity
+        rose, not because anything was released.
+      * `peak_equity` is RATCHETED to the new equity. The drawdown halt
+        trails the peak, and leaving a ₹2L-era peak under a ₹10L book
+        would make the 10% ruin buffer meaningless in the other
+        direction (equity permanently above peak = a halt that can never
+        arm until the peak catches up).
+      * one `capital_injection` row is appended to `account_events` —
+        that table is the append-only audit trail, and a capital change
+        that isn't in it is a capital change nobody can reconstruct.
+
+    Returns {before, after, injected, why}. Raises on a non-numeric
+    amount: this is an owner-invoked operation, not a pipeline seam, and
+    silently doing nothing with the money would be the worst outcome."""
+    own = conn is None
+    if conn is None:
+        conn = brain_map.connect()
+    try:
+        amount = float(amount)
+        before = account_summary(conn)
+        if amount == 0:
+            return {"before": before, "after": before, "injected": 0.0,
+                    "why": why}
+        conn.execute(
+            "UPDATE account_state SET starting_capital = starting_capital + ?, "
+            "peak_equity = max(peak_equity, starting_capital + realized_pnl + ?) "
+            "WHERE id = 1", (amount, amount))
+        conn.commit()
+        after = account_summary(conn)
+        log_event(conn, "capital_injection",
+                  f"Rs.{amount:,.2f} "
+                  f"({before['starting_capital']:,.2f} -> "
+                  f"{after['starting_capital']:,.2f} base; equity "
+                  f"{before['equity']:,.2f} -> {after['equity']:,.2f}; "
+                  f"available cash {before['available_cash']:,.2f} -> "
+                  f"{after['available_cash']:,.2f})"
+                  + (f" — {why}" if why else ""))
+        _snapshot_equity(conn)
+        return {"before": before, "after": after, "injected": amount,
+                "why": why}
+    finally:
+        if own:
+            conn.close()
+
+
 def account_summary(conn) -> dict:
     """One dict with everything the CLI / notifier could want to show."""
     acct = get_account(conn)
@@ -531,7 +591,29 @@ def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None) -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
     import json
+    import sys
+
+    ap = argparse.ArgumentParser(description="The paper account")
+    ap.add_argument("--inject", type=float, default=None,
+                    help="add this many rupees to starting_capital "
+                         "(negative withdraws)")
+    ap.add_argument("--why", default="", help="audit note for --inject")
+    ap.add_argument("--yes", action="store_true",
+                    help="required with --inject: this moves real paper "
+                         "capital and is written to the append-only ledger")
+    cli = ap.parse_args()
+
     connection = brain_map.connect()
-    print(json.dumps(account_summary(connection), indent=2))
+    if cli.inject is not None:
+        if not cli.yes:
+            print("Refusing to move capital without --yes.")
+            print(f"Would inject Rs.{cli.inject:,.2f}. Re-run with --yes.")
+            connection.close()
+            sys.exit(1)
+        print(json.dumps(inject_capital(cli.inject, why=cli.why,
+                                        conn=connection), indent=2))
+    else:
+        print(json.dumps(account_summary(connection), indent=2))
     connection.close()

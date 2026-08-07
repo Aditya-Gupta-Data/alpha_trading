@@ -149,3 +149,46 @@ def test_tier_inputs_read_fresh_table():
 
 if __name__ == "__main__":
     print("Run via pytest: python -m pytest tests/test_firm_treasury.py")
+
+
+# ---------------------------------------- the pool-scale rebase (08-07)
+# `get_budget` seeds from the config ONCE and never reads it again, so
+# raising `equity_desk_capital_rs` after the ₹2L -> ₹10L injection moved
+# NOTHING: the live row still said ₹60,000 and the step-capped rotation
+# would have walked it up over three sessions.
+
+def test_a_rebase_jumps_the_step_cap_a_rotation_could_not():
+    conn = _conn()
+    ft.set_budget(conn, 60_000.0, "the 2L-era budget")
+    out = ft.rebase_budget(300_000.0, why="pool 2L -> 10L", conn=conn,
+                           ledger_path=Path(tempfile.mkdtemp()) / "l.jsonl")
+    assert out["before"] == 60_000.0 and out["after"] == 300_000.0
+    # A rotation could only have moved one step per day toward that.
+    assert ft.plan_move(60_000.0, 300_000.0)["move"] == ft.TREASURY_MAX_STEP_RS
+
+
+def test_a_rebase_is_written_to_the_ledger_and_the_audit_trail():
+    conn = _conn()
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp) / "treasury_ledger.jsonl"
+        ft.rebase_budget(300_000.0, why="architect order", conn=conn,
+                         ledger_path=ledger)
+        rows = [json.loads(l) for l in ledger.read_text().splitlines()]
+        assert rows[-1]["action"] == "rebase"
+        assert rows[-1]["after_rs"] == 300_000.0
+        assert rows[-1]["why"] == "architect order"
+    events = [r[0] for r in conn.execute(
+        "SELECT detail FROM account_events WHERE event_type = "
+        "'treasury_rotation'")]
+    assert any("300,000.00" in e for e in events)
+
+
+def test_the_rotation_step_cap_is_untouched_by_the_rebase_door():
+    """The cap exists so the router cannot lurch the book on a noisy
+    signal. The manual door must not become a way around it on a cron."""
+    conn = _conn()
+    ft.rebase_budget(300_000.0, conn=conn,
+                     ledger_path=Path(tempfile.mkdtemp()) / "l.jsonl")
+    # From 300k, a target of 600k still moves exactly one capped step.
+    assert ft.plan_move(300_000.0, 600_000.0)["move"] == ft.TREASURY_MAX_STEP_RS
+    assert ft.plan_move(300_000.0, 320_000.0)["move"] == 0.0   # deadband holds

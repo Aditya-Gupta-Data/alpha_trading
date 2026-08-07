@@ -121,6 +121,39 @@ def get_budget(conn=None) -> float:
             conn.close()
 
 
+def rebase_budget(budget_rs: float, why: str = "", conn=None,
+                  ledger_path=None) -> dict:
+    """Set the equity budget outright, outside the rotation's step cap.
+
+    THE PROBLEM THIS SOLVES (2026-08-07): `get_budget` seeds from
+    `equity_desk_capital_rs` ONCE and never reads the config again —
+    thereafter only rotations move it, and a rotation is deadband- and
+    step-capped by design. So after the pool went ₹2L → ₹10L, raising the
+    config from ₹60k to ₹3L moved NOTHING: the live row still said
+    ₹60,000, and the rotation would have walked it up ₹1L a day over
+    three sessions while the desk stayed underfunded.
+
+    This is the deliberate door for a POOL-SCALE change — the treasury
+    equivalent of `portfolio_manager.inject_capital`. It is not part of
+    the daily cycle and nothing calls it automatically: the step cap
+    exists so the router cannot lurch the book around on a noisy signal,
+    and quietly bypassing it on a schedule would delete that protection.
+
+    Returns {before, after, why}; writes the ledger row and the audit
+    event itself (unlike `set_budget`, whose caller owns those)."""
+    conn, owns = _connect(conn)
+    try:
+        before = get_budget(conn)
+        after = set_budget(conn, budget_rs, why or "manual rebase")
+        _ledger_append({"action": "rebase", "before_rs": before,
+                        "after_rs": after, "pool_rs": firm_pool(conn),
+                        "why": why}, ledger_path=ledger_path)
+        return {"before": before, "after": after, "why": why}
+    finally:
+        if owns:
+            conn.close()
+
+
 def set_budget(conn, budget_rs: float, why: str) -> float:
     """One atomic budget move + its audit event. The caller (rotation)
     owns the ledger row and the card."""
@@ -369,7 +402,24 @@ def vm_push_file(local_path, remote_rel: str = "data/", run_fn=None,
 
 if __name__ == "__main__":
     import sys
-    if "--rotate" in sys.argv:
+    if "--rebase" in sys.argv:
+        i = sys.argv.index("--rebase")
+        try:
+            amount = float(sys.argv[i + 1])
+        except (IndexError, ValueError):
+            print("usage: --rebase <rupees> [--why \"...\"] --yes")
+            raise SystemExit(2)
+        if "--yes" not in sys.argv:
+            print(f"Refusing to rebase the equity budget to "
+                  f"Rs.{amount:,.2f} without --yes.")
+            raise SystemExit(1)
+        why = ""
+        if "--why" in sys.argv:
+            j = sys.argv.index("--why")
+            why = sys.argv[j + 1] if j + 1 < len(sys.argv) else ""
+        print(json.dumps(rebase_budget(amount, why=why), indent=2,
+                         default=str))
+    elif "--rotate" in sys.argv:
         if not TREASURY_ENABLED:
             print("treasury disabled (treasury_enabled=false)")
         else:

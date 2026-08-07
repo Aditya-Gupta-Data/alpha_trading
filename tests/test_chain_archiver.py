@@ -43,10 +43,10 @@ def _fetchers(expiries=("2026-07-16", "2026-07-23", "2026-07-30",
 def test_captures_nearest_expiries_only_and_throttles():
     f, calls = _fetchers()
     rows = ca.capture_underlying("NIFTY 50", "nifty", date(2026, 7, 10), **f)
-    assert len(rows) == ca.MAX_EXPIRIES                 # capped at nearest 4
+    assert len(rows) == 4                               # NIFTY keeps 4
     assert [r["expiry"] for r in rows] == ["2026-07-16", "2026-07-23",
                                            "2026-07-30", "2026-08-27"]
-    assert len(calls["sleeps"]) == ca.MAX_EXPIRIES - 1  # throttle between calls
+    assert len(calls["sleeps"]) == 3                    # throttle between calls
     assert rows[0]["spot"] == 25000.0 and rows[0]["vix"] == 13.5
     assert rows[0]["oc"]                                 # chain payload kept
 
@@ -74,10 +74,10 @@ def test_run_writes_lake_partitions_per_underlying():
     with tempfile.TemporaryDirectory() as tmp:
         f, _ = _fetchers()
         summary = ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
-        assert summary["captured"]["NIFTY 50"] == ca.MAX_EXPIRIES
+        assert summary["captured"]["NIFTY 50"] == 4
         assert summary["captured"]["NIFTY BANK"] == ca.MAX_EXPIRIES
         rows = lake.read_day("chains/nifty", "2026-07-10", root=tmp)
-        assert len(rows) == ca.MAX_EXPIRIES
+        assert len(rows) == 4
         assert rows[0]["underlying"] == "NIFTY 50"
         assert lake.read_day("chains/banknifty", "2026-07-10", root=tmp)
 
@@ -88,7 +88,71 @@ def test_weekend_skips_unless_forced():
         summary = ca.run(today=date(2026, 7, 11), lake_root=tmp, **f)  # Saturday
         assert summary["skipped"] == "weekend" and not calls["chain"]
         summary = ca.run(today=date(2026, 7, 11), lake_root=tmp, force=True, **f)
-        assert summary["captured"]["NIFTY 50"] == ca.MAX_EXPIRIES
+        assert summary["captured"]["NIFTY 50"] == 4
+
+
+# ------------------------------------------- the 2026-08-07 expansion
+# The desk went 2 -> 9 underlyings on 08-05 but only two chains were being
+# captured, so a refused FINNIFTY or equity-option trade could not be
+# priced by `ghost_tracker` at all — and decision #36's clock applies to
+# every underlying equally: a chain not captured today is gone tomorrow.
+
+
+def test_the_whole_live_universe_is_archived():
+    """Drift guard: the archiver's universe must not fall behind the
+    market loop's. Anything the desk can trade, it must capture."""
+    from src import market_loop as ml
+    assert set(ca.UNDERLYINGS) == set(ml.UNDERLYINGS)
+    assert len(ca.UNDERLYINGS) == 9
+
+
+def test_the_existing_slugs_are_never_renamed():
+    """`chains/nifty` and `chains/banknifty` already hold history; a slug
+    rename would orphan every partition written before today."""
+    assert ca.UNDERLYINGS["NIFTY 50"] == "nifty"
+    assert ca.UNDERLYINGS["NIFTY BANK"] == "banknifty"
+
+
+def test_slugs_are_unique_so_no_two_underlyings_share_a_partition():
+    assert len(set(ca.UNDERLYINGS.values())) == len(ca.UNDERLYINGS)
+
+
+def test_only_the_weekly_carrying_index_takes_four_expiries():
+    """FINNIFTY/MIDCPNIFTY and the five stocks are MONTHLY-ONLY, so a
+    4-deep sweep reaches contracts nobody trades — 4x the calls and 4x
+    the storage for the same live month."""
+    assert ca.expiries_wanted("NIFTY 50") == 4
+    for u in ("NIFTY BANK", "NIFTY FIN SERVICE", "NIFTY MID SELECT",
+              "TCS.NS", "RELIANCE.NS"):
+        assert ca.expiries_wanted(u) == 2
+
+
+def test_underlyings_are_paced_apart():
+    """Nine underlyings back-to-back is a burst on an account with ONE
+    rate budget. The pause makes the sweep a drip."""
+    with tempfile.TemporaryDirectory() as tmp:
+        f, calls = _fetchers()
+        ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
+        pauses = [s for s in calls["sleeps"] if s == ca.UNDERLYING_PAUSE_SECONDS]
+        assert len(pauses) == len(ca.UNDERLYINGS) - 1
+
+
+def test_one_dead_underlying_never_costs_the_other_eight():
+    """A stock chain that answers nothing must not abort the sweep."""
+    with tempfile.TemporaryDirectory() as tmp:
+        f, _ = _fetchers()
+        good = f["chain_fn"]
+
+        def chain_fn(u, e):
+            if u == "TCS.NS":
+                raise RuntimeError("simulated DH-905")
+            return good(u, e)
+
+        f["chain_fn"] = chain_fn
+        summary = ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
+        assert summary["captured"]["TCS.NS"] == 0
+        assert summary["captured"]["NIFTY 50"] == 4
+        assert summary["captured"]["RELIANCE.NS"] == 2
 
 
 if __name__ == "__main__":

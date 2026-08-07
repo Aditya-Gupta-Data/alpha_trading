@@ -40,13 +40,51 @@ from src import lake
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-# The two liquid index chains the engine actually trades (Phase 5 scope).
-UNDERLYINGS = {"NIFTY 50": "nifty", "NIFTY BANK": "banknifty"}
+# EXPANDED 2026-08-07 from the two Phase-5 index chains to the WHOLE live
+# universe. The desk went 2 -> 9 underlyings on 08-05, but only NIFTY and
+# BANKNIFTY chains were being captured, so `ghost_tracker` could not price
+# a refused FINNIFTY or equity-option trade at all — and decision #36's
+# clock applies to every one of them equally: a chain not captured today
+# is not retrievable tomorrow.
+#
+# Slugs are the lake directory names and are PERMANENT: `chains/nifty` and
+# `chains/banknifty` already hold history, so those two keep their
+# original slugs rather than being renamed to match a new convention.
+UNDERLYINGS = {
+    "NIFTY 50": "nifty",
+    "NIFTY BANK": "banknifty",
+    "NIFTY FIN SERVICE": "finnifty",
+    "NIFTY MID SELECT": "midcpnifty",
+    "RELIANCE.NS": "reliance",
+    "HDFCBANK.NS": "hdfcbank",
+    "ICICIBANK.NS": "icicibank",
+    "INFY.NS": "infy",
+    "TCS.NS": "tcs",
+}
 
 # Capture the nearest N expiries per underlying: the active weekly/monthly
 # contracts where all trading (and all future feature value) concentrates.
-MAX_EXPIRIES = 4
+#
+# 2 is deliberate for everything except NIFTY. FINNIFTY, MIDCPNIFTY and all
+# five equity names are MONTHLY-ONLY (measured against the scrip master on
+# 08-05), so "the nearest 4" reaches four months out into contracts nobody
+# trades and nothing will ever backtest — 4x the calls and 4x the storage
+# for the same one or two live months. NIFTY still carries weeklies, which
+# is exactly where the near-dated surface lives, so it keeps 4.
+MAX_EXPIRIES = 2
+MAX_EXPIRIES_BY_UNDERLYING = {"NIFTY 50": 4}
 THROTTLE_SECONDS = 3.0
+
+# RATE-LIMIT HEADROOM (2026-08-07). Going 2 -> 9 underlyings turns ~10
+# chain calls into ~28, on an account with ONE rate budget. Two protections
+# already exist and both still apply: `dhan_client._throttle()` spaces
+# EVERY Dhan call on the host >= 1.1s apart across processes (the DH-905
+# fix), and this job runs at 15:40 IST — after the scheduler self-
+# terminates at 15:30 — so it never competes with the live loop.
+# This adds the third: a pause between underlyings, so a nine-underlying
+# sweep is a slow drip rather than nine back-to-back bursts. Worst case
+# ~28 chain calls x 3s + 8 x 5s = ~2 minutes, entirely post-close.
+UNDERLYING_PAUSE_SECONDS = 5.0
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -55,10 +93,16 @@ def _is_weekday(day: date) -> bool:
     return day.weekday() < 5
 
 
+def expiries_wanted(underlying: str) -> int:
+    """How many expiries are worth capturing for this underlying — 4 for
+    the only index still carrying weeklies, 2 for the monthly-only rest."""
+    return MAX_EXPIRIES_BY_UNDERLYING.get(underlying, MAX_EXPIRIES)
+
+
 def capture_underlying(underlying: str, slug: str, today: date,
                        expiry_fn=None, chain_fn=None, spot_fn=None,
                        vix_fn=None, sleep_fn=time.sleep,
-                       max_expiries: int = MAX_EXPIRIES) -> list:
+                       max_expiries: int = None) -> list:
     """Snapshot one underlying's nearest expiries into archive rows.
     Injectable fetchers for offline tests. Returns the rows captured
     ([] when nothing answered). Never raises."""
@@ -79,7 +123,8 @@ def capture_underlying(underlying: str, slug: str, today: date,
         return []
     # Nearest first; drop already-past expiries defensively.
     expiries = sorted(e for e in expiries if e >= today.isoformat())
-    expiries = expiries[:max_expiries]
+    expiries = expiries[:(max_expiries if max_expiries is not None
+                          else expiries_wanted(underlying))]
     if not expiries:
         print(f"  (chain archiver: no expiries answered for {underlying})")
         return []
@@ -128,7 +173,13 @@ def run(today: date = None, lake_root=None, force: bool = False,
         summary["skipped"] = "weekend"
         print(f"(chain archiver: {today} is a weekend — nothing to capture)")
         return summary
-    for underlying, slug in UNDERLYINGS.items():
+    sleep_fn = fetchers.get("sleep_fn") or time.sleep
+    for i, (underlying, slug) in enumerate(UNDERLYINGS.items()):
+        if i:
+            # Nine underlyings back-to-back is a burst; this makes it a
+            # drip. Post-close, so the wall-clock cost buys nothing back
+            # from anyone.
+            sleep_fn(UNDERLYING_PAUSE_SECONDS)
         rows = capture_underlying(underlying, slug, today, **fetchers)
         if rows:
             path = lake.write_partition(f"chains/{slug}", today.isoformat(),

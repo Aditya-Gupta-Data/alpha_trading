@@ -80,9 +80,16 @@ GHOST_PATH = ROOT / "data" / "ghost_portfolio_pnl.jsonl"
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# The only underlyings whose chains are archived (chain_archiver.UNDERLYINGS).
-# Everything else is honestly unpriceable rather than modelled.
-CHAIN_SLUGS = {"NIFTY 50": "nifty", "NIFTY BANK": "banknifty"}
+# Which underlyings have archived chains — read from the ARCHIVER ITSELF,
+# never copied. A second copy of this map is a second thing to let rot,
+# and the failure mode is silent: on 2026-08-07 the archiver went 2 -> 9
+# and a duplicated map here kept reporting seven of them UNPRICEABLE
+# while their chains sat on disk. Everything absent from it is honestly
+# unpriceable rather than modelled.
+try:
+    from src.ingestion.chain_archiver import UNDERLYINGS as CHAIN_SLUGS
+except Exception:                                   # pragma: no cover
+    CHAIN_SLUGS = {"NIFTY 50": "nifty", "NIFTY BANK": "banknifty"}
 
 # How many sessions back to look for a chain partition before giving up:
 # the archive skips weekends and holidays, so "yesterday" is often not the

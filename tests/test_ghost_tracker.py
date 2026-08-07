@@ -130,14 +130,24 @@ def test_a_partially_priced_spread_is_not_a_mark():
     assert m["status"] == "NO_STRIKE"
 
 
+def test_the_priceable_set_is_read_from_the_archiver_never_copied():
+    """A second copy of that map is a second thing to let rot, and the
+    failure is silent: on 2026-08-07 the archiver went 2 -> 9 and a
+    duplicated map here would have kept calling seven of them
+    unpriceable while their chains sat on disk."""
+    from src.ingestion.chain_archiver import UNDERLYINGS
+    assert GT.CHAIN_SLUGS is UNDERLYINGS or GT.CHAIN_SLUGS == UNDERLYINGS
+    assert "TCS.NS" in GT.CHAIN_SLUGS and len(GT.CHAIN_SLUGS) == 9
+
+
 def test_an_underlying_with_no_archived_chain_is_reported_not_modelled():
-    """FINNIFTY / MIDCPNIFTY / the five equity options have no EOD chain
-    anywhere in this system. A modelled price on a refused trade would
-    corrupt the exact comparison this module exists to make."""
-    m = GT.mark_ghost(_ghost(underlying="RELIANCE.NS"),
-                      as_of=date(2026, 8, 12))
+    """Since the 2026-08-07 expansion all nine live underlyings ARE
+    archived, so this uses a name outside the universe. The rule is
+    unchanged: a modelled price on a refused trade would corrupt the exact
+    comparison this module exists to make."""
+    m = GT.mark_ghost(_ghost(underlying="SBIN.NS"), as_of=date(2026, 8, 12))
     assert m["status"] == "NO_CHAIN_ARCHIVE" and m["pnl"] is None
-    assert "RELIANCE.NS" in m["detail"]
+    assert "SBIN.NS" in m["detail"]
 
 
 def test_a_refusal_without_a_structure_is_named_not_dropped():
@@ -157,7 +167,7 @@ def test_unpriced_ghosts_stay_out_of_the_total(tmp_path):
     """The headline number must never quietly include a guess."""
     ledger = tmp_path / "proposal_ledger.jsonl"
     rows = [_ghost(),
-            _ghost(underlying="RELIANCE.NS",
+            _ghost(underlying="SBIN.NS",
                    legs=_legs(buy_strike=1400, sell_strike=1450))]
     with ledger.open("w") as fh:
         for r in rows:

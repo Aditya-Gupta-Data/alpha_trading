@@ -66,11 +66,25 @@ Two halves were missing, not one:
 Measured live: **RELIANCE −12.0, HDFCBANK −8.5, TCS −7.7, INFY −6.4,
 ICICIBANK +11.3** vs their sectors.
 
-⚠️ **All five exceed the ±5% saturation band**, so they tie at rank 1.00
-and sort ahead of the four bar-less indices *without discriminating among
-themselves*. `RS_SATURATION_PCT` is a strategy parameter and was left
-alone. If the architect wants the router to rank stocks against each
+⚠️ **Most of them exceed the ±5% saturation band**, so they tie at rank
+1.00 and sort ahead of the four bar-less indices *without discriminating
+among themselves*. `RS_SATURATION_PCT` is a strategy parameter and was
+left alone. If the architect wants the router to rank stocks against each
 other, that constant is the lever — a freeze-breaking change.
+
+Verified on the VM after the backfill (4.1s, and it **does reorder** —
+RELIANCE fell below TCS, which the flat ranking could never do):
+
+```
+underlying router: HDFCBANK.NS (rank 1.00, rs -1.00) > ICICIBANK.NS (1.00,
++1.00) > INFY.NS (1.00, -1.00) > TCS.NS (1.00, -1.00) > RELIANCE.NS (0.81,
+-0.81) > NIFTY 50 (0.00, rs — (no bars)) > … the three other indices
+```
+
+The VM and Mac readings differ slightly for RELIANCE (−0.81 vs saturated)
+because the two lakes are different depths, so the 63-session window
+starts on a different date. Expected, not a defect — but it does mean the
+ranking is only as reproducible as the lake behind it.
 
 Indices honestly return **no bars** (an equity bhavcopy does not carry
 them) and print `rs — (no bars)` rather than a fabricated `+0.00`. That

@@ -237,6 +237,18 @@ async def run_market_loop(underlyings=UNDERLYINGS,
                 underlyings = underlying_router.prioritise(underlyings)
             except Exception as e:
                 print(f"[Market Loop] router failed open ({e}).", flush=True)
+            # The ranking was invisible until 2026-08-07: the loop reordered
+            # silently, so the log showed nine refusals in some order and no
+            # way to tell WHY that order. Its own try/except deliberately —
+            # a logging failure must never print as a routing failure.
+            try:
+                from src.analysis import underlying_router
+                print(f"[Market Loop] "
+                      f"{underlying_router.render_line(underlyings)}",
+                      flush=True)
+            except Exception as e:
+                print(f"[Market Loop] router line unavailable ({e}).",
+                      flush=True)
             for underlying in underlyings:
                 if not cooldown.ready(underlying, now):
                     continue  # still cooling down — stay quiet

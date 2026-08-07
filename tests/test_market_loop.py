@@ -153,6 +153,40 @@ def test_multiple_underlyings_have_independent_cooldowns():
     assert propose.call_args_list[2].args[0] == "NIFTY BANK"
 
 
+# --------------------------------------------------- router visibility
+# Added 2026-08-07. The loop reordered its nine underlyings silently, so
+# the log showed nine refusals in an unexplained order and the ranking
+# that produced it was unreadable after the fact.
+
+def test_every_open_cycle_logs_the_router_order(capsys):
+    fetch = mock.Mock(return_value=None)
+    propose = mock.Mock()
+    cd = ml.CooldownRegistry(seconds=7200)
+    run_cycles([ist(10, 0)], fetch, propose, cooldown=cd,
+               underlyings=("NIFTY 50", "NIFTY BANK"))
+    lines = [l for l in capsys.readouterr().out.splitlines()
+             if "underlying router:" in l]
+    assert len(lines) == 1, lines
+    assert "NIFTY 50" in lines[0] and "NIFTY BANK" in lines[0]
+    assert "rank" in lines[0]           # the ranking, not just the order
+
+
+def test_a_broken_router_line_is_not_reported_as_a_routing_failure(capsys):
+    """Its own try/except: a logging fault must never read as the loop
+    having failed open on the routing itself."""
+    from src.analysis import underlying_router
+    fetch = mock.Mock(return_value=None)
+    with mock.patch.object(underlying_router, "render_line",
+                           side_effect=RuntimeError("boom")):
+        run_cycles([ist(10, 0)], fetch, mock.Mock(),
+                   cooldown=ml.CooldownRegistry(seconds=7200),
+                   underlyings=("NIFTY 50",))
+    out = capsys.readouterr().out
+    assert "router line unavailable" in out
+    assert "router failed open" not in out
+    fetch.assert_called_once()          # the cycle itself still ran
+
+
 # ------------------------------------------------------- headless mode
 
 def make_analysis(rsi=55.0):

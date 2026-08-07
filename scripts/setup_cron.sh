@@ -73,6 +73,12 @@
 #                             keeps its OWN log-sweep offset so it never
 #                             consumes ops_monitor's findings (#6).
 #
+#  29. src.ingestion.cross_asset: Daily 19:40 IST (wired 2026-08-07). MCX
+#                             commodities + global-index EOD bars into the
+#                             lake. Capture-only — no Dept 2/3 importer, so
+#                             it cannot touch a proposal or a size. Full
+#                             reasoning at the entry itself, below.
+#
 #   (src.evolution is deliberately NOT here: it needs a local Ollama, which
 #    the VM lacks by design — it is scheduled on the MAC via launchd instead;
 #    see scripts/com.alphatrading.evolution.plist + install_evolution_agent.sh.)
@@ -357,6 +363,24 @@ CRON_TZ=Asia/Kolkata
 #     NOTE: the Mac's patience_basket chain still fetches its own copy for
 #     tier grading; the two stores are per-machine and do not diverge.
 15 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.bhavcopy_clerk --backfill 5 >> "$REPO_ROOT/logs/bhavcopy_clerk.log" 2>&1
+
+# 29. Cross-asset EOD tap (Daily 19:40 IST, WIRED 2026-08-07) — MCX
+#     commodities + global indices into data/lake/cross_asset/. Built
+#     2026-08-05 and never scheduled, so the only rows it ever wrote were
+#     from one manual run. CAPTURE-ONLY: nothing in Dept 2/3 imports it,
+#     so this cron cannot change a proposal, a gate or a size.
+#     EXPECT CA-404s AT FIRST — GOLD_INDIA's and CRUDE's contract ids in
+#     config/macro_securities.json expired 2026-08-05, and an expired MCX
+#     future does not error, it just returns no bars. The job names that
+#     skip out loud in logs/cross_asset.jsonl; rolling the ids is a
+#     separate, deliberate change (see stale_instruments()).
+#     19:40 is the last free minute in the evening block: clear of
+#     flows_tracker (19:35), daily_archiver (19:45) and the macro_nightly
+#     (19:50) memory peak on the 1 GB e2-micro.
+#     NOT in ops_monitor.EXPECTED_JOBS on purpose: a heartbeat there is
+#     also a health_gate input, and a capture-only tap must not be able to
+#     block the discovery miner. Wire it there once its ids are rolled.
+40 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.cross_asset >> "$REPO_ROOT/logs/cross_asset.log" 2>&1
 
 # 24. Macro nightly heartbeat (Daily 19:50 IST) — the Dept-8 macro clock:
 #     FRED globals ingest -> NSE indices ingest -> regime declare() onto the

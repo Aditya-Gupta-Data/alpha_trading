@@ -142,3 +142,83 @@ def test_clean_run_fires_nothing(tmp_path):
                  ledger_path=tmp_path / "l.jsonl", notify_fn=cards.append)
     assert rep["problems"] == [] and cards == []
     assert rep["counts"]["ok"] == 1
+
+
+# --------------------------------------------- the darling id universe
+# The 2026-08-07 hygiene fix. The desk quoted seven names it had no id
+# for — five of them OPEN POSITIONS the Mac's tier table had since
+# dropped — and every cycle logged `no_security_id` for each. An unpriced
+# holding is an unmarked holding, so the universe is now what we screen
+# PLUS what we hold PLUS what a prior build already resolved.
+
+def _tiers_file(tmp_path, symbols):
+    p = tmp_path / "darling_tiers.json"
+    p.write_text(json.dumps(
+        {"tiers": {"A": [{"symbol": s} for s in symbols]}}))
+    return p
+
+
+def _journal_file(tmp_path, entries):
+    p = tmp_path / "shadow.jsonl"
+    p.write_text("\n".join(
+        json.dumps({"event": "entry", "id": f"e{i}", "ticker": t})
+        for i, t in enumerate(entries)) + "\n")
+    return p
+
+
+def test_an_open_position_outside_the_tier_table_still_gets_an_id(tmp_path):
+    """The exact 2026-08-07 hole: RELIANCE was held on the VM and absent
+    from the Mac's screen, so it had no id and could not be priced."""
+    tiers = _tiers_file(tmp_path, ["TCS"])
+    journal = _journal_file(tmp_path, ["RELIANCE.NS"])
+    assert SM._darling_symbols(tiers, journal,
+                               tmp_path / "absent.json") == ["RELIANCE", "TCS"]
+
+
+def test_an_exited_position_drops_out_of_the_universe(tmp_path):
+    """Held, not merely once-traded — the journal's own exit pairing
+    decides, so a closed name does not accumulate forever."""
+    p = tmp_path / "shadow.jsonl"
+    p.write_text(json.dumps({"event": "entry", "id": "e1",
+                             "ticker": "WABAG.NS"}) + "\n"
+                 + json.dumps({"event": "exit", "id": "e1",
+                               "ticker": "WABAG.NS"}) + "\n")
+    assert SM._open_position_symbols(p) == set()
+
+
+def test_a_resolved_symbol_survives_leaving_the_tier_table(tmp_path):
+    """Carry-forward: the build runs on the Mac off a screen that churns,
+    so dropping a name from the screen must not delete a verified id."""
+    out = tmp_path / "ids.json"
+    rows = DEFAULT_ROWS + [("NSE", "E", "2885", "RELIANCE",
+                            "Reliance Inds", "RELIANCE", "EQ")]
+    first = SM.build_darling_ids(symbols=["TCS", "RELIANCE"],
+                                 fetch_fn=_fetch(rows), out_path=out)
+    assert set(first["ids"]) == {"TCS", "RELIANCE"}
+    # RELIANCE has now left the screen and is not held anywhere.
+    tiers = _tiers_file(tmp_path, ["TCS"])
+    again = SM.build_darling_ids(fetch_fn=_fetch(rows), out_path=out,
+                                 tiers_path=tiers,
+                                 journal_path=tmp_path / "none.jsonl")
+    assert again["ids"]["RELIANCE"]["id"] == "2885"
+
+
+def test_carry_forward_still_drops_an_id_the_master_no_longer_knows(tmp_path):
+    """It carries the SYMBOL into the next lookup, never the id itself —
+    a delisted name must fall out honestly, not be preserved blind."""
+    out = tmp_path / "ids.json"
+    rows = DEFAULT_ROWS + [("NSE", "E", "999", "DEADCO", "Dead Co",
+                            "DEADCO", "EQ")]
+    SM.build_darling_ids(symbols=["DEADCO"], fetch_fn=_fetch(rows),
+                         out_path=out)
+    gone = SM.build_darling_ids(fetch_fn=_fetch(),        # DEADCO delisted
+                                out_path=out,
+                                tiers_path=tmp_path / "no_tiers.json",
+                                journal_path=tmp_path / "none.jsonl")
+    assert "DEADCO" not in gone["ids"]
+    assert "DEADCO" in gone["unresolved"]
+
+
+def test_a_missing_journal_never_breaks_the_build(tmp_path):
+    """Fail-open: the Mac may have no shadow journal at all."""
+    assert SM._open_position_symbols(tmp_path / "nope.jsonl") == set()

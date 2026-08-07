@@ -339,21 +339,62 @@ DARLING_IDS_PATH = ROOT / "data" / "darling_ids.json"
 TIERS_PATH_FOR_IDS = ROOT / "data" / "darling_tiers.json"
 
 
-def _darling_symbols(tiers_path=None) -> list:
-    """Every symbol in the tier table — the id universe the VM desk may
-    ever need to quote."""
+def _open_position_symbols(journal_path=None) -> set:
+    """Symbols the desk currently HOLDS, tier table or not.
+
+    Added 2026-08-07. The tier table is a screen — it churns, and a name
+    that drops out of it keeps its open position. Those orphans were
+    still quoted every cycle and every quote failed `no_security_id`,
+    which is a real hole (an unpriced holding is an unmarked holding)
+    wearing the costume of log spam: 7 names, ~9 lines a cycle. An id is
+    needed for as long as we hold the thing, so the id universe is the
+    union of what we screen and what we own."""
+    try:
+        from src import knowledge_graph_logger as kg
+        return {t.replace(".NS", "") for t in
+                kg.open_positions(path=journal_path) if t}
+    except Exception:
+        return set()
+
+
+def _already_resolved_symbols(out_path=None) -> set:
+    """Symbols the previous build already resolved.
+
+    CARRY-FORWARD, added 2026-08-07, and the durable half of the fix. The
+    build runs on the MAC off the Mac's tier table; the open book lives on
+    the VM. So a name the VM holds but the Mac's screen has dropped was
+    silently deleted from the map on the next weekly rebuild — which is
+    how five held positions ended up unquotable. Carrying prior symbols
+    into the lookup universe keeps them, and because every symbol is
+    re-looked-up in that run's master, a delisted or renamed id still
+    falls out honestly into `unresolved` rather than being carried blind."""
+    import json as _json
+    p = Path(out_path) if out_path else DARLING_IDS_PATH
+    try:
+        return set((_json.loads(p.read_text()).get("ids") or {}).keys())
+    except (OSError, ValueError):
+        return set()
+
+
+def _darling_symbols(tiers_path=None, journal_path=None,
+                     out_path=None) -> list:
+    """The id universe the VM desk may ever need to quote: every symbol in
+    the tier table, plus every open position, plus everything a previous
+    build already resolved."""
     import json as _json
     p = Path(tiers_path) if tiers_path else TIERS_PATH_FOR_IDS
     try:
         tiers = _json.loads(p.read_text()).get("tiers") or {}
     except (OSError, ValueError):
-        return []
-    return sorted({r.get("symbol") for rows in tiers.values()
-                   for r in rows if r.get("symbol")})
+        tiers = {}
+    screened = {r.get("symbol") for rows in tiers.values()
+                for r in rows if r.get("symbol")}
+    return sorted(screened | _open_position_symbols(journal_path)
+                  | _already_resolved_symbols(out_path))
 
 
 def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
-                      tiers_path=None) -> dict:
+                      tiers_path=None, journal_path=None) -> dict:
     """The VM desk's quote ids (decision #83): darlings are non-F&O names
     outside SECURITY_ID_MAP, so their ids come from Dhan's PUBLIC scrip
     master — exact name match only, EQ series preferred, anything
@@ -362,7 +403,8 @@ def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
     fetch), shipped nightly; the VM refuses ids older than its own
     freshness gate."""
     import json as _json
-    symbols = symbols if symbols is not None else _darling_symbols(tiers_path)
+    symbols = (symbols if symbols is not None
+               else _darling_symbols(tiers_path, journal_path, out_path))
     master = index_master(fetch_master(fetch_fn))
     found = lookup_wanted(symbols, master)
     ids, unresolved = {}, {}
@@ -386,7 +428,8 @@ def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
 
 
 def ensure_darling_ids(max_age_days: int = 7, fetch_fn=None,
-                       out_path=None, tiers_path=None) -> bool:
+                       out_path=None, tiers_path=None,
+                       journal_path=None) -> bool:
     """Weekly-refresh guard around the heavy fetch: rebuild only when the
     artifact is absent or older than `max_age_days`. A failed fetch keeps
     the previous file (the VM's own staleness gate judges it) and returns
@@ -402,7 +445,8 @@ def ensure_darling_ids(max_age_days: int = 7, fetch_fn=None,
         pass
     try:
         out = build_darling_ids(fetch_fn=fetch_fn, out_path=out_path,
-                                tiers_path=tiers_path)
+                                tiers_path=tiers_path,
+                                journal_path=journal_path)
         print(f"  (darling ids rebuilt: {out['count']} resolved, "
               f"{len(out['unresolved'])} unresolved)")
         return True

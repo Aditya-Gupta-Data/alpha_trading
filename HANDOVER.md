@@ -42,6 +42,74 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-07 (Friday, pre-weekend sync): all nine chains are captured, the desk budget matches the pool
+
+**Deployed and verified live.** Suite **1,997 green**. No strategy, gate,
+entry or exit parameter was touched — this was data capture and budget
+limits only.
+
+### 1. Chain archiver 2 → 9 — **first live run captured all nine**
+
+```
+NIFTY 50 4 | NIFTY BANK 2 | NIFTY FIN SERVICE 2 | NIFTY MID SELECT 2
+RELIANCE.NS 2 | HDFCBANK.NS 2 | ICICIBANK.NS 2 | INFY.NS 2 | TCS.NS 2
+```
+
+Expiry depth is **per underlying** now: NIFTY keeps 4 because it is the
+only index still carrying weeklies; everything else takes 2, since
+FINNIFTY/MIDCPNIFTY and the five stocks are monthly-only and a 4-deep
+sweep reaches contracts nobody trades. Slugs `nifty`/`banknifty` are
+permanent — renaming them would orphan the history already on disk.
+
+**Rate limits — this is the third protection, not the only one.** The
+host-wide `_throttle()` already spaces every Dhan call ≥1.1s across
+processes (the DH-905 fix), and 15:40 is *after* the scheduler
+self-terminates at 15:30, so the sweep never races the live loop. Added
+`UNDERLYING_PAUSE_SECONDS = 5.0` so nine names drip rather than burst.
+Measured live: **~28 chain calls, well under 2 minutes, zero DH-905**.
+
+**Storage is a non-issue**: the whole chain lake is 2.8 MB; today's nine
+partitions cost ~150 KB. At that rate a year is ~35 MB against 1.8 GB
+free.
+
+**One bug this immediately exposed, fixed the same hour:** `ghost_tracker`
+carried its OWN copy of the slug map, so it kept calling seven
+underlyings unpriceable while their fresh chains sat on disk — silently,
+with no error. It now imports the map from the archiver, pinned by a
+test. **Verified end to end: a TCS.NS ghost prices**
+(`status PRICED, price_source archive:2026-08-07, pnl −11,452.50`).
+
+### 2. Treasury: equity desk ₹60,000 → **₹3,00,000**
+
+`config.json` scaled 5× with the pool — deadband ₹10k → **₹50k**, max
+step ₹25k → **₹1L**, rounding ₹5k → **₹25k**. These restore the 10L-era
+values the treasury tests have always pinned; the ₹2L numbers were #84's
+clean-sheet config.
+
+**Config alone would have moved nothing**, which is the part worth
+remembering: `get_budget` seeds from `equity_desk_capital_rs` ONCE and
+thereafter only rotations move the row, and rotations are deadband- and
+step-capped by design — the live budget would have crawled from ₹60k over
+three sessions. `firm_treasury.rebase_budget()` is the deliberate
+pool-scale door (the treasury's `inject_capital`), and **nothing calls it
+automatically**: the step cap exists so the router cannot lurch the book
+on a noisy signal.
+
+Live now: **equity ₹3,00,000 | options ₹7,00,000 | pool ₹10,00,000**,
+rebase logged to the treasury ledger at 16:53 IST.
+
+### ⏭️ Monday
+
+1. The 15:40 archiver run is the one to watch — first *scheduled* nine-way
+   sweep. Its log is heartbeat-monitored, so a silent failure surfaces on
+   the 20:30 ops card.
+2. First real ghost read after the close; equity-option ghosts are
+   priceable from today, index ghosts from 08-03.
+3. The 19:56 treasury rotation now works off a ₹3L base — expect "hold
+   within deadband" unless the router's tilts move it more than ₹50k.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-07 (Friday, evening): the pool is ₹10L and the refused trades now have a ghost book
 
 **Deployed.** Suite **1,987 green** (+24). No gate, cap, strategy or exit

@@ -42,6 +42,90 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-07 (Friday): two live sessions observed, three ops holes closed, and ONE FINDING THE ARCHITECT MUST SEE
+
+**The freeze held.** Nothing in this session touched a gate, a size, a
+strategy or a risk cap. Deployed to the VM: `573def8` + a rebuilt
+`data/darling_ids.json` + `setup_cron.sh` reinstalled (**29 cron lines**,
+backup at `~/user_crontab.bak-20260807-151420`). Suite **1,938 green**.
+
+### What the market actually did with the new desk (Thu 08-06 / Fri 08-07)
+
+**G3 works — the bear-put monoculture is broken.** Thursday journalled three
+spreads: one **iron condor** (NIFTY BANK 56600P/58900C, `ac895ae4`) and two
+**bull call spreads** (NIFTY FIN SERVICE `3af8c6ce`, NIFTY BANK `a4303d95`).
+Zero bear puts in two days; no butterfly yet. Friday journalled nothing —
+and the reason is **capital, not signal**: ₹236,466 locked, ₹2,957.69 liquid.
+NIFTY 50 missed the ₹10,000 per-trade cap by ₹166–257/lot on every cycle.
+
+The **physical-settlement gate never engaged**, correctly — the five equity
+names were evaluated every cycle and refused downstream on max-loss
+(₹12,240–₹22,925/lot), never on settlement, and no stock entry landed inside
+7 days of expiry. **NIFTY MID SELECT never trades**: "no tradeable quotes at
+the chosen strikes", both days, every cycle.
+
+### ⚠️ THE FINDING: the macro router is INERT, not merely macro-blind
+
+`HANDOVER` 08-05 recorded that the router's macro leg is empty. It is worse
+than that, and the new log line is what exposed it. Measured live on the VM:
+
+```
+underlying router: NIFTY 50 (rank 0.00, rs +0.00, macro —) > NIFTY BANK
+(rank 0.00, rs +0.00, macro —) > … all nine at rank 0.00
+```
+
+**Both legs read zero.** The macro leg is absent as documented. The momentum
+leg is zero for a different reason: `momentum_score` calls
+`sector_trend.get_relative_strength(underlying, sector)` **without
+`stock_bars`**, and that function's own contract is "`stock_bars` MUST be
+supplied while the live price path is token-gated" — so it returns an error
+dict, `rs_spread_pct` is None, and `momentum_score` fail-opens to 0.0 for
+every name. Ranking is therefore uniformly flat and `prioritise` is a stable
+sort over equal keys: **the universe is never reordered.** The router has
+been shipping as a no-op since 08-05. Nothing is broken or unsafe — it
+fails open exactly as designed — but the 3-D desk's routing leg is not
+actually running, and wiring bars into it is a Dept-2 decision, not a
+hygiene fix. **Left for the architect.**
+
+### What was fixed (hygiene only)
+
+1. **Seven unquotable names, five of them OPEN POSITIONS.** The id map is
+   built on the Mac off the tier table; the tier table is a screen and it
+   churns, so a held name dropped from the screen was deleted from the map
+   on the next weekly rebuild while its position stayed open. That is an
+   unmarked holding, not log spam. The id universe is now screen ∪ held ∪
+   previously-resolved (carry-forward re-verifies every symbol against each
+   run's master, so a delisted name still falls out into `unresolved`).
+   **105 → 120 ids, 0 unresolved**; every open position on the VM now
+   prices. BHARTIARTL 10604, RELIANCE 2885, TMCV 759782, BAJAJ-AUTO 16669,
+   JSWSTEEL 11723, GRAVITA 20534, VOLTAMP 13577 (all NSE_EQ / EQ).
+2. **The router logs its ranking** once per open cycle (`render_line`,
+   which existed, was tested, and was called by nothing). Own try/except:
+   a logging fault must never print as a routing failure.
+3. **`cross_asset` is on cron** — daily 19:40 IST. Built 08-05, never
+   scheduled. Dry-run from the VM: **CRUDE returns 3 bars** (last 08-06),
+   so the earlier CA-404 was a stale window, not a dead feed. GOLD_INDIA
+   reports **CA-410 — contract expired 2026-08-05**; rolling that id is a
+   deliberate config change, not done here.
+
+### ⏭️ Next session
+
+1. **Decide the router** (above) — it is inert until `momentum_score` is
+   given bars, and that is a freeze-breaking change by definition.
+2. **Capital, not strategy, is the binding constraint on entries.** The
+   architect's V1.1 dynamic sizing engine is aimed at exactly the refusals
+   Friday's log is full of; Friday is the evidence for it.
+3. Roll GOLD_INDIA's contract id in `config/macro_securities.json`, then
+   consider adding `cross_asset.log` to `ops_monitor.EXPECTED_JOBS` — it is
+   deliberately absent now because that heartbeat feeds `health_gate`, and a
+   capture-only tap must not be able to block the discovery miner.
+4. NIFTY MID SELECT's strike selection finds no tradeable quotes at all —
+   worth one look before it is assumed to be a liquidity fact.
+5. The market_loop change reaches production at Monday's 09:10
+   `master_scheduler`; Friday's process is still running the old code.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-05 (final): V1 OPTIONS DESK COMPLETE — Sunday code freeze is in effect
 
 **The last block of a very long day.** After the morning's infra work (below),

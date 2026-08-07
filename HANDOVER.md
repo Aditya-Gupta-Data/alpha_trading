@@ -42,6 +42,81 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-07 (Friday, later): the router actually routes, every refusal is on record, and V1.x is written down
+
+**Deployed `9d4db66`.** Suite **1,963 green** (+25). No gate, cap, strategy
+or exit parameter was touched — the freeze holds. `ROADMAP.md` is new.
+
+### 1. The inert router (found earlier today) is FIXED
+
+Two halves were missing, not one:
+
+* **The bars.** `momentum_score` never passed `stock_bars`, which
+  `get_relative_strength` requires while the live price path is
+  token-gated. Source is now the **local bhavcopy lake** — on disk,
+  refreshed by its own cron, no token, no API call, no rate contention
+  with the live loop. Cached per symbol per DAY (a 63-session return does
+  not move intraday) and primed in ONE pass over the day-files for the
+  whole universe (five separate walks ≈ 10s; primed ≈ 2s).
+* **The sector.** The five equity underlyings were mapped NOWHERE —
+  `INDEX_SECTOR` covers only indices — so `sector_trend` was also being
+  handed an empty sector name. `sector_for()` reads them out of
+  `config/sector_universe.json`'s constituent lists.
+
+Measured live: **RELIANCE −12.0, HDFCBANK −8.5, TCS −7.7, INFY −6.4,
+ICICIBANK +11.3** vs their sectors.
+
+⚠️ **All five exceed the ±5% saturation band**, so they tie at rank 1.00
+and sort ahead of the four bar-less indices *without discriminating among
+themselves*. `RS_SATURATION_PCT` is a strategy parameter and was left
+alone. If the architect wants the router to rank stocks against each
+other, that constant is the lever — a freeze-breaking change.
+
+Indices honestly return **no bars** (an equity bhavcopy does not carry
+them) and print `rs — (no bars)` rather than a fabricated `+0.00`. That
+distinction is the whole reason the dead router went unseen for two days.
+
+**VM data prerequisite, done today:** the VM's bhavcopy lake held only 5
+day-files (the daily cron's `--backfill 5`). A one-off `--backfill 140`
+was run to give the 63-session lookback its 64 closes. **If the lake is
+ever wiped, the momentum leg silently returns to 0.0** — it fails open by
+design, so the `rs — (no bars)` marker in the log is the thing to watch.
+
+### 2. The rejection ledger — `data/proposal_ledger.jsonl`
+
+One row per evaluation, written after the proposer returns. **It decides
+nothing** (no branch reads it back) and never raises. An unrecognised
+refusal is `REJECTED_OTHER` **with its raw text kept** — a reworded gate
+must show up as unmapped, not be absorbed by the nearest bucket. Read it:
+
+```bash
+python3 -m src.proposal_ledger --json
+```
+
+It starts filling at Monday's 09:10 session. Today's refusals are NOT in
+it — the file starts empty, and back-filling it from log text would be
+fabricating a record.
+
+### 3. `ROADMAP.md`
+
+V1.1 dynamic sizing (the ledger is its evidence base — ≥2 weeks of rows
+before deciding), V1.2 opting in the ALREADY-BUILT ATR trail (nothing to
+write; it needs a chosen `atr_mult` and out-of-sample evidence), V1.3
+cross-asset. Nothing in it is approved; each needs an explicit unfreeze.
+
+### ⏭️ Next session
+
+1. **Watch Monday's first `underlying router:` line.** Stocks should
+   carry real `rs` figures and indices should read `— (no bars)`. Any
+   stock reading `— (no bars)` means the VM lake regressed.
+2. `python3 -m src.proposal_ledger --date $(date +%F)` after the close —
+   the first real read of what the desk wanted and could not have.
+3. Everything in the 08-07 (earlier) block below still stands: capital,
+   not strategy, is the binding constraint; GOLD_INDIA's contract id is
+   still expired; NIFTY MID SELECT still finds no tradeable quotes.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-07 (Friday): two live sessions observed, three ops holes closed, and ONE FINDING THE ARCHITECT MUST SEE
 
 **The freeze held.** Nothing in this session touched a gate, a size, a

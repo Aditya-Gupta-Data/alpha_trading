@@ -42,6 +42,88 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-07 (Friday, evening): the pool is ₹10L and the refused trades now have a ghost book
+
+**Deployed.** Suite **1,987 green** (+24). No gate, cap, strategy or exit
+parameter was changed.
+
+### 1. Capital: ₹2,00,000 → ₹10,00,000, executed on the VM
+
+`portfolio_manager.STARTING_CAPITAL` was **already** 10L — the live
+`account_state` row was decision #84's ₹2L clean sheet, so this was a
+state change, not a code change, and it needed a door with an audit
+trail. Live before → after:
+
+| | before | after |
+|---|---|---|
+| starting_capital | 200,000.00 | **1,000,000.00** |
+| realized_pnl | 39,423.99 | 39,423.99 *(untouched)* |
+| equity | 239,423.99 | 1,039,423.99 |
+| locked_margin | 236,466.30 | 236,466.30 *(11 locks intact)* |
+| **available_cash** | **2,957.69** | **802,957.69** |
+| peak_equity | 244,215.34 | 1,039,423.99 *(ratcheted)* |
+| drawdown_pct | 1.96 | 0.00 |
+
+DB backed up first to `~/brain_map.db.bak-preinjection-20260807`. The
+injection is in the append-only `account_events` trail (`2026-08-07
+16:41:19`). Run it again with
+`python3 -m src.portfolio_manager --inject <rupees> --why "…" --yes`.
+
+**Three consequences the architect should know:**
+
+1. **The halts rebased with the pool.** Daily 3% breaker: ₹6k → **₹30k**.
+   Ruin halt 10% trailing off a ₹1,039,424 peak: ₹20k → **~₹104k**. That
+   is decision #84's stated aggression relaxing by 5×, automatically.
+2. **`firm_treasury.firm_pool` derives from `starting_capital`**, so the
+   firm pool now reads ₹10,00,000 — but the **equity desk budget is still
+   ₹60,000** and rotation is deadband-₹10k / step-capped-₹25k per day. It
+   will take **many sessions** to walk up to the 30% base of the new pool.
+   If the architect wants the equity desk funded at the new scale now,
+   that is a separate, deliberate treasury decision.
+3. Monday's refusals should change character: NIFTY 50 missed the cap by
+   ₹166–257/lot, which is a **cap** problem, not a cash problem — those
+   will still refuse. The margin-exhaustion refusals will not.
+
+### 2. The ghost portfolio — `src/ghost_tracker.py`
+
+Answers "what would have happened if we took them?" off the proposal
+ledger. **On no execution path and a test enforces it**: no margin, no
+journal, no `brain_map` row, no capital, no cron line. Deleting it changes
+nothing about how the desk trades.
+
+```bash
+python3 -m src.ghost_tracker --date 2026-08-10
+```
+
+It needed one thing the ledger did not have — the refused **structure**.
+`options_proposer` now returns a `rejected` payload (legs, lot_size,
+expiry, net premium, max_loss) at the five refusal sites; additive keys
+only, and nothing on the trading path reads them. Without them a refusal
+is a sentence with no strikes in it.
+
+⚠️ **Where it is blind, and it says so rather than modelling:** EOD
+chains are archived for **NIFTY 50 and NIFTY BANK only**. FINNIFTY,
+MIDCPNIFTY and all five equity options have **no EOD option chain
+anywhere in this system**, so their ghosts report `NO_CHAIN_ARCHIVE` and
+stay OUT of the total. Since Friday's refusals were heavily equity-option
+and FINNIFTY, **expect the first ghost reports to be mostly unpriceable**.
+Widening `chain_archiver.UNDERLYINGS` is the fix, and it is a real
+decision: 4 expiries × N underlyings against a rate-limited chain
+endpoint on a 1 GB box.
+
+Also: a size-refused trade was sized to **zero** lots, so the ghost is
+priced at one lot with `lots_assumed: true`. Reading it as "we'd have
+taken one lot" is the reader's call, made in the open.
+
+### ⏭️ Next session
+
+1. First real ghost read after Monday's close — and check how much of it
+   is `NO_CHAIN_ARCHIVE` before drawing any conclusion from the total.
+2. Decide the equity-desk budget question in (1.2) above.
+3. Everything in the two 08-07 blocks below still stands.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-07 (Friday, later): the router actually routes, every refusal is on record, and V1.x is written down
 
 **Deployed `9d4db66`.** Suite **1,963 green** (+25). No gate, cap, strategy

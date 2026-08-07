@@ -49,6 +49,14 @@ cost us" becomes a query rather than an argument.
 
 **Prerequisite:** ≥2 weeks of proposal-ledger rows.
 
+**Update 2026-08-07 (evening).** The pool was raised ₹2,00,000 →
+₹10,00,000 by architect order, which removes the *margin* half of the
+starvation but not the cap half: NIFTY 50 was missing the ₹10,000
+per-trade cap by ₹166–257/lot, and that refusal is unchanged by more
+cash. The `ghost_tracker` built the same day now measures what those
+cap-refusals were worth — that is the number this item should be decided
+on, not on the refusal count.
+
 ---
 
 ## V1.2 — Smart Exits (opt in the dormant ATR trailing stop)

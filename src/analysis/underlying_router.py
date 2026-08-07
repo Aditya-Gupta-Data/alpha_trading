@@ -70,23 +70,148 @@ INDEX_SECTOR = {
 BENCHMARKS = {"NIFTY 50"}
 
 
+# How many day-files of the bhavcopy lake to scan. `sector_trend`'s
+# RS_LOOKBACK is 63 SESSIONS and it needs 64 closes, so this must cover
+# comfortably more than that in CALENDAR days — ~21 sessions a month.
+DAILY_BARS_DAYS = 130
+
+
 def _clamp(x, lo=-1.0, hi=1.0):
     return max(lo, min(hi, x))
 
 
-def momentum_score(underlying: str, rs_fn=None, universe=None) -> float:
+def _muzzled() -> bool:
+    """True inside the test suite (the same seam `equity_desk` uses for
+    market calls, applied here to the on-disk lake)."""
+    import os
+    return (os.environ.get("IS_TEST_ENV", "").strip().lower()
+            in ("1", "true", "yes")
+            or bool(os.environ.get("PYTEST_CURRENT_TEST")))
+
+
+def sector_for(underlying: str, universe=None) -> str | None:
+    """The parent whose momentum this underlying is measured against.
+
+    Indices come from INDEX_SECTOR. STOCK underlyings (the five equity-
+    option names) were never mapped at all — `INDEX_SECTOR.get()` returned
+    None for them, so `sector_trend` was handed an empty sector name and
+    could not find index bars either. Their sector is already written down
+    in `config/sector_universe.json`'s constituent lists, so it is read
+    from there rather than duplicated here (a second copy of a mapping is
+    a second thing to let rot)."""
+    if underlying in INDEX_SECTOR:
+        return INDEX_SECTOR[underlying]
+    try:
+        if universe is None:
+            from src.analysis.sector_trend import load_universe
+            universe = load_universe()
+        for sector, meta in (universe or {}).items():
+            if underlying in (meta.get("constituents") or []):
+                return sector
+    except Exception:
+        pass
+    return None
+
+
+# {(symbol, session_date): bars} — the lake is re-read once per symbol per
+# DAY, not once per 15-minute cycle. A 63-session return does not move
+# intraday, and re-parsing 130 day-files nine times a cycle would be the
+# most expensive thing in the loop by a wide margin.
+_BARS_CACHE = {}
+
+
+def daily_bars(underlying: str, days: int = DAILY_BARS_DAYS, today=None,
+               lake_dir=None) -> list:
+    """Daily bars for `underlying` in `sector_trend`'s (date, low, high,
+    close) shape, oldest first — [] when we honestly have none.
+
+    THE 2026-08-07 BUG. `momentum_score` called `get_relative_strength`
+    without `stock_bars`, and that function's contract is that
+    `stock_bars` MUST be supplied while the live price path is token-
+    gated. So it returned an error dict on every call, every leg read
+    0.0, the ranking was uniformly flat, and `prioritise` — a stable sort
+    over equal keys — never reordered anything. The router had been
+    shipping as a no-op since 2026-08-05.
+
+    The source is the LOCAL bhavcopy lake: already on disk, already
+    refreshed nightly by its own cron, no token, no API call and so no
+    rate contention with the live loop. INDICES are absent from an equity
+    bhavcopy by construction, so they return [] here and keep their
+    honest 0.0 — an index cannot be priced off a file that only carries
+    equities, and inventing one would be exactly the wrong fix."""
+    symbol = str(underlying or "")
+    if not symbol.endswith(".NS"):
+        return []
+    key = (symbol, str(today or date.today()))
+    if key in _BARS_CACHE:
+        return _BARS_CACHE[key]
+    if lake_dir is None and _muzzled():
+        # Hermetic tests do not walk the real 467 MB lake: 130 file reads
+        # per underlying is exactly the "slow test is a bug report" case.
+        # A test that wants bars passes `lake_dir` (or primes the cache).
+        return []
+    bars = []
+    try:
+        from src.ingestion.bhavcopy_clerk import bars_for
+        for b in bars_for(symbol, days=days, lake_dir=lake_dir):
+            close = b.get("close")
+            if close is None:
+                continue           # a NULL-honest row is skipped, not zeroed
+            bars.append((b.get("date") or b.get("session"),
+                         b.get("low"), b.get("high"), float(close)))
+    except Exception:
+        bars = []
+    _BARS_CACHE[key] = bars
+    return bars
+
+
+def prime_bars(underlyings, days: int = DAILY_BARS_DAYS, today=None,
+               lake_dir=None) -> int:
+    """Load the whole universe's bars in ONE pass over the day-files.
+
+    `bars_for` re-parses every file per symbol, so five stocks cost five
+    passes over 130 files — measured at ~10s on the Mac and slower on the
+    1 GB e2-micro. `bars_for_many` parses each file exactly once. Same
+    cache, same shape; purely how many times the disk is read. Returns
+    how many symbols were primed; never raises."""
+    if _muzzled() and lake_dir is None:
+        return 0
+    day = str(today or date.today())
+    wanted = [u for u in (underlyings or [])
+              if str(u).endswith(".NS") and (str(u), day) not in _BARS_CACHE]
+    if not wanted:
+        return 0
+    try:
+        from src.ingestion.bhavcopy_clerk import bars_for_many
+        batch = bars_for_many(wanted, days=days, lake_dir=lake_dir)
+    except Exception:
+        return 0
+    primed = 0
+    for u in wanted:
+        rows = batch.get(str(u).split(".")[0].strip().upper()) or []
+        bars = [(b.get("date") or b.get("session"), b.get("low"),
+                 b.get("high"), float(b["close"]))
+                for b in rows if b.get("close") is not None]
+        _BARS_CACHE[(str(u), day)] = bars
+        primed += 1
+    return primed
+
+
+def momentum_score(underlying: str, rs_fn=None, universe=None,
+                   bars_fn=None) -> float:
     """[-1, 1] from relative strength vs the parent sector, or 0.0 when
     there is no reading. Never raises."""
     if underlying in BENCHMARKS:
         # The benchmark cannot outperform itself. 0.0 here is a CORRECT
         # reading, not a missing one.
         return 0.0
-    sector = INDEX_SECTOR.get(underlying)
+    sector = sector_for(underlying, universe=universe)
     try:
         if rs_fn is None:
             from src.analysis.sector_trend import get_relative_strength
             rs_fn = get_relative_strength
-        verdict = rs_fn(underlying, sector or "")
+        bars = (bars_fn or daily_bars)(underlying)
+        verdict = rs_fn(underlying, sector or "", stock_bars=bars)
         spread = (verdict or {}).get("rs_spread_pct")
         if spread is None:
             return 0.0
@@ -128,33 +253,50 @@ def macro_score(underlying: str, conn=None, lookback_days: int = 30,
 
 
 def score_underlying(underlying: str, conn=None, rs_fn=None,
-                     macro_fn=None) -> dict:
-    """{underlying, momentum, macro, rank} — the full, inspectable read.
+                     macro_fn=None, bars_fn=None) -> dict:
+    """{underlying, momentum, macro, rank, rs_bars} — the full,
+    inspectable read.
 
     `rank` combines the momentum leg with the ABSOLUTE macro leg: a
     strongly bearish macro read is as tradeable as a strongly bullish one,
     and ranking on the signed value would tilt the book long without
-    anyone deciding to."""
-    mom = momentum_score(underlying, rs_fn=rs_fn)
+    anyone deciding to.
+
+    `rs_bars` (2026-08-07) is how many daily bars the momentum leg
+    actually had. It exists so the log can distinguish a MEASURED 0.00
+    from an UNMEASURED one — the two are indistinguishable in the rank
+    alone, and that is precisely how a dead router went unnoticed for two
+    sessions."""
+    mom = momentum_score(underlying, rs_fn=rs_fn, bars_fn=bars_fn)
     macro = (macro_fn(underlying) if macro_fn
              else macro_score(underlying, conn=conn))
     macro_leg = 0.0 if macro is None else _clamp(abs(float(macro)) / MACRO_SCALE, 0.0, 1.0)
     rank = MOMENTUM_WEIGHT * abs(mom) + MACRO_WEIGHT * macro_leg
+    try:
+        n_bars = len((bars_fn or daily_bars)(underlying))
+    except Exception:
+        n_bars = 0
     return {"underlying": underlying, "momentum": round(mom, 4),
-            "macro": macro, "rank": round(rank, 4)}
+            "macro": macro, "rank": round(rank, 4), "rs_bars": n_bars}
 
 
-def rank_universe(underlyings, conn=None, rs_fn=None, macro_fn=None) -> list:
+def rank_universe(underlyings, conn=None, rs_fn=None, macro_fn=None,
+                  bars_fn=None) -> list:
     """The scored universe, best first. STABLE: equal ranks keep their
     input order, so a flat/absent signal reproduces today's behaviour
     exactly rather than shuffling the list."""
     try:
+        if bars_fn is None:
+            try:
+                prime_bars(underlyings)     # one disk pass for the universe
+            except Exception:
+                pass
         scored = [score_underlying(u, conn=conn, rs_fn=rs_fn,
-                                   macro_fn=macro_fn)
+                                   macro_fn=macro_fn, bars_fn=bars_fn)
                   for u in (underlyings or [])]
     except Exception:
         return [{"underlying": u, "momentum": 0.0, "macro": None,
-                 "rank": 0.0} for u in (underlyings or [])]
+                 "rank": 0.0, "rs_bars": 0} for u in (underlyings or [])]
     return sorted(scored, key=lambda r: -r["rank"])
 
 
@@ -174,15 +316,22 @@ def prioritise(underlyings, conn=None, rs_fn=None, macro_fn=None) -> tuple:
         return tuple(underlyings or ())
 
 
-def render_line(underlyings, conn=None, rs_fn=None, macro_fn=None) -> str:
-    """One human line for a log — what got prioritised and why."""
+def render_line(underlyings, conn=None, rs_fn=None, macro_fn=None,
+                bars_fn=None) -> str:
+    """One human line for a log — what got prioritised and why.
+
+    An UNMEASURED momentum leg prints `rs —`, never `rs +0.00`: a
+    fabricated zero reading next to a real one is the same class of lie
+    the whole module is written to avoid."""
     ranked = rank_universe(underlyings, conn=conn, rs_fn=rs_fn,
-                           macro_fn=macro_fn)
+                           macro_fn=macro_fn, bars_fn=bars_fn)
     if not ranked:
         return "underlying router: empty universe"
     parts = []
     for r in ranked:
         macro = "—" if r["macro"] is None else f"{r['macro']:+g}"
+        rs = (f"{r['momentum']:+.2f}" if r.get("rs_bars")
+              else "— (no bars)")
         parts.append(f"{r['underlying']} (rank {r['rank']:.2f}, "
-                     f"rs {r['momentum']:+.2f}, macro {macro})")
+                     f"rs {rs}, macro {macro})")
     return "underlying router: " + " > ".join(parts)

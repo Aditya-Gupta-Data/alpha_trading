@@ -187,6 +187,17 @@ class CooldownRegistry:
         return [u for u in underlyings if not self.ready(u, now)]
 
 
+def _ledger_record(underlying, result, state) -> None:
+    """One proposal-ledger line per evaluation. Import-local and
+    swallowing everything: telemetry does not get to break the loop, and
+    a missing module must not either."""
+    try:
+        from src import proposal_ledger
+        proposal_ledger.record(underlying, result, state=state)
+    except Exception as e:
+        print(f"[Market Loop] proposal ledger skipped ({e}).", flush=True)
+
+
 async def run_market_loop(underlyings=UNDERLYINGS,
                           interval: float = POLL_INTERVAL_SECONDS,
                           cooldown: CooldownRegistry = None,
@@ -257,8 +268,14 @@ async def run_market_loop(underlyings=UNDERLYINGS,
                     if state is None:
                         print(f"[Market Loop] {underlying}: no market state "
                               "this cycle.", flush=True)
+                        _ledger_record(underlying, None, None)
                         continue
                     result = await asyncio.to_thread(propose_fn, underlying, state)
+                    # TELEMETRY, not a branch (2026-08-07): the journal
+                    # records what the desk DID; nothing recorded what it
+                    # almost did, so a day of refusals left no queryable
+                    # trace. Nothing below reads this back.
+                    _ledger_record(underlying, result, state)
                     if result.get("proposed"):
                         cooldown.arm(underlying, now)
                         print(f"[Market Loop] {underlying}: proposal fired — "

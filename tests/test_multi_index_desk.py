@@ -88,7 +88,9 @@ def test_activation_did_not_weaken_the_settlement_guard():
 # ============================================ 3. macro-trend router
 
 def _rs(mapping):
-    return lambda u, sector: {"rs_spread_pct": mapping.get(u)}
+    # Signature matches the real seam: `sector_trend.get_relative_strength`
+    # takes the bars the router now supplies (the 2026-08-07 fix).
+    return lambda u, sector, stock_bars=None: {"rs_spread_pct": mapping.get(u)}
 
 
 def test_an_outperforming_midcap_is_prioritised():
@@ -116,7 +118,7 @@ def test_a_flat_signal_reproduces_todays_order_exactly():
     """No signal must mean no change — the sort is stable, so an absent
     reading can never shuffle the universe."""
     universe = list(ml.UNDERLYINGS)
-    order = R.prioritise(universe, rs_fn=lambda u, s: {"rs_spread_pct": None},
+    order = R.prioritise(universe, rs_fn=lambda u, s, stock_bars=None: {"rs_spread_pct": None},
                          macro_fn=lambda u: None)
     assert list(order) == universe
 
@@ -124,16 +126,16 @@ def test_a_flat_signal_reproduces_todays_order_exactly():
 def test_a_strongly_NEGATIVE_macro_read_ranks_as_high_as_a_positive_one():
     """The desk trades both directions. Ranking on the SIGNED score would
     quietly bias the book long without anyone deciding to."""
-    up = R.score_underlying("A", rs_fn=lambda u, s: {"rs_spread_pct": 0.0},
+    up = R.score_underlying("A", rs_fn=lambda u, s, stock_bars=None: {"rs_spread_pct": 0.0},
                             macro_fn=lambda u: 4.0)
-    down = R.score_underlying("B", rs_fn=lambda u, s: {"rs_spread_pct": 0.0},
+    down = R.score_underlying("B", rs_fn=lambda u, s, stock_bars=None: {"rs_spread_pct": 0.0},
                               macro_fn=lambda u: -4.0)
     assert up["rank"] == down["rank"] > 0
 
 
 def test_absent_macro_is_None_not_a_fabricated_zero():
     """'No macro read' and 'neutral macro read' must stay distinguishable."""
-    s = R.score_underlying("X", rs_fn=lambda u, sec: {"rs_spread_pct": 0.0},
+    s = R.score_underlying("X", rs_fn=lambda u, sec, stock_bars=None: {"rs_spread_pct": 0.0},
                            macro_fn=lambda u: None)
     assert s["macro"] is None and s["rank"] == 0.0
 
@@ -152,7 +154,7 @@ def test_the_benchmark_has_nothing_to_outperform():
 
 
 def test_the_router_fails_open_to_the_input_order():
-    def boom(u, sector):
+    def boom(u, sector, stock_bars=None):
         raise RuntimeError("sector data down")
     universe = ["NIFTY 50", "NIFTY BANK"]
     assert list(R.prioritise(universe, rs_fn=boom,
@@ -162,6 +164,129 @@ def test_the_router_fails_open_to_the_input_order():
         raise RuntimeError("brain map down")
     assert list(R.prioritise(universe, rs_fn=_rs({}),
                              macro_fn=boom_macro)) == universe
+
+
+# ---------------------------------- the momentum leg actually computes
+# THE 2026-08-07 BUG. `momentum_score` called `get_relative_strength`
+# WITHOUT `stock_bars`, whose own contract says it must be supplied while
+# the live price path is token-gated. Every call returned an error dict,
+# every leg read 0.0, and `prioritise` — a stable sort over equal keys —
+# never reordered anything. The router shipped as a no-op for two
+# sessions and the rank alone could not show it.
+
+BHAV_HEADER = ("SYMBOL,SERIES,DATE1,PREV_CLOSE,OPEN_PRICE,HIGH_PRICE,"
+               "LOW_PRICE,CLOSE_PRICE,AVG_PRICE,TTL_TRD_QNTY,"
+               "TURNOVER_LACS,NO_OF_TRADES,DELIV_QTY,DELIV_PER")
+
+
+def _lake(tmp_path, symbol="TCS", days=5, start_close=100.0):
+    """A tiny bhavcopy lake: one day-file per session, rising closes."""
+    root = tmp_path / "bhavcopy"
+    root.mkdir()
+    for i in range(days):
+        day = f"2026-08-{i + 1:02d}"
+        close = start_close + i
+        (root / f"{day}.csv").write_text(
+            BHAV_HEADER + "\n"
+            f"{symbol},EQ,{day},{close - 1},{close},{close + 2},"
+            f"{close - 2},{close},{close},1000,10,50,500,50\n")
+    return root
+
+
+def test_daily_bars_reads_the_lake_in_the_shape_sector_trend_expects(tmp_path):
+    """(date, low, high, close) — `sector_trend._closes` indexes b[3]."""
+    bars = R.daily_bars("TCS.NS", lake_dir=_lake(tmp_path))
+    assert len(bars) == 5
+    assert bars[0] == ("2026-08-01", 98.0, 102.0, 100.0)
+    assert bars[-1][3] == 104.0            # oldest first
+
+
+def test_an_index_gets_no_bars_from_an_equity_bhavcopy(tmp_path):
+    """Honest [] rather than an invented series: an equity bhavcopy does
+    not carry NIFTY BANK, and pricing an index off one would be fiction."""
+    assert R.daily_bars("NIFTY BANK", lake_dir=_lake(tmp_path)) == []
+
+
+def test_the_five_stock_underlyings_all_have_a_parent_sector():
+    """They were mapped NOWHERE before the fix — INDEX_SECTOR covers only
+    indices, so `sector_for` returned None and sector_trend was handed an
+    empty sector name on top of the missing bars."""
+    assert R.sector_for("TCS.NS") == "IT"
+    assert R.sector_for("INFY.NS") == "IT"
+    assert R.sector_for("HDFCBANK.NS") == "FINANCIALS"
+    assert R.sector_for("ICICIBANK.NS") == "FINANCIALS"
+    assert R.sector_for("RELIANCE.NS") == "ENERGY"
+
+
+def test_the_momentum_leg_is_handed_its_bars():
+    """The regression guard for the whole bug: the seam that REQUIRES
+    stock_bars must receive them."""
+    seen = {}
+
+    def rs_fn(ticker, sector, stock_bars=None):
+        seen["sector"] = sector
+        seen["bars"] = stock_bars
+        return {"rs_spread_pct": 2.5}
+
+    mom = R.momentum_score("TCS.NS", rs_fn=rs_fn,
+                           bars_fn=lambda u: [("2026-08-01", 1, 2, 3)])
+    assert seen["sector"] == "IT"
+    assert seen["bars"] == [("2026-08-01", 1, 2, 3)]
+    assert mom == 0.5                       # 2.5 / RS_SATURATION_PCT
+
+
+def test_a_real_reading_reorders_the_universe():
+    """What the no-op could never do: an outperforming stock gets scanned
+    before the flat indices."""
+    order = R.prioritise(["NIFTY 50", "NIFTY BANK", "TCS.NS"],
+                         rs_fn=_rs({"TCS.NS": 3.0}), macro_fn=lambda u: None)
+    assert order[0] == "TCS.NS"
+
+
+def test_an_unmeasured_leg_prints_as_absent_not_as_a_zero_reading():
+    """`rs +0.00` next to a real 0.00 is exactly how a dead router hid."""
+    measured = R.render_line(
+        ["TCS.NS"], rs_fn=_rs({"TCS.NS": 0.0}), macro_fn=lambda u: None,
+        bars_fn=lambda u: [("2026-08-01", 1, 2, 3)])
+    assert "rs +0.00" in measured
+    unmeasured = R.render_line(["TCS.NS"], rs_fn=_rs({}),
+                               macro_fn=lambda u: None, bars_fn=lambda u: [])
+    assert "rs — (no bars)" in unmeasured
+
+
+def test_the_universe_is_primed_in_one_pass_over_the_lake(tmp_path):
+    """Five symbols must not mean five walks of 130 day-files — measured
+    at ~10s that way on the Mac, 2s primed, and the VM is a 1 GB box."""
+    root = tmp_path / "bhavcopy"
+    root.mkdir()
+    for i in range(3):
+        day = f"2026-08-{i + 1:02d}"
+        rows = "\n".join(
+            f"{s},EQ,{day},99,100,102,98,{100 + i},100,1000,10,50,500,50"
+            for s in ("TCS", "INFY"))
+        (root / f"{day}.csv").write_text(BHAV_HEADER + "\n" + rows + "\n")
+    R._BARS_CACHE.clear()
+    primed = R.prime_bars(["TCS.NS", "INFY.NS", "NIFTY 50"], lake_dir=root,
+                          today="2026-08-07")
+    assert primed == 2                      # the index is not in a bhavcopy
+    for f in root.glob("*.csv"):
+        f.unlink()                          # nothing further may touch disk
+    assert len(R.daily_bars("TCS.NS", today="2026-08-07")) == 3
+    assert len(R.daily_bars("INFY.NS", today="2026-08-07")) == 3
+    R._BARS_CACHE.clear()
+
+
+def test_the_lake_is_read_once_per_symbol_per_day(tmp_path):
+    """25 cycles a session must not re-parse 130 day-files nine times
+    each — that would be the most expensive thing in the loop."""
+    lake = _lake(tmp_path)
+    R._BARS_CACHE.clear()
+    first = R.daily_bars("TCS.NS", lake_dir=lake, today="2026-08-07")
+    for f in lake.glob("*.csv"):
+        f.unlink()                          # the lake is gone…
+    again = R.daily_bars("TCS.NS", lake_dir=lake, today="2026-08-07")
+    assert again == first                   # …and the day's read still stands
+    R._BARS_CACHE.clear()
 
 
 def test_the_router_reads_the_dual_horizon_column(tmp_path):

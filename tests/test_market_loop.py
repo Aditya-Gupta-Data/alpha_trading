@@ -187,6 +187,39 @@ def test_a_broken_router_line_is_not_reported_as_a_routing_failure(capsys):
     fetch.assert_called_once()          # the cycle itself still ran
 
 
+def test_every_evaluation_reaches_the_proposal_ledger(tmp_path):
+    """Both fates and the no-state cycle, recorded — the loop is where
+    every evaluation is visible at once."""
+    from src import proposal_ledger as PL
+    ledger = tmp_path / "proposal_ledger.jsonl"
+    rows = []
+
+    def fake_record(underlying, result, state=None):
+        rows.append(PL.record(underlying, result, state=state, path=ledger))
+
+    fetch = mock.Mock(side_effect=[{"vix": 13.0}, None])
+    propose = mock.Mock(return_value={"proposed": False,
+                                      "reason": "no tradeable quotes at "
+                                                "the chosen strikes"})
+    with mock.patch.object(ml, "_ledger_record", side_effect=fake_record):
+        run_cycles([ist(10, 0), ist(10, 15)], fetch, propose,
+                   cooldown=ml.CooldownRegistry(seconds=7200))
+    assert [r["fate"] for r in PL.read_rows(path=ledger)] == [
+        "REJECTED_NO_QUOTE", "NO_MARKET_STATE"]
+
+
+def test_a_broken_ledger_never_breaks_the_cycle(capsys):
+    """Telemetry hangs off the live loop; it does not get to stop it."""
+    fetch = mock.Mock(return_value={"vix": 13.0})
+    propose = mock.Mock(return_value={"proposed": True, "reason": "ok"})
+    with mock.patch("src.proposal_ledger.record",
+                    side_effect=RuntimeError("disk full")):
+        run_cycles([ist(10, 0)], fetch, propose,
+                   cooldown=ml.CooldownRegistry(seconds=7200))
+    assert propose.call_count == 1          # the proposal still fired
+    assert "proposal ledger skipped" in capsys.readouterr().out
+
+
 # ------------------------------------------------------- headless mode
 
 def make_analysis(rsi=55.0):

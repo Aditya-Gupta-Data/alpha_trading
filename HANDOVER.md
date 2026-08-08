@@ -42,6 +42,95 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-07 (Friday, SESSION CLOSE): post-session health check — clean session, but read what the router did and did NOT do
+
+**This is the session-wrap block. Start here Monday.**
+
+Suite **1,997 green**, working tree clean, VM at `cb4098b`.
+
+### The Friday session itself: clean
+
+`09:15:00 → 15:30:01`, all nine underlyings armed, **zero tracebacks,
+zero crashes, zero fatal exceptions** in `master_scheduler.log`. Entered
+nothing — every candidate refused on the ₹10k cap, margin, exposure or
+missing quotes, which is the same picture as Thursday and the reason the
+₹10L injection and the proposal ledger exist.
+
+### ⚠️ THE THING NOT TO MISBELIEVE: the router did NOT run on Friday
+
+**Zero `underlying router:` lines in Friday's log.** The fix landed at
+~15:1x and the scheduler process had been running since 09:10, so the
+session executed the OLD code end to end. The same is true of the
+proposal ledger — `data/proposal_ledger.jsonl` **does not exist yet** on
+the VM, and `ghost_tracker` correctly reports "no refused trades" for
+both 08-06 and 08-07. Nothing failed; the code simply was not in the
+running process.
+
+**Everything shipped today is first exercised at Monday 09:10.** Do not
+read Friday's clean log as evidence that the router, the ledger or the
+ghost book work in production — they have only been proven by direct
+invocation, which is a weaker claim.
+
+### The corrected router reading (complete lake)
+
+The bhavcopy backfill finished 16:07 (**100 day-files, 2026-03-23 →
+2026-08-07**). Against the full lake:
+
+```
+HDFCBANK.NS 1.00 (rs −1.00) > ICICIBANK.NS 1.00 (+1.00) > INFY.NS 0.77
+(−0.77) > RELIANCE.NS 0.33 (−0.33) > TCS.NS 0.06 (−0.06) > the four
+indices 0.00 (rs — (no bars))
+```
+
+63-session spreads: ICICIBANK **+11.78**, HDFCBANK −5.38, INFY −3.86,
+RELIANCE −1.63, TCS −0.28. **`RS_SATURATION_PCT = 5.0` needs no change** —
+it clips the two genuine outliers and leaves the middle ordered. An
+earlier note in this file said all five saturated; that sample was taken
+mid-backfill against a partial lake and must not be quoted.
+
+*(A caution about the polling that produced it: `pgrep -f bhavcopy_clerk`
+matches the SSH shell whose own command line contains that string, so it
+reported the job alive long after it finished. Use
+`ps -eo cmd | grep -E 'python -m src[.]ingestion[.]bhavcopy'`.)*
+
+### Archiver: 9/9 captured, zero errors — with one honest correction
+
+The **15:40 cron ran the OLD 2-underlying code** (the expansion deployed
+at ~16:5x). The nine partitions on disk for 08-07 come from the manual
+run at 16:53–16:55. **`chain_archiver.log` contains zero errors of any
+kind, and zero DH-905 from the archiver.**
+
+**A mistake I made and then repaired:** the manual run rewrote
+`chains/banknifty/date=2026-08-07` with 2 expiries over the cron's 4,
+dropping two far-dated snapshots that decision #36 says are not
+retrievable. Because the market was closed the same closes were still
+available, so BANKNIFTY was re-captured at depth 4 and the partition now
+holds **4 rows (08-25, 09-29, 10-27, 12-29)**. From Monday the cron
+captures BANKNIFTY at 2 by the new policy — deliberate, and the reason is
+in `chain_archiver`'s own comment.
+
+### DH-905: present, but not what the name suggests here
+
+`suggest.log` (08:03), `ops_monitor.log`, `ceo_brief.log` carry DH-905
+rows — all `Input_Exception` ("Missing required fields, bad values for
+parameters") on **historical** calls, e.g. `id=1333 NSE_EQ/EQUITY
+2024-05-17->2026-08-05`. That is a **bad-parameter** failure, not a rate
+limit, and it is pre-existing and unrelated to the archiver expansion.
+Worth triaging on its own; do not read it as rate-limit pressure from
+today's changes.
+
+### ⏭️ Monday, in order
+
+1. **09:10** — first session on the new code. Watch for the
+   `underlying router:` line (stocks with real `rs`, indices `— (no
+   bars)`) and for `data/proposal_ledger.jsonl` appearing.
+2. **15:40** — first *scheduled* nine-way archiver sweep.
+3. **After the close** — `python3 -m src.ghost_tracker` for the first
+   real ghost read; all nine underlyings are priceable from 08-07 on.
+4. Triage the `suggest.py` DH-905 bad-parameter calls (id 1333).
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-07 (Friday, pre-weekend sync): all nine chains are captured, the desk budget matches the pool
 
 **Deployed and verified live.** Suite **1,997 green**. No strategy, gate,

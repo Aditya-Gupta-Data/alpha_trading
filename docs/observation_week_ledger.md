@@ -1081,3 +1081,101 @@ deploy time went unrecorded, which is precisely the gap this log closes.
   `RunAtLoad = true`, so the miner fires at every login; now bounded by
   the on-demand server, but worth a separate decision on whether a
   login-time run is wanted at all.
+
+---
+
+## Observation — the e2-micro is NOT memory-starved; the "VM is choking" premise measured false (2026-08-08, infra triage before a hardware/data spend)
+
+**Not a bug.** Recorded because a purchase decision (₹15–20k Mini PC, a
+larger VPS, or a paid tick-data subscription) was being weighed on the
+belief that the GCP `e2-micro` is running out of memory on "SQLite and
+Pandas calculations". Every number below was read off the live VM,
+read-only, on 2026-08-08.
+
+### Memory — not the constraint
+
+| Reading | Value |
+|---|---|
+| Total / available RAM | 964 MB / **353 MB available** |
+| Swap | **none configured** (an OOM would be a hard kill, not slowdown) |
+| OOM kills, `dmesg` + `journalctl -k` | **0**, across 16d 21h uptime |
+| Service restarts (`NRestarts`) | **0** on alpha-trading, alpha-discord-bot, cloudflared-tunnel |
+| Peak service RSS (`systemctl show -p MemoryPeak`) | alpha-trading **70.2 MB**, discord bot 48.1 MB, tunnel 45.6 MB |
+| Peak RSS, our read-only paths | **31 MB** (router, ghost_tracker, proposal_ledger, brain_map query) |
+| `MemoryError` / "Cannot allocate" in any app log | **none** |
+
+**~190 MB of the 964 MB — about 20% — is Google's own agents**, not ours:
+ops-agent 73 MB, osconfig 36 MB, fluent-bit 29 MB, ops wrapper 18 MB,
+guest agents ~34 MB. Our entire trading stack peaks at 70 MB.
+
+**The Pandas premise is wrong for this codebase.** `grep` across `src/`
+finds **no import of pandas, numpy or polars**. `pandas` is in
+`requirements.txt` for `yfinance` and `scripts/build_synthetic_proxies.py`;
+the engine itself is stdlib + sqlite3.
+
+### CPU — one real cost, bounded by design
+
+2 shared vCPU (Xeon 2.20 GHz), load average **0.09**, `vmstat` steal time
+**0** (no hypervisor throttling observed). The one measurable expense is
+`underlying_router`'s cold start, which parses the last 100 bhavcopy
+day-files (36 MB of CSV) through `bhavcopy_clerk.bars_for_many`:
+
+    three cold runs, live VM: 22.6 s / 43.2 s / 43.3 s
+    same work on the Mac:     ~2 s
+
+Paid **once per process per day** (`_BARS_CACHE` is keyed symbol+day) and
+bounded by `DAILY_BARS_DAYS = 130`, so it cannot grow past ~47 MB of CSV
+however long the lake runs. Practical effect: the 09:15 session's first
+cycle is delayed up to ~45 s. Not a correctness risk; it is the honest
+measure of this box's single-core speed.
+
+### Disk — the actually tight resource, and it is not ours
+
+`/` is **81% used, 1.8 GB free**. The repo is 779 MB of that (venv 506 MB,
+data 116 MB). The largest single reclaimable item is **888 MB of archived
+systemd journals** (`journalctl --disk-usage`). Capping
+`SystemMaxUse` in `/etc/systemd/journald.conf` and vacuuming once would
+roughly halve disk pressure without touching anything we own. **NOT DONE**
+— it is a host config change and was left for the owner to approve.
+
+### Migration findings (recorded, then PARKED by owner decision 2026-08-08)
+
+- **No IP allowlisting exists anywhere in our code.** We never send,
+  register or pin an IP. Whether *Dhan* enforces IP allowlisting on API
+  access **cannot be answered from this repo** and must be confirmed with
+  the broker before any home-broadband move. It is not asserted here
+  either way.
+- **The real GCP coupling is the token path, not the IP.**
+  `renew_token.fetch_gcp_secrets` pulls PIN/TOTP/API keys from GCP Secret
+  Manager via the instance metadata server. Off GCP it **silently no-ops
+  and falls back to `.env`** — so migration works technically, but it
+  reverses decision #46, which deliberately keeps account-control
+  credentials off the trading box.
+- Secondary couplings: `edge_miner`'s `gcloud compute scp` pull lane,
+  `firm_treasury.vm_push_file`, `scripts/push_token_to_vm.sh`. The
+  Cloudflare tunnel is already dynamic-IP-safe and needs nothing.
+- NSE (bhavcopy, corporate_events, deals_tracker) is verified to serve the
+  GCP IP; a residential IP is untested against NSE's bot-blocking.
+
+### The TickBytes tick-data subscription (Reddit, r/IndiaAlgoTrading)
+
+Assessed against the repo's own README (`QuantDev-stack/TickBytes`), not
+just the post. **It cannot replace our archiver:**
+
+- Covers **6 indices** (NIFTY 50, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX,
+  BANKEX). **Individual stock options are not included** — confirmed
+  absent from the repo's own documentation — so all five of our equity
+  option underlyings would still need `chain_archiver` running.
+- **EOD delivery (16:00–17:00 IST, private Telegram)**, so it cannot feed
+  the live proposal path at all.
+- It would **increase** this box's load, not reduce it: daily tick + 1-second
+  parquet ingestion needs pandas/polars, which `src/` does not currently
+  import at all. Our own archiver costs ~2 minutes and ~150 KB/day.
+- Provenance is stated only as "recorded directly from raw exchange feeds";
+  no licence or redistribution terms are documented, and pricing is not
+  stated in the repo.
+
+**Verdict: not a V1 infra fix. Possible V2 research input** — tick/1-second
+history with L2 depth and 16 Greeks is exactly the class of data decision
+#36 says we cannot reconstruct after the fact. Any adoption is a separate,
+evidence-gated decision and a new ingestion pipeline, i.e. freeze-breaking.

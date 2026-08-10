@@ -1138,6 +1138,18 @@ systemd journals** (`journalctl --disk-usage`). Capping
 roughly halve disk pressure without touching anything we own. **NOT DONE**
 — it is a host config change and was left for the owner to approve.
 
+> **DONE 2026-08-11** (architect approved). Journals had grown to 933 MB by
+> then. `journalctl --vacuum-size=200M` **freed 768 MB** — three ~95 MB
+> archived files plus the rest — and `/etc/systemd/journald.conf` now caps
+> `SystemMaxUse=200M`, `SystemMaxFileSize=50M`, `MaxRetentionSec=1month`
+> (backup alongside it as `journald.conf.bak-<ts>`). Disk went **2.3 GB →
+> 3.0 GB free (76% → 68%)**. Nothing inside `alpha_trading/` was touched:
+> repo tree clean, `data/` still 118 MB, brain_map.db/journal.jsonl
+> untouched, all three services active, and journald keeps logging (verified
+> against live `alpha-trading` unit lines after the restart). This is
+> **recurring-safe** — the cap means the growth cannot repeat, so it is a
+> one-time fix and not a chore.
+
 ### Migration findings (recorded, then PARKED by owner decision 2026-08-08)
 
 - **No IP allowlisting exists anywhere in our code.** We never send,

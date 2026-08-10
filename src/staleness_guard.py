@@ -142,12 +142,16 @@ REGISTRY = {
             policy=IGNORE,
             consumer="analysis.sector_trend.is_sector_bullish → "
                      "analysis.regime_filters._sector_bearish (LIVE bullish veto)",
-            producer=None,
-            note="NO PRODUCER EXISTS on any schedule — verified 2026-08-05 by "
-                 "grep over src/, scripts/, archive/, research_archive/. The "
-                 "file was written once (yfinance, 2026-07-16) and has never "
-                 "been refreshed. Until a refresher exists this artifact is "
-                 "permanently stale BY DESIGN and the sector veto stays off.",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh (LaunchAgent "
+                     "com.aditrader.sync, at login + hourly while awake)",
+            note="Was PRODUCERLESS from 2026-07-16 to 2026-08-05 (written once "
+                 "by yfinance and never refreshed) while still feeding a LIVE "
+                 "bullish veto — the bug this whole module was built for. "
+                 "scripts/fetch_sector_bars.py became its producer on 08-05 "
+                 "and the Mac auto-sync agent became its SCHEDULE on 08-11. "
+                 "MAC-ONLY by necessity: Yahoo blocks datacentre IPs and src/ "
+                 "must stay free of a yfinance import, so the VM can never "
+                 "build this itself — it can only be shipped one.",
         ),
 
         # ---- MONITOR-ONLY: these already have their own correct checks -----
@@ -234,10 +238,14 @@ REGISTRY = {
             policy=MONITOR,
             consumer="regime backfill CLI, evolution, macro_shocks.crisis_playbook "
                      "(none on the live entry path)",
-            producer=None,
-            note="No producer on any schedule. Off the live decision path, so "
-                 "monitored with a deliberately loose tolerance rather than "
-                 "treated as an incident.",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh (weekly leg; "
+                     "evolution.refresh_bars_cache pulls through the VM's token)",
+            note="Had no SCHEDULE until 2026-08-11 — the refresher existed "
+                 "(evolution.refresh_bars_cache) but nothing ever called it, so "
+                 "the file aged to 31 days. Off the live decision path, hence "
+                 "the deliberately loose 30-day tolerance and the weekly rather "
+                 "than daily refresh: the pull runs through the VM's token and "
+                 "is not worth repeating nightly.",
         ),
     ]
 }

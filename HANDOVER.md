@@ -42,6 +42,67 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-11 (Tuesday, pre-open, later): the Mac's dependencies now push themselves
+
+Suite **2,000 green**. Ran for real before the open — **every artifact the
+VM consumes is `fresh` right now.**
+
+### The router's sector leg is live again
+
+`sector_index_bars` was **producerless from 07-16 to 08-05** and unscheduled
+after that, while still feeding a LIVE bullish veto — the bug this whole
+staleness module was built for. It is now **0.0d old on the VM**, and the
+router's ranking moved as a result (INFY 0.77 → 0.40, RELIANCE 0.33 → 0.36,
+TCS 0.06 → 0.12): the momentum leg had been comparing today's stock closes
+against **08-05** sector closes.
+
+`bars_cache` (31 days) is refreshed too — 1,185 bars each for NIFTY 50 and
+NIFTY BANK, 892 VIX sessions. It always had a refresher
+(`evolution.refresh_bars_cache`); what it never had was a caller.
+
+### Why these stayed Mac-native — it was checked, not assumed
+
+`scripts/fetch_sector_bars.py` says **MAC-ONLY, NEVER RUN ON THE VM** and
+means it: Yahoo rate-limits/blocks datacentre IPs, and `src/` must stay free
+of a yfinance import. Valuation is the same story from the other direction —
+the corpus is Mac-side. So the VM *cannot* build either; it can only be
+shipped them. **The split is now explicit**: the VM builds what its own
+bhavcopy supports (pricer + tiers, 19:18/19:22), the Mac pushes only what
+the VM genuinely cannot compute.
+
+### `scripts/mac_auto_sync.sh` + `com.aditrader.sync.plist`
+
+Runs the Mac-only producers and ships **6 artifacts** through
+`firm_treasury.vm_push_file` (the one Mac→VM lane). It **deliberately does
+not ship `darling_tiers.json` / `darlings_levels.json`** — those went
+VM-native yesterday, and a Mac copy over them would reintroduce exactly the
+staleness this ends.
+
+launchd, not cron, and for a measured reason: macOS cron does not fire while
+asleep and never catches up (audited 08-04 — the Mac missed 4 of 11 weekdays
+with **no log line at all**). `RunAtLoad` + hourly `StartInterval` coalesces
+on wake, so the sync happens within an hour of the lid opening. The script
+throttles itself to one real run per 3h; the agent ticking and doing nothing
+is the intended shape.
+
+**⚠️ THE OWNER MUST RUN THREE COMMANDS ONCE** to activate it — until then
+this is a manual script and nothing runs it. They are in the plist's own
+header comment and in the developer handoff.
+
+**⚠️ `/bin/bash` needs Full Disk Access** or launchd cannot read a repo under
+`~/Documents` (the 07-09 edge-miner TCC lesson). It is already granted on
+this Mac; a macOS upgrade can revoke it silently, so if the agent goes quiet
+check that first.
+
+### Two staleness records corrected
+
+`sector_index_bars` and `bars_cache` both carried `producer=None` in
+`staleness_guard`. Both now name the sync agent, and the headline test moved
+from asserting "NO PRODUCER" to asserting the producer is **named** — a
+stale artifact whose refresher is unnamed is the harder incident.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-11 (Tuesday, pre-open): the three Monday blockers are cleared
 
 Suite **2,000 green**. VM at the latest commit, **31 cron lines**, no

@@ -45,8 +45,13 @@ def _artifact_file(tmp_path: Path, rel: str, age_days: float) -> Path:
 
 # ------------------------------------------------------- the headline case
 
-def test_twenty_day_old_file_is_stale_and_names_the_dead_producer(tmp_path):
-    """THE bug, reproduced: the exact artifact, the exact age."""
+def test_twenty_day_old_file_is_stale_and_names_its_producer(tmp_path):
+    """THE bug, reproduced: the exact artifact, the exact age.
+
+    The reason used to end in "NO PRODUCER" because nothing refreshed this
+    file at all. It has one since 2026-08-11 (the Mac auto-sync agent), so
+    the assertion moved from "nobody refreshes it" to "name who does" —
+    a stale artifact whose refresher is unnamed is the harder incident."""
     _artifact_file(tmp_path, "data/sector_index_bars.json", 20)
     v = SG.check("sector_index_bars", now=NOW, root=tmp_path)
 
@@ -55,9 +60,9 @@ def test_twenty_day_old_file_is_stale_and_names_the_dead_producer(tmp_path):
     assert v["threshold_hours"] == 3 * 24          # 3 × its 24h cadence
     assert v["policy"] == SG.IGNORE                # this one self-disables
     assert v["signal"] == "mtime"
-    # the reason must carry the age, the limit, AND the fact nobody refreshes it
+    # the reason must carry the age, the limit, AND who was supposed to refresh it
     assert "20.0 days old" in v["reason"]
-    assert "NO PRODUCER" in v["reason"]
+    assert "mac_auto_sync.sh" in v["reason"]
 
 
 def test_twenty_day_old_file_generates_the_alert_payload(tmp_path):

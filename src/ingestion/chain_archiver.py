@@ -65,13 +65,21 @@ UNDERLYINGS = {
 # Capture the nearest N expiries per underlying: the active weekly/monthly
 # contracts where all trading (and all future feature value) concentrates.
 #
-# 2 is deliberate for everything except NIFTY. FINNIFTY, MIDCPNIFTY and all
-# five equity names are MONTHLY-ONLY (measured against the scrip master on
-# 08-05), so "the nearest 4" reaches four months out into contracts nobody
-# trades and nothing will ever backtest — 4x the calls and 4x the storage
-# for the same one or two live months. NIFTY still carries weeklies, which
-# is exactly where the near-dated surface lives, so it keeps 4.
-MAX_EXPIRIES = 2
+# 3 for everything except NIFTY. FINNIFTY, MIDCPNIFTY and all five equity
+# names are MONTHLY-ONLY (measured against the scrip master on 08-05), so
+# "the nearest 4" reached four months out into contracts nobody trades.
+# NIFTY still carries weeklies — the near-dated surface — so it keeps 4.
+#
+# RAISED 2 -> 3 on 2026-08-11, and the ghost book is what raised it: on
+# 08-10 the desk refused equity spreads written on the 2026-10-27 expiry,
+# which is the THIRD monthly. At depth 2 the archive stopped at 09-29, so
+# seven of nineteen ghosts came back NO_CHAIN_ARCHIVE — the refusals were
+# real trades the engine had built and we could not say what they would
+# have done. The proposer reaches the third monthly because `horizon_for`
+# can ask for 90+ days; the archive has to reach as far as the proposer
+# does or the ghost book has a hole exactly where the long-horizon trades
+# are. Cost is ~9 extra chain calls (~30s) and ~50 KB/day.
+MAX_EXPIRIES = 3
 MAX_EXPIRIES_BY_UNDERLYING = {"NIFTY 50": 4}
 THROTTLE_SECONDS = 3.0
 

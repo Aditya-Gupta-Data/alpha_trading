@@ -75,7 +75,7 @@ def test_run_writes_lake_partitions_per_underlying():
         f, _ = _fetchers()
         summary = ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
         assert summary["captured"]["NIFTY 50"] == 4
-        assert summary["captured"]["NIFTY BANK"] == ca.MAX_EXPIRIES
+        assert summary["captured"]["NIFTY BANK"] == ca.MAX_EXPIRIES  # 3
         rows = lake.read_day("chains/nifty", "2026-07-10", root=tmp)
         assert len(rows) == 4
         assert rows[0]["underlying"] == "NIFTY 50"
@@ -118,13 +118,15 @@ def test_slugs_are_unique_so_no_two_underlyings_share_a_partition():
 
 
 def test_only_the_weekly_carrying_index_takes_four_expiries():
-    """FINNIFTY/MIDCPNIFTY and the five stocks are MONTHLY-ONLY, so a
-    4-deep sweep reaches contracts nobody trades — 4x the calls and 4x
-    the storage for the same live month."""
+    """NIFTY carries weeklies — the near-dated surface — so it takes 4.
+    The monthly-only names take 3: raised from 2 on 2026-08-11 because
+    the 08-10 ghosts wanted the THIRD monthly (2026-10-27) and the
+    archive stopped at the second, so seven refused trades could not be
+    priced at all. The archive has to reach as far as the proposer does."""
     assert ca.expiries_wanted("NIFTY 50") == 4
     for u in ("NIFTY BANK", "NIFTY FIN SERVICE", "NIFTY MID SELECT",
               "TCS.NS", "RELIANCE.NS"):
-        assert ca.expiries_wanted(u) == 2
+        assert ca.expiries_wanted(u) == 3
 
 
 def test_underlyings_are_paced_apart():
@@ -152,7 +154,7 @@ def test_one_dead_underlying_never_costs_the_other_eight():
         summary = ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
         assert summary["captured"]["TCS.NS"] == 0
         assert summary["captured"]["NIFTY 50"] == 4
-        assert summary["captured"]["RELIANCE.NS"] == 2
+        assert summary["captured"]["RELIANCE.NS"] == 3
 
 
 if __name__ == "__main__":

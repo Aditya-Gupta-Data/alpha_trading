@@ -169,3 +169,58 @@ def test_the_live_ledger_is_never_written_from_a_test():
     """A test that forgets `path` must be a no-op, not a junk row in the
     production file."""
     assert PL.record("NIFTY 50", _rejection("x")) is None
+
+
+# ------------------------------------------- the expiry hole (08-11 fix)
+# A gate-stage refusal (exposure #68, margin) hands back the BUILT
+# proposal, whose expiry lives at proposal["spread"]["expiry"] — there is
+# no top-level `expiry` key. Reading the wrong place wrote `expiry: None`,
+# and a ghost with no expiry can never find a chain: every NIFTY BANK
+# ghost on 2026-08-10 died as `no captured chain for expiry None`.
+
+def _built_proposal(expiry="2026-08-25", spot=57800.0):
+    return {"ticker": "NIFTY BANK", "view": "neutral", "lots": 2,
+            "spread": {"strategy": "iron_condor", "direction": "neutral",
+                       "lot_size": 30, "expiry": expiry, "entry_spot": spot,
+                       "net_credit": 120.0, "net_debit": None,
+                       "max_loss": 8400.0, "max_profit": 3600.0,
+                       "legs": [{"side": "SELL", "option_type": "PE",
+                                 "strike": 56600, "premium": 100.0},
+                                {"side": "BUY", "option_type": "PE",
+                                 "strike": 56200, "premium": 40.0}]}}
+
+
+def test_a_gate_refusal_carries_the_expiry_off_the_spread():
+    from src import options_proposer as op
+    facts = op._rejected_facts("NIFTY BANK", {"view": "neutral"},
+                               _built_proposal())
+    assert facts["expiry"] == "2026-08-25"
+    assert facts["spot"] == 57800.0
+    assert facts["lots"] == 2 and facts["lot_size"] == 30
+
+
+def test_the_expiry_reaches_the_ledger_row_for_a_gate_refusal():
+    from src import options_proposer as op
+    result = {"proposed": False, "entry": None,
+              "reason": "exposure gate: 1 open neutral position(s) on "
+                        "NIFTY BANK already (`ac895ae4`)",
+              "rejected": op._rejected_facts("NIFTY BANK", {"view": "neutral"},
+                                             _built_proposal())}
+    row = PL.row_for("NIFTY BANK", result)
+    assert row["fate"] == "REJECTED_EXPOSURE"
+    assert row["expiry"] == "2026-08-25"       # was None before the fix
+    assert row["entry_net"] == 120.0           # credit structure
+    assert len(row["legs"]) == 2
+
+
+def test_a_build_stage_refusal_still_carries_its_own_expiry():
+    """Those were never broken — build_proposal returns its own expiry,
+    which is why the hole looked underlying-specific, not stage-specific."""
+    from src import options_proposer as op
+    facts = op._rejected_facts("NIFTY 50", {
+        "view": "bearish", "expiry": "2026-09-29",
+        "rejected_spread": {"strategy": "bear_put_spread", "lot_size": 65,
+                            "net_debit": 60.0, "net_credit": None,
+                            "legs": [{"side": "BUY", "option_type": "PE",
+                                      "strike": 24600, "premium": 100.0}]}})
+    assert facts["expiry"] == "2026-09-29"

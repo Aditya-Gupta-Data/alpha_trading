@@ -73,6 +73,15 @@
 #                             keeps its OWN log-sweep offset so it never
 #                             consumes ops_monitor's findings (#6).
 #
+#  30. src.analysis.dynamic_pricer + src.analysis.darling_tiers:
+#                             Mon-Fri 19:18 / 19:22 IST (wired 2026-08-11).
+#                             The VM now builds the equity desk's levels and
+#                             tier table itself, off its own bhavcopy lake,
+#                             instead of waiting for a Mac that may be
+#                             asleep. valuation_scorer stays Mac-only —
+#                             running it here empties the valuation file and
+#                             greys out every darling. Details at the entry.
+#
 #  29. src.ingestion.cross_asset: Daily 19:40 IST (wired 2026-08-07). MCX
 #                             commodities + global-index EOD bars into the
 #                             lake. Capture-only — no Dept 2/3 importer, so
@@ -363,6 +372,36 @@ CRON_TZ=Asia/Kolkata
 #     NOTE: the Mac's patience_basket chain still fetches its own copy for
 #     tier grading; the two stores are per-machine and do not diverge.
 15 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.bhavcopy_clerk --backfill 5 >> "$REPO_ROOT/logs/bhavcopy_clerk.log" 2>&1
+
+# 30. Darling levels + tier grading ON THE VM (Mon-Fri 19:18 / 19:22 IST,
+#     WIRED 2026-08-11). These two artifacts were Mac-only, produced by
+#     the 19:15 `patience_basket --eod` chain and shipped down. The Mac
+#     had not run since 08-05, so by 08-10 `darling_tiers.json` and
+#     `darlings_levels.json` were 5.1 days stale — and the equity desk
+#     FAILS CLOSED on a stale tier table (`_tiers_fresh`), so every extra
+#     day of Mac sleep is a day the desk cannot enter a darling at all.
+#     The VM can now do this itself: both stages derive from the bhavcopy
+#     lake, which MIGRATED HERE on 08-04 and holds 100+ sessions.
+#
+#     ⚠️ ONLY THESE TWO STAGES. `valuation_scorer` is deliberately NOT
+#     here: it needs the fundamentals/deep-read corpus that lives on the
+#     Mac, and running it on this box scores 0 of 109 darlings and
+#     overwrites `darlings_valuation.json` with an empty result — which
+#     drives EVERY darling to `ungraded` on the next grading pass.
+#     Measured on 2026-08-11 (caught by a --dry-run, repaired by
+#     re-shipping the Mac's copy). `darlings_queue.json`,
+#     `darlings_valuation.json` and `darling_pins.json` remain Mac-shipped
+#     INPUTS; they change on a weekly screen cadence, not daily.
+#
+#     19:18 sits after this box's own bhavcopy (19:15, ~30s) so the levels
+#     are built on TODAY's close — a 16:00 run would grade on yesterday's
+#     data while making the file look fresh, which is worse than stale.
+#     If the Mac is also awake its ship lands the same day's copy over
+#     these; the tier file is its own de-dup ledger, so whichever runs
+#     second simply sees no new transitions and fires no duplicate cards.
+18 19 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.analysis.dynamic_pricer >> "$REPO_ROOT/logs/dynamic_pricer.log" 2>&1
+
+22 19 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.analysis.darling_tiers >> "$REPO_ROOT/logs/darling_tiers.log" 2>&1
 
 # 29. Cross-asset EOD tap (Daily 19:40 IST, WIRED 2026-08-07) — MCX
 #     commodities + global indices into data/lake/cross_asset/. Built

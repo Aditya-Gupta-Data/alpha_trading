@@ -871,7 +871,16 @@ def _rejected_facts(underlying: str, result: dict, proposal: dict = None) -> dic
 
     `lots` is deliberately absent for a size-refused trade: the engine
     computed zero lots, and the ghost tracker prices ONE lot and says so
-    rather than inventing a size the sizer never authorised."""
+    rather than inventing a size the sizer never authorised.
+
+    EXPIRY LIVES ON THE SPREAD, not on the proposal (2026-08-11 fix). A
+    built proposal carries it as `proposal["spread"]["expiry"]` — there is
+    no top-level `expiry` key — so gate-stage refusals (exposure #68,
+    margin) wrote `expiry: None` and their ghosts could never find a
+    chain. It cost every NIFTY BANK ghost on 08-10: five rows, all
+    `no captured chain for expiry None`. Build-stage refusals were fine
+    because `build_proposal` returns its own `expiry`, which is why the
+    hole looked underlying-specific rather than stage-specific."""
     try:
         spread = (proposal or {}).get("spread") or result.get("rejected_spread")
         if not spread:
@@ -886,8 +895,12 @@ def _rejected_facts(underlying: str, result: dict, proposal: dict = None) -> dic
             "net_credit": spread.get("net_credit"),
             "net_debit": spread.get("net_debit"),
             "lots": (proposal or {}).get("lots"),
-            "expiry": (proposal or {}).get("expiry") or result.get("expiry"),
-            "spot": (proposal or {}).get("spot") or result.get("spot"),
+            "expiry": (spread.get("expiry")
+                       or (proposal or {}).get("expiry")
+                       or result.get("expiry")),
+            "spot": (spread.get("entry_spot")
+                     or (proposal or {}).get("spot")
+                     or result.get("spot")),
             "view": result.get("view"),
         }
     except Exception:

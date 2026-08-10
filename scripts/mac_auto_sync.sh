@@ -99,6 +99,21 @@ else
     log "bars cache: fresh (< 7d) — skipped"
 fi
 
+# darling ids — the desk's quote ids off Dhan's PUBLIC scrip master (27 MB
+# fetch, no token). ORPHANED 2026-08-11: the rebuild used to be a step inside
+# the Mac's EOD chain, and when the tier chain moved to the VM nothing called
+# `ensure_darling_ids` on any schedule any more. The file was still being
+# SHIPPED, so it looked maintained while quietly ageing toward the desk's own
+# 14-day gate — at which point every darling becomes unquotable at once.
+# `ensure_darling_ids` carries its own 7-day guard, so calling it every run is
+# free: it returns immediately unless the artifact is actually old.
+log "darling ids: ensuring (own 7-day guard)"
+"$PY" - <<'PYEOF' >> logs/mac_auto_sync.log 2>&1
+from src.ingestion.scrip_master import ensure_darling_ids
+print("darling ids ensured:", ensure_darling_ids())
+PYEOF
+log "darling ids: ok"
+
 # --------------------------------------------------------------- 2. the ship
 # Through firm_treasury.vm_push_file — the ONE Mac→VM artifact lane, which
 # already pins the gcloud interpreter and names its failures on stderr rather
@@ -114,7 +129,13 @@ from src import firm_treasury
 # Mac copy over them would reintroduce the staleness this script ends.
 MANIFEST = ("sector_index_bars.json", "darlings_valuation.json",
             "darlings_queue.json", "darling_pins.json",
-            "fo_liquidity.json", "darling_ids.json")
+            "fo_liquidity.json", "darling_ids.json",
+            # bars_cache added 2026-08-11: it was refreshed here but never
+            # shipped, so the VM sat on a 31-day-old copy while the Mac's was
+            # current — the staleness card kept firing for a file that had in
+            # fact just been rebuilt. Shipping it (351 KB) is cheaper than
+            # explaining every night why a "stale" artifact is fine.
+            "bars_cache.json")
 
 data = Path("data")
 ok, failed = [], []

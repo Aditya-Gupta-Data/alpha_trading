@@ -256,3 +256,46 @@ def test_cli_runs_and_prints_without_touching_the_network(capsys):
     assert "sector_index_bars" in out
     assert SG.main(["--json"]) == 0
     assert json.loads(capsys.readouterr().out)
+
+
+# ------------------------------ the Mac inputs the VM cannot rebuild (08-11)
+# All three are produced on the Mac, shipped by the auto-sync agent, and read
+# by `darling_tiers` ON THE VM — and none of them was monitored until the
+# 2026-08-11 audit. The valuation file is the sharp one: an empty copy sends
+# every darling to `ungraded` and the desk silently sees nothing tradeable.
+
+def test_the_mac_shipped_darling_inputs_are_monitored():
+    for name in ("darlings_queue", "darlings_valuation", "darling_pins"):
+        assert name in SG.REGISTRY, f"{name} is read on a live path unmonitored"
+
+
+def test_those_inputs_are_judged_on_a_WEEKLY_cadence():
+    """They come off a weekly fundamental screen. A 24h cadence would cry
+    stale every second day and train everyone to ignore the card."""
+    for name in ("darlings_queue", "darlings_valuation", "darling_pins"):
+        assert SG.REGISTRY[name].refresh_interval_hours == 7 * 24, name
+        assert SG.REGISTRY[name].threshold_hours >= 14 * 24, name
+
+
+def test_every_producer_string_names_a_machine_and_a_schedule():
+    """Drift guard. On 2026-08-11 three rows still pointed at the Mac EOD
+    chain for artifacts that had become VM crons the day before — so a stale
+    card would have sent the owner to the wrong machine."""
+    for name, art in SG.REGISTRY.items():
+        if art.producer is None:
+            continue
+        p = art.producer
+        assert ("VM cron" in p or "Mac" in p), f"{name}: producer names no machine"
+
+
+def test_the_vm_native_tier_chain_points_at_the_vm_not_the_mac():
+    assert "VM cron" in SG.REGISTRY["darling_tiers"].producer
+    assert "19:22" in SG.REGISTRY["darling_tiers"].producer
+    assert "VM cron" in SG.REGISTRY["darlings_levels"].producer
+    assert "19:18" in SG.REGISTRY["darlings_levels"].producer
+
+
+def test_the_mac_only_artifacts_point_at_the_sync_agent():
+    for name in ("sector_index_bars", "bars_cache", "darling_ids",
+                 "fo_liquidity", "darlings_valuation"):
+        assert "mac_auto_sync.sh" in SG.REGISTRY[name].producer, name

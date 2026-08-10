@@ -162,7 +162,8 @@ REGISTRY = {
             policy=MONITOR,
             consumer="analysis.equity_entry_checks.liquidity_filter "
                      "(equity-option halt stack)",
-            producer="Mac EOD chain — analysis.patience_basket --eod (19:15)",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh (ships the "
+                     "file; built by the Mac's F&O bundle leg)",
             note="Has its own FAIL-CLOSED check (LIQUIDITY_MAX_AGE_DAYS=7). "
                  "Monitored, never overridden: self-disabling a fail-closed "
                  "risk gate would make it fail OPEN.",
@@ -173,8 +174,13 @@ REGISTRY = {
             refresh_interval_hours=24, tolerance=3,
             policy=MONITOR,
             consumer="equity_desk (no NEW entries on a stale tier table)",
-            producer="Mac EOD chain — analysis.patience_basket --eod (19:15)",
-            note="Has its own check (equity_desk.TIERS_MAX_AGE_DAYS=3).",
+            producer="VM cron — analysis.darling_tiers (Mon-Fri 19:22)",
+            note="Has its own check (equity_desk.TIERS_MAX_AGE_DAYS=3). "
+                 "VM-NATIVE since 2026-08-11: it was Mac-produced and shipped, "
+                 "and a Mac that stayed shut for 5 days left the desk unable "
+                 "to enter a darling at all (it fails CLOSED here). The Mac's "
+                 "EOD chain may still ship its own copy when the laptop is "
+                 "awake; same-day either way.",
         ),
         Artifact(
             name="darlings_levels",
@@ -183,8 +189,9 @@ REGISTRY = {
             policy=MONITOR,
             consumer="analysis.equity_entry_checks._extension (overextension "
                      "halt) + equity_shadow_proposer",
-            producer="Mac EOD chain — analysis.dynamic_pricer (19:15)",
-            note="No native freshness check of its own; gated indirectly by "
+            producer="VM cron — analysis.dynamic_pricer (Mon-Fri 19:18)",
+            note="VM-NATIVE since 2026-08-11, same reason as darling_tiers. "
+                 "No native freshness check of its own; gated indirectly by "
                  "the tier table's check. Monitored so the omission is "
                  "visible rather than assumed safe.",
         ),
@@ -194,8 +201,72 @@ REGISTRY = {
             refresh_interval_hours=7 * 24, tolerance=2,
             policy=MONITOR,
             consumer="equity_desk quote ids (unquotable without them)",
-            producer="Mac — ingestion.scrip_master (Sat 09:30)",
-            note="Has its own check (equity_desk.IDS_MAX_AGE_DAYS=14).",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh (weekly leg: "
+                     "scrip_master.ensure_darling_ids, then shipped)",
+            note="Has its own check (equity_desk.IDS_MAX_AGE_DAYS=14). The "
+                 "REBUILD was orphaned 2026-08-11 → 2026-08-11: it used to be "
+                 "a step inside the Mac EOD chain, and when the tier chain "
+                 "moved to the VM nothing called ensure_darling_ids on any "
+                 "schedule any more. The file would have aged silently to the "
+                 "14-day gate and taken the desk's quotes with it.",
+        ),
+
+        # ---- THE MAC INPUTS THE VM CANNOT REBUILD --------------------------
+        # Added 2026-08-11. All three are produced on the Mac (fundamental
+        # screen + deep-read corpus), shipped by the auto-sync agent, and READ
+        # BY `darling_tiers` ON THE VM — and none of them was monitored. The
+        # valuation file is the sharp one: measured on the VM, an empty or
+        # absent copy drives EVERY darling to `ungraded` on the next grading
+        # pass, i.e. the desk silently sees nothing tradeable. That is exactly
+        # the `sector_index_bars` failure mode (a live consumer reading a file
+        # nothing watched) and it is why these rows exist.
+        #
+        # 7-day cadence, not 24h: these come off a WEEKLY fundamental screen,
+        # so a 24h cadence would cry stale every second day and train everyone
+        # to ignore the card.
+        Artifact(
+            name="darlings_queue",
+            rel_path="data/darlings_queue.json",
+            refresh_interval_hours=7 * 24, tolerance=2,
+            policy=MONITOR,
+            consumer="analysis.darling_tiers + dynamic_pricer + "
+                     "valuation_scorer (the darling universe itself)",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh (built by the "
+                     "Mac's fundamental screen; the VM cannot rebuild it)",
+            note="The universe every darling stage iterates. An ABSENT copy "
+                 "is not an error anywhere downstream — the pricer simply "
+                 "prices 0 darlings and reports success, which is how a "
+                 "missing queue hides. Measured on the VM 2026-08-11.",
+        ),
+        Artifact(
+            name="darlings_valuation",
+            rel_path="data/darlings_valuation.json",
+            refresh_interval_hours=7 * 24, tolerance=2,
+            policy=MONITOR,
+            consumer="analysis.darling_tiers (valuation band drives the "
+                     "buy/hold/sell tier rules)",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh "
+                     "(analysis.valuation_scorer; MAC-ONLY — it needs the "
+                     "fundamentals + deep-read corpus, and running it on the "
+                     "VM scores 0 of 109 and empties the file)",
+            note="THE SHARP ONE. A stale copy grades on old fundamentals; an "
+                 "EMPTY one sends every darling to `ungraded` and the desk "
+                 "sees nothing tradeable — with no error anywhere, because "
+                 "`ungraded` is a legitimate NULL-honest tier.",
+        ),
+        Artifact(
+            name="darling_pins",
+            rel_path="data/darling_pins.json",
+            refresh_interval_hours=7 * 24, tolerance=3,
+            policy=MONITOR,
+            consumer="analysis.darling_tiers (weekly_recalibration pins: "
+                     "rejected→strong_sell, data-lost→ungraded)",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh (written by "
+                     "analysis.weekly_recalibration)",
+            note="Enforces the No-Orphan rule — a pin holds a dropped name in "
+                 "the table until its shadow closes. A stale pins file means "
+                 "a name the weekly screen rejected keeps grading as if it "
+                 "were still a darling.",
         ),
         Artifact(
             name="bulk_deals",
@@ -239,13 +310,17 @@ REGISTRY = {
             consumer="regime backfill CLI, evolution, macro_shocks.crisis_playbook "
                      "(none on the live entry path)",
             producer="Mac auto-sync — scripts/mac_auto_sync.sh (weekly leg; "
-                     "evolution.refresh_bars_cache pulls through the VM's token)",
+                     "evolution.refresh_bars_cache pulls through the VM's "
+                     "token, then ships the file)",
             note="Had no SCHEDULE until 2026-08-11 — the refresher existed "
                  "(evolution.refresh_bars_cache) but nothing ever called it, so "
                  "the file aged to 31 days. Off the live decision path, hence "
                  "the deliberately loose 30-day tolerance and the weekly rather "
                  "than daily refresh: the pull runs through the VM's token and "
-                 "is not worth repeating nightly.",
+                 "is not worth repeating nightly. It is also SHIPPED (added to "
+                 "the manifest the same day) — the Mac was rebuilding it and "
+                 "keeping it, so the VM's card kept crying stale about a file "
+                 "that had just been rebuilt one hop away.",
         ),
     ]
 }

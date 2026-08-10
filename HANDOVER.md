@@ -42,6 +42,88 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 📍 CURRENT STATE — 2026-08-11 (Tuesday, pre-open): the three Monday blockers are cleared
+
+Suite **2,000 green**. VM at the latest commit, **31 cron lines**, no
+duplicate schedules. No entry/exit or strategy logic touched.
+
+### 1. Auto-approve is armed again — the tripwire was working, not broken
+
+`PAPER_AUTO_APPROVE=1` was set the whole time. The **human-pulse
+tripwire** had paused auto-approval because the last human decision was
+**2026-08-04** and the threshold is 3 trading days. That is the
+supervision contract doing its job while the owner was away.
+
+Monday's three NIFTY FIN SERVICE condors were **rejected, not approved**:
+their premiums are Monday's, so approving on Tuesday would journal a fill
+at a price that never traded, and the #68 exposure gate would have blocked
+the 2nd and 3rd as duplicates anyway. Decision #31 keeps them tracked
+hypothetically, so nothing is lost. Those decisions ARE the pulse — the
+tripwire is re-armed (`tripped: False`) and the pending queue is empty.
+
+**This will recur** every time the owner goes 3 trading days without
+touching `/pending`. It is by design; the card that fires says so.
+
+### 2. Archiver depth 2 → 3, and the ghost book nearly doubled
+
+The 08-10 ghosts wanted the **third monthly (2026-10-27)** — `horizon_for`
+lets the proposer reach 90+ days — and the archive stopped at the second.
+**The archive has to reach as far as the proposer does.** Live run
+confirms `['2026-08-25', '2026-09-29', '2026-10-27']` for every
+monthly-only name, zero DH-905, disk unchanged at 2.3 GB free.
+
+Re-marking Monday with the deeper archive: **5 priced → 12 of 19**, and
+the hypothetical total moved **+₹3,296 → +₹19,844**. ⚠️ Treat that number
+as indicative only: it is 1-lot-assumed on trades the sizer had refused to
+zero, and EOD `last_price` on an illiquid strike can be a stale mark.
+
+### 3. The `expiry: None` bug — root cause was the stage, not the underlying
+
+A **gate-stage** refusal (exposure #68, margin) hands back the BUILT
+proposal, whose expiry lives at `proposal["spread"]["expiry"]` — there is
+no top-level `expiry` key. So those rows wrote `expiry: None` and their
+ghosts could never find a chain. Build-stage refusals were never affected
+because `build_proposal` returns its own `expiry`, which is exactly why
+the hole looked NIFTY-BANK-specific. `spot` had the same shape of bug and
+now reads `entry_spot` off the spread. **Monday's 5 orphaned rows stay
+unpriceable** — the fix applies to rows written from today forward.
+
+### 4. The VM now builds the equity desk's eyes itself
+
+`dynamic_pricer` **19:18** and `darling_tiers` **19:22** (Mon-Fri), after
+this box's own 19:15 bhavcopy. The Mac had not run since 08-05, the
+artifacts were 5.1 days stale, and the desk **fails closed** on a stale
+tier table — so every further day of Mac sleep was a day it could not
+enter a darling. Both now read **fresh (0.0d)**; first VM-native grading
+produced 14 sane family transitions.
+
+**⚠️ `valuation_scorer` is deliberately NOT scheduled on the VM, and this
+is the trap of the day.** Measured here: it scores **0 of 109** darlings
+because the fundamentals/deep-read corpus is Mac-only, and it **overwrites
+`darlings_valuation.json` with an empty result** — which drives EVERY
+darling to `ungraded` on the next grading pass (100+ transitions, and the
+desk sees no tradeable darlings at all). I hit this live; a `--dry-run`
+caught it and the Mac's copy was re-shipped to repair it. `darlings_queue`
+/ `darlings_valuation` / `darling_pins` remain **Mac-shipped inputs** on a
+weekly screen cadence.
+
+**Why 19:18 and not the 16:00 that was asked for:** NSE publishes the full
+bhavcopy after ~18:00, so a 16:00 run would grade on yesterday's close
+while making the file *look* fresh — worse than being honestly stale.
+
+### ⏭️ Watch today
+
+1. **09:15** — auto-approval should resume; a fill journals as `approved`,
+   not `pending_approval`.
+2. **19:18 / 19:22** — first scheduled VM-native pricer + tier run.
+3. `python3 -m src.ghost_tracker --date 2026-08-11` after the close — new
+   rows should carry a real expiry on gate-stage refusals.
+4. Still open: `bars_cache` is 31 days old with **no producer on any
+   schedule**, and `sector_index_bars` is Mac-produced and stale — the
+   router's sector leg reads off it.
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-07 (Friday, SESSION CLOSE): post-session health check — clean session, but read what the router did and did NOT do
 
 **This is the session-wrap block. Start here Monday.**

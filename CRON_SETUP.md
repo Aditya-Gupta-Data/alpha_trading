@@ -81,6 +81,16 @@ VM's IP:
 
 | When | Job | What |
 |---|---|---|
+> **⚠️ SUPERSEDED 2026-08-11 — the two Mac rows below are HISTORY.**
+> `fetch_sector_bars.py` and `valuation_scorer` now run from
+> `scripts/mac_auto_sync.sh` under the `com.aditrader.sync` LaunchAgent
+> (at login + hourly while awake), because macOS cron does not fire while
+> the machine is asleep and never catches up — audited 08-04, the Mac
+> missed 4 of 11 weekdays with no log line at all. The PRICE half of the
+> 19:15 chain (`dynamic_pricer` → `darling_tiers`) moved to VM cron at
+> 19:18 / 19:22. `patience_basket --eod` still works if run by hand, and
+> its ship leg is harmless; nothing schedules it any more.
+
 | 19:10 Mon–Fri | `scripts/fetch_sector_bars.py` | **NEW 2026-08-05:** THE producer for `data/sector_index_bars.json` — the artifact that had none, and that feeds the live sector veto. Runs BEFORE the 19:15 chain so that chain ships a same-day file. Mac-only (yfinance is a Mac-lane dep; Yahoo blocks datacentre IPs). Log: `logs/sector_bars.log` |
 | 19:15 Mon–Fri | `src.analysis.patience_basket --eod` | THE DAILY CLOCK: today's bhavcopy → F&O bundle → pricer → valuation → 7-tier grading → darling shadow leg (Buy-tier entries, Strong-Sell forced exits). Log: `logs/patience_eod.log` |
 | 10:00 Saturday | `src.analysis.weekly_recalibration` | THE WEEKLY CLOCK: refresh quarterly filings → re-screen fundamentals → No-Orphan pins → rebuild pricer/valuation/tiers → one summary card. Log: `logs/weekly_recalibration.log` |

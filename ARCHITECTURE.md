@@ -27,7 +27,7 @@ touch anything:
 1. **Find the department, then its Manager.** Eight departments, each with ONE
    file/seam you approach to change its behaviour. Never dig through 50 files.
    The table is in `MODULES.md`; the departments are described below.
-2. **The live execution path is the 24 VM cron jobs in `scripts/setup_cron.sh`**
+2. **The live execution path is the 31 VM cron jobs in `scripts/setup_cron.sh`**
    plus 3 Mac cron jobs, 2 Mac LaunchAgents, three systemd services, and the
    MCP server in `.mcp.json`. That list is the definition of "live". If a
    module is not reachable from one of those, it is not running, whatever its
@@ -364,8 +364,15 @@ ATR stop, trim pivots, overextension state) + `valuation_scorer` (the
 (strong/weak buy–hold–sell + watch) plus an honest `ungraded` Tier 0 —
 so a name is never "done" after entry and the same table that says BUY
 also says SELL for what we hold. Two clocks, deliberately different:
-`patience_basket --eod` (daily 19:15) re-grades on PRICE, because prices
-move daily; `weekly_recalibration` (Saturday 10:00) re-judges
+`dynamic_pricer` (VM cron, Mon-Fri 19:18) then `darling_tiers` (VM cron,
+Mon-Fri 19:22) re-grade on PRICE, because prices move daily — **both moved
+off the Mac's `patience_basket --eod` chain to the VM on 2026-08-11**, after
+a laptop that stayed shut for five days left these artifacts stale and the
+equity desk, which FAILS CLOSED on a stale tier table, unable to enter a
+darling at all. `valuation_scorer` did NOT move and cannot: it needs the
+fundamentals + deep-read corpus that lives on the Mac, and run on the VM it
+scores 0 of 109 and empties the file, greying out every darling. It is
+shipped instead, by `scripts/mac_auto_sync.sh`; `weekly_recalibration` (Saturday 10:00) re-judges
 FUNDAMENTALS, because those only change when filings arrive — and it
 OVERRIDES the daily grade by PINNING a held name that fails its screen
 (the No-Orphan rule) until its paper position closes,
@@ -487,9 +494,9 @@ owner for this wiring; the desk's own equity curve is the evidence a later
 Dept-5 review judges.
 
 **The firm treasury (decision #80, owner Directive 1):** the split between the
-desks is DYNAMIC. `src/firm_treasury.py` re-routes capital nightly inside the
-Mac EOD chain — after tier grading (freshest demand read), before the shadow
-leg spends — using a mechanical regime router (NIFTY trend, Buy-tier depth,
+desks is DYNAMIC. `src/firm_treasury.py` re-routes capital nightly on the VM
+(cron, Mon-Fri 19:56 — it rode the Mac EOD chain until the 2026-08-11 shift)
+— after tier grading (freshest demand read), before the shadow leg spends — using a mechanical regime router (NIFTY trend, Buy-tier depth,
 valuations, VIX, options-desk margin demand; bounds 15–60% equity share,
 ₹50k deadband, ₹1L max step). The desk's account base IS its allocation
 (subscribe/redeem shift `starting_capital` + peak together, so the ruin halt

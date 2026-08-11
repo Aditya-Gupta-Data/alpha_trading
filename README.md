@@ -18,7 +18,7 @@ repository — only a market-data connection. Every "trade" is paper.
 | Know what a specific file does | [MODULES.md](MODULES.md) — one line per file, grouped by department |
 | Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 85 numbered decisions, append-only |
 | Pick up cold / know what's broken | [HANDOVER.md](HANDOVER.md) — current state + the PENDING ISSUES backlog; older blocks in [docs/handover_archive.md](docs/handover_archive.md) |
-| Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 24 VM jobs + 3 Mac jobs |
+| Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 31 VM jobs + the Mac sync agent |
 | See how the project evolved | [PROJECT_TIMELINE.md](PROJECT_TIMELINE.md) — day by day, from git |
 | Know what is coming next | [ROADMAP.md](ROADMAP.md) — the single index of future work |
 | Know the rules code may not break | [CLAUDE.md](CLAUDE.md) §7 — house conventions (`OVERVIEW.md` retired to [docs/archive_v0/](docs/archive_v0/) 2026-08-11) |
@@ -72,7 +72,7 @@ ideas:
 
 ## Where it runs
 
-- **The VM** (`alpha-trading-vm`, GCP, Debian, IST clock) is the engine: 24 cron
+- **The VM** (`alpha-trading-vm`, GCP, Debian, IST clock) is the engine: 31 cron
   jobs plus three systemd services. It holds only a short-lived market-data
   token — never the account credentials that could mint one.
 - **The Mac** is analysis-only. It builds the heavy artifacts (bhavcopy lake,
@@ -93,7 +93,7 @@ The full test suite is the fastest way to confirm a working checkout:
 python3 -m pytest -q
 ```
 
-**1,589 tests in ~83 seconds, fully hermetic** — no network, no live token, no
+**2,005 tests in ~135 seconds, fully hermetic** — no network, no live token, no
 production data. If a test you write is slow, it is almost certainly reaching a
 real external system; see the testing philosophy in
 [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -127,7 +127,7 @@ src/                 141 modules, all on a live execution path
   validation/        Dept 5 — the proving court (gates, trials, placebos)
   discovery/         pattern miners (propose candidates only)
   knowledge_graph/   entity affinity + causal edges
-tests/               132 files, 1,589 tests — the live suite
+tests/               150 files, 2,005 tests — the live suite
 research_archive/    parked code, kept for reuse, on NO execution path
 docs/                23 specs and plans (the "why" behind the big builds)
 data/                the lake + artifacts (mostly gitignored)

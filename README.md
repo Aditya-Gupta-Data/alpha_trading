@@ -17,10 +17,11 @@ repository — only a market-data connection. Every "trade" is paper.
 | Understand the system to change it | **[ARCHITECTURE.md](ARCHITECTURE.md)** — the 8-department map + data flow. **Start here.** |
 | Know what a specific file does | [MODULES.md](MODULES.md) — one line per file, grouped by department |
 | Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 85 numbered decisions, append-only |
-| Pick up cold / know what's broken | [HANDOVER.md](HANDOVER.md) — current state, limitations, open items |
+| Pick up cold / know what's broken | [HANDOVER.md](HANDOVER.md) — current state + the PENDING ISSUES backlog; older blocks in [docs/handover_archive.md](docs/handover_archive.md) |
 | Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 24 VM jobs + 3 Mac jobs |
 | See how the project evolved | [PROJECT_TIMELINE.md](PROJECT_TIMELINE.md) — day by day, from git |
-| Know the rules code may not break | [OVERVIEW.md](OVERVIEW.md) |
+| Know what is coming next | [ROADMAP.md](ROADMAP.md) — the single index of future work |
+| Know the rules code may not break | [CLAUDE.md](CLAUDE.md) §7 — house conventions (`OVERVIEW.md` retired to [docs/archive_v0/](docs/archive_v0/) 2026-08-11) |
 | **Work on this repo as an AI agent** | **[CLAUDE.md](CLAUDE.md)** — standing rules, loaded automatically |
 
 ## What it actually does

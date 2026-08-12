@@ -162,11 +162,38 @@ REGISTRY = {
             policy=MONITOR,
             consumer="analysis.equity_entry_checks.liquidity_filter "
                      "(equity-option halt stack)",
-            producer="Mac auto-sync — scripts/mac_auto_sync.sh (ships the "
-                     "file; built by the Mac's F&O bundle leg)",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh, "
+                     "`fo_bhavcopy --fetch 5` leg (SCHEDULED 2026-08-13; "
+                     "before that it had no cron on either machine)",
             note="Has its own FAIL-CLOSED check (LIQUIDITY_MAX_AGE_DAYS=7). "
                  "Monitored, never overridden: self-disabling a fail-closed "
                  "risk gate would make it fail OPEN.",
+        ),
+        Artifact(
+            # ADDED 2026-08-13 by the lake-depth audit. fo_liquidity above
+            # watches the DERIVED tiers file; this watches the RAW capture it
+            # is derived from. Both are needed, because `liquidity_snapshot()`
+            # reads the NEWEST lake day and happily re-derives a fresh-looking
+            # JSON from a week-old bundle — so a green fo_liquidity can sit on
+            # top of a dead feed. That is precisely how this layer reached 0
+            # days on the VM while its output kept shipping.
+            #
+            # Tolerance 7 (not 3): the producer runs only while the Mac is
+            # awake, and the audit showed multi-day laptop gaps are normal.
+            # 3 would cry wolf every long weekend.
+            name="fo_bhavcopy_lake",
+            rel_path="data/lake/fo_bhavcopy",
+            refresh_interval_hours=24, tolerance=7,
+            policy=MONITOR,
+            consumer="ingestion.fo_bhavcopy.liquidity_snapshot -> "
+                     "data/fo_liquidity.json (equity-option halt stack)",
+            producer="Mac auto-sync — scripts/mac_auto_sync.sh, "
+                     "`fo_bhavcopy --fetch 5` leg. MAC-ONLY: NSE bot-walls "
+                     "datacentre IPs, so this can never run on the VM.",
+            note="A DIRECTORY, watched by mtime — the clerk mkdir()s a new "
+                 "date folder per session, so the parent's mtime moves on "
+                 "every real capture. Monitor-only: the halt stack's own "
+                 "fail-closed age check is the gate.",
         ),
         Artifact(
             name="darling_tiers",

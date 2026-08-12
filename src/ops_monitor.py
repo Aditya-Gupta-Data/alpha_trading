@@ -111,6 +111,8 @@ EXPECTED_JOBS = {
     "main.log": True,                # Mon-Fri 15:35 IST
     "master_scheduler.log": True,    # Mon-Fri 09:10 IST
     "chain_archiver.log": True,      # Mon-Fri 15:40 IST (Phase-0 capture)
+                                     # HEARTBEAT ONLY — see the note below on
+                                     # why that was not enough on 2026-08-05.
     "deals_tracker.log": False,      # daily 19:30 IST (EOD bulk/block pull)
     "daily_archiver.log": False,     # daily 19:45 IST (perishable snapshots)
     "earnings_calendar.log": False,  # daily 19:20 IST (results dates)
@@ -123,6 +125,32 @@ EXPECTED_JOBS = {
     # frames. Restore this line and the cron together, or neither.
     "corporate_events.log": False,   # daily 19:25 IST (NSE announcements
                                      # -> the corporate_risk_halt feed)
+    # PERISHABLE-DATA LOSS IS NOT A MISSING HEARTBEAT (2026-08-13).
+    # chain_archiver.log and flows_tracker.log were ALREADY listed here on
+    # 2026-08-05, and the card still said nothing when that day's option
+    # chains were lost and 08-04's flows were skipped. Both jobs RAN; both
+    # exited 0. A heartbeat can only prove the cron fired, never that it
+    # brought anything home.
+    #
+    # The fix is therefore NOT another entry in this dict — it is upstream,
+    # in the two clerks, which now emit named skips worded so `sweep_logs`
+    # already catches them:
+    #     CA-EMPTY / CA-BLACKOUT   chain_archiver — zero chains captured
+    #     FL-STALE                 flows_tracker  — source served an old
+    #                              session; the lake write was refused
+    # Each contains "UNAVAILABLE", which PROBLEM_PATTERNS matches, so the
+    # nightly card carries them with no change to this module's logic.
+    # Do not "tidy" those words out of the clerks: they ARE the wiring.
+    #
+    # fo_bhavcopy is deliberately ABSENT from this dict. It is MAC-ONLY (NSE
+    # bot-walls datacentre IPs) and this default is the VM's schedule, so a
+    # row here would flag SILENT on the VM every single night — the exact
+    # trap documented above for rss_ingester, which feeds health_gate and
+    # would permanently block the discovery miner. It is watched instead by
+    # staleness_guard's `fo_bhavcopy_lake` + `fo_liquidity` artifacts, which
+    # measure the DATA's age rather than a log's presence and therefore work
+    # across the machine boundary. On the Mac itself, add it with
+    #     OPS_EXPECTED_JOBS="...,fo_bhavcopy.log:1"
     "discovery_nightly.log": False,  # daily 20:20 IST (gated miner pass #76,
                                      # pre-sweep like every job here — the log
                                      # is touched even on a gate-skip, so

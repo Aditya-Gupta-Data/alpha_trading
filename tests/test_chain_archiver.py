@@ -157,6 +157,63 @@ def test_one_dead_underlying_never_costs_the_other_eight():
         assert summary["captured"]["RELIANCE.NS"] == 3
 
 
+# ---------------------------------------------- no silent zeros (2026-08-13)
+# The audit case, verbatim: 2026-08-05 logged
+#   {"date":"2026-08-05","captured":{"NIFTY 50":0,"NIFTY BANK":0},"skipped":null}
+# on a Wednesday. Green heartbeat, zero data, no alert, and option chains are
+# the one dataset decision #36 says can never be re-bought.
+
+def _problem_lines(capsys):
+    from src.ops_monitor import is_problem_line
+    return [ln for ln in capsys.readouterr().out.splitlines()
+            if is_problem_line(ln)]
+
+
+def test_an_empty_underlying_is_a_named_skip_that_reaches_the_ops_card(capsys):
+    with tempfile.TemporaryDirectory() as tmp:
+        f, _ = _fetchers()
+        good = f["chain_fn"]
+        f["chain_fn"] = lambda u, e: None if u == "TCS.NS" else good(u, e)
+        summary = ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
+
+    assert summary["captured"]["TCS.NS"] == 0
+    assert summary["empty"] == ["TCS.NS"]
+    assert summary["skipped"] == "CA-EMPTY"          # was None — the bug
+    fired = _problem_lines(capsys)
+    assert any("CA-EMPTY" in ln and "TCS.NS" in ln for ln in fired)
+
+
+def test_every_underlying_empty_is_CA_BLACKOUT_not_nine_coincidences(capsys):
+    with tempfile.TemporaryDirectory() as tmp:
+        f, _ = _fetchers()
+        f["chain_fn"] = lambda u, e: None
+        summary = ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
+
+    assert summary["skipped"] == "CA-BLACKOUT"
+    assert len(summary["empty"]) == len(ca.UNDERLYINGS)
+    assert all(v == 0 for v in summary["captured"].values())
+    assert any("CA-BLACKOUT" in ln for ln in _problem_lines(capsys))
+
+
+def test_a_clean_day_stays_silent_on_the_ops_card(capsys):
+    """The other half of the contract: a good night must not start
+    crying wolf, or the card becomes noise and gets ignored."""
+    with tempfile.TemporaryDirectory() as tmp:
+        summary = ca.run(today=date(2026, 7, 10), lake_root=tmp,
+                         **_fetchers()[0])
+    assert summary["skipped"] is None and summary["empty"] == []
+    assert _problem_lines(capsys) == []
+
+
+def test_a_weekend_is_still_silent(capsys):
+    """A closed market owes us nothing — it must never look like loss."""
+    with tempfile.TemporaryDirectory() as tmp:
+        summary = ca.run(today=date(2026, 7, 11), lake_root=tmp,
+                         **_fetchers()[0])
+    assert summary["skipped"] == "weekend" and summary["empty"] == []
+    assert _problem_lines(capsys) == []
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

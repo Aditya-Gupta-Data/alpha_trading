@@ -28,6 +28,28 @@ Discipline:
   * Heartbeat-monitored: chain_archiver.log is in ops_monitor's
     EXPECTED_JOBS, so silent failure surfaces on the nightly health card.
 
+A HEARTBEAT IS NOT A CAPTURE (fixed 2026-08-13). The lake-depth audit found
+2026-08-05 written as:
+
+    {"date":"2026-08-05","captured":{"NIFTY 50":0,"NIFTY BANK":0},
+     "skipped":null}
+
+The job RAN, so its heartbeat was green and ops_monitor said nothing; every
+other day that week captured 4/4 expiries. A whole trading day's IV surface
+and OI distribution went missing in a line that reads like success — on the
+ONE dataset in this repo that can never be re-bought (decision #36). `0` and
+`null` are not an outage report.
+
+So an empty capture is now a NAMED, LOUD skip:
+  * per underlying   CA-EMPTY  — nothing came back for that name
+  * whole-day        CA-BLACKOUT — every underlying empty on a trading day,
+                     which is a token/endpoint failure, not nine coincidences
+Both print the word UNAVAILABLE, which is what `ops_monitor.PROBLEM_PATTERNS`
+matches, so the nightly card carries them without ops_monitor needing to know
+this module exists. `summary["skipped"]` stops being `null` on a bad day and
+carries the code; `summary["empty"]` lists the names. Still never raises —
+the clock must not die over a bad capture (rule 8, ARCHITECTURE.md).
+
 Manual check:  python3 -m src.ingestion.chain_archiver
 """
 
@@ -176,7 +198,8 @@ def run(today: date = None, lake_root=None, force: bool = False,
     lake. Skips weekends unless force. Returns a summary dict (also
     printed — this module's log IS its heartbeat). Never raises."""
     today = today or date.today()
-    summary = {"date": today.isoformat(), "captured": {}, "skipped": None}
+    summary = {"date": today.isoformat(), "captured": {}, "skipped": None,
+               "empty": []}
     if not _is_weekday(today) and not force:
         summary["skipped"] = "weekend"
         print(f"(chain archiver: {today} is a weekend — nothing to capture)")
@@ -189,15 +212,42 @@ def run(today: date = None, lake_root=None, force: bool = False,
             # from anyone.
             sleep_fn(UNDERLYING_PAUSE_SECONDS)
         rows = capture_underlying(underlying, slug, today, **fetchers)
+        path = None
         if rows:
             path = lake.write_partition(f"chains/{slug}", today.isoformat(),
                                         rows, root=lake_root)
-            summary["captured"][underlying] = len(rows) if path else 0
+        if rows and path:
+            summary["captured"][underlying] = len(rows)
             print(f"(chain archiver: {underlying} — {len(rows)} expiry "
                   f"snapshot(s) -> lake)")
         else:
+            # A zero here is a PERMANENT hole, not a quiet nothing. Name it
+            # with a word ops_monitor's PROBLEM_PATTERNS actually matches;
+            # "nothing captured" matched none of them and that is how
+            # 2026-08-05 passed as a healthy night.
             summary["captured"][underlying] = 0
-            print(f"(chain archiver: {underlying} — nothing captured)")
+            summary["empty"].append(underlying)
+            reason = ("lake write failed" if rows else
+                      "no expiry answered")
+            print(f"  (chain archiver: CA-EMPTY {underlying} {today} — "
+                  f"{reason}, chain UNAVAILABLE and NOT recoverable later)")
+
+    if summary["empty"]:
+        summary["skipped"] = (
+            "CA-BLACKOUT" if len(summary["empty"]) == len(UNDERLYINGS)
+            else "CA-EMPTY")
+        if summary["skipped"] == "CA-BLACKOUT":
+            # Nine independent underlyings do not fail together by chance.
+            # This shape is a dead token or a dead endpoint, and it is the
+            # exact shape 2026-08-05 had.
+            print(f"  (chain archiver: CA-BLACKOUT {today} — ALL "
+                  f"{len(UNDERLYINGS)} underlyings empty; the whole trading "
+                  f"day's chains are UNAVAILABLE. Suspect the token or the "
+                  f"endpoint, not the market.)")
+        else:
+            print(f"  (chain archiver: CA-EMPTY {today} — "
+                  f"{len(summary['empty'])}/{len(UNDERLYINGS)} underlyings "
+                  f"UNAVAILABLE: {', '.join(summary['empty'])})")
     return summary
 
 

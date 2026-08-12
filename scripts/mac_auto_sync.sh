@@ -17,6 +17,13 @@
 #   bars_cache.json         off the live entry path (evolution / regime
 #                           backfill), but it had no schedule anywhere, so the
 #                           ops sweep flagged it at 31 days.
+#   fo_liquidity.json       ADDED 2026-08-13. The file was already SHIPPED but
+#                           its producer (src.ingestion.fo_bhavcopy) had no
+#                           cron on either machine — the lake-depth audit found
+#                           0 F&O days on the VM and 15 hand-run days here. The
+#                           fetch leg now runs above the ship, so the liquidity
+#                           tiers the equity halt stack reads are built from a
+#                           bundle fetched the same run.
 #
 # The old arrangement made these a side effect of the Mac's 19:15 EOD chain,
 # so a laptop that stayed shut meant the VM quietly aged. By 2026-08-10
@@ -98,6 +105,22 @@ PYEOF
 else
     log "bars cache: fresh (< 7d) — skipped"
 fi
+
+# F&O bhavcopy — the raw grain behind fo_liquidity.json, and the one
+# perishable layer that had NO SCHEDULE ON ANY MACHINE (found by the
+# 2026-08-13 lake-depth audit: 0 days on the VM, 15 days on the Mac, all of
+# them from manual runs). It cannot move to the VM — NSE bot-walls datacentre
+# IPs, which is why every NSE clerk is MAC-ONLY — so it belongs here, and it
+# must run BEFORE the ship step so the fo_liquidity.json that goes up is built
+# from today's bundle rather than last week's.
+#
+# `--fetch 5` walks back five WEEKDAYS and skips any day already on disk, so
+# it is idempotent and self-healing: a laptop shut for three days catches up
+# on the next wake instead of leaving a permanent hole. `fetch_recent` ends by
+# refreshing the liquidity snapshot itself.
+log "fo bhavcopy: fetching last 5 weekdays"
+"$PY" -m src.ingestion.fo_bhavcopy --fetch 5 >> logs/fo_bhavcopy.log 2>&1 \
+    && log "fo bhavcopy: ok" || log "fo bhavcopy: FAILED (keeping the stored lake)"
 
 # darling ids — the desk's quote ids off Dhan's PUBLIC scrip master (27 MB
 # fetch, no token). ORPHANED 2026-08-11: the rebuild used to be a step inside

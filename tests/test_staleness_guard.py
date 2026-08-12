@@ -299,3 +299,42 @@ def test_the_mac_only_artifacts_point_at_the_sync_agent():
     for name in ("sector_index_bars", "bars_cache", "darling_ids",
                  "fo_liquidity", "darlings_valuation"):
         assert "mac_auto_sync.sh" in SG.REGISTRY[name].producer, name
+
+
+# ------------------------ the unscheduled perishable feed (audit, 2026-08-13)
+# The lake-depth audit found `fo_bhavcopy` running on NO cron on EITHER
+# machine: 0 days on the VM, 15 on the Mac and every one of them hand-run.
+# Its derived file (`fo_liquidity.json`) was nonetheless being shipped and
+# monitored, which is what made the gap invisible — `liquidity_snapshot()`
+# re-derives a fresh-looking JSON from the newest lake day however old that
+# day is, so a green artifact can sit on top of a dead feed.
+
+def test_the_raw_fo_capture_is_monitored_not_just_its_derived_file():
+    assert "fo_bhavcopy_lake" in SG.REGISTRY, (
+        "watching fo_liquidity.json alone cannot see a dead F&O feed")
+    assert "fo_liquidity" in SG.REGISTRY
+
+
+def test_the_fo_feed_is_declared_mac_only_so_nobody_reschedules_it_on_the_vm():
+    """NSE bot-walls datacentre IPs. A future agent reading only the registry
+    must not 'fix' the Mac dependency by adding a VM cron."""
+    prod = SG.REGISTRY["fo_bhavcopy_lake"].producer
+    assert "mac_auto_sync.sh" in prod
+    assert "MAC-ONLY" in prod
+
+
+def test_the_fo_producer_actually_exists_in_the_mac_sync_script():
+    """Pins the claim to the file. A registry that names a schedule which was
+    never wired is the same lie the audit found, one layer up."""
+    script = (SG.ROOT / "scripts" / "mac_auto_sync.sh").read_text()
+    assert "src.ingestion.fo_bhavcopy --fetch" in script
+    # it must run BEFORE the ship step, or the VM gets yesterday's tiers
+    assert script.index("fo_bhavcopy --fetch") < script.index("shipping to the VM")
+
+
+def test_fo_bhavcopy_is_NOT_in_the_vm_expected_jobs():
+    """It is Mac-only, and EXPECTED_JOBS defaults to the VM's schedule. A row
+    there would flag SILENT nightly on the VM — the documented rss_ingester
+    trap, which feeds health_gate and would block the discovery miner."""
+    from src import ops_monitor
+    assert not any("fo_bhavcopy" in k for k in ops_monitor.EXPECTED_JOBS)

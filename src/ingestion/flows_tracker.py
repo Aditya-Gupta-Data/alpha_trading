@@ -18,13 +18,39 @@ Artifacts:
   * data/lake/flows/date=YYYY-MM-DD  the permanent per-day history
   * data/flows_snapshot.json         hand-editable fallback input
 
+A STALE SOURCE MUST NOT LOOK LIKE A FRESH DAY (fixed 2026-08-13). NSE's
+endpoint keeps serving the PREVIOUS session's numbers when the current
+session's are not published yet. The old code took whatever `as_of` came
+back and wrote a partition under THAT date — so a stale answer silently
+re-wrote a day already captured, the job reported success, and the day it
+was actually asked about left no trace at all.
+
+The lake-depth audit caught both halves of the signature:
+  * `logs/flows_tracker.log` shows the same `as_of` repeated on later runs
+    (2026-07-24 ×3, 2026-07-31 ×4)
+  * `data/lake/flows/` jumps 2026-08-03 → 2026-08-05, and NOTHING in any
+    log says 08-04 was missed
+
+So the tracker now computes the EXPECTED session (today, or the previous
+weekday on a weekend/holiday run) and compares. If the source's `as_of` is
+older, the lake write is REFUSED and the run prints a `FL-STALE` line
+carrying the word UNAVAILABLE, which `ops_monitor.PROBLEM_PATTERNS`
+matches — the miss reaches the nightly card instead of a log nobody reads.
+`normalized["stale"]`/`["expected_as_of"]` carry the same verdict to any
+caller. A FUTURE `as_of` is refused too, on the same reasoning.
+
+Deliberately NOT changed: the `data/fii_dii_flows.json` write. Downstream
+readers already carry their own freshness checks against `as_of`, and
+withholding the file would turn a monitoring fix into a behaviour change
+under the V1 freeze. Only the permanent lake record is protected here.
+
 Cron: daily 19:35 IST. Manual check:  python3 -m src.ingestion.flows_tracker
 """
 
 import json
 import urllib.error
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from src import lake
@@ -123,6 +149,43 @@ def _load_snapshot(path=None) -> list:
     return rows if isinstance(rows, list) else []
 
 
+def expected_session(today: date) -> date:
+    """The session whose flows this run should be capturing.
+
+    Weekday -> itself. Sat/Sun -> the preceding Friday, because the job is
+    daily and a weekend run legitimately carries Friday's numbers; calling
+    that stale would cry wolf twice a week. Exchange holidays are NOT
+    modelled here — a holiday looks like a one-day stale flag, which is the
+    safe direction (visible and explainable) rather than the silent one."""
+    d = today
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def staleness_verdict(as_of: str, today: date) -> dict:
+    """{'stale': bool, 'expected': 'YYYY-MM-DD', 'reason': str|None}.
+
+    Unparseable `as_of` counts as STALE — the guard fails toward refusing
+    to write, because a partition under a date we could not read is worse
+    than a named gap."""
+    expected = expected_session(today)
+    try:
+        got = date.fromisoformat(str(as_of)[:10])
+    except (TypeError, ValueError):
+        return {"stale": True, "expected": expected.isoformat(),
+                "reason": f"unparseable as_of {as_of!r}"}
+    if got < expected:
+        return {"stale": True, "expected": expected.isoformat(),
+                "reason": f"source served {got} for expected session "
+                          f"{expected}"}
+    if got > expected:
+        return {"stale": True, "expected": expected.isoformat(),
+                "reason": f"source served a FUTURE date {got} "
+                          f"(expected {expected})"}
+    return {"stale": False, "expected": expected.isoformat(), "reason": None}
+
+
 def run(output_path=None, snapshot_path=None, lake_root=None,
         today: date = None, use_live: bool = True) -> dict:
     """Fetch, normalize, persist: today's row (overwritten JSON) + the
@@ -150,7 +213,11 @@ def run(output_path=None, snapshot_path=None, lake_root=None,
         out.write_text(json.dumps(normalized, indent=2))
     except OSError as exc:
         print(f"  (flows tracker: could not write {out} [{exc}])")
-    if source != "none":
+    verdict = staleness_verdict(normalized["as_of"], today)
+    normalized["expected_as_of"] = verdict["expected"]
+    normalized["stale"] = verdict["stale"]
+
+    if source != "none" and not verdict["stale"]:
         lake.write_partition("flows", normalized["as_of"], [normalized],
                              root=lake_root)
         if raw:
@@ -161,6 +228,13 @@ def run(output_path=None, snapshot_path=None, lake_root=None,
     print(f"(flows tracker: {normalized['as_of']} [{source}] — "
           f"FII net {fii_net if fii_net is not None else '?'} cr, "
           f"DII net {dii_net if dii_net is not None else '?'} cr)")
+    if verdict["stale"] and source != "none":
+        # The whole point: say the expected day is missing, using a word
+        # ops_monitor matches. Re-writing an already-captured partition
+        # would have made this run indistinguishable from a good one.
+        print(f"  (flows tracker: FL-STALE — {verdict['reason']}; refused "
+              f"to re-write that partition. Flows for "
+              f"{verdict['expected']} are UNAVAILABLE.)")
     return normalized
 
 

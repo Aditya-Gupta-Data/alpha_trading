@@ -32,12 +32,31 @@ to, and all three are the same honest outcome here: **a named skip, never
 a fabricated bar, never a crash.** Per-instrument fail-open: one dead
 symbol costs its own row.
 
+SILENCE AND REFUSAL ARE DIFFERENT ANSWERS (2026-08-13). CA-404 means the
+window came back genuinely EMPTY; **CA-401 means the door REFUSED and
+said why** (a DH-9xx — expired token, entitlement, rate limit). Before
+this split an expired token printed the CA-404 holiday line, so "the id
+is still dead" and "MCX was shut" looked identical on the morning after
+a roll — vague about exactly the thing you need sharp.
+
 CONTRACT EXPIRY IS A KNOWN TRAP (inherited from `macro_tracker`, whose
 `config/macro_securities.json` this module deliberately REUSES rather
-than duplicating): MCX futures ids die with their contract. GOLD_INDIA's
-current id expires 2026-08-05 — today. An expired id does not error
-loudly, it just stops returning bars, so `stale_instruments()` names any
-entry whose `_expiry` has passed and the report says so out loud.
+than duplicating): MCX futures ids die with their contract. An expired id
+does not error loudly, it just stops returning bars, so
+`stale_instruments()` names any entry whose `_expiry` has passed and the
+report says so out loud.
+
+ROLL LOG — the ids are rolled BY HAND, on purpose. A replacement id
+guessed from a naming pattern is the same bug in a new costume (ledger
+Issues 14/15), so each roll is verified row-by-row against Dhan's public
+scrip master and the reasoning lands in `_verified`.
+  * 2026-08-05  GOLD_INDIA id 466583 (GOLD AUG FUT) expired. The tap ran
+    for 8 days capturing CRUDE only.
+  * 2026-08-13  rolled to 483079 (GOLD OCT FUT, exp 2026-10-05). 466583
+    was by then ABSENT from the master — not repointed, gone. MCX GOLD is
+    BI-MONTHLY (Feb/Apr/Jun/Aug/Oct/Dec), so there is no SEP contract and
+    the 08-05→08-13 hole in the lake is real and unrecoverable.
+  * NEXT DUE 2026-08-19 — CRUDE. Successor is 565899 (CRUDEOIL SEP FUT).
 
 Writes date-partitioned lake rows (`lake.write_partition`), the same
 layout every other clerk uses, so `lake.read_day("cross_asset", day)`
@@ -131,22 +150,40 @@ def _ledger(entry: dict, ledger_path=None) -> None:
         pass
 
 
+class UpstreamRefused(Exception):
+    """The door answered with a CLASSIFIED failure — not an empty window.
+
+    Found 2026-08-13 while rolling GOLD_INDIA's id: with an expired local
+    token, both legs reported `CA-404 no completed bars (holiday /
+    unentitled / dead id)`. That reads as "the market was shut", so a dead
+    TOKEN was indistinguishable from a dead CONTRACT and from a genuine
+    MCX holiday — which is exactly the wrong thing to be vague about the
+    day after someone rolls an id and wants to know whether it took.
+    A DH-9xx is upstream telling us something; only silence is CA-404."""
+
+    def __init__(self, code: str, detail: str):
+        self.code, self.detail = code, detail
+        super().__init__(f"{code}: {detail}")
+
+
 def _default_fetch(instr: dict, start: str, end: str):
-    """Daily OHLC via the ONE hardened door. Returns the payload dict or
-    None — never raises, never a second HTTP client (#48/#56)."""
+    """Daily OHLC via the ONE hardened door. Returns the payload dict, or
+    None for an genuinely empty window; raises `UpstreamRefused` when the
+    guard classified a failure. Never a second HTTP client (#48/#56)."""
     from src import dhan_client as dc
     from src.dhan_client import unwrap_payload
     from src.dhan_guard import SafeDhanClient
     safe = SafeDhanClient()
     client = dc._get_client()
     if client is None:
-        return None
+        raise UpstreamRefused("CA-401", "no Dhan client — token missing or "
+                                        "unreadable, so nothing was asked")
     resp, err = safe._call("historical_daily_data",
                            client.historical_daily_data,
                            instr["id"], instr["seg"], instr["inst"],
                            start, end)
     if err is not None:
-        return None
+        raise UpstreamRefused("CA-401", str(err)[:200])
     payload = unwrap_payload(resp, inner_marker="timestamp")
     return payload if isinstance(payload, dict) else None
 
@@ -209,6 +246,10 @@ def run(days: int = DEFAULT_LOOKBACK_DAYS, today: date = None,
             continue
         try:
             payload = fetch_fn(instr, start, end)
+        except UpstreamRefused as exc:              # upstream SAID something
+            skipped.append({"name": name, "code": exc.code,
+                            "detail": exc.detail})
+            continue
         except Exception as exc:                    # per-instrument fail-open
             skipped.append({"name": name, "code": "CA-500",
                             "detail": f"{type(exc).__name__}: {str(exc)[:160]}"})

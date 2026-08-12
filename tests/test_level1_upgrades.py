@@ -305,6 +305,56 @@ def test_a_holiday_or_unentitled_segment_is_a_NAMED_SKIP_not_a_crash(tmp_path):
     assert (tmp_path / "l.jsonl").exists()
 
 
+def test_a_refused_call_is_CA_401_not_the_CA_404_holiday_line(tmp_path):
+    """The bug this split closes (2026-08-13): with an expired token both
+    legs printed 'no completed bars (holiday / unentitled / dead id)', so
+    a dead TOKEN, a dead CONTRACT and a shut market were one message. The
+    morning after rolling an id, that is the one thing that must be
+    sharp. Silence is CA-404; a DH-9xx answer is CA-401, quoted."""
+    def refused(i, s, e):
+        raise CA.UpstreamRefused("CA-401", "DH-901 on ?: token expired")
+
+    rep = CA.run(instruments=INSTR, fetch_fn=refused,
+                 today=date(2026, 8, 5), lake_root=tmp_path,
+                 ledger_path=tmp_path / "l.jsonl")
+    assert rep["ok"] == [] and rep["rows_written"] == 0
+    assert rep["skipped"][0]["code"] == "CA-401"
+    assert "DH-901" in rep["skipped"][0]["detail"]
+    # and it is still a per-instrument skip, not a crash or a fake bar
+    assert (tmp_path / "l.jsonl").exists()
+
+
+def test_a_refusal_does_not_stop_the_other_legs(tmp_path):
+    """Per-instrument fail-open survives the new code: one refused leg
+    must not cost the leg that answered."""
+    instr = dict(INSTR)
+    instr["GOLD_INDIA"] = {"id": "2", "seg": "MCX_COMM", "inst": "FUTCOM",
+                           "asset_class": "commodity", "_expiry": "2026-12-31"}
+
+    def half(i, s, e):
+        if i["id"] == "1":
+            raise CA.UpstreamRefused("CA-401", "DH-901 on ?: token expired")
+        return _payload(2)
+
+    rep = CA.run(instruments=instr, fetch_fn=half, today=date(2026, 8, 5),
+                 lake_root=tmp_path, ledger_path=tmp_path / "l.jsonl")
+    assert [r["name"] for r in rep["ok"]] == ["GOLD_INDIA"]
+    assert rep["skipped"][0]["code"] == "CA-401"
+    assert rep["rows_written"] == 2
+
+
+def test_the_shipped_gold_id_is_a_live_contract_not_the_expired_one(tmp_path):
+    """Guards the roll itself. 466583 (GOLD AUG FUT) expired 2026-08-05 and
+    is GONE from the scrip master; shipping it again would silently
+    reproduce the 8-day capture gap. Hermetic — reads the config, not the
+    network."""
+    instr = CA.load_instruments()
+    gold = instr.get("GOLD_INDIA")
+    assert gold, "GOLD_INDIA must stay configured"
+    assert gold["id"] != "466583", "the dead AUG contract must never return"
+    assert CA.stale_instruments({"GOLD_INDIA": gold}, date(2026, 8, 13)) == []
+
+
 def test_an_exploding_fetch_cannot_crash_the_pass(tmp_path):
     def boom(i, s, e):
         raise RuntimeError("segment not entitled")

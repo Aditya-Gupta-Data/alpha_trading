@@ -408,11 +408,17 @@ CRON_TZ=Asia/Kolkata
 #     2026-08-05 and never scheduled, so the only rows it ever wrote were
 #     from one manual run. CAPTURE-ONLY: nothing in Dept 2/3 imports it,
 #     so this cron cannot change a proposal, a gate or a size.
-#     EXPECT CA-404s AT FIRST — GOLD_INDIA's and CRUDE's contract ids in
-#     config/macro_securities.json expired 2026-08-05, and an expired MCX
-#     future does not error, it just returns no bars. The job names that
-#     skip out loud in logs/cross_asset.jsonl; rolling the ids is a
-#     separate, deliberate change (see stale_instruments()).
+#     CONTRACT IDS ROT — that is this job's standing chore, not a bug.
+#     An expired MCX future does not error, it just returns no bars, so
+#     the job names the skip out loud in logs/cross_asset.jsonl and the
+#     ids are rolled BY HAND against Dhan's scrip master (a guessed
+#     successor id is ledger Issues 14/15 again). GOLD_INDIA sat dead
+#     2026-08-05 → 08-13 and now runs on the OCT contract; CRUDE is next,
+#     due 2026-08-19. The roll log lives in cross_asset.py's docstring.
+#     READING THE LOG: CA-404 = the window was genuinely empty (holiday /
+#     unentitled). CA-401 = the door REFUSED and quoted a DH-9xx — an
+#     expired token, not a dead contract. Those were one message until
+#     2026-08-13; do not conflate them again.
 #     19:40 is the last free minute in the evening block: clear of
 #     flows_tracker (19:35), daily_archiver (19:45) and the macro_nightly
 #     (19:50) memory peak on the 1 GB e2-micro.

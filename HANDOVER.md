@@ -121,6 +121,19 @@ handoff). V1 `src/` execution logic untouched all day; three things moved:
    Also fixed: `tests/test_portfolio.py` headless margin-gate test read the
    REAL journal (RULE 6) — stubbed (`0054289`).
 
+4. **Week-1 release: `src/strategies/insolvency_short.py` — SHADOW ONLY
+   (decision #89).** Bear put spread only, F&O+tier1 gate (fail-closed),
+   0.5% risk cap, day-5 time exit, `logs/insolvency_short_shadow.jsonl`, no
+   cron. **Do not wire it to capital:** the F&O subset of the insolvency
+   study is 19 filings / 3 names with a POSITIVE median and tier1 has ZERO
+   events in 7 years — the edge is in non-F&O pennies. Jul-Aug 2026 dry
+   run: 30 triggers, all `not_in_fo`. Next step if the owner wants it live:
+   a Dept-5 F&O-subset study, which cannot pass today.
+5. **M1 reporting honesty (Sequence 1):** Wilson line, drawdown line and
+   blocked line verified live on EOD + CEO cards; `blocked_line` now also
+   counts proposal-ledger risk refusals (margin / risk cap / budget /
+   exposure) — `eod_summary.risk_refusals_today`. Telemetry only.
+
 Open items carried unchanged from the backlog above (DH-905 at 08:03, NIFTY
 MID SELECT quotes, `report_downloader` crawl, 2 VM bug-ledger rows).
 

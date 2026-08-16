@@ -200,13 +200,46 @@ def drawdown_line(db_path=None) -> str | None:
             f"drawdown -{dd:.2f}%{flat}")
 
 
-def blocked_line(today: str = None, blocks_path=None) -> str | None:
-    """`Blocked today: 3 (total 645)` from the exposure gate's ledger.
+# Proposal-ledger fates that mean "a trade was proposed and a RISK rule said
+# no" — the opportunity-cost set (M1, 2026-08-16). Quote/VIX/structure
+# refusals are data problems, not risk blocks, and are deliberately excluded.
+RISK_REFUSAL_FATES = ("REJECTED_RISK_CAP", "REJECTED_RISK_BUDGET",
+                      "REJECTED_MARGIN", "REJECTED_EXPOSURE")
+
+
+def risk_refusals_today(today: str = None, ledger_path=None) -> dict | None:
+    """{fate: count} of today's proposal-ledger rows whose fate is a risk
+    refusal (per-trade cap, risk budget, margin, exposure), or None when
+    the ledger is absent/empty for the day. Read-only; the ledger is
+    written by the proposer, never here."""
+    try:
+        from src import proposal_ledger
+        rows = proposal_ledger.read_rows(path=ledger_path,
+                                         session_date=today or _today())
+    except Exception:
+        return None
+    if not rows:
+        return None
+    out = {}
+    for r in rows:
+        f = r.get("fate")
+        if f in RISK_REFUSAL_FATES:
+            out[f] = out.get(f, 0) + 1
+    return out
+
+
+def blocked_line(today: str = None, blocks_path=None,
+                 ledger_path=None) -> str | None:
+    """`Blocked today: 3 (total 645)` from the exposure gate's ledger —
+    plus, when the proposal ledger has any for the day, the risk/margin
+    refusals: ` · risk refusals today: 2 (margin 1, risk cap 1)`.
 
     The single most under-reported number in the system: 645 blocks
     against ~25 entries, and the owner only ever saw at most one Discord
     note per (ticker, direction) per day. A gate nobody can count is a
-    gate nobody can evaluate."""
+    gate nobody can evaluate. (M1 2026-08-16: margin / risk-cap / budget
+    refusals were counted nowhere on a daily card either — the proposal
+    ledger had them all along.)"""
     path = Path(blocks_path) if blocks_path else BLOCKS_PATH
     today = today or _today()
     total = todays = 0
@@ -219,10 +252,17 @@ def blocked_line(today: str = None, blocks_path=None) -> str | None:
             if f'"ts": "{today}' in line or f'"ts":"{today}' in line:
                 todays += 1
     except OSError:
-        return None
-    if total == 0:
-        return None
-    return f"Blocked today: {todays} (total {total})"
+        total = None
+    refusals = risk_refusals_today(today, ledger_path)
+    parts = []
+    if total:
+        parts.append(f"Blocked today: {todays} (total {total})")
+    if refusals:
+        n = sum(refusals.values())
+        detail = ", ".join(f"{k.replace('REJECTED_', '').replace('_', ' ').lower()} {v}"
+                           for k, v in sorted(refusals.items(), key=lambda kv: -kv[1]))
+        parts.append(f"risk refusals today: {n} ({detail})")
+    return " · ".join(parts) if parts else None
 
 
 def position_age_lines(entries: list, today: str = None,
@@ -255,7 +295,8 @@ def position_age_lines(entries: list, today: str = None,
     return lines
 
 
-def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None) -> dict:
+def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None,
+                   ledger_path=None) -> dict:
     """Build the EOD broadcast payload from journal + brain_map.db.
 
     Returns a payload dict ready for broadcast_alert(payload). Exported so
@@ -347,7 +388,7 @@ def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None) -> dict:
     # the number that flatters; the pair is the number that informs.
     try:
         risk = [x for x in (drawdown_line(db_path),
-                            blocked_line(today, blocks_path)) if x]
+                            blocked_line(today, blocks_path, ledger_path)) if x]
         if risk:
             fields.append({"name": "📉 Drawdown & Gate Activity",
                            "value": "\n".join(risk)[:1024], "inline": False})

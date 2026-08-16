@@ -773,12 +773,39 @@ def test_blocked_trades_are_counted_today_and_in_total(tmp_path):
         '{"ts": "2026-08-05T09:15:11", "ticker": "NIFTY 50"}',
         '{"ts": "2026-08-05T11:20:00", "ticker": "NIFTY BANK"}',
     ]) + "\n")
-    assert _eod.blocked_line("2026-08-05", p) == "Blocked today: 2 (total 3)"
-    assert _eod.blocked_line("2026-08-06", p) == "Blocked today: 0 (total 3)"
+    nl = tmp_path / "no_ledger.jsonl"          # hermetic: no proposal ledger
+    assert _eod.blocked_line("2026-08-05", p, nl) == "Blocked today: 2 (total 3)"
+    assert _eod.blocked_line("2026-08-06", p, nl) == "Blocked today: 0 (total 3)"
 
 
 def test_no_block_ledger_means_no_line(tmp_path):
-    assert _eod.blocked_line("2026-08-05", tmp_path / "nope.jsonl") is None
+    assert _eod.blocked_line("2026-08-05", tmp_path / "nope.jsonl",
+                             tmp_path / "nl.jsonl") is None
+
+
+def test_risk_refusals_from_the_proposal_ledger_ride_the_blocked_line(tmp_path):
+    """M1 (2026-08-16): margin / risk-cap / budget / exposure refusals were
+    in the proposal ledger all along and on no daily card. Data-problem
+    fates (no quote, no VIX) are NOT risk blocks and stay out."""
+    import json
+    led = tmp_path / "proposal_ledger.jsonl"
+    rows = [{"session_date": "2026-08-05", "fate": "REJECTED_MARGIN"},
+            {"session_date": "2026-08-05", "fate": "REJECTED_MARGIN"},
+            {"session_date": "2026-08-05", "fate": "REJECTED_RISK_CAP"},
+            {"session_date": "2026-08-05", "fate": "REJECTED_NO_QUOTE"},
+            {"session_date": "2026-08-04", "fate": "REJECTED_EXPOSURE"}]
+    led.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert _eod.risk_refusals_today("2026-08-05", led) == {
+        "REJECTED_MARGIN": 2, "REJECTED_RISK_CAP": 1}
+    # no exposure ledger at all -> the refusals still make a line
+    assert _eod.blocked_line("2026-08-05", tmp_path / "nope.jsonl", led) == \
+        "risk refusals today: 3 (margin 2, risk cap 1)"
+    blocks = tmp_path / "exposure_blocks.jsonl"
+    blocks.write_text('{"ts": "2026-08-05T09:15:11", "ticker": "NIFTY 50"}\n')
+    assert _eod.blocked_line("2026-08-05", blocks, led) == \
+        "Blocked today: 1 (total 1) · risk refusals today: 3 (margin 2, risk cap 1)"
+    # a day with only data-problem fates contributes nothing
+    assert _eod.blocked_line("2026-08-06", blocks, led) == "Blocked today: 0 (total 1)"
 
 
 def test_position_age_is_reported_oldest_first():

@@ -106,8 +106,11 @@ def scan_events(keyword: str, start: str, end: str, events_dir=None,
         from src import lake
 
         def read_day_fn(day):
-            return lake.read_day("events", day,
-                                 root=events_dir.parent.parent)
+            # `root` here is the LAKE root (data/lake), NOT the repo root —
+            # passing events_dir.parent.parent sent it looking for
+            # data/data/lake/events and returned zero rows across 703
+            # partitions in total silence. Caught by running it.
+            return lake.read_day("events", day, root=events_dir.parent)
     pattern = re.compile(re.escape(str(keyword)), re.I)
     out = []
     for day in _partition_days(events_dir, start, end):

@@ -255,3 +255,35 @@ def test_the_report_always_carries_its_caveats(tmp_path):
 def test_stats_reports_n_zero_honestly_rather_than_dividing_by_nothing():
     s = ES._stats([None, None])
     assert s["n"] == 0 and s["mean_pct"] is None and s["hit_rate_pct"] is None
+
+
+# ------------------------------- the lake-root bug (found by running it)
+
+def test_the_default_reader_uses_the_LAKE_root_not_the_repo_root(tmp_path):
+    """`lake.read_day(root=...)` takes the LAKE root (data/lake). Both
+    modules originally passed `events_dir.parent.parent`, which resolves to
+    `data/` — so the reader looked for `data/data/lake/events`, found
+    nothing, and reported '703 partitions scanned, 0 filings' in total
+    silence. A wrong path that returns [] instead of raising is the worst
+    shape of bug this repo has; this test pins the fix."""
+    import inspect
+    for mod in (CM, ES):
+        src = inspect.getsource(mod)
+        assert "root=events_dir.parent)" in src, mod.__name__
+        assert "events_dir.parent.parent)" not in src, mod.__name__
+
+
+def test_the_reader_finds_rows_through_the_real_lake_layout(tmp_path):
+    """End-to-end through `lake` itself, on a lake laid out exactly as the
+    live one is — the check the injected `read_day_fn` cannot make."""
+    from src import lake
+    day = "2026-08-03"
+    part = tmp_path / "lake" / "events" / f"date={day}"
+    part.mkdir(parents=True)
+    lake.write_partition("events", day,
+                         [{"as_of": day, "symbol": "ACME", "ticker": "ACME.NS",
+                           "subject": "Corporate Insolvency Resolution Process"}],
+                         root=tmp_path / "lake")
+    rep = CM.report(day, day, events_dir=tmp_path / "lake" / "events")
+    assert rep["credit_filings"] == 1
+    assert rep["by_category"] == {"INSOLVENCY": 1}

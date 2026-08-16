@@ -170,10 +170,32 @@ def backfill(days: int, end: date = None, fetch_bytes_fn=_fetch_bytes,
             "results": results, "any_new": fetched_something}
 
 
-def bars_for(symbol: str, days: int = 90, lake_dir=None) -> list:
+def _apply_actions(sym: str, bars: list, adjust, actions_path=None) -> list:
+    """Corporate-action adjustment for the HISTORICAL part of a series
+    (2026-08-16, Sequence 2). `adjust=True` applies the CONFIRMED rows in
+    config/corporate_actions.json; `adjust="auto"` also applies the lake's
+    own detected candidates; `adjust=False` returns the raw prints. The
+    bar on/after an ex-date — and therefore always the LATEST bar, which
+    is what marks and executions read — is never scaled. Fail-open: an
+    unreadable config means raw bars, never a crash."""
+    if not adjust or not bars:
+        return bars
+    try:
+        from src.ingestion import corporate_actions as ca
+        return ca.adjusted(sym, bars, path=actions_path,
+                           auto=(adjust == "auto"))
+    except Exception:
+        return bars
+
+
+def bars_for(symbol: str, days: int = 90, lake_dir=None, adjust=True,
+             actions_path=None) -> list:
     """Chronological (oldest->newest) bars for one symbol from the day
     files on disk. Honest []: unknown symbol or empty lake. Days the
-    symbol didn't trade simply aren't there — no gap filling."""
+    symbol didn't trade simply aren't there — no gap filling.
+    `adjust` (default True): historical bars before a confirmed split /
+    bonus ex-date are scaled so the series is continuous — see
+    `_apply_actions`; the latest bar is always raw."""
     root = Path(lake_dir) if lake_dir else BHAVCOPY_LAKE
     if not root.is_dir():
         return []
@@ -188,14 +210,15 @@ def bars_for(symbol: str, days: int = 90, lake_dir=None) -> list:
         if bar:
             bar["session"] = f.stem
             bars.append(bar)
-    return bars
+    return _apply_actions(sym, bars, adjust, actions_path)
 
 
-def bars_for_many(symbols: list, days: int = 250, lake_dir=None) -> dict:
+def bars_for_many(symbols: list, days: int = 250, lake_dir=None,
+                  adjust=True, actions_path=None) -> dict:
     """{symbol: chronological bars} for MANY symbols in ONE pass over the
     day files — the batch loader the dynamic pricer uses (91 darlings x
     218 files re-parsed per symbol would be quadratic; this parses each
-    file exactly once). Same honesty rules as bars_for."""
+    file exactly once). Same honesty rules as bars_for, same `adjust`."""
     root = Path(lake_dir) if lake_dir else BHAVCOPY_LAKE
     syms = {s.split(".")[0].strip().upper() for s in symbols or []}
     out = {s: [] for s in syms}
@@ -212,7 +235,7 @@ def bars_for_many(symbols: list, days: int = 250, lake_dir=None) -> dict:
                 bar = dict(bar)
                 bar["session"] = f.stem
                 out[s].append(bar)
-    return out
+    return {s: _apply_actions(s, b, adjust, actions_path) for s, b in out.items()}
 
 
 if __name__ == "__main__":

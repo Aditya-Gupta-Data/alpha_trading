@@ -1,0 +1,407 @@
+{
+ "_note": "Corporate actions that break raw bhavcopy price continuity (splits, bonuses). Read by src/ingestion/corporate_actions.py, applied to HISTORICAL bars only — the bar on/after ex_date is never scaled, so live marks and execution prices stay raw.",
+ "_schema": {
+  "symbol": "NSE symbol, no suffix",
+  "ex_date": "YYYY-MM-DD — the first session at the NEW price basis",
+  "ratio": "shares AFTER / shares BEFORE. 1:5 split -> 5. 1:1 bonus -> 2. 1:2 bonus (1 for every 2 held) -> 1.5",
+  "kind": "split | bonus | split+bonus | other",
+  "source": "how the row was established",
+  "verified_against_nse_circular": "true only when someone checked the NSE corporate-action circular. bhavcopy_gap = the exchange's own price/volume discontinuity was measured in data/lake/bhavcopy, which is evidence of the ratio but not of the classification"
+ },
+ "_how_to_fill": "python3 -m src.ingestion.corporate_actions --scan SYMBOL [--days 3000] lists candidate ex-dates from the lake's own gaps; confirm the ratio (NSE circular or the yfinance cross-check: --yf-check SYMBOL EX_DATE, MAC-ONLY) and paste the row into `actions`. Never invent a ratio; a wrong factor is worse than a raw cliff because it is invisible.",
+ "actions": [
+  {
+   "symbol": "IRCTC",
+   "ex_date": "2021-10-28",
+   "ratio": 5.0,
+   "kind": "split",
+   "source": "bhavcopy_gap: prev_close 4130.15 -> open 817.0 (5.06x), volume 5.4M -> 59.3M, session 2021-10-28",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "TATASTEEL",
+   "ex_date": "2022-07-28",
+   "ratio": 10.0,
+   "kind": "split",
+   "source": "bhavcopy_gap: prev_close 959.4 -> open 98.1 (9.78x), volume 5.3M -> 137.2M, session 2022-07-28",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "NESTLEIND",
+   "ex_date": "2024-01-05",
+   "ratio": 10.0,
+   "kind": "split",
+   "source": "bhavcopy_gap: prev_close 27116.4 -> open 2754.0 (9.85x), volume 132k -> 2.58M, session 2024-01-05",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "NESTLEIND",
+   "ex_date": "2025-08-08",
+   "ratio": 2.0,
+   "kind": "bonus",
+   "source": "bhavcopy_gap: measured 1.9916x, volume x2.45, session 2025-08-08 (1:1 bonus)",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "EICHERMOT",
+   "ex_date": "2020-08-24",
+   "ratio": 10.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 9.8672x, volume x43.98",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "LAURUSLABS",
+   "ex_date": "2020-09-29",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.8858x, volume x3.47",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "APLAPOLLO",
+   "ex_date": "2020-12-15",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9033x, volume x8.63",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "DIXON",
+   "ex_date": "2021-03-18",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.8905x, volume x16.15",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "APLAPOLLO",
+   "ex_date": "2021-09-16",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.0104x, volume x2.32",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "SRF",
+   "ex_date": "2021-10-13",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9081x, volume x2.57",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "IEX",
+   "ex_date": "2021-12-03",
+   "ratio": 3.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.9471x, volume x5.91",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "BSE",
+   "ex_date": "2022-03-21",
+   "ratio": 3.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 3.1407x, volume x2.06",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "JUBLFOOD",
+   "ex_date": "2022-04-19",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9302x, volume x5.4",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "AUBANK",
+   "ex_date": "2022-06-09",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9821x, volume x2.48",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "IOC",
+   "ex_date": "2022-06-30",
+   "ratio": 1.5,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.4848x, volume x2.73",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "TORNTPHARM",
+   "ex_date": "2022-07-08",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9725x, volume x3.21",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "GAIL",
+   "ex_date": "2022-09-06",
+   "ratio": 1.5,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.4784x, volume x2.21",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "BAJAJFINSV",
+   "ex_date": "2022-09-13",
+   "ratio": 10.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 9.7653x, volume x24.5",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "BLUESTARCO",
+   "ex_date": "2023-06-20",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9554x, volume x4.19",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "HAL",
+   "ex_date": "2023-09-28",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9835x, volume x2.33",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "COCHINSHIP",
+   "ex_date": "2024-01-10",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9764x, volume x6.69",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "PERSISTENT",
+   "ex_date": "2024-03-28",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9906x, volume x3.36",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "CANBK",
+   "ex_date": "2024-05-15",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.8735x, volume x6.31",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "INOXWIND",
+   "ex_date": "2024-05-24",
+   "ratio": 4.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 3.7822x, volume x8.03",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "BPCL",
+   "ex_date": "2024-06-21",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9693x, volume x3.32",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "HINDPETRO",
+   "ex_date": "2024-06-21",
+   "ratio": 1.5,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.4953x, volume x2.86",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "OIL",
+   "ex_date": "2024-07-02",
+   "ratio": 1.5,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.4841x, volume x3.6",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "PGEL",
+   "ex_date": "2024-07-10",
+   "ratio": 10.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 9.8971x, volume x4.94",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "CDSL",
+   "ex_date": "2024-08-23",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9321x, volume x7.11",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "PHOENIXLTD",
+   "ex_date": "2024-09-20",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9405x, volume x4.93",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "DRREDDY",
+   "ex_date": "2024-10-28",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9354x, volume x3.23",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "WIPRO",
+   "ex_date": "2024-12-03",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9792x, volume x2.76",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "NMDC",
+   "ex_date": "2024-12-27",
+   "ratio": 3.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.9851x, volume x3.47",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "SHRIRAMFIN",
+   "ex_date": "2025-01-10",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9644x, volume x5.55",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "SIEMENS",
+   "ex_date": "2025-04-07",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.0115x, volume x2.47 (SIEMENS 2025-04-07 is likely the energy DEMERGER, not a split — same price-continuity effect, different economics)",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "NAUKRI",
+   "ex_date": "2025-05-07",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 5.0339x, volume x6.06",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "BSE",
+   "ex_date": "2025-05-23",
+   "ratio": 3.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.9671x, volume x3.29",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "COFORGE",
+   "ex_date": "2025-06-04",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9442x, volume x9.95",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "BAJFINANCE",
+   "ex_date": "2025-06-16",
+   "ratio": 10.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 9.7605x, volume x6.89",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "ASHOKLEY",
+   "ex_date": "2025-07-16",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.0008x, volume x2.28",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "MOTHERSON",
+   "ex_date": "2025-07-18",
+   "ratio": 1.5,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.4991x, volume x2.65",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "PATANJALI",
+   "ex_date": "2025-09-11",
+   "ratio": 3.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.9899x, volume x8.49",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "GODFRYPHLP",
+   "ex_date": "2025-09-16",
+   "ratio": 3.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 2.9217x, volume x10.17",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "PIDILITIND",
+   "ex_date": "2025-09-23",
+   "ratio": 2.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.9804x, volume x2.2",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "CAMS",
+   "ex_date": "2025-12-05",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9996x, volume x5.39",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "MCX",
+   "ex_date": "2026-01-02",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 4.9278x, volume x12.92",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "KOTAKBANK",
+   "ex_date": "2026-01-14",
+   "ratio": 5.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 5.0061x, volume x4.25",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "ANGELONE",
+   "ex_date": "2026-02-26",
+   "ratio": 10.0,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 9.9199x, volume x8.43",
+   "verified_against_nse_circular": false
+  },
+  {
+   "symbol": "TRENT",
+   "ex_date": "2026-06-04",
+   "ratio": 1.5,
+   "kind": "candidate_lake_evidenced",
+   "source": "bhavcopy_gap F&O scan 2026-08-16: measured 1.5045x, volume x2.88",
+   "verified_against_nse_circular": false
+  }
+ ],
+ "_scan_note": "2026-08-16: 40 rows added from a full F&O-universe scan (208 symbols, 2019-09-30→2026-08-05). Each is the exchange's own price/volume discontinuity snapped to a canonical ratio; kind=candidate_lake_evidenced means the RATIO is measured, the classification (split vs bonus vs demerger) is not. Confirm against NSE circulars when convenient; flip verified_against_nse_circular to true row by row."
+}

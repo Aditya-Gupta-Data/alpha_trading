@@ -134,6 +134,16 @@ handoff). V1 `src/` execution logic untouched all day; three things moved:
    counts proposal-ledger risk refusals (margin / risk cap / budget /
    exposure) — `eod_summary.risk_refusals_today`. Telemetry only.
 
+6. **Corporate-action adjuster (Sequence 2, decision #90):**
+   `src/ingestion/corporate_actions.py` + `config/corporate_actions.json`
+   (49 rows, all `verified_against_nse_circular: false`). `bars_for` /
+   `bars_for_many` now return split-adjusted HISTORY by default; the latest
+   bar is always raw. Verified: BAJAJFINSV 2022-09 reads 1,720→1,784, not
+   17,205→1,784; latest bar factor 1.0. **The miners do not read prices** —
+   this protects the analysis layer (tiers, pricer, router, valuation).
+   Owner task when convenient: confirm rows against NSE circulars
+   (`--scan SYMBOL` lists candidates; `--yf-check` is Mac-only).
+
 Open items carried unchanged from the backlog above (DH-905 at 08:03, NIFTY
 MID SELECT quotes, `report_downloader` crawl, 2 VM bug-ledger rows).
 

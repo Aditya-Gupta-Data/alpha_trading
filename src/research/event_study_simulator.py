@@ -188,12 +188,20 @@ def _stats(values: list) -> dict:
     mid = len(ordered) // 2
     median = (ordered[mid] if len(ordered) % 2
               else (ordered[mid - 1] + ordered[mid]) / 2)
+    mean = sum(vals) / len(vals)
     return {
         "n": len(vals),
-        "mean_pct": round(sum(vals) / len(vals), 3),
+        "mean_pct": round(mean, 3),
         "median_pct": round(median, 3),
         "hit_rate_pct": round(sum(1 for v in vals if v > 0) / len(vals) * 100, 1),
         "best_pct": max(vals), "worst_pct": min(vals),
+        # THE SKEW FLAG (added 2026-08-11, from the first full-history run).
+        # "Suspension of Trading" returned mean +554% against median -2.82%
+        # on n=6: one delisted shell that went up 20x. The sample-size gate
+        # alone does not catch that — n=22 passed it at the 5-day window and
+        # still reported a +68% mean. When mean and median disagree in SIGN,
+        # the mean is an outlier artefact and the median is the answer.
+        "mean_median_diverge": (mean > 0) != (median > 0),
     }
 
 
@@ -235,6 +243,14 @@ def run(keyword: str, start: str = None, end: str = None,
             "No p-values are computed. Event windows overlap and are "
             "autocorrelated; a t-test here would look like significance "
             "without being it.",
+            "MEAN IS NOT THE ANSWER on this data. Distressed-name returns "
+            "are violently right-skewed — a single shell that runs 10x "
+            "drags a -3% median to a +4% mean. Read median and hit-rate; "
+            "`mean_median_diverge` marks every window where they disagree.",
+            "Survivorship bias here is NOT academic and it biases the "
+            "result UPWARD: names that were delisted outright (AMTEKAUTO, "
+            "EDUCOMP and their kind) have no bars at all and vanish from "
+            "the sample, so even the median is the survivors' median.",
         ],
     }
     if not events:
@@ -285,11 +301,21 @@ def render_lines(rep: dict) -> list:
         if not s["n"]:
             lines.append(f"  {name}: no measurable window")
             continue
-        flag = "  ⚠️ n<%d, NOT a finding" % MIN_SAMPLE \
-            if s["verdict"] == "insufficient_sample" else ""
-        lines.append(f"  {name}: n={s['n']}  mean {s['mean_pct']:+.2f}%  "
-                     f"median {s['median_pct']:+.2f}%  "
-                     f"hit {s['hit_rate_pct']:.0f}%{flag}")
+        # .get, not [] — `verdict` is stamped by run(), so a caller that
+        # renders a bare _stats() dict would otherwise KeyError. A renderer
+        # that crashes on a missing optional key is a defect, not a contract.
+        flag = ("  ⚠️ n<%d, NOT a finding" % MIN_SAMPLE
+                if s.get("verdict") == "insufficient_sample" else "")
+        # Median FIRST: on skewed distressed-name data the mean is the
+        # number most likely to be misquoted.
+        lines.append(f"  {name}: n={s['n']}  median {s['median_pct']:+.2f}%  "
+                     f"hit {s['hit_rate_pct']:.0f}%  "
+                     f"(mean {s['mean_pct']:+.2f}%, "
+                     f"range {s['worst_pct']:+.0f}%…{s['best_pct']:+.0f}%)"
+                     f"{flag}")
+        if s.get("mean_median_diverge"):
+            lines.append("      ⚠️ mean and median disagree in sign — "
+                         "outlier-driven; trust the median")
         ex = s.get("excess_vs_benchmark")
         if ex and ex["n"]:
             lines.append(f"      vs {rep['benchmark']}: "

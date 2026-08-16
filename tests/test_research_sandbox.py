@@ -303,3 +303,36 @@ def test_a_serial_filer_is_summarised_as_counts_not_a_wall_of_text(tmp_path):
     assert info == {"total": 20, "by_category": {"INSOLVENCY": 20}}
     line = [l for l in CM.render_lines(rep) if "ZOMB" in l][0]
     assert "INSOLVENCY x20" in line and len(line) < 120
+
+
+def test_a_sign_disagreement_between_mean_and_median_is_flagged():
+    """From the first full-history run: 'Suspension of Trading' returned
+    mean +554% against median -2.82% because one delisted shell ran 20x.
+    The sample-size gate does not catch this — n=22 passed it at the 5-day
+    window and still reported a +68% mean."""
+    skewed = ES._stats([-3.0, -2.0, -4.0, -1.0, 2000.0])
+    assert skewed["mean_median_diverge"] is True
+    assert skewed["median_pct"] < 0 < skewed["mean_pct"]
+    clean = ES._stats([-3.0, -2.0, -4.0, -1.0])
+    assert clean["mean_median_diverge"] is False
+
+
+def test_the_render_leads_with_the_median_and_warns_on_skew():
+    rep = {"keyword": "x", "from": "a", "to": "b", "events_matched": 1,
+           "distinct_symbols": 1, "benchmark": "NIFTY 50",
+           "coverage": {"symbols_with_price_history": 1,
+                        "benchmark_series_available": False},
+           "results": {"fwd_5d": ES._stats([-3.0, -2.0, -4.0, -1.0, 2000.0])}}
+    text = "\n".join(ES.render_lines(rep))
+    assert text.index("median") < text.index("mean")
+    assert "disagree in sign" in text
+
+
+def test_the_caveats_name_the_skew_and_the_upward_survivorship_bias(tmp_path):
+    d = tmp_path / "events"
+    d.mkdir()
+    rep = ES.run("x", start="2026-08-01", end="2026-08-05", events_dir=d,
+                 read_day_fn=lambda day: [], lake_dir=tmp_path)
+    joined = " ".join(rep["caveats"]).lower()
+    assert "right-skewed" in joined or "skew" in joined
+    assert "upward" in joined

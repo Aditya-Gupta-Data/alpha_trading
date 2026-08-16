@@ -1,0 +1,271 @@
+{
+ "_note": "Geographic revenue exposure \u2014 WHERE a company's money actually comes from, so that a state election, a riot, a monsoon failure or a foreign macro shock can be turned into a named list of stocks at risk. V2 RESEARCH SANDBOX: read by nothing on the trading path, and a test enforces that. Every row is a HAND-ENTERED ESTIMATE from public disclosure, not a parsed filing \u2014 which is why each carries `confidence` and `source`. An entry with confidence 'low' is a hypothesis to verify, never a number to size on.",
+ "_schema": {
+  "ticker": "NSE ticker with .NS suffix \u2014 the key used everywhere else in this repo",
+  "exposures": "list of {region, kind, share_pct, driver, confidence, source}. `kind` is one of india_state | country | region_bloc. `share_pct` is share of REVENUE, not profit, and is an estimate: null means 'material but unquantified', never 0. `driver` names the mechanism \u2014 what actually breaks if that region does. `confidence` is high | medium | low.",
+  "shock_sensitivity": "free-text list of the shock TYPES this name is exposed to (election, monsoon, currency, tariff, regulation, conflict) \u2014 the join key an event study filters on."
+ },
+ "_verification_rule": "Before any of this is used for a decision, each row must be checked against the company's own segment/geography disclosure in its annual report. `data/lake/fundamental_reports/` already holds downloaded reports for part of the darling universe.",
+ "as_of": "2026-08-11",
+ "exposures": {
+  "TATAMOTORS.NS": {
+   "exposures": [
+    {
+     "region": "United Kingdom",
+     "kind": "country",
+     "share_pct": null,
+     "driver": "JLR manufacturing + UK/EU demand; the single largest non-India revenue block",
+     "confidence": "high",
+     "source": "public knowledge of the JLR subsidiary \u2014 VERIFY against segment disclosure"
+    },
+    {
+     "region": "China",
+     "kind": "country",
+     "share_pct": null,
+     "driver": "JLR's largest single retail market; a China demand shock hits margin before volume",
+     "confidence": "medium",
+     "source": "unverified"
+    }
+   ],
+   "shock_sensitivity": [
+    "currency",
+    "tariff",
+    "conflict",
+    "regulation"
+   ]
+  },
+  "TCS.NS": {
+   "exposures": [
+    {
+     "region": "United States",
+     "kind": "country",
+     "share_pct": null,
+     "driver": "BFSI client concentration; a US banking or H-1B shock lands here first",
+     "confidence": "high",
+     "source": "IT-sector structure \u2014 VERIFY against geography disclosure"
+    },
+    {
+     "region": "United Kingdom / Europe",
+     "kind": "region_bloc",
+     "share_pct": null,
+     "driver": "second revenue block; GBP/EUR translation risk",
+     "confidence": "medium",
+     "source": "unverified"
+    }
+   ],
+   "shock_sensitivity": [
+    "currency",
+    "regulation",
+    "tariff"
+   ]
+  },
+  "INFY.NS": {
+   "exposures": [
+    {
+     "region": "United States",
+     "kind": "country",
+     "share_pct": null,
+     "driver": "same US-client concentration as TCS; the two co-move on US macro",
+     "confidence": "high",
+     "source": "IT-sector structure \u2014 VERIFY"
+    },
+    {
+     "region": "Europe",
+     "kind": "region_bloc",
+     "share_pct": null,
+     "driver": "second block",
+     "confidence": "medium",
+     "source": "unverified"
+    }
+   ],
+   "shock_sensitivity": [
+    "currency",
+    "regulation"
+   ]
+  },
+  "HINDUNILVR.NS": {
+   "exposures": [
+    {
+     "region": "Uttar Pradesh",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "rural FMCG volume; the largest rural consumer base in India",
+     "confidence": "medium",
+     "source": "rural-mix inference \u2014 VERIFY"
+    },
+    {
+     "region": "Bihar",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "rural volume + monsoon-linked farm income",
+     "confidence": "low",
+     "source": "hypothesis"
+    }
+   ],
+   "shock_sensitivity": [
+    "monsoon",
+    "election",
+    "regulation"
+   ]
+  },
+  "ITC.NS": {
+   "exposures": [
+    {
+     "region": "Uttar Pradesh",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "cigarette volumes + state VAT/excise changes hit here hardest",
+     "confidence": "medium",
+     "source": "hypothesis"
+    },
+    {
+     "region": "Andhra Pradesh / Karnataka",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "leaf tobacco sourcing \u2014 a supply-side, not demand-side, exposure",
+     "confidence": "medium",
+     "source": "hypothesis"
+    }
+   ],
+   "shock_sensitivity": [
+    "regulation",
+    "election",
+    "monsoon"
+   ]
+  },
+  "SUNPHARMA.NS": {
+   "exposures": [
+    {
+     "region": "United States",
+     "kind": "country",
+     "share_pct": null,
+     "driver": "US generics + specialty; USFDA plant action is the tail risk",
+     "confidence": "high",
+     "source": "pharma-sector structure \u2014 VERIFY"
+    },
+    {
+     "region": "Gujarat",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "manufacturing concentration \u2014 a plant-level regulatory event is state-local",
+     "confidence": "medium",
+     "source": "hypothesis"
+    }
+   ],
+   "shock_sensitivity": [
+    "regulation",
+    "currency"
+   ]
+  },
+  "MARUTI.NS": {
+   "exposures": [
+    {
+     "region": "Haryana",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "Gurgaon/Manesar plants \u2014 a state labour or power event stops production",
+     "confidence": "high",
+     "source": "plant location, public"
+    },
+    {
+     "region": "Gujarat",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "second manufacturing base",
+     "confidence": "medium",
+     "source": "public"
+    }
+   ],
+   "shock_sensitivity": [
+    "election",
+    "regulation",
+    "conflict"
+   ]
+  },
+  "COALINDIA.NS": {
+   "exposures": [
+    {
+     "region": "Jharkhand",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "mine concentration; state-level unrest or land disputes halt output",
+     "confidence": "high",
+     "source": "public"
+    },
+    {
+     "region": "Odisha",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "second mining block + rail evacuation routes",
+     "confidence": "high",
+     "source": "public"
+    },
+    {
+     "region": "Chhattisgarh",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "third block; historically the most disruption-prone",
+     "confidence": "medium",
+     "source": "public"
+    }
+   ],
+   "shock_sensitivity": [
+    "election",
+    "conflict",
+    "monsoon",
+    "regulation"
+   ]
+  },
+  "RELIANCE.NS": {
+   "exposures": [
+    {
+     "region": "Gujarat",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "Jamnagar refining complex \u2014 a single-site concentration risk",
+     "confidence": "high",
+     "source": "public"
+    },
+    {
+     "region": "Middle East",
+     "kind": "region_bloc",
+     "share_pct": null,
+     "driver": "crude sourcing; a Gulf supply shock is an input-cost event",
+     "confidence": "medium",
+     "source": "hypothesis"
+    }
+   ],
+   "shock_sensitivity": [
+    "conflict",
+    "currency",
+    "regulation"
+   ]
+  },
+  "TATASTEEL.NS": {
+   "exposures": [
+    {
+     "region": "Netherlands / United Kingdom",
+     "kind": "region_bloc",
+     "share_pct": null,
+     "driver": "the European operations have repeatedly been the loss-making leg",
+     "confidence": "high",
+     "source": "public \u2014 VERIFY current share"
+    },
+    {
+     "region": "Odisha / Jharkhand",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "domestic mining + Kalinganagar/Jamshedpur plants",
+     "confidence": "high",
+     "source": "public"
+    }
+   ],
+   "shock_sensitivity": [
+    "tariff",
+    "currency",
+    "election",
+    "regulation"
+   ]
+  }
+ }
+}

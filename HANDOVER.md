@@ -144,6 +144,14 @@ handoff). V1 `src/` execution logic untouched all day; three things moved:
    Owner task when convenient: confirm rows against NSE circulars
    (`--scan SYMBOL` lists candidates; `--yf-check` is Mac-only).
 
+7. **Sequence 3 (08-17, decision #91):** `🤖 Pattern Miner` field on the
+   16:30 CEO brief (`ceo_brief.collect_miner`, read-only) — tomorrow's
+   card will say whether the 20:20 pass ran and what it registered.
+   `src/liquidity_slippage.py`: paper fills now pay tier slippage (0.10 /
+   0.25 / 0.50% per side by `fo_liquidity` tier); STOCK was 0.0% and the
+   equity desk settled frictionless. Expect equity-desk `pnl_net` to read
+   ~0.2–1.0% lower per round trip from here on — that is the fix, not a bug.
+
 Open items carried unchanged from the backlog above (DH-905 at 08:03, NIFTY
 MID SELECT quotes, `report_downloader` crawl, 2 VM bug-ledger rows).
 

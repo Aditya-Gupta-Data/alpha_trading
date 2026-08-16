@@ -799,3 +799,72 @@ def test_master_scheduler_declares_itself_a_job():
     """It self-terminates at 15:30 — it must not be logged as a service."""
     src = (ceo_brief.ROOT / "src" / "master_scheduler.py").read_text()
     assert 'record_startup("master_scheduler", kind="job")' in src
+
+
+# ------------------------------------------- 🤖 Pattern Miner (2026-08-17)
+
+def _miner_db(tmp_path, rows):
+    import sqlite3
+    from src.validation import registry as rg
+    p = tmp_path / "brain.db"
+    conn = sqlite3.connect(p)
+    rg.ensure_schema(conn)
+    for r in rows:
+        conn.execute("INSERT INTO candidate_patterns (pattern_id, kind, definition, "
+                     "description, status, support_n, discovered_at) VALUES (?,?,?,?,?,?,?)",
+                     r)
+    conn.commit(); conn.close()
+    return p
+
+
+def test_miner_field_says_still_aggregating_before_the_first_run(tmp_path):
+    from src import ceo_brief as cb
+    st = tmp_path / "state.json"
+    st.write_text(json.dumps({"consecutive_skips": 4, "last_skip": "2026-08-16T20:20:00"}))
+    db = _miner_db(tmp_path, [])
+    m = cb.collect_miner(db_path=db, state_path=st)
+    assert m["available"] and m["ran_ever"] is False and m["top"] == []
+    f = cb._miner_field(m)
+    assert f["name"] == "🤖 Pattern Miner"
+    assert "still aggregating" in f["value"] and "4 consecutive skip" in f["value"]
+
+
+def test_miner_field_distinguishes_ran_and_found_nothing(tmp_path):
+    from src import ceo_brief as cb
+    st = tmp_path / "state.json"
+    st.write_text(json.dumps({"consecutive_skips": 0, "last_run": "2026-08-18T20:20:05"}))
+    m = cb.collect_miner(db_path=_miner_db(tmp_path, []), state_path=st)
+    v = cb._miner_field(m)["value"]
+    assert v.startswith("Ran (last 2026-08-18T20:20)") and "no distinct patterns" in v
+
+
+def test_miner_field_lists_the_newest_rules_and_never_calls_them_live(tmp_path):
+    from src import ceo_brief as cb
+    st = tmp_path / "state.json"
+    st.write_text(json.dumps({"consecutive_skips": 0, "last_run": "2026-08-18T20:20:05"}))
+    rows = [("auto:aaa", "cooccurrence", "{}", "[real] ctx:vix_high + macro_nifty_short  (7/9 = 78% vs base 52%)", "CANDIDATE", 9, "2026-08-18T20:20:10"),
+            ("auto:bbb", "sequence", "{}", "[real] lag2:deals_bulk_buy → win  (6/8)", "CANDIDATE", 8, "2026-08-18T20:20:11"),
+            ("auto:ccc", "cooccurrence", "{}", "old one", "CANDIDATE", 20, "2026-08-01T20:20:11"),
+            ("auto:ddd", "cooccurrence", "{}", "dead one", "DEAD", 30, "2026-08-18T20:20:12")]
+    m = cb.collect_miner(db_path=_miner_db(tmp_path, rows), state_path=st,
+                         clock=lambda: datetime(2026, 8, 18, 16, 30))
+    assert m["total"] == 3 and m["new_today"] == 2          # DEAD excluded
+    assert [t["id"] for t in m["top"]] == ["auto:bbb", "auto:aaa", "auto:ccc"]
+    v = cb._miner_field(m)["value"]
+    assert "3 candidate(s) registered, 2 new today" in v
+    assert "ctx:vix_high + macro_nifty_short" in v and "dead one" not in v
+    assert "proving harness owns every promotion" in v
+
+
+def test_the_brief_carries_the_miner_field_only_when_injected(tmp_path):
+    from src import ceo_brief as cb
+    logs = tmp_path / "logs"; logs.mkdir()
+    base = cb.build_brief_card(logs_dir=logs, state_path=tmp_path / "s.json",
+                               deploy_log_path=tmp_path / "d.log",
+                               journal_path=tmp_path / "j.jsonl")
+    assert not any(f["name"] == "🤖 Pattern Miner" for f in base["fields"])
+    with_miner = cb.build_brief_card(logs_dir=logs, state_path=tmp_path / "s.json",
+                                     deploy_log_path=tmp_path / "d.log",
+                                     journal_path=tmp_path / "j.jsonl",
+                                     miner_fn=lambda: {"available": False})
+    assert any(f["name"] == "🤖 Pattern Miner" for f in with_miner["fields"])

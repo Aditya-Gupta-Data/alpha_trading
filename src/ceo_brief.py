@@ -762,6 +762,93 @@ def _risk_field(risk: dict) -> dict:
             "inline": False}
 
 
+# ---------------------------------------------------------------- miner
+# Sequence 3 (2026-08-17): the Phase-5 miner's first pass is due 08-18 and
+# nothing on any card would show what it found. Read-only over
+# brain_map.candidate_patterns + logs/.discovery_nightly_state.json.
+
+MINER_TOP_N = 3
+
+
+def collect_miner(db_path=None, state_path=None, clock=None,
+                  top_n: int = MINER_TOP_N) -> dict:
+    """{ran_ever, last_run, last_skip, consecutive_skips, total, new_today,
+    top: [{id, kind, description, support_n, status, discovered_at}]}.
+    `top` = the newest CANDIDATE/ACTIVE rows, most-supported first among
+    the newest run. Every read fails open into an 'unavailable' shape —
+    a broken read costs the field, never the card."""
+    out = {"available": False, "ran_ever": False, "last_run": None,
+           "last_skip": None, "consecutive_skips": None, "total": 0,
+           "new_today": 0, "top": []}
+    try:
+        from src.discovery import nightly as _n
+        st = json.loads(Path(state_path or _n.STATE_PATH).read_text())
+        out["last_run"] = st.get("last_run")
+        out["last_skip"] = st.get("last_skip")
+        out["consecutive_skips"] = st.get("consecutive_skips")
+        out["ran_ever"] = bool(st.get("last_run"))
+    except Exception:
+        pass
+    try:
+        import sqlite3
+        from src.brain_map import DEFAULT_DB_PATH as _DB
+        path = Path(db_path or _DB)
+        if not path.exists():
+            return out
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT pattern_id, kind, description, support_n, status, "
+                "discovered_at, insample_stats FROM candidate_patterns "
+                "WHERE status NOT IN ('DEAD','RETIRED') "
+                "ORDER BY discovered_at DESC, support_n DESC").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return out
+    out["available"] = True
+    out["total"] = len(rows)
+    today = _today(clock)
+    out["new_today"] = sum(1 for r in rows
+                           if str(r["discovered_at"] or "").startswith(today))
+    for r in rows[:top_n]:
+        out["top"].append({"id": r["pattern_id"], "kind": r["kind"],
+                           "description": r["description"] or r["pattern_id"],
+                           "support_n": r["support_n"], "status": r["status"],
+                           "discovered_at": r["discovered_at"]})
+    return out
+
+
+def _miner_field(m: dict) -> dict:
+    """`🤖 Pattern Miner` — top rules, or an honest 'nothing yet' that
+    distinguishes 'never ran' from 'ran and found nothing'."""
+    if not m.get("available"):
+        skips = m.get("consecutive_skips")
+        tail = (f" — gated, {skips} consecutive skip(s)" if skips else "")
+        return {"name": "🤖 Pattern Miner",
+                "value": f"Still aggregating — no pattern registry read yet{tail}.",
+                "inline": False}
+    if not m.get("top"):
+        if m.get("ran_ever"):
+            v = (f"Ran (last {str(m['last_run'])[:16]}) — no distinct patterns "
+                 f"survived the gates yet. Total registered: {m['total']}.")
+        else:
+            skips = m.get("consecutive_skips")
+            v = ("No distinct patterns yet / still aggregating"
+                 + (f" — miner gated, {skips} consecutive skip(s)" if skips else "")
+                 + ".")
+        return {"name": "🤖 Pattern Miner", "value": v[:1024], "inline": False}
+    lines = [f"{m['total']} candidate(s) registered, {m['new_today']} new today"
+             + (f" · last run {str(m['last_run'])[:16]}" if m.get("last_run") else "")]
+    for t in m["top"]:
+        lines.append(f"• [{t['status']}] {t['description']}"[:300]
+                     + (f" (support {t['support_n']})" if t.get("support_n") else ""))
+    lines.append("CANDIDATE = registered only; the proving harness owns every promotion.")
+    return {"name": "🤖 Pattern Miner", "value": "\n".join(lines)[:1024],
+            "inline": False}
+
+
 def build_brief_card(logs_dir: Path = LOGS_DIR,
                      state_path: Path = STATE_PATH,
                      deploy_log_path: Path = DEPLOY_LOG_PATH,
@@ -769,7 +856,8 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
                      journal_path=None,
                      clock=None,
                      halt_lines_fn=None,
-                     macro_sentence_fn=None) -> dict:
+                     macro_sentence_fn=None,
+                     miner_fn=None) -> dict:
     """The whole brief as ONE notifier payload (event="ceo_brief").
 
     Every seam is a parameter so the entire card is assertable offline. Each
@@ -806,6 +894,16 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
         if sentence:
             fields.append({"name": "🌍 Macro Read", "value": sentence[:1024],
                            "inline": False})
+    except Exception:
+        pass
+
+    # Sequence 3 (2026-08-17): the miner's mind, read-only. Injected by
+    # main() only (same rule as the macro sentence: a build_* called from a
+    # test must never touch live state); miner_fn=None = no field.
+    try:
+        m = miner_fn() if miner_fn else None
+        if m is not None:
+            fields.append(_miner_field(m))
     except Exception:
         pass
 
@@ -880,7 +978,8 @@ def main(argv=None) -> int:
     from src import portfolio_manager as pm
     from src import ceo_language
     kw = {"halt_lines_fn": pm.halt_banner_lines,
-         "macro_sentence_fn": ceo_language.macro_regime_sentence}
+         "macro_sentence_fn": ceo_language.macro_regime_sentence,
+         "miner_fn": collect_miner}
     payload = build_brief_card(**kw) if dry else send_brief(**kw)
     print(_render_text(payload), flush=True)
     if dry:

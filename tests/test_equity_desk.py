@@ -158,9 +158,14 @@ def test_settle_exit_nets_delivery_frictions_into_firm_account():
     s = desk.settle_exit(entry, {"ticker": "TCS.NS", "reason": "target",
                                  "exit_price": 2460.0}, conn=conn)
     gross = (2460.0 - 2269.0) * qty
+    # Gap 4 (2026-08-17): both sides also pay the liquidity-tier slippage
+    # (0.10/0.25/0.50% by fo_liquidity tier) — same door the desk uses.
+    from src.liquidity_slippage import slippage_rs
+    slip = slippage_rs(2269.0, qty, "TCS.NS") + slippage_rs(2460.0, qty, "TCS.NS")
     expected = round(gross - desk.delivery_frictions("BUY", 2269.0, qty)
-                     - desk.delivery_frictions("SELL", 2460.0, qty), 2)
+                     - desk.delivery_frictions("SELL", 2460.0, qty) - slip, 2)
     assert s["pnl_net"] == expected and s["pnl_net"] < gross
+    assert s["slippage_rs"] == round(slip, 2) and slip > 0
     assert pm.equity(conn) == 1_000_000.0 + expected  # firm equity moved
     assert desk.desk_state(conn)["realized"] == expected
     assert desk.settle_exit(_entry("INFY"), {"exit_price": 1.0},

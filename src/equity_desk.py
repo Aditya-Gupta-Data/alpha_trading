@@ -234,8 +234,18 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
             or price_in is None or price_out is None):
         return None
     gross = (float(price_out) - float(price_in)) * int(qty)
+    # Gap 4 (2026-08-17): the desk settled at frictionless fills — a paper
+    # illusion on anything thinner than a tier-1 name. Both sides now pay
+    # the liquidity-tier slippage (fo_liquidity.json: 0.10/0.25/0.50%).
+    # Fail-open to zero, never a crash — but zero is what it was before.
+    try:
+        from src.liquidity_slippage import slippage_rs
+        slip = (slippage_rs(price_in, qty, exit_event.get("ticker") or entry.get("ticker"))
+                + slippage_rs(price_out, qty, exit_event.get("ticker") or entry.get("ticker")))
+    except Exception:
+        slip = 0.0
     pnl_net = round(gross - delivery_frictions("BUY", price_in, qty)
-                    - delivery_frictions("SELL", price_out, qty), 2)
+                    - delivery_frictions("SELL", price_out, qty) - slip, 2)
     conn, owns = _connect(conn)
     try:
         ref = funding.get("lock_ref") or LOCK_PREFIX + str(entry.get("id"))
@@ -243,7 +253,7 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
         if not result.get("released"):
             return None
         return {"ticker": exit_event.get("ticker"), "lock_ref": ref,
-                "qty": int(qty), "pnl_net": pnl_net,
+                "qty": int(qty), "pnl_net": pnl_net, "slippage_rs": round(slip, 2),
                 "reason": exit_event.get("reason"),
                 "equity": result.get("equity"),
                 "halted": result.get("halted")}

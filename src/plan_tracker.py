@@ -81,21 +81,35 @@ def _vix_slippage_mult(vix: float) -> float:
 
 
 def apply_slippage(price: float, instrument_type: str,
-                   vix: float = None, lots: int = 1) -> float:
+                   vix: float = None, lots: int = 1,
+                   symbol: str = None) -> float:
     """Bid-ask slippage in Rs. per unit. `vix` scales OPTION slippage to model
     the crisis blowout (see _vix_slippage_mult); deep-OTM legs (lowest premium,
     0.50% base) suffer that multiple off the worst base, so a panicked wing is
     savaged. `lots` adds a synthetic book-depth penalty (+~0.05% per 10 lots) —
     no infinite top-of-book liquidity. vix=None + lots<=1 reproduces the
-    original ladder byte-for-byte (backward compatible)."""
+    original ladder byte-for-byte (backward compatible).
+
+    Gap 4 (2026-08-17): `symbol` switches on the LIQUIDITY-TIER floor from
+    `liquidity_slippage` (fo_liquidity.json: tier1 0.10% / tier2 0.25% /
+    illiquid 0.50% per side). STOCK — which was a flat 0.0% — becomes the
+    tier fraction; OPTION/INDEX pay max(their own ladder, the tier floor).
+    symbol=None keeps every legacy number unchanged. Paper fills only."""
     instr_upper = instrument_type.upper()
+    tier_frac = None
+    if symbol:
+        try:
+            from src.liquidity_slippage import tier_slippage_frac
+            tier_frac = tier_slippage_frac(symbol)
+        except Exception:
+            tier_frac = None
     if instr_upper == "INDEX":
-        return price * 0.0005  # 0.05%
+        return price * max(0.0005, tier_frac or 0.0)   # 0.05% legacy floor
     if instr_upper != "OPTION":
-        return 0.0             # STOCK: 0.0% under this rule
+        return price * (tier_frac or 0.0)   # STOCK: 0.0% legacy, tier when named
     base = 0.0050 if price < 50 else 0.0030 if price < 150 else 0.0010
     size_frac = (max(0, int(lots) - 1) / 10.0) * 0.0005   # +0.05% per 10 lots
-    return price * (base * _vix_slippage_mult(vix) + size_frac)
+    return price * max(base * _vix_slippage_mult(vix) + size_frac, tier_frac or 0.0)
 
 
 # --- Phase 5: options spread tracking ---------------------------------
@@ -749,8 +763,11 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         exit_frictions = pf.calculate_trade_frictions(instrument_type, "SELL", exit_price, entry["shares"])
         total_frictions = entry_frictions + exit_frictions
 
-        entry_slippage = apply_slippage(entry["price"], instrument_type) * entry["shares"]
-        exit_slippage = apply_slippage(exit_price, instrument_type) * entry["shares"]
+        # Gap 4: STOCK fills pay the liquidity-tier slippage (was 0.0%).
+        entry_slippage = apply_slippage(entry["price"], instrument_type,
+                                        symbol=entry.get("ticker")) * entry["shares"]
+        exit_slippage = apply_slippage(exit_price, instrument_type,
+                                       symbol=entry.get("ticker")) * entry["shares"]
         total_slippage = entry_slippage + exit_slippage
 
         gross_pnl = entry["shares"] * (exit_price - entry["price"])

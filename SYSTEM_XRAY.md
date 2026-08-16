@@ -358,7 +358,7 @@ recorded for later, or capture for a future that hasn't arrived.
 | `bulk_deals.json`, `deals_history.jsonl` | DAILY | — |
 | `news_sentiment.json` | DAILY | — |
 | `macro_regime.json`, `macro_regime_declarations.jsonl` | DAILY | — |
-| `daily_context` (25 rows) | DAILY write / **DORMANT read** | Accumulating history for future pattern-mining — **explicitly**. The miners need 60 frames; at ~1/trading-day that is roughly mid-September. This is the single dependency gating Department 5's existence. |
+| `daily_context` (25 rows on 08-05; 38 on 08-16, gate cut 60→40 by executive override #87/#88 to force the first miner pass ~Aug 18-19) | DAILY write / **DORMANT read** | Accumulating history for future pattern-mining — **explicitly**. The miners need 60 frames; at ~1/trading-day that is roughly mid-September. This is the single dependency gating Department 5's existence. |
 | `sizing_adjustments.jsonl` | DAILY | — |
 | `problems.jsonl`, `deploy_log.jsonl` | DAILY | — |
 | `intraday_15m.jsonl` | DAILY write / **DORMANT read** | Accumulating history for a future intraday-feature layer. Stated intent, no owner, no date. |
@@ -504,7 +504,7 @@ AS OF: 2026-08-05 14:20 IST · main @ f65f583 · suite 1,700 green
 LIVE:  VM 28 cron + 3 systemd · Mac 3 cron + 2 LaunchAgents · MCP 9 tools
 MONEY: pool ₹2,00,000 · realized ₹39,424 · open 7 (4 options, 3 equity)
        equity budget ₹60,000 · 19 resolved real trades (12W/7L)
-CLOCKS: Stage-B 17 declarations / 0 graded · daily_context 25/60 frames
+CLOCKS: Stage-B 17 declarations / 0 graded · daily_context 25/60 frames  ← gate is now 40 (#87/#88, 2026-08-16)
         discovery skipped 17 consecutive nights · bug ledger 74 untriaged
 STALE:  sector_index_bars.json (20d, feeds a LIVE veto) · bars_cache.json (27d)
 <!-- /AUTO -->

@@ -42,7 +42,7 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | 19:50 Mon-Fri | `src.firm_treasury --rotate` | Re-routes the equity desk's budget after the Mac's ~19:20 artifact ship (#83). |
 | 19:50 daily | `src.analysis.macro_nightly` | The Dept-8 macro heartbeat: FRED ingest → NSE indices ingest → regime `declare()` → Stage-B forward scoring (fail-open last). No Dhan token, so the shared 19:50 slot is contention-free. |
 | 20:00 daily | `src.sleep_phase` | Brain Map pass — decay-only on the VM (no Ollama; edge mining runs opportunistically from the Mac). |
-| 20:20 daily | `src.discovery.nightly` | Gated Phase-5 miner pass (#76): skips (exit 0) unless ops heartbeats green + no INGESTION problems + `daily_context` ≥ 50 frames (60 → 50 on 2026-08-16, decision #87). Every 7th skip fires one Discord note. |
+| 20:20 daily | `src.discovery.nightly` | Gated Phase-5 miner pass (#76): skips (exit 0) unless ops heartbeats green + no INGESTION problems + `daily_context` ≥ 40 frames (60 → 50 → 40 on 2026-08-16, decisions #87/#88). Every 7th skip fires one Discord note. |
 | 20:30 daily | `src.ops_monitor` | Log sweep + job heartbeats → Discord health card. |
 | 20:40 daily | `src.bug_ledger` | Folds the ops sweep's problem lines + silent rejections/halts into `logs/autonomous_bug_report.jsonl` for the Thursday Protocol (#84). |
 | every 2h :00 | `src.portfolio_report` | Report card; the SCRIPT self-gates to market hours and exits quietly otherwise. Even-hour slots never touch the 07:00 renewal minute. |

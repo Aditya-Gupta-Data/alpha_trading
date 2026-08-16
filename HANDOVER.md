@@ -99,14 +99,16 @@ have been wrong in both directions.
 Suite **2,071 green** (before this block's change; re-run recorded in the
 handoff). V1 `src/` execution logic untouched all day; three things moved:
 
-1. **Miner depth gate lowered 60 → 50 frames** — `src/discovery/nightly.py`
-   `MIN_CONTEXT_FRAMES = 50` (owner executive decision, **decision #87**).
-   The other two gates and CANDIDATE-only mining are unchanged. The Mac copy
-   of `daily_context` shows 38 frames; the VM (25 on 08-05, ~1/day) should
-   cross 50 around **2026-08-30** — the first miner pass will show up in
-   `logs/discovery_nightly.log` and the CEO card's `consecutive_skips` line.
-   Deploy = `git pull` on the VM; no cron edit needed (the 60 in
-   `setup_cron.sh` was a comment, updated).
+1. **Miner depth gate lowered 60 → 50 → 40 frames** — `src/discovery/nightly.py`
+   `MIN_CONTEXT_FRAMES = 40` (owner executive override, **decisions #87 + #88**,
+   both 08-16: the second cut was made to force the first pass THIS week).
+   The other two gates and CANDIDATE-only mining are unchanged. VM
+   `daily_context` = **38 frames on 08-16** (verified on the box, ~1/day) →
+   40 on the 08-18 frame → **first miner pass 20:20 IST Tue 2026-08-18**
+   (08-19 if the frame lands late or heartbeats/ingestion block). Watch
+   `logs/discovery_nightly.log` and the CEO card's `consecutive_skips` line;
+   a run with 0 candidates is a valid outcome, not a bug. Deployed to the VM
+   at `4941697` (gate 50); the 40 cut needs one more `git pull`.
 2. **Next Version update STAGED, in prep.** The V1 CODE FREEZE (08-05) is
    nearing its end. **Post-update the engineering protocol becomes a strict
    WEEKLY RELEASE / UPDATE CADENCE** — one gated release per week (suite

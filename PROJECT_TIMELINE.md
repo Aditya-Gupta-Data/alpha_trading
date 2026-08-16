@@ -235,6 +235,22 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-08-16 · 12 commits · 24 files touched
+
+- `ffbc914` feat(discovery): miner depth gate 60 -> 50 frames (owner decision #87); stage Next-Version + weekly release cadence in docs
+- `0054289` test: stub the #68 exposure gate in the headless margin-gate test — it read the real journal
+- `10ff440` feat(research): earnings reaction study — YoY quartiles vs forward returns (sandbox, not a finding)
+- `e9ab7c3` docs: V2 sandbox state dump for session handoff
+- `1628bb7` feat(research): deep history, steel proxies, sourced elections, plant-location extraction
+- `93d21a9` feat(research): metals into cross_asset, ONI + election clocks, geo extraction from filings
+- `9643faf` feat(research): run the event study on six years, and fix what running it exposed
+- `d792820` feat(research): V2 sandbox — geo exposure, credit monitor, event-study backtester
+- `4aceaaf` wip: readable credit render
+- `1449abb` wip: lake-root fix
+- `3f03a18` wip: vocabulary rewritten from live lake
+- `b0fc89c` wip: v2 research sandbox
+
+
 ### 2026-08-08 · 1 commits · 1 files touched
 
 - `e79dbe1` docs(handover): Friday session-close health check — clean session, router not yet exercised

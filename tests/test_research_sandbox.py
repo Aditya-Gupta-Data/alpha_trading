@@ -552,3 +552,81 @@ def test_the_plant_extractor_gates_on_repeated_mentions(tmp_path):
     rows = json.loads(geo.read_text())["exposures"]["X.NS"]["exposures"]
     assert out["state_rows_added"] == 1
     assert [r["region"] for r in rows] == ["Gujarat"]
+
+
+# ---------------------------------------------------------------------------
+# Earnings Reaction Study (2026-08-16) — the scoreboard against reality.
+# ---------------------------------------------------------------------------
+
+def _doc(periods):
+    return {"symbol": "TESTCO", "periods": periods}
+
+
+def _p(to, filed, profit, sale=1000.0):
+    return {"to": to, "filed_on": filed, "net_profit_consolidated": profit,
+            "net_profit": None, "net_sale": sale}
+
+
+def test_yoy_needs_the_same_quarter_a_year_earlier_not_the_previous_quarter():
+    from src.research.earnings_reaction import events_for
+    ev, skipped = events_for("TESTCO", _doc([
+        _p("31-MAR-2025", "20-Apr-2025 18:00:00", 100.0),
+        _p("30-JUN-2025", "20-Jul-2025 18:00:00", 110.0),
+        _p("31-MAR-2026", "20-Apr-2026 18:00:00", 150.0),
+    ]))
+    assert [e["quarter_to"] for e in ev] == ["2026-03-31"]
+    assert ev[0]["profit_yoy_pct"] == 50.0
+    assert skipped == {"no_prior_year_quarter": 2}
+
+
+def test_an_intraday_filing_is_dated_the_PREVIOUS_session_so_the_reaction_is_measured():
+    from src.research.earnings_reaction import events_for
+    ev, _ = events_for("TESTCO", _doc([
+        _p("31-MAR-2025", "20-Apr-2025 11:00:00", 100.0),
+        _p("31-MAR-2026", "20-Apr-2026 11:00:00", 120.0),   # during market hours
+    ]))
+    assert ev[0]["date"] == "2026-04-19" and ev[0]["filed_after_close"] is False
+    ev, _ = events_for("TESTCO", _doc([
+        _p("31-MAR-2025", "20-Apr-2025 11:00:00", 100.0),
+        _p("31-MAR-2026", "20-Apr-2026 17:45:00", 120.0),   # after the close
+    ]))
+    assert ev[0]["date"] == "2026-04-20" and ev[0]["filed_after_close"] is True
+
+
+def test_a_loss_base_year_gives_no_growth_number_rather_than_a_fake_percentage():
+    from src.research.earnings_reaction import events_for
+    ev, skipped = events_for("TESTCO", _doc([
+        _p("31-MAR-2025", "20-Apr-2025 18:00:00", -40.0),
+        _p("31-MAR-2026", "20-Apr-2026 18:00:00", 60.0),
+    ]))
+    assert ev == [] and skipped["profit_yoy_undefined"] == 1
+
+
+def test_quartiles_are_ranked_highest_growth_first_and_are_deterministic():
+    from src.research.earnings_reaction import quartiles
+    evs = [{"symbol": f"S{i}", "profit_yoy_pct": float(i)} for i in range(8)]
+    q = quartiles(evs)
+    assert [e["profit_yoy_pct"] for e in q["Q1_top"]] == [7.0, 6.0]
+    assert [e["profit_yoy_pct"] for e in q["Q4_bottom"]] == [1.0, 0.0]
+    assert quartiles([]) == {}
+
+
+def test_the_earnings_study_carries_both_gates_and_its_caveats(monkeypatch):
+    from src.research import earnings_reaction as er
+    monkeypatch.setattr("src.research.event_study_simulator._closes_by_symbol",
+                        lambda syms, days, lake_dir=None: {s: {} for s in syms})
+    evs = [{"symbol": "A", "date": "2026-04-20", "profit_yoy_pct": 5.0},
+           {"symbol": "B", "date": "2026-04-20", "profit_yoy_pct": 1.0}]
+    rep = er.study(evs)
+    for block in rep["quartiles"].values():
+        for s in block["results"].values():
+            assert s["verdict"] == "insufficient_sample"
+    assert any("Survivorship" in c for c in rep["caveats"])
+    assert er.study([])["verdict"] == "no_events"
+
+
+def test_the_earnings_module_is_a_manual_offline_tool():
+    from pathlib import Path
+    src = Path("src/research/earnings_reaction.py").read_text()
+    assert src.startswith("# MANUAL OFFLINE TOOL")
+    assert "earnings_reaction" not in Path("scripts/setup_cron.sh").read_text()

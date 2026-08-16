@@ -245,3 +245,34 @@ Sign survives and the effect strengthens out of sample. n=1,863 / 1,842.
 * `verified_against_eci: false` until someone actually checks ECI.
 * The `basis: operational_presence` marker separating asset location from
   revenue share.
+
+---
+
+## 9. Studies run 2026-08-16 (all three: NOT findings)
+
+Read §5 first. All three studies below were run with hypothesis-first,
+median + hit rate, both n-gates, survivorship stated. None passed OOS.
+
+* **Elections × operational presence** (`run_dates`-style, scratch): 17 of
+  32 elections touch a `basis: operational_presence` name (only 5 names
+  carry state rows), n=27 ticker-days / 14 dates. Hypothesis (vol premium
+  for exposed names) REFUTED: treated median |r| 1.56%/2.86% vs control
+  1.84%/3.35%. Directional TRAIN 10d +2.40% hit 67% → VERIFY +0.35% hit 50%.
+  Calendar issues seen: `2021-09-30 West Bengal` looks like a by-poll date;
+  Karnataka-2023, Gujarat/UP/Punjab-2022, Kerala/TN-2021, Bihar-2020 absent.
+* **Steel-proxy shocks** (SLX 5-session ≥|8%|, de-clustered, 2011→2026):
+  up-spikes 51 dates — NIFTY METAL TRAIN −0.74%/−0.51% → VERIFY +2.29%/+1.11%
+  (sign flips, fails); METAL−AUTO spread +0.85/+0.91 → +0.99/+1.14 hit ~60%
+  (sign survives, effect ⅓ of window noise: WATCH, not finding). Down-spikes
+  44 dates — AUTO 5d −1.40 → −1.04 weakly survives; METAL −0.03 → −3.02 (no
+  train support). Autos move WITH producers in single names → beta, not a
+  steel-cost transfer. **MCX COPPER/ZINC hold zero history** (ids added
+  today) — unusable as a shock series until ≥3y accumulate.
+* **Earnings reaction** (`src/research/earnings_reaction.py`): see the
+  MODULES.md row. Lake depth is 5 quarters, so all 201 YoY events are in
+  2026 — **no train/verify split possible**. Bottom quartile −3.42%/−5.24%
+  hit 28%/17% (excess vs NIFTY −2.17/−5.23); top quartile −0.72%/+0.87%
+  (no positive edge; Q3 was as negative as Q4 in season A). Season B 5d
+  bottom quartile flipped to +2.67% (n=12), July 10d windows truncated at
+  the 2026-08-05 bhavcopy end. Re-run when the lake holds Q4-FY27 filings
+  (Apr-2027) — that is the first genuine second year.

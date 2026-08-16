@@ -343,11 +343,17 @@ def test_pm_run_headless_silently_rejects_when_the_gate_says_no():
               "view": "neutral", "vix": 14.0, "reason": "ok"}
 
     logged, notified = [], []
+    from src import exposure_gate
     saved = (op.build_proposal, journal_mod.log, op._notify_discord,
              op._memory_context_for, op._skeptic_note_for,
-             pm.gate_headless_entry)
+             pm.gate_headless_entry, exposure_gate.gate_entry)
     try:
         op.build_proposal = lambda *a, **k: canned
+        # The #68 exposure gate reads the REAL data/journal.jsonl; on a box
+        # with an open NIFTY BANK neutral it would block before the margin
+        # gate under test ever ran (seen 2026-08-16). Stub it — this test is
+        # about the margin gate, and the suite must not read production data.
+        exposure_gate.gate_entry = lambda *a, **k: (True, "ok")
         journal_mod.log = lambda e: logged.append(e)
         op._notify_discord = lambda text: notified.append(text) or True
         op._memory_context_for = lambda *a, **k: ""
@@ -384,7 +390,7 @@ def test_pm_run_headless_silently_rejects_when_the_gate_says_no():
     finally:
         (op.build_proposal, journal_mod.log, op._notify_discord,
          op._memory_context_for, op._skeptic_note_for,
-         pm.gate_headless_entry) = saved
+         pm.gate_headless_entry, exposure_gate.gate_entry) = saved
 
 
 def test_pm_decide_pending_approval_is_margin_gated():

@@ -76,6 +76,15 @@
      "driver": "second block",
      "confidence": "medium",
      "source": "unverified"
+    },
+    {
+     "region": "Karnataka",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_INFY_2025_2026.pdf: named on 6 facilities page(s) [6, 120, 125]"
     }
    ],
    "shock_sensitivity": [
@@ -100,6 +109,15 @@
      "driver": "rural volume + monsoon-linked farm income",
      "confidence": "low",
      "source": "hypothesis"
+    },
+    {
+     "region": "Goa",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_HINDUNILVR_2025_2026.pdf: named on 7 facilities page(s) [9, 10, 41]"
     }
    ],
    "shock_sensitivity": [
@@ -125,6 +143,51 @@
      "driver": "leaf tobacco sourcing \u2014 a supply-side, not demand-side, exposure",
      "confidence": "medium",
      "source": "hypothesis"
+    },
+    {
+     "region": "Madhya Pradesh",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_ITC_2025_2026.pdf: named on 3 facilities page(s) [19, 29, 57]"
+    },
+    {
+     "region": "Assam",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_ITC_2025_2026.pdf: named on 3 facilities page(s) [19, 29, 57]"
+    },
+    {
+     "region": "West Bengal",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_ITC_2025_2026.pdf: named on 3 facilities page(s) [19, 29, 57]"
+    },
+    {
+     "region": "Andhra Pradesh",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_ITC_2025_2026.pdf: named on 2 facilities page(s) [19, 29, 57]"
+    },
+    {
+     "region": "Maharashtra",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_ITC_2025_2026.pdf: named on 2 facilities page(s) [19, 29, 57]"
     }
    ],
    "shock_sensitivity": [
@@ -148,8 +211,18 @@
      "kind": "india_state",
      "share_pct": null,
      "driver": "manufacturing concentration \u2014 a plant-level regulatory event is state-local",
-     "confidence": "medium",
-     "source": "hypothesis"
+     "confidence": "high",
+     "source": "EXTRACTED 2026-08-16 from AR_SUNPHARMA_2025_2026.pdf: named on 4 facilities page(s) [1, 6, 14]",
+     "basis": "operational_presence"
+    },
+    {
+     "region": "Maharashtra",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_SUNPHARMA_2025_2026.pdf: named on 3 facilities page(s) [1, 6, 14]"
     }
    ],
    "shock_sensitivity": [
@@ -165,15 +238,35 @@
      "share_pct": null,
      "driver": "Gurgaon/Manesar plants \u2014 a state labour or power event stops production",
      "confidence": "high",
-     "source": "plant location, public"
+     "source": "EXTRACTED 2026-08-16 from AR_MARUTI_2024_2025.pdf: named on 4 facilities page(s) [2, 5, 21]",
+     "basis": "operational_presence"
     },
     {
      "region": "Gujarat",
      "kind": "india_state",
      "share_pct": null,
      "driver": "second manufacturing base",
-     "confidence": "medium",
-     "source": "public"
+     "confidence": "high",
+     "source": "EXTRACTED 2026-08-16 from AR_MARUTI_2024_2025.pdf: named on 7 facilities page(s) [2, 5, 21]",
+     "basis": "operational_presence"
+    },
+    {
+     "region": "Delhi",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_MARUTI_2024_2025.pdf: named on 5 facilities page(s) [2, 5, 21]"
+    },
+    {
+     "region": "Goa",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_MARUTI_2024_2025.pdf: named on 2 facilities page(s) [2, 5, 21]"
     }
    ],
    "shock_sensitivity": [
@@ -190,7 +283,8 @@
      "share_pct": null,
      "driver": "mine concentration; state-level unrest or land disputes halt output",
      "confidence": "high",
-     "source": "public"
+     "source": "EXTRACTED 2026-08-16 from AR_COALINDIA_2024_2025.pdf: named on 4 facilities page(s) [3, 6, 7]",
+     "basis": "operational_presence"
     },
     {
      "region": "Odisha",
@@ -198,15 +292,35 @@
      "share_pct": null,
      "driver": "second mining block + rail evacuation routes",
      "confidence": "high",
-     "source": "public"
+     "source": "EXTRACTED 2026-08-16 from AR_COALINDIA_2024_2025.pdf: named on 4 facilities page(s) [3, 6, 7]",
+     "basis": "operational_presence"
     },
     {
      "region": "Chhattisgarh",
      "kind": "india_state",
      "share_pct": null,
      "driver": "third block; historically the most disruption-prone",
-     "confidence": "medium",
-     "source": "public"
+     "confidence": "high",
+     "source": "EXTRACTED 2026-08-16 from AR_COALINDIA_2024_2025.pdf: named on 4 facilities page(s) [3, 6, 7]",
+     "basis": "operational_presence"
+    },
+    {
+     "region": "Maharashtra",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_COALINDIA_2024_2025.pdf: named on 4 facilities page(s) [3, 6, 7]"
+    },
+    {
+     "region": "West Bengal",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_COALINDIA_2024_2025.pdf: named on 4 facilities page(s) [3, 6, 7]"
     }
    ],
    "shock_sensitivity": [
@@ -258,6 +372,33 @@
      "driver": "domestic mining + Kalinganagar/Jamshedpur plants",
      "confidence": "high",
      "source": "public"
+    },
+    {
+     "region": "Maharashtra",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_TATASTEEL_2025_2026.pdf: named on 2 facilities page(s) [65, 75, 77]"
+    },
+    {
+     "region": "Punjab",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_TATASTEEL_2025_2026.pdf: named on 2 facilities page(s) [65, 75, 77]"
+    },
+    {
+     "region": "Goa",
+     "kind": "india_state",
+     "share_pct": null,
+     "driver": "operational presence \u2014 facilities named in the annual report; a disruption here stops output regardless of where the revenue is booked",
+     "confidence": "high",
+     "basis": "operational_presence",
+     "source": "EXTRACTED 2026-08-16 from AR_TATASTEEL_2025_2026.pdf: named on 2 facilities page(s) [65, 75, 77]"
     }
    ],
    "shock_sensitivity": [
@@ -273,5 +414,12 @@
   "country_rows_evidenced": 2,
   "india_state_rows_left_alone": 2,
   "why": "Ind AS 108 discloses geography by COUNTRY, never by Indian state. State rows stay estimates by necessity \u2014 they must be rebuilt from plant/mine locations or GST registrations, not from annual reports."
+ },
+ "_plant_extraction": {
+  "run_on": "2026-08-16",
+  "state_rows_added": 15,
+  "hand_estimates_upgraded": 6,
+  "min_mentions": 2,
+  "basis_note": "These are OPERATIONAL rows, not revenue. Ind AS 108 never discloses revenue by Indian state, so a state row in this map means 'assets are here', which is what an election, riot or power cut actually disrupts \u2014 arguably the better variable anyway."
  }
 }

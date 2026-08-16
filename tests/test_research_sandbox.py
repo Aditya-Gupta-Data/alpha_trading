@@ -368,13 +368,17 @@ def test_el_nino_uses_NOAAs_own_threshold_and_the_monsoon_seasons_only():
     assert "2016" not in " ".join(h["date"] for h in hits)
 
 
-def test_the_election_calendar_ships_empty_by_design():
-    """Writing dates from memory would put FABRICATED timestamps into a
-    research record — RULE 3 forbids it. Empty is the honest state."""
-    assert MS.load_elections() == []
+def test_the_election_calendar_is_now_SOURCED_not_hand_typed():
+    """It shipped empty on 2026-08-11 because typing dates from memory
+    would have been fabrication. It is populated on 2026-08-16 — from the
+    Wikipedia API, with `source_page` on every row so any date is
+    traceable. The rule never changed; the sourcing did."""
+    rows = MS.load_elections()
+    assert len(rows) >= 25
     raw = json.loads((ROOT / "config" / "india_election_calendar.json").read_text())
-    assert raw["elections"] == []
-    assert "FABRICATED" in raw["_why_empty"]
+    assert "FABRICATED" in raw["_why_empty"]          # the reasoning is kept
+    assert raw["_sourced"]["source"].startswith("Wikipedia API")
+    assert "SECONDARY SOURCE" in raw["_sourced"]["caveat"]
 
 
 def test_the_geo_map_is_the_join_key_for_a_shock():
@@ -454,3 +458,97 @@ def test_the_metals_ids_are_verified_and_steel_is_absent_on_purpose():
     from src.ingestion.cross_asset import COMMODITY_KEYS
     assert set(COMMODITY_KEYS) == {"CRUDE", "GOLD_INDIA", "COPPER",
                                    "ALUMINIUM", "ZINC"}
+
+
+# ------------------------- deep history / steel proxy / elections (08-16)
+
+from src.ingestion.sandbox import deep_history as DH
+from src.ingestion.sandbox import election_calendar as EC
+
+
+def test_the_steel_proxy_is_labelled_a_PROXY_not_a_price():
+    """SLX/MT are equities that co-move with steel. Recording them as a
+    steel price would let an ETF close be mistaken for an HRC quote."""
+    assert DH.DEEP_SERIES["SLX"][1] == "steel_proxy"
+    assert DH.DEEP_SERIES["MT"][1] == "steel_proxy"
+    from src.ingestion.cross_asset import COMMODITY_KEYS
+    # And it must NOT be in the Dhan door — one market-data door per source.
+    assert not any(k in COMMODITY_KEYS for k in ("SLX", "MT", "STEEL"))
+
+
+def test_the_monsoon_year_is_judged_on_its_PEAK_not_its_mean():
+    """Averaging JJA with JAS blunts exactly the years that matter."""
+    oni = [{"date": "2015-07-01", "season": "JJA", "year": 2015, "anom": 1.44},
+           {"date": "2015-08-01", "season": "JAS", "year": 2015, "anom": 1.73},
+           {"date": "2015-01-01", "season": "DJF", "year": 2015, "anom": 2.5}]
+    peaks = DH.monsoon_years(oni)
+    assert peaks == {2015: 1.73}          # DJF excluded, peak not mean
+
+
+def test_a_season_return_is_None_rather_than_a_shortened_window():
+    """A 3-month return and a 6-month return are not the same measurement."""
+    series = {"2020-07-01": 100.0}        # no December close
+    assert DH.season_return(series, 2020) is None
+
+
+def test_three_el_nino_years_is_reported_as_insufficient():
+    """The dated study's n counts ticker-days; this one counts monsoons.
+    Three monsoons is three observations however many rows they generate."""
+    s = DH._stats([-1.0, -2.0, -3.0])
+    assert s["n"] == 3 and s["median_pct"] == -2.0 and s["hit_rate_pct"] == 0.0
+
+
+def test_a_multi_phase_election_records_the_LAST_poll_date():
+    """'27 March – 29 April 2021' is ONE election polled over five weeks.
+    The market event is the resolution, not the first phase."""
+    assert EC.last_poll_date("27 March – 29 April 2021 (292 seats)") == "2021-04-29"
+    assert EC.last_poll_date("10 February 2022") == "2022-02-10"
+    assert EC.last_poll_date("no dates here") is None
+
+
+def test_by_elections_are_excluded_from_the_calendar():
+    """A by-election fills a few seats and changes no government; counting
+    it as a full assembly poll pads n with non-events."""
+    members = {"query": {"categorymembers": [
+        {"title": "2019 Haryana Legislative Assembly election"},
+        {"title": "2019 Kerala Legislative Assembly by-elections"},
+        {"title": "Category:2019 elections"}]}}
+    got = EC.election_pages(2019, fetch_fn=lambda p: members)
+    assert got == ["2019 Haryana Legislative Assembly election"]
+
+
+def test_every_election_row_is_traceable_and_flagged_unverified():
+    raw = json.loads((ROOT / "config" / "india_election_calendar.json").read_text())
+    assert len(raw["elections"]) >= 25
+    for r in raw["elections"]:
+        assert r["source_page"], r
+        assert r["verified_against_eci"] is False
+        assert r["kind"] == "state_assembly"
+        assert re.match(r"^\d{4}-\d{2}-\d{2}$", r["date"])
+
+
+def test_operational_state_rows_are_never_confused_with_revenue():
+    """The map now carries two kinds of state row. Reading an operational
+    presence as a revenue share would be a category error."""
+    raw = json.loads((ROOT / "config" / "geo_revenue_exposure.json").read_text())
+    ops = [e for b in raw["exposures"].values() for e in b["exposures"]
+           if e.get("basis") == "operational_presence"]
+    assert ops, "plant extraction never applied"
+    for e in ops:
+        assert e["kind"] == "india_state"
+        assert e["share_pct"] is None      # presence is not a revenue share
+        assert "EXTRACTED" in e["source"]
+
+
+def test_the_plant_extractor_gates_on_repeated_mentions(tmp_path):
+    """A state named once on one page is as likely a CSR sentence as a
+    plant."""
+    geo = tmp_path / "geo.json"
+    geo.write_text(json.dumps({"exposures": {"X.NS": {"exposures": []}}}))
+    out = GX.apply_plant_states(
+        [{"ticker": "X.NS", "status": "states_found", "source_file": "AR.pdf",
+          "marked_pages": [10], "states": {"Gujarat": 4, "Kerala": 1}}],
+        geo_path=geo, min_mentions=2)
+    rows = json.loads(geo.read_text())["exposures"]["X.NS"]["exposures"]
+    assert out["state_rows_added"] == 1
+    assert [r["region"] for r in rows] == ["Gujarat"]

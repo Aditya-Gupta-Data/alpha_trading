@@ -239,6 +239,8 @@ def main(argv=None) -> int:
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--apply", action="store_true",
                     help="write the evidence into the geo map")
+    ap.add_argument("--plants", action="store_true",
+                    help="extract STATE operational exposure instead")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
@@ -246,6 +248,19 @@ def main(argv=None) -> int:
     if not targets:
         print("nothing to do — pass --ticker or --all")
         return 2
+    if a.plants:
+        pres = [plant_states_for(t) for t in targets]
+        if a.json:
+            print(json.dumps(pres, indent=2))
+        else:
+            for r in pres:
+                top = ", ".join(f"{s}({n})" for s, n in
+                                list(r["states"].items())[:6])
+                print(f"{r['ticker']:<16} {r['status']:<20} "
+                      f"pages={r.get('pages_scanned', 0):<4} {top}")
+        if a.apply:
+            print(json.dumps(apply_plant_states(pres), indent=1))
+        return 0
     results = [extract_ticker(t) for t in targets]
     if a.json:
         print(json.dumps(results, indent=2))
@@ -259,6 +274,168 @@ def main(argv=None) -> int:
     if a.apply:
         print(json.dumps(apply_evidence(results), indent=1))
     return 0
+
+
+
+
+# ============================================================ PLANT LOCATIONS
+# THE PIVOT (2026-08-16). Ind AS 108 gives country-level revenue and nothing
+# below it, so the state rows this map needs cannot come from the revenue
+# note — ever. But annual reports DO name where the company physically
+# operates: "Manufacturing Facilities", "Plant Locations", "Works",
+# "Registered Office". That is OPERATIONAL exposure, not revenue exposure,
+# and the distinction is the whole point:
+#
+#   revenue exposure  = where the money comes from  (unavailable by state)
+#   operational exposure = where the assets sit     (extractable, and it is
+#                          what a state election, riot or power cut actually
+#                          disrupts)
+#
+# For a monsoon or election shock, operational exposure is arguably the
+# better variable anyway — a strike in Haryana stops MARUTI's line whatever
+# fraction of its revenue Haryana buys.
+
+INDIAN_STATES = (
+    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
+    "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
+    "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya",
+    "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim",
+    "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand",
+    "West Bengal", "Delhi", "Jammu and Kashmir", "Ladakh", "Puducherry",
+    "Chandigarh", "Dadra and Nagar Haveli", "Daman", "Andaman",
+)
+
+PLANT_MARKERS = (
+    "manufacturing facilit", "plant location", "our plants", "works at",
+    "manufacturing location", "registered office", "corporate office",
+    "manufacturing unit", "production facilit", "our facilities",
+    "plants and", "mines at", "manufacturing sites",
+)
+
+
+def extract_plant_states(pdf_path, max_pages: int = MAX_PAGES_SCANNED,
+                         open_fn=None) -> dict:
+    """{state: mentions} on pages that talk about facilities.
+
+    Counts a state ONLY on a page already marked as a facilities page, so a
+    passing reference in a CSR paragraph does not become a plant. Never
+    raises; an unreadable PDF returns its error rather than an empty map
+    that would read as 'no plants'."""
+    out = {"file": str(pdf_path), "pages_scanned": 0, "marked_pages": [],
+           "states": {}, "error": None}
+    pdf = None
+    try:
+        if open_fn is not None:
+            pages = open_fn(pdf_path)
+        else:
+            import pdfplumber
+            pdf = pdfplumber.open(str(pdf_path))
+            pages = pdf.pages
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+        return out
+    try:
+        marked = 0
+        for i, page in enumerate(pages):
+            if i >= max_pages or marked >= 12:
+                break
+            out["pages_scanned"] = i + 1
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                continue
+            low = text.lower()
+            if not any(m in low for m in PLANT_MARKERS):
+                continue
+            marked += 1
+            out["marked_pages"].append(i + 1)
+            for st in INDIAN_STATES:
+                if st.lower() in low:
+                    out["states"][st] = out["states"].get(st, 0) + 1
+    finally:
+        try:
+            if pdf is not None:
+                pdf.close()
+        except Exception:
+            pass
+    return out
+
+
+def plant_states_for(ticker: str, reports_dir=None, **kw) -> dict:
+    pdfs = report_pdfs(ticker, reports_dir)
+    if not pdfs:
+        return {"ticker": ticker, "status": "no_report_held", "states": {}}
+    ev = extract_plant_states(pdfs[-1], **kw)
+    ranked = dict(sorted(ev["states"].items(), key=lambda kv: -kv[1]))
+    return {"ticker": ticker,
+            "status": ("read_failed" if ev["error"] else
+                       "states_found" if ranked else "no_facility_pages"),
+            "source_file": Path(pdfs[-1]).name,
+            "pages_scanned": ev["pages_scanned"],
+            "marked_pages": ev["marked_pages"][:6],
+            "states": ranked, "error": ev["error"]}
+
+
+
+
+def apply_plant_states(results: list, geo_path=None, min_mentions: int = 2,
+                       max_states: int = 5) -> dict:
+    """Write extracted STATE presence into the geo map as OPERATIONAL rows.
+
+    These are marked `basis: operational_presence`, NOT revenue — the map
+    now carries two different kinds of state row and they must never be
+    read as the same thing. A revenue share says how much money that state
+    supplies; an operational row says the company's assets are there and a
+    disruption stops them.
+
+    `min_mentions` is the noise gate: a state named once on one facilities
+    page is as likely to be a CSR sentence as a plant. Existing hand-typed
+    rows for the same state are UPGRADED in place rather than duplicated,
+    so the map does not grow two rows for Haryana."""
+    p = Path(geo_path or GEO_PATH)
+    raw = json.loads(p.read_text())
+    added = upgraded = 0
+    for r in results:
+        if r.get("status") != "states_found":
+            continue
+        body = (raw.get("exposures") or {}).get(r["ticker"])
+        if not body:
+            continue
+        keep = [(s, n) for s, n in r["states"].items() if n >= min_mentions]
+        for state, mentions in keep[:max_states]:
+            existing = next((e for e in body["exposures"]
+                             if e.get("kind") == "india_state"
+                             and str(e.get("region", "")).lower()
+                             == state.lower()), None)
+            evidence = (f"EXTRACTED {date.today().isoformat()} from "
+                        f"{r['source_file']}: named on {mentions} facilities "
+                        f"page(s) {r['marked_pages'][:3]}")
+            if existing:
+                existing["source"] = evidence
+                existing["confidence"] = "high"
+                existing["basis"] = "operational_presence"
+                upgraded += 1
+            else:
+                body["exposures"].append({
+                    "region": state, "kind": "india_state", "share_pct": None,
+                    "driver": "operational presence — facilities named in the "
+                              "annual report; a disruption here stops output "
+                              "regardless of where the revenue is booked",
+                    "confidence": "high", "basis": "operational_presence",
+                    "source": evidence})
+                added += 1
+    raw["_plant_extraction"] = {
+        "run_on": date.today().isoformat(),
+        "state_rows_added": added, "hand_estimates_upgraded": upgraded,
+        "min_mentions": min_mentions,
+        "basis_note": ("These are OPERATIONAL rows, not revenue. Ind AS 108 "
+                       "never discloses revenue by Indian state, so a state "
+                       "row in this map means 'assets are here', which is "
+                       "what an election, riot or power cut actually "
+                       "disrupts — arguably the better variable anyway."),
+    }
+    p.write_text(json.dumps(raw, indent=1) + "\n")
+    return {"state_rows_added": added, "hand_estimates_upgraded": upgraded}
 
 
 if __name__ == "__main__":

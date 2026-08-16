@@ -9,5 +9,301 @@
   "source": "the ECI page or notification this row was read from"
  },
  "_how_to_fill": "eci.gov.in publishes past general and state election schedules. One row per election, `source` filled with the page it came from. Then: python3 -m src.research.event_study_simulator --dates-from elections",
- "elections": []
+ "elections": [
+  {
+   "date": "2019-04-11",
+   "result_date": null,
+   "state": "Andhra Pradesh",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2019 Andhra Pradesh Legislative Assembly election",
+   "source_page": "2019 Andhra Pradesh Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2019-04-11",
+   "result_date": null,
+   "state": "Sikkim",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2019 Sikkim Legislative Assembly election",
+   "source_page": "2019 Sikkim Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2019-04-29",
+   "result_date": null,
+   "state": "Odisha",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2019 Odisha Legislative Assembly election",
+   "source_page": "2019 Odisha Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2019-10-21",
+   "result_date": null,
+   "state": "Haryana",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2019 Haryana Legislative Assembly election",
+   "source_page": "2019 Haryana Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2019-10-21",
+   "result_date": null,
+   "state": "Maharashtra",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2019 Maharashtra Legislative Assembly election",
+   "source_page": "2019 Maharashtra Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2019-12-20",
+   "result_date": null,
+   "state": "Jharkhand",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2019 Jharkhand Legislative Assembly election",
+   "source_page": "2019 Jharkhand Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2020-02-08",
+   "result_date": null,
+   "state": "Delhi",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2020 Delhi Legislative Assembly election",
+   "source_page": "2020 Delhi Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2021-04-06",
+   "result_date": null,
+   "state": "Assam",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2021 Assam Legislative Assembly election",
+   "source_page": "2021 Assam Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2021-04-06",
+   "result_date": null,
+   "state": "Puducherry",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2021 Puducherry Legislative Assembly election",
+   "source_page": "2021 Puducherry Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2021-09-30",
+   "result_date": null,
+   "state": "West Bengal",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2021 West Bengal Legislative Assembly election",
+   "source_page": "2021 West Bengal Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2022-02-14",
+   "result_date": null,
+   "state": "Goa",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2022 Goa Legislative Assembly election",
+   "source_page": "2022 Goa Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2022-02-14",
+   "result_date": null,
+   "state": "Uttarakhand",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2022 Uttarakhand Legislative Assembly election",
+   "source_page": "2022 Uttarakhand Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2022-03-05",
+   "result_date": null,
+   "state": "Manipur",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2022 Manipur Legislative Assembly election",
+   "source_page": "2022 Manipur Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2023-05-10",
+   "result_date": null,
+   "state": "Meghalaya",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2023 Meghalaya Legislative Assembly election",
+   "source_page": "2023 Meghalaya Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2023-11-07",
+   "result_date": null,
+   "state": "Mizoram",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2023 Mizoram Legislative Assembly election",
+   "source_page": "2023 Mizoram Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2023-11-17",
+   "result_date": null,
+   "state": "Chhattisgarh",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2023 Chhattisgarh Legislative Assembly election",
+   "source_page": "2023 Chhattisgarh Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2023-11-17",
+   "result_date": null,
+   "state": "Madhya Pradesh",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2023 Madhya Pradesh Legislative Assembly election",
+   "source_page": "2023 Madhya Pradesh Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2023-11-30",
+   "result_date": null,
+   "state": "Telangana",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2023 Telangana Legislative Assembly election",
+   "source_page": "2023 Telangana Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2024-04-19",
+   "result_date": null,
+   "state": "Arunachal Pradesh",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2024 Arunachal Pradesh Legislative Assembly election",
+   "source_page": "2024 Arunachal Pradesh Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2024-05-13",
+   "result_date": null,
+   "state": "Andhra Pradesh",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2024 Andhra Pradesh Legislative Assembly election",
+   "source_page": "2024 Andhra Pradesh Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2024-06-01",
+   "result_date": null,
+   "state": "Odisha",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2024 Odisha Legislative Assembly election",
+   "source_page": "2024 Odisha Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2024-10-01",
+   "result_date": null,
+   "state": "Jammu and Kashmir",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2024 Jammu and Kashmir Legislative Assembly election",
+   "source_page": "2024 Jammu and Kashmir Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2024-10-05",
+   "result_date": null,
+   "state": "Haryana",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2024 Haryana Legislative Assembly election",
+   "source_page": "2024 Haryana Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2024-11-20",
+   "result_date": null,
+   "state": "Jharkhand",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2024 Jharkhand Legislative Assembly election",
+   "source_page": "2024 Jharkhand Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2024-11-20",
+   "result_date": null,
+   "state": "Maharashtra",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2024 Maharashtra Legislative Assembly election",
+   "source_page": "2024 Maharashtra Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2025-02-05",
+   "result_date": null,
+   "state": "Delhi",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2025 Delhi Legislative Assembly election",
+   "source_page": "2025 Delhi Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2025-11-11",
+   "result_date": null,
+   "state": "Bihar",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2025 Bihar Legislative Assembly election",
+   "source_page": "2025 Bihar Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2026-04-09",
+   "result_date": null,
+   "state": "Assam",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2026 Assam Legislative Assembly election",
+   "source_page": "2026 Assam Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2026-04-09",
+   "result_date": null,
+   "state": "Kerala",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2026 Kerala Legislative Assembly election",
+   "source_page": "2026 Kerala Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2026-04-09",
+   "result_date": null,
+   "state": "Puducherry",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2026 Puducherry Legislative Assembly election",
+   "source_page": "2026 Puducherry Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2026-04-23",
+   "result_date": null,
+   "state": "Tamil Nadu",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2026 Tamil Nadu Legislative Assembly election",
+   "source_page": "2026 Tamil Nadu Legislative Assembly election",
+   "verified_against_eci": false
+  },
+  {
+   "date": "2026-05-21",
+   "result_date": null,
+   "state": "West Bengal",
+   "kind": "state_assembly",
+   "source": "Wikipedia: 2026 West Bengal Legislative Assembly election",
+   "source_page": "2026 West Bengal Legislative Assembly election",
+   "verified_against_eci": false
+  }
+ ],
+ "_sourced": {
+  "run_on": "2026-08-16",
+  "count": 32,
+  "source": "Wikipedia API (en.wikipedia.org/w/api.php), one page per election; `source_page` on every row",
+  "caveat": "SECONDARY SOURCE. Wikipedia is machine-readable where ECI is scattered press-note PDFs, but it is not the authority. `verified_against_eci` is False on every row until someone checks it. `date` is the LAST poll date of a multi-phase election; `result_date` is null unless the page stated one \u2014 counting day is conventionally a few days later, and 'conventionally' is not a date.",
+  "merge_note": "Collected over two passes: the category endpoint is flaky under load (HTTP 429) and returned different year sets on consecutive runs, so missing years were MERGED in rather than replacing the file. Re-running --apply overwrites; use a merge if a year is missing."
+ }
 }

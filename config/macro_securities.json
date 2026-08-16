@@ -1,18 +1,40 @@
 {
-  "_note": "Verified Dhan instrument ids for the Phase 7 macro tracker's live path. Fill each entry ONLY with ids verified against Dhan's api-scrip-master-detailed.csv (project rule: a wrong id silently prices the wrong instrument \u2014 never guess). Shape per metric: {\"id\": \"...\", \"seg\": \"MCX_COMM\" | \"NSE_CURRENCY\", \"inst\": \"FUTCOM\" | \"FUTCUR\"}. A metric left out simply skips the live path and falls open to data/macro_snapshot.json.",
-  "_verified": "2026-08-13 against api-scrip-master-detailed.csv (207,932 rows). GOLD_INDIA ROLLED: the old id 466583 (GOLD AUG FUT, exp 2026-08-05) is GONE from the master entirely — not renamed, not repointed, absent, which is why the tap logged CA-410/CA-404 rather than erroring. Replaced with 483079 = GOLD OCT FUT, exp 2026-10-05, MCX/M/FUTCOM, lot 1.0, verified row-by-row. NOTE MCX GOLD IS BI-MONTHLY (Feb/Apr/Jun/Aug/Oct/Dec) — there is no SEP contract, so OCT is the front month and the 08-05→08-13 gap in the lake is real and unrecoverable. CRUDE (560977, CRUDEOIL AUG FUT) re-verified present and unexpired, exp 2026-08-19 — THE NEXT ROLL IS DUE THEN; the next contract is 565899 (CRUDEOIL SEP FUT, exp 2026-09-21). Earlier: 2026-07-10 first verification; re-checked 2026-07-16. USDINR STILL absent \u2014 the 2026-07-16 scrip master again holds no unexpired USDINR futures (all FUTCUR rows expired 2024-2026-06), so the metric stays snapshot-only; re-check on the next contract listing. FUTURES IDS EXPIRE WITH THEIR CONTRACT (see _expiry per entry) \u2014 after expiry the tracker fails open to the snapshot; re-verify a fresh contract id from the scrip master then. GOLD_WORLD has no Dhan instrument by nature \u2014 snapshot-only.",
-  "CRUDE": {
-    "id": "560977",
-    "seg": "MCX_COMM",
-    "inst": "FUTCOM",
-    "_symbol": "CRUDEOIL AUG FUT",
-    "_expiry": "2026-08-19"
-  },
-  "GOLD_INDIA": {
-    "id": "483079",
-    "seg": "MCX_COMM",
-    "inst": "FUTCOM",
-    "_symbol": "GOLD OCT FUT",
-    "_expiry": "2026-10-05"
-  }
+ "_note": "Verified Dhan instrument ids for the Phase 7 macro tracker's live path. Fill each entry ONLY with ids verified against Dhan's api-scrip-master-detailed.csv (project rule: a wrong id silently prices the wrong instrument \u2014 never guess). Shape per metric: {\"id\": \"...\", \"seg\": \"MCX_COMM\" | \"NSE_CURRENCY\", \"inst\": \"FUTCOM\" | \"FUTCUR\"}. A metric left out simply skips the live path and falls open to data/macro_snapshot.json.",
+ "_verified": "2026-08-13 against api-scrip-master-detailed.csv (207,932 rows). GOLD_INDIA ROLLED: the old id 466583 (GOLD AUG FUT, exp 2026-08-05) is GONE from the master entirely \u2014 not renamed, not repointed, absent, which is why the tap logged CA-410/CA-404 rather than erroring. Replaced with 483079 = GOLD OCT FUT, exp 2026-10-05, MCX/M/FUTCOM, lot 1.0, verified row-by-row. NOTE MCX GOLD IS BI-MONTHLY (Feb/Apr/Jun/Aug/Oct/Dec) \u2014 there is no SEP contract, so OCT is the front month and the 08-05\u219208-13 gap in the lake is real and unrecoverable. CRUDE (560977, CRUDEOIL AUG FUT) re-verified present and unexpired, exp 2026-08-19 \u2014 THE NEXT ROLL IS DUE THEN; the next contract is 565899 (CRUDEOIL SEP FUT, exp 2026-09-21). Earlier: 2026-07-10 first verification; re-checked 2026-07-16. USDINR STILL absent \u2014 the 2026-07-16 scrip master again holds no unexpired USDINR futures (all FUTCUR rows expired 2024-2026-06), so the metric stays snapshot-only; re-check on the next contract listing. FUTURES IDS EXPIRE WITH THEIR CONTRACT (see _expiry per entry) \u2014 after expiry the tracker fails open to the snapshot; re-verify a fresh contract id from the scrip master then. GOLD_WORLD has no Dhan instrument by nature \u2014 snapshot-only.",
+ "CRUDE": {
+  "id": "560977",
+  "seg": "MCX_COMM",
+  "inst": "FUTCOM",
+  "_symbol": "CRUDEOIL AUG FUT",
+  "_expiry": "2026-08-19"
+ },
+ "GOLD_INDIA": {
+  "id": "483079",
+  "seg": "MCX_COMM",
+  "inst": "FUTCOM",
+  "_symbol": "GOLD OCT FUT",
+  "_expiry": "2026-10-05"
+ },
+ "COPPER": {
+  "id": "568831",
+  "seg": "MCX_COMM",
+  "inst": "FUTCOM",
+  "_symbol": "COPPER AUG FUT",
+  "_expiry": "2026-08-31"
+ },
+ "ALUMINIUM": {
+  "id": "568830",
+  "seg": "MCX_COMM",
+  "inst": "FUTCOM",
+  "_symbol": "ALUMINIUM AUG FUT",
+  "_expiry": "2026-08-31"
+ },
+ "ZINC": {
+  "id": "568836",
+  "seg": "MCX_COMM",
+  "inst": "FUTCOM",
+  "_symbol": "ZINC AUG FUT",
+  "_expiry": "2026-08-31"
+ },
+ "_verified_metals": "2026-08-16, COPPER/ALUMINIUM/ZINC added and verified row-by-row against api-scrip-master-detailed.csv (210,446 rows; MCX FUTCOM = 146 live contracts). \u26a0\ufe0f THESE ROLL MONTHLY, unlike GOLD (bi-monthly) \u2014 the rot cadence is 12x/year each, so expect CA-410 from stale_instruments() on the first business day after each expiry until rolled. Next ladder rungs already verified if a manual roll is needed: COPPER 571298 (SEP-30) / 574829 (OCT-30); ALUMINIUM 571297 / 574828; ZINC 571303 / 574834. STEEL was REQUESTED but NOT added: MCX lists STEELREBAR only, which is a construction-rebar contract, not the flat/HRC steel that drives TATASTEEL or JSWSTEEL input costs \u2014 a wrong proxy is worse than an absent one."
 }

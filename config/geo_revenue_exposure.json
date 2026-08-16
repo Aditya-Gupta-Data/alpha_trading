@@ -42,15 +42,15 @@
      "share_pct": null,
      "driver": "BFSI client concentration; a US banking or H-1B shock lands here first",
      "confidence": "high",
-     "source": "IT-sector structure \u2014 VERIFY against geography disclosure"
+     "source": "EXTRACTED 2026-08-16 from AR_TCS_2025_2026.pdf p.[60, 226]: India 15,775 22,060; India 15,101 21,471"
     },
     {
      "region": "United Kingdom / Europe",
      "kind": "region_bloc",
      "share_pct": null,
      "driver": "second revenue block; GBP/EUR translation risk",
-     "confidence": "medium",
-     "source": "unverified"
+     "confidence": "high",
+     "source": "EXTRACTED 2026-08-16 from AR_TCS_2025_2026.pdf p.[60, 226]: India 15,775 22,060; India 15,101 21,471"
     }
    ],
    "shock_sensitivity": [
@@ -267,5 +267,11 @@
     "regulation"
    ]
   }
+ },
+ "_extraction": {
+  "run_on": "2026-08-16",
+  "country_rows_evidenced": 2,
+  "india_state_rows_left_alone": 2,
+  "why": "Ind AS 108 discloses geography by COUNTRY, never by Indian state. State rows stay estimates by necessity \u2014 they must be rebuilt from plant/mine locations or GST registrations, not from annual reports."
  }
 }

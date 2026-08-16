@@ -1,0 +1,13 @@
+{
+ "_note": "Historical Indian state/general election dates, for the V2 research sandbox's shock studies. SHIPS EMPTY BY DESIGN \u2014 the same rule config/global_indices.json follows.",
+ "_why_empty": "Election dates must be sourced from the Election Commission of India. Writing them from memory would put FABRICATED timestamps into a research record, which CLAUDE.md RULE 3 forbids outright \u2014 and a study built on invented dates is worse than no study, because it looks like evidence. The loader, schema and event-study path are built and tested; they return an honest zero until this file is filled.",
+ "_schema": {
+  "date": "YYYY-MM-DD \u2014 the POLL date (or the last phase's poll date for a multi-phase election). NOT the result date; use `result_date` for that, since the market reprices on results, not on polling.",
+  "result_date": "YYYY-MM-DD \u2014 counting day. Usually the sharper event.",
+  "state": "state name as it appears in geo_revenue_exposure.json regions",
+  "kind": "state_assembly | general",
+  "source": "the ECI page or notification this row was read from"
+ },
+ "_how_to_fill": "eci.gov.in publishes past general and state election schedules. One row per election, `source` filled with the page it came from. Then: python3 -m src.research.event_study_simulator --dates-from elections",
+ "elections": []
+}

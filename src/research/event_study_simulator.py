@@ -284,6 +284,65 @@ def run(keyword: str, start: str = None, end: str = None,
     return report
 
 
+def run_dates(events, windows=DEFAULT_WINDOWS, tickers=None, label="dated",
+              lake_dir=None, bhav_days: int = 2000) -> dict:
+    """The study for DATE-driven shocks rather than keyword-driven filings.
+
+    `events` is [{date, ...}] — an El Niño monsoon season, an election
+    result day, anything with a timestamp — and `tickers` is the basket the
+    shock is hypothesised to reach (in practice, whatever
+    `macro_shocks_v2.tickers_for_shock` returns off the geo map).
+
+    Same machinery as `run`: same look-ahead exclusion, same median-first
+    stats, same skew flag, same MIN_SAMPLE gate. Deliberately NOT a second
+    implementation — a research tool with two subtly different definitions
+    of "forward return" is a tool that will eventually disagree with itself.
+
+    ⚠️ CLUSTERING. Every ticker shares the same event dates here, so the
+    windows are not independent the way scattered filings are: one bad
+    fortnight can supply the entire sample. `distinct_event_dates` is
+    reported for exactly that reason — read it before the median."""
+    symbols = [str(t).split(".")[0].upper() for t in (tickers or [])]
+    dates = sorted({str(e.get("date")) for e in (events or []) if e.get("date")})
+    rep = {
+        "study": label, "windows": list(windows),
+        "distinct_event_dates": len(dates),
+        "event_dates": dates[:24],
+        "basket": sorted(set(symbols)),
+        "observations_possible": len(dates) * len(set(symbols)),
+        "results": {},
+        "caveats": [
+            "CLUSTERED SAMPLE: every name shares the same event dates, so "
+            "observations are NOT independent — n counts ticker-days, not "
+            "independent events. Read `distinct_event_dates` first.",
+            "MEAN IS NOT THE ANSWER — read median and hit-rate; "
+            "`mean_median_diverge` marks windows where they disagree.",
+            "Survivorship is uncorrected and biases the result UPWARD.",
+        ],
+    }
+    if not dates or not symbols:
+        rep["verdict"] = "no_events_or_no_basket"
+        return rep
+    closes = _closes_by_symbol(set(symbols), bhav_days, lake_dir=lake_dir)
+    rep["basket_with_price_history"] = sorted(s for s in set(symbols)
+                                              if closes.get(s))
+    for w in windows:
+        vals = [forward_return(closes.get(s, {}), d, w)
+                for d in dates for s in set(symbols)]
+        stats = _stats(vals)
+        stats["verdict"] = ("insufficient_sample"
+                            if len(dates) < 3 or stats["n"] < MIN_SAMPLE
+                            else "measured")
+        # A dated study needs BOTH gates: 200 ticker-days off 2 event dates
+        # is one fortnight wearing a large n.
+        stats["gate"] = ("too few distinct event dates"
+                         if len(dates) < 3 else
+                         "n below MIN_SAMPLE" if stats["n"] < MIN_SAMPLE
+                         else "passed")
+        rep["results"][f"fwd_{w}d"] = stats
+    return rep
+
+
 def render_lines(rep: dict) -> list:
     lines = [f"event study: '{rep['keyword']}' {rep['from']} → {rep['to']}"
              + (f" [sector {rep['sector']}]" if rep.get("sector") else ""),

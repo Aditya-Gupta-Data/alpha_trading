@@ -80,7 +80,24 @@ DEFAULT_LOOKBACK_DAYS = 7      # short: this runs daily and is idempotent
 # macro_securities.json. Keeping the SAME key names means one verified-id
 # file serves both this clerk and the macro tracker — a second copy of an
 # instrument id is a second thing to let rot (ledger Issues 14/15).
-COMMODITY_KEYS = ("CRUDE", "GOLD_INDIA")
+# EXTENDED 2026-08-16 with the industrial metals: they are INPUT COSTS for
+# names we already trade or track (copper/aluminium → cables, autos, power;
+# zinc → galvanised steel), which is a different question from crude's
+# energy-and-inflation channel. All three verified row-by-row against
+# api-scrip-master-detailed.csv the same day.
+#
+# ⚠️ THEY ROLL MONTHLY. GOLD is bi-monthly and CRUDE monthly, so the desk
+# already knows this shape — but three more monthly contracts means the
+# expired-id trap (CA-410) now fires up to 4x more often. `stale_instruments`
+# names it rather than returning silent empties; the ladder for the next two
+# rungs of each metal is recorded in config/macro_securities.json so a roll
+# is a lookup, not a re-derivation.
+#
+# STEEL was asked for and deliberately NOT added: MCX lists only STEELREBAR,
+# a construction-rebar contract that does not track the flat/HRC steel driving
+# TATASTEEL or JSWSTEEL input costs. A wrong proxy is worse than an absent one
+# (#78 — a guessed id silently prices the wrong instrument).
+COMMODITY_KEYS = ("CRUDE", "GOLD_INDIA", "COPPER", "ALUMINIUM", "ZINC")
 
 
 def _load_json(path, default=None):

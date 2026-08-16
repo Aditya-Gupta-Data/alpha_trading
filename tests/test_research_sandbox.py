@@ -336,3 +336,121 @@ def test_the_caveats_name_the_skew_and_the_upward_survivorship_bias(tmp_path):
     joined = " ".join(rep["caveats"]).lower()
     assert "right-skewed" in joined or "skew" in joined
     assert "upward" in joined
+
+
+# ------------------------------- macro shocks + dated study (2026-08-16)
+
+from src.ingestion.sandbox import macro_shocks_v2 as MS
+from src.research import geo_revenue_extractor as GX
+
+ONI_SAMPLE = """ SEAS  YR   TOTAL   ANOM
+  JJA 2023  27.50   1.00
+  JAS 2023  27.80   1.25
+  JJA 2021  26.10  -0.40
+  DJF 2016  27.90   2.50
+"""
+
+
+def test_oni_parses_and_a_neutral_reading_is_never_manufactured():
+    rows = MS.parse_oni(ONI_SAMPLE + "  BAD row here\n")
+    assert len(rows) == 4
+    assert all(isinstance(r["anom"], float) for r in rows)
+
+
+def test_el_nino_uses_NOAAs_own_threshold_and_the_monsoon_seasons_only():
+    """Redefining the cutoff and still calling it 'El Nino' would be
+    quietly renaming the term; DJF 2016 was a monster event but it is not
+    a MONSOON season, so it must not enter a monsoon study."""
+    rows = MS.parse_oni(ONI_SAMPLE)
+    hits = MS.el_nino_seasons(rows)
+    assert {h["season"] for h in hits} == {"JJA", "JAS"}
+    assert all(h["anom"] >= MS.EL_NINO_THRESHOLD for h in hits)
+    assert "2016" not in " ".join(h["date"] for h in hits)
+
+
+def test_the_election_calendar_ships_empty_by_design():
+    """Writing dates from memory would put FABRICATED timestamps into a
+    research record — RULE 3 forbids it. Empty is the honest state."""
+    assert MS.load_elections() == []
+    raw = json.loads((ROOT / "config" / "india_election_calendar.json").read_text())
+    assert raw["elections"] == []
+    assert "FABRICATED" in raw["_why_empty"]
+
+
+def test_the_geo_map_is_the_join_key_for_a_shock():
+    assert "HINDUNILVR.NS" in MS.tickers_for_shock("monsoon")
+    assert "TATAMOTORS.NS" in MS.tickers_for_region("United Kingdom")
+
+
+def test_a_dated_study_needs_distinct_EVENT_DATES_not_just_ticker_days():
+    """200 ticker-days off 2 event dates is one fortnight wearing a large
+    n. Both gates must hold."""
+    events = [{"date": "2026-08-03"}, {"date": "2026-08-04"}]
+    rep = ES.run_dates(events, windows=(1,), tickers=["A.NS"],
+                       lake_dir=ROOT / "does_not_exist")
+    assert rep["distinct_event_dates"] == 2
+    assert rep["results"]["fwd_1d"]["verdict"] == "insufficient_sample"
+    assert rep["results"]["fwd_1d"]["gate"] == "too few distinct event dates"
+
+
+def test_a_dated_study_names_its_clustering():
+    rep = ES.run_dates([{"date": "2026-08-03"}], tickers=["A.NS"],
+                       lake_dir=ROOT / "nope")
+    assert any("CLUSTERED" in c for c in rep["caveats"])
+
+
+def test_only_a_QUANTIFIED_geography_line_counts_as_evidence():
+    """A marked page is not a disclosure. MD&A narrative and percentage
+    charts hit the markers without carrying the segment table."""
+    assert GX.is_quantified("- Within India 72988.91 65637.28")
+    assert GX.is_quantified("India 15,775 22,060")
+    assert not GX.is_quantified("States and Europe, where specialty therapies form")
+    assert not GX.is_quantified("Life Sciences APAC 8.3%")
+
+
+def test_the_extractor_never_touches_an_india_state_row(tmp_path):
+    """No annual report discloses revenue by Indian state. An extractor
+    that overwrote a state estimate would be claiming a number it cannot
+    possibly have found."""
+    geo = tmp_path / "geo.json"
+    geo.write_text(json.dumps({"exposures": {"X.NS": {"exposures": [
+        {"region": "Uttar Pradesh", "kind": "india_state", "share_pct": None,
+         "driver": "d", "confidence": "low", "source": "hypothesis"},
+        {"region": "United States", "kind": "country", "share_pct": None,
+         "driver": "d", "confidence": "low", "source": "hypothesis"}]}}}))
+    GX.apply_evidence([{"ticker": "X.NS", "status": "geography_note_found",
+                        "source_file": "AR.pdf", "marked_pages": [220],
+                        "hits": [{"page": 220, "line": "Within India 72988.91"}]}],
+                      geo_path=geo)
+    rows = json.loads(geo.read_text())["exposures"]["X.NS"]["exposures"]
+    state = [r for r in rows if r["kind"] == "india_state"][0]
+    country = [r for r in rows if r["kind"] == "country"][0]
+    assert state["confidence"] == "low" and state["source"] == "hypothesis"
+    assert country["confidence"] == "high" and "EXTRACTED" in country["source"]
+
+
+def test_unquantified_hits_leave_the_hand_estimate_alone(tmp_path):
+    geo = tmp_path / "geo.json"
+    geo.write_text(json.dumps({"exposures": {"X.NS": {"exposures": [
+        {"region": "Europe", "kind": "country", "share_pct": None,
+         "driver": "d", "confidence": "medium", "source": "unverified"}]}}}))
+    out = GX.apply_evidence([{"ticker": "X.NS", "status": "geography_note_found",
+                              "source_file": "AR.pdf", "marked_pages": [32],
+                              "hits": [{"page": 32, "line": "States and Europe, "
+                                                            "where specialty"}]}],
+                            geo_path=geo)
+    assert out["country_rows_evidenced"] == 0
+    row = json.loads(geo.read_text())["exposures"]["X.NS"]["exposures"][0]
+    assert row["confidence"] == "medium" and row["source"] == "unverified"
+
+
+def test_the_metals_ids_are_verified_and_steel_is_absent_on_purpose():
+    raw = json.loads((ROOT / "config" / "macro_securities.json").read_text())
+    for m in ("COPPER", "ALUMINIUM", "ZINC"):
+        assert raw[m]["seg"] == "MCX_COMM" and raw[m]["inst"] == "FUTCOM"
+        assert raw[m]["id"].isdigit() and raw[m]["_expiry"]
+    assert "STEEL" not in raw
+    assert "STEELREBAR" in raw["_verified_metals"]
+    from src.ingestion.cross_asset import COMMODITY_KEYS
+    assert set(COMMODITY_KEYS) == {"CRUDE", "GOLD_INDIA", "COPPER",
+                                   "ALUMINIUM", "ZINC"}

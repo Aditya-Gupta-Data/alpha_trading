@@ -197,12 +197,21 @@ def report(start: str, end: str, events_dir=None, read_day_fn=None,
     for e in events:
         by_cat[e["category"]] = by_cat.get(e["category"], 0) + 1
         by_symbol.setdefault(e["symbol"], []).append(e["category"])
-    stressed = {s: c for s, c in
-                ((s, [x for x in cats
-                      if x in ("INSOLVENCY", "DEFAULT", "RATING_ACTION",
-                               "SUSPENSION", "REGULATOR_ACTION",
-                               "REPORTING_DELAY")])
-                 for s, cats in by_symbol.items()) if c}
+    # COUNTS, not the raw list. The first live run printed every category
+    # occurrence per symbol and produced 150-item lines for names in
+    # multi-year insolvency (JPASSOCIAT filed 128 times) — technically
+    # complete and completely unreadable.
+    negative = ("INSOLVENCY", "DEFAULT", "RATING_ACTION", "SUSPENSION",
+                "REGULATOR_ACTION", "REPORTING_DELAY")
+    stressed = {}
+    for s, cats in by_symbol.items():
+        hits = [c for c in cats if c in negative]
+        if not hits:
+            continue
+        counts = {}
+        for c in hits:
+            counts[c] = counts.get(c, 0) + 1
+        stressed[s] = {"total": len(hits), "by_category": counts}
     rep = {
         "from": start, "to": end,
         "days_scanned": found["days_scanned"],
@@ -210,7 +219,7 @@ def report(start: str, end: str, events_dir=None, read_day_fn=None,
         "by_category": {k: by_cat.get(k, 0) for k in SEVERITY if by_cat.get(k)},
         "distinct_symbols": len(by_symbol),
         "symbols_with_negative_credit_news": dict(sorted(
-            stressed.items(), key=lambda kv: -len(kv[1]))[:25]),
+            stressed.items(), key=lambda kv: -kv[1]["total"])[:25]),
         "unclassified_sample": found["unclassified_sample"],
         "written_to": None,
         "note": ("Classification is KEYWORD-based and coarse. It counts "
@@ -246,9 +255,12 @@ def render_lines(rep: dict) -> list:
         lines.append(f"    {cat:<16} {n}")
     neg = rep["symbols_with_negative_credit_news"]
     if neg:
-        lines.append("  negative credit news:")
-        for sym, cats in list(neg.items())[:10]:
-            lines.append(f"    {sym:<14} {', '.join(cats)}")
+        lines.append("  most-stressed names (negative filings only):")
+        for sym, info in list(neg.items())[:10]:
+            detail = ", ".join(f"{k} x{v}" for k, v in
+                               sorted(info["by_category"].items(),
+                                      key=lambda kv: -kv[1]))
+            lines.append(f"    {sym:<14} {info['total']:>4}  ({detail})")
     return lines
 
 

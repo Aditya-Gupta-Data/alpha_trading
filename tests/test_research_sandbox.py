@@ -133,8 +133,10 @@ def test_credit_report_counts_and_names_the_stressed_symbols(tmp_path):
     rep = CM.report("2026-08-01", "2026-08-05", events_dir=d, read_day_fn=fn)
     assert rep["credit_filings"] == 2
     assert rep["by_category"] == {"DEFAULT": 1, "RATING_ACTION": 1}
-    assert "ACME" in rep["symbols_with_negative_credit_news"]
-    assert "BETA" not in rep["symbols_with_negative_credit_news"]
+    neg = rep["symbols_with_negative_credit_news"]
+    assert neg["ACME"] == {"total": 2,
+                           "by_category": {"RATING_ACTION": 1, "DEFAULT": 1}}
+    assert "BETA" not in neg
     assert "Board Meeting Intimation" in rep["unclassified_sample"]
 
 
@@ -287,3 +289,17 @@ def test_the_reader_finds_rows_through_the_real_lake_layout(tmp_path):
     rep = CM.report(day, day, events_dir=tmp_path / "lake" / "events")
     assert rep["credit_filings"] == 1
     assert rep["by_category"] == {"INSOLVENCY": 1}
+
+
+def test_a_serial_filer_is_summarised_as_counts_not_a_wall_of_text(tmp_path):
+    """JPASSOCIAT filed 128 times over two years of insolvency. The first
+    live run printed every one of them on a single line."""
+    days = {f"2026-08-{d:02d}": [{"as_of": f"2026-08-{d:02d}", "symbol": "ZOMB",
+                                  "subject": "Corporate Insolvency Resolution "
+                                             "Process"}] for d in range(1, 21)}
+    d, fn = _events(days, tmp_path)
+    rep = CM.report("2026-08-01", "2026-08-25", events_dir=d, read_day_fn=fn)
+    info = rep["symbols_with_negative_credit_news"]["ZOMB"]
+    assert info == {"total": 20, "by_category": {"INSOLVENCY": 20}}
+    line = [l for l in CM.render_lines(rep) if "ZOMB" in l][0]
+    assert "INSOLVENCY x20" in line and len(line) < 120

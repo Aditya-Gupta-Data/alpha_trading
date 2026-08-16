@@ -27,10 +27,12 @@ and one that needs three new credentials first.
 Three lanes, in order of how much they cost us:
 
   1. **EVENTS LAKE (free, already captured, 7 years deep).** Classify each
-     filing's `subject` against the vocabulary below. This is the whole
-     backbone: rating actions, default/delay notices, debenture trustee
-     communications, and fresh NCD issuance all arrive here as ordinary
-     corporate announcements.
+     filing's `subject` against the vocabulary below. ⚠️ `subject` is NOT a
+     free-text headline — it is SEBI's fixed disclosure taxonomy, 79 distinct
+     values across 15,326 rows measured on 2026-08-11. Insolvency admissions,
+     payment defaults, trading suspensions and filed rating actions all arrive
+     as exact category strings, which is why the vocabulary below quotes them
+     verbatim rather than guessing at wording.
   2. **RATING-AGENCY PAGES (not implemented — a decision, not an omission).**
      CRISIL/ICRA/CARE publish rating rationales on their own sites. That is
      a NEW crawler against a NEW host, and this repo's boundary doctrine
@@ -44,14 +46,16 @@ Three lanes, in order of how much they cost us:
 WHAT IT REFUSES TO DO
 ---------------------
 It does not score, rank or infer a "credit health" number. A filing that
-says `Downgrade` is a FACT; deciding it means the equity will fall is a
+says `Defaults on Payment of Interest/Principal` is a FACT; deciding it
+means the equity will fall is a
 Department 5 judgement gated on evidence, and this module has none yet. It
 classifies and counts. Nothing more.
 
 Classification is keyword-based and therefore **coarse and honest about it**:
-`_classify` returns None for anything it does not recognise, and the report
+`classify` returns None for anything it does not recognise, and the report
 carries an `unclassified_sample` so the vocabulary can be improved from real
-misses rather than guessed at.
+misses rather than guessed at. That loop has already run once — see the
+comment above `CREDIT_PATTERNS`.
 
 CLI
     python3 -m src.ingestion.sandbox.credit_monitor --days 90
@@ -67,32 +71,60 @@ ROOT = Path(__file__).resolve().parents[3]
 EVENTS_DIR = ROOT / "data" / "lake" / "events"
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# Ordered: the first pattern that matches wins, and the ordering encodes
-# severity — a "default" filing that also says "rating" is a default.
+# THE VOCABULARY WAS REWRITTEN 2026-08-11, AFTER RUNNING IT.
+#
+# The first draft matched free-text headlines and found ZERO credit filings
+# across 703 day partitions. The reason is worth recording: `subject` in this
+# lake is NOT a headline, it is SEBI's fixed disclosure taxonomy — 79 distinct
+# values across 15,326 rows. So `\bdefault\b` never matched the real category
+# "Defaults on Payment of Interest/Principal" (the trailing "s" defeats the
+# word boundary), and the single most severe credit event in the taxonomy —
+# "Corporate Insolvency Resolution Process", 721 rows — was not in the
+# vocabulary at all.
+#
+# Every pattern below is now matched against a category that ACTUALLY OCCURS
+# in the lake, with its observed frequency over the last 400 sessions noted.
+# Ordered by severity: the first match wins.
 CREDIT_PATTERNS = (
-    ("DEFAULT", r"\bdefault\b|delay in payment|failure to pay|"
-                r"non[- ]payment|payment obligation"),
-    ("DOWNGRADE", r"\bdowngrad|\brating revis|revision in (credit )?rating|"
-                  r"rating action"),
-    ("UPGRADE", r"\bupgrad"),
-    ("WATCH_NEGATIVE", r"credit watch|rating watch|negative outlook|"
-                       r"outlook revised"),
-    # TRUSTEE must be tested BEFORE ISSUANCE: "Debenture Trustee
-    # Communication" contains the word `debenture` and would otherwise be
-    # filed as routine financing. A trustee communication is the opposite —
-    # the trustee speaks up when something is going wrong. Caught by a test.
-    ("TRUSTEE", r"debenture trustee|trustee communication"),
-    ("ISSUANCE", r"\bncd\b|non[- ]convertible debenture|bond issu|"
-                 r"debenture|commercial paper|debt securities|"
-                 r"fund rais.*(debt|debenture|ncd)"),
-    ("PLEDGE", r"pledge|encumbrance|invocation of pledge"),
+    # 721 rows. IBC admission — the terminal credit event, and by far the
+    # most common severe one. Missing this made the whole first draft blind.
+    ("INSOLVENCY", r"insolvency resolution|\bcirp\b|liquidation"),
+    # 44 + 44 + 39 + 9 rows across four distinct SEBI categories.
+    ("DEFAULT", r"defaults? on payment|delay/default|fraud/default|"
+                r"default by employees|\bdefault\b"),
+    # 5 + 2 + 1 + 1 rows. The agency actions that ARE filed to the exchange.
+    ("RATING_ACTION", r"credit rating"),
+    # 26 rows. A trading suspension is a credit-adjacent solvency signal.
+    ("SUSPENSION", r"suspension of trading|\bdelisting\b"),
+    # 21 + 45 rows. Regulator action, which often precedes a rating move.
+    ("REGULATOR_ACTION", r"action\(s\) (taken|initiated) or orders passed|"
+                         r"granting/withdrawal/surrender/cancellation/"
+                         r"suspension of key licenses"),
+    # 840 rows — the noisiest of these, kept because litigation outcome is
+    # a genuine credit input, but read it as context, never as a signal.
+    ("LITIGATION", r"pendency of litigation"),
+    # 9 rows. An off-balance-sheet obligation the equity market rarely prices.
+    ("GUARANTEE", r"giving guarantees|indemnity|becoming a surety"),
+    # 1 row. Late accounts are a classic pre-distress tell.
+    ("REPORTING_DELAY", r"delayed/non-submission of financial results"),
+    # 16 + 3 rows. Routine financing; included for the issuance-then-stress
+    # sequence, NOT as a stress signal in itself.
+    ("ISSUANCE", r"allotment of securities|issue of securities|\bncd\b|"
+                 r"non[- ]convertible debenture|debenture|commercial paper"),
 )
+
+# What this lane CANNOT see, stated rather than discovered later: an agency
+# downgrade only appears here if the company filed it under a "Credit Rating"
+# category — 9 rows in 400 sessions. Rating rationales published on the
+# CRISIL/ICRA/CARE sites are NOT in this lake. If the signal proves out, that
+# is the argument for lane 2; it is not something this lane can fix.
 _COMPILED = [(tag, re.compile(pat, re.I)) for tag, pat in CREDIT_PATTERNS]
 
 # Severity ordering for the report; DEFAULT first because it is the one that
 # is never routine.
-SEVERITY = ("DEFAULT", "DOWNGRADE", "WATCH_NEGATIVE", "TRUSTEE", "PLEDGE",
-            "ISSUANCE", "UPGRADE")
+SEVERITY = ("INSOLVENCY", "DEFAULT", "RATING_ACTION", "SUSPENSION",
+            "REGULATOR_ACTION", "REPORTING_DELAY", "GUARANTEE",
+            "LITIGATION", "ISSUANCE")
 
 
 def classify(subject: str):
@@ -163,7 +195,9 @@ def report(start: str, end: str, events_dir=None, read_day_fn=None,
         by_symbol.setdefault(e["symbol"], []).append(e["category"])
     stressed = {s: c for s, c in
                 ((s, [x for x in cats
-                      if x in ("DEFAULT", "DOWNGRADE", "WATCH_NEGATIVE")])
+                      if x in ("INSOLVENCY", "DEFAULT", "RATING_ACTION",
+                               "SUSPENSION", "REGULATOR_ACTION",
+                               "REPORTING_DELAY")])
                  for s, cats in by_symbol.items()) if c}
     rep = {
         "from": start, "to": end,

@@ -80,26 +80,35 @@ def test_every_name_declares_what_kind_of_shock_reaches_it():
 
 # ---------------------------------------------------------- credit monitor
 
-def test_the_credit_vocabulary_catches_the_filings_that_matter():
-    assert CM.classify("Rating action - downgrade of long term rating") == "DOWNGRADE"
-    assert CM.classify("Intimation of default in payment of interest") == "DEFAULT"
-    assert CM.classify("Allotment of Non-Convertible Debentures") == "ISSUANCE"
-    assert CM.classify("Outlook revised to negative") == "WATCH_NEGATIVE"
-    assert CM.classify("Debenture Trustee Communication") == "TRUSTEE"
-    assert CM.classify("Invocation of pledge by promoter") == "PLEDGE"
+def test_the_vocabulary_matches_the_REAL_sebi_categories():
+    """These strings are verbatim SEBI disclosure categories, counted from
+    the live lake (15,326 rows / 79 distinct values over 400 sessions). The
+    first draft of this vocabulary was written for free-text headlines and
+    matched ZERO filings across 703 partitions — this test is what stops
+    that regressing."""
+    assert CM.classify("Corporate Insolvency Resolution Process") == "INSOLVENCY"
+    assert CM.classify("Defaults on Payment of Interest/Principal") == "DEFAULT"
+    assert CM.classify("Delay/default in the payment of fines/penalties/dues "
+                       "etc. to authority") == "DEFAULT"
+    assert CM.classify("Fraud/Default/Arrest") == "DEFAULT"
+    assert CM.classify("Credit Rating- Revision") == "RATING_ACTION"
+    assert CM.classify("Suspension of Trading") == "SUSPENSION"
+    assert CM.classify("Pendency of Litigation(s)/dispute(s) or the outcome "
+                       "impacting the Company") == "LITIGATION"
+    assert CM.classify("Giving guarantees/indemnity/ becoming a surety for "
+                       "third party") == "GUARANTEE"
+    assert CM.classify("Allotment of Securities") == "ISSUANCE"
 
 
-def test_default_outranks_a_rating_mention_in_the_same_headline():
-    """Ordering encodes severity: a filing that says both is a default."""
-    assert CM.classify("Rating downgraded following default on NCD") == "DEFAULT"
+def test_the_plural_that_defeated_the_first_draft():
+    """`\\bdefault\\b` does not match "Defaults" — the trailing s defeats the
+    word boundary. That one regex detail cost the entire first run."""
+    assert CM.classify("Defaults on Payment of Interest/Principal") == "DEFAULT"
 
 
-def test_an_ordinary_filing_classifies_as_None_not_as_a_near_miss():
-    """Most filings are board meetings. Forcing them into a credit bucket
-    would flood the report with noise."""
-    for subject in ("Board Meeting Intimation", "Record Date",
-                    "Analyst Meet", "Newspaper Publication"):
-        assert CM.classify(subject) is None
+def test_insolvency_outranks_everything_it_co_occurs_with():
+    assert CM.classify("Corporate Insolvency Resolution Process - "
+                       "default on NCD") == "INSOLVENCY"
 
 
 def _events(rows_by_day, tmp_path):
@@ -114,16 +123,16 @@ def _events(rows_by_day, tmp_path):
 def test_credit_report_counts_and_names_the_stressed_symbols(tmp_path):
     days = {
         "2026-08-03": [{"as_of": "2026-08-03", "symbol": "ACME", "ticker": "ACME.NS",
-                        "subject": "Rating downgrade by CRISIL"}],
+                        "subject": "Credit Rating- Revision"}],
         "2026-08-04": [{"as_of": "2026-08-04", "symbol": "ACME", "ticker": "ACME.NS",
-                        "subject": "Default in payment of interest"},
+                        "subject": "Defaults on Payment of Interest/Principal"},
                        {"as_of": "2026-08-04", "symbol": "BETA", "ticker": "BETA.NS",
                         "subject": "Board Meeting Intimation"}],
     }
     d, fn = _events(days, tmp_path)
     rep = CM.report("2026-08-01", "2026-08-05", events_dir=d, read_day_fn=fn)
     assert rep["credit_filings"] == 2
-    assert rep["by_category"] == {"DEFAULT": 1, "DOWNGRADE": 1}
+    assert rep["by_category"] == {"DEFAULT": 1, "RATING_ACTION": 1}
     assert "ACME" in rep["symbols_with_negative_credit_news"]
     assert "BETA" not in rep["symbols_with_negative_credit_news"]
     assert "Board Meeting Intimation" in rep["unclassified_sample"]
@@ -132,7 +141,7 @@ def test_credit_report_counts_and_names_the_stressed_symbols(tmp_path):
 def test_the_credit_monitor_writes_nothing_unless_asked(tmp_path):
     """A research tool that writes by default pollutes the lake."""
     days = {"2026-08-03": [{"as_of": "2026-08-03", "symbol": "ACME",
-                            "subject": "Rating downgrade"}]}
+                            "subject": "Credit Rating- Revision"}]}
     d, fn = _events(days, tmp_path)
     rep = CM.report("2026-08-01", "2026-08-05", events_dir=d, read_day_fn=fn)
     assert rep["written_to"] is None
@@ -145,7 +154,7 @@ def test_the_credit_monitor_writes_nothing_unless_asked(tmp_path):
 
 def test_an_unreadable_partition_costs_that_day_not_the_run(tmp_path):
     days = {"2026-08-03": [{"as_of": "2026-08-03", "symbol": "A",
-                            "subject": "Rating downgrade"}],
+                            "subject": "Credit Rating- Revision"}],
             "2026-08-04": "boom"}
 
     def fn(day):

@@ -151,7 +151,7 @@ def test_depth_gate_blocks_below_the_frame_floor():
 # ------------------------------------- countdown vs corpse (2026-08-05)
 #
 # The miner skipped 17 consecutive nights and the skip line said only
-# "daily_context 25/60 frames" — which reads IDENTICALLY whether the corpus
+# "daily_context 25/50 frames" — which reads IDENTICALLY whether the corpus
 # is growing on schedule or died three weeks ago. Nothing was broken; it was
 # simply unmeasurable. These pin the distinction.
 
@@ -182,11 +182,11 @@ def test_a_growing_corpus_reports_an_observed_rate_and_a_projected_date():
     assert g["first_frame"] == "2026-07-11" and g["last_frame"] == "2026-08-04"
     assert g["accruing"] is True
     assert g["accrual_per_day"] == 1.0                # 24 frames over 24 days
-    assert g["days_to_go"] == 35                      # 60 - 25, at 1.0/day
-    assert g["projected_ready"] == "2026-09-08"
+    assert g["days_to_go"] == 25                      # 50 - 25, at 1.0/day
+    assert g["projected_ready"] == "2026-08-29"
 
     line = nightly.depth_reason(g)
-    assert "25/60" in line and "35 more nights" in line and "2026-09-08" in line
+    assert "25/50" in line and "25 more nights" in line and "2026-08-29" in line
     assert "NOT ACCRUING" not in line
 
 
@@ -222,7 +222,7 @@ def test_a_slower_corpus_projects_a_later_date_not_the_same_one():
     g = nightly.depth_gate(_frames_conn(every_other), today=date(2026, 8, 18))
     assert g["frames"] == 25
     assert g["accrual_per_day"] == 0.5
-    assert g["days_to_go"] == 70                      # (60-25)/0.5
+    assert g["days_to_go"] == 50                      # (50-25)/0.5
 
 
 def test_a_met_floor_carries_no_countdown_at_all():
@@ -236,7 +236,7 @@ def test_an_empty_table_never_divides_by_zero():
     g = nightly.depth_gate(_frames_conn([]), today=date(2026, 8, 5))
     assert g["ok"] is False and g["frames"] == 0
     assert g["days_to_go"] is None
-    assert nightly.depth_reason(g) == "daily_context 0/60 frames"
+    assert nightly.depth_reason(g) == "daily_context 0/50 frames"
 
 
 def test_a_single_frame_has_no_measurable_rate_and_claims_none():

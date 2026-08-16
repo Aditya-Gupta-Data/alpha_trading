@@ -42,7 +42,7 @@
 #                             Phase-5 miner pass: skips quietly (exit 0)
 #                             unless ops heartbeats are green, the latest
 #                             sweep shows no INGESTION problem lines, and
-#                             daily_context has >= 60 frames; every 7th
+#                             daily_context has >= 50 frames; every 7th
 #                             consecutive skip fires one Discord note.
 #                             Runs AFTER sleep_phase (20:00, drift monitor
 #                             Task H) and BEFORE the 20:30 ops sweep so
@@ -290,7 +290,7 @@ CRON_TZ=Asia/Kolkata
 
 # 18. Gated nightly discovery pass (Daily 20:20 IST, decision #76) — the
 #     Phase-5 miners behind three gates: ops heartbeats green + no INGESTION
-#     problem lines in the latest sweep + daily_context >= 60 frames. A skip
+#     problem lines in the latest sweep + daily_context >= 50 frames. A skip
 #     is exit 0 + one log line; every 7th consecutive skip fires one Discord
 #     note (the gate can never die silently). After sleep_phase (20:00),
 #     before the 20:30 ops sweep (heartbeat convention). CANDIDATEs only —

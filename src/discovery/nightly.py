@@ -62,7 +62,10 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 LOGS_DIR = ROOT / "logs"
 STATE_PATH = LOGS_DIR / ".discovery_nightly_state.json"
 
-MIN_CONTEXT_FRAMES = 60      # the depth floor (the panel rule as a number)
+MIN_CONTEXT_FRAMES = 50      # the depth floor (the panel rule as a number)
+# 60 -> 50 on 2026-08-16 by owner executive decision ("accelerate the miner").
+# The lower floor is a Dept-5 judgment call, not a statistical result: 50
+# frames is still CANDIDATE-only mining behind the proving harness.
 NOTIFY_EVERY_SKIPS = 7       # one Discord note per 7 consecutive skips
 STALE_FRAME_DAYS = 3         # newest frame older than this => accrual STOPPED
 
@@ -217,7 +220,7 @@ def depth_gate(conn, min_frames: int = MIN_CONTEXT_FRAMES, today=None) -> dict:
 def depth_reason(depth: dict) -> str:
     """The depth gate as one human line.
 
-    Two different sentences on purpose. `25/60 frames` alone reads the same
+    Two different sentences on purpose. `25/50 frames` alone reads the same
     whether the corpus is growing on schedule or died three weeks ago, and
     for 17 nights nobody could tell which. Now the line either carries a
     projected date, or it says the corpus has stopped."""

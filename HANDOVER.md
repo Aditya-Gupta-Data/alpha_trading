@@ -94,6 +94,36 @@ have been wrong in both directions.
 
 ---
 
+## 📍 CURRENT STATE — 2026-08-16 (Sunday): miner gate 60→50, Next-Version staging, weekly cadence ahead
+
+Suite **2,071 green** (before this block's change; re-run recorded in the
+handoff). V1 `src/` execution logic untouched all day; three things moved:
+
+1. **Miner depth gate lowered 60 → 50 frames** — `src/discovery/nightly.py`
+   `MIN_CONTEXT_FRAMES = 50` (owner executive decision, **decision #87**).
+   The other two gates and CANDIDATE-only mining are unchanged. The Mac copy
+   of `daily_context` shows 38 frames; the VM (25 on 08-05, ~1/day) should
+   cross 50 around **2026-08-30** — the first miner pass will show up in
+   `logs/discovery_nightly.log` and the CEO card's `consecutive_skips` line.
+   Deploy = `git pull` on the VM; no cron edit needed (the 60 in
+   `setup_cron.sh` was a comment, updated).
+2. **Next Version update STAGED, in prep.** The V1 CODE FREEZE (08-05) is
+   nearing its end. **Post-update the engineering protocol becomes a strict
+   WEEKLY RELEASE / UPDATE CADENCE** — one gated release per week (suite
+   green, `wrap_session.sh`, HANDOVER block), iterative edge deployment.
+   Until the update actually lands, freeze rules still bind.
+3. **V2 R&D sandbox FROZEN** after three studies (elections, steel-proxy
+   shocks, earnings reaction) all returned not-a-finding; Insolvency /
+   Defaults remains the only OOS-verified edge. State in
+   `docs/v2_sandbox_state.md` §9; `src/research/earnings_reaction.py` added.
+   Also fixed: `tests/test_portfolio.py` headless margin-gate test read the
+   REAL journal (RULE 6) — stubbed (`0054289`).
+
+Open items carried unchanged from the backlog above (DH-905 at 08:03, NIFTY
+MID SELECT quotes, `report_downloader` crawl, 2 VM bug-ledger rows).
+
+---
+
 ## 📍 CURRENT STATE — 2026-08-11 (Tuesday, pre-open, later): the Mac's dependencies now push themselves
 
 Suite **2,000 green**. Ran for real before the open — **every artifact the

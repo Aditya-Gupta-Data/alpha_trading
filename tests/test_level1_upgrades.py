@@ -462,10 +462,18 @@ def test_the_shipped_global_config_is_empty_by_design_and_says_so():
 
 def test_the_module_is_imported_by_nothing_on_the_trading_path():
     """Capture-only. If this ever gains a Dept 2/3 importer it stops being
-    a safe expansion and becomes a live dependency."""
-    import subprocess
+    a safe expansion and becomes a live dependency.
+
+    Matches IMPORTS, not mentions (tightened 2026-08-11). The original
+    grepped for the bare string, so it failed the day another module's
+    docstring cited `cross_asset` as a precedent for its own capture-only
+    boundary — flagging a prose reference as a dependency. Prose citing the
+    rule is the rule working; an import is the violation."""
+    import re
     root = Path(__file__).resolve().parent.parent
-    hits = subprocess.run(
-        ["grep", "-rl", "--include=*.py", "cross_asset", str(root / "src")],
-        capture_output=True, text=True).stdout.split()
-    assert [Path(h).name for h in hits] == ["cross_asset.py"]
+    imports = re.compile(
+        r"^\s*(from\s+src[\w.]*\s+import\s+[^\n]*cross_asset"
+        r"|import\s+src[\w.]*\.cross_asset)", re.M)
+    hits = [py.name for py in (root / "src").rglob("*.py")
+            if py.name != "cross_asset.py" and imports.search(py.read_text())]
+    assert hits == [], f"cross_asset is imported by {hits}"

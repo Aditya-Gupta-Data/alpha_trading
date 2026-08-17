@@ -235,6 +235,14 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-08-17 · 4 commits · 18 files touched
+
+- `20883b9` feat(dept3): the risk-of-ruin halt LATCHES — capital cannot buy a resume (decision #92)
+- `d3f3303` fix(dept3): capital moves translate peak_equity, never ratchet it — drawdown tracks trading, not deposits
+- `17abc3b` feat(seq3): 🤖 Pattern Miner field on the CEO brief + liquidity-tier slippage on paper fills (#91)
+- `6df1d82` feat(dept1): corporate-action adjuster — split/bonus-adjusted history in bars_for, latest bar always raw (#90); 49-row config from F&O scan
+
+
 ### 2026-08-16 · 12 commits · 24 files touched
 
 - `ffbc914` feat(discovery): miner depth gate 60 -> 50 frames (owner decision #87); stage Next-Version + weekly release cadence in docs

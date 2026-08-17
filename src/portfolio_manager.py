@@ -53,6 +53,10 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 STARTING_CAPITAL = 1_000_000.0   # Rs.10,00,000 simulated allocation pool
 MAX_DRAWDOWN_PCT = 10.0          # hard-coded risk-of-ruin parameter
+HALT_LATCH_EVENT = "ruin_halt_latched"   # the persistent risk-of-ruin brake
+HALT_CLEAR_EVENT = "ruin_halt_cleared"   # (Dept 3 ruling 2026-08-17) —
+                                 # arming is automatic, clearing is an
+                                 # admin-only act: see clear_halt()
 MAX_DAILY_LOSS_PCT = 3.0         # daily circuit breaker (merged from
                                  # next_gen_engine 2026-07-19): realized loss
                                  # today >= 3% of session-open equity halts
@@ -149,9 +153,92 @@ def drawdown_pct(conn) -> float:
     return round(max(0.0, (peak - equity(conn)) / peak * 100), 4)
 
 
+def halt_latched(conn) -> bool:
+    """True while a risk-of-ruin halt is LATCHED and not since cleared.
+
+    The latch lives in `account_events` — the append-only trail this
+    module already owns — as the LAST of a `ruin_halt_latched` /
+    `ruin_halt_cleared` pair. No schema migration, and every arm and
+    every clear is a permanent, timestamped, attributable row: a halt
+    that can be silently un-set is not a halt.
+
+    Deliberately its own event type, not the `risk_of_ruin_halt` rows
+    `request_entry` writes on every rejection — those record a blocked
+    entry, this records the state of the brake."""
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT event_type FROM account_events WHERE event_type IN (?, ?) "
+        "ORDER BY ts DESC, rowid DESC LIMIT 1",
+        (HALT_LATCH_EVENT, HALT_CLEAR_EVENT)).fetchone()
+    return bool(row) and row[0] == HALT_LATCH_EVENT
+
+
+def latch_halt(conn, why: str = "") -> bool:
+    """Arm the latch (idempotent; True if this call armed it). Fail-open
+    on a read-only connection: several dashboard/report readers call
+    `trading_halted` over a `mode=ro` handle, and a brake that raises
+    inside a read would take down the very panel meant to display it.
+    The verdict is still HALTED either way — only the record is lost,
+    and the next writer re-arms it."""
+    try:
+        if halt_latched(conn):
+            return False
+        log_event(conn, HALT_LATCH_EVENT, why or "risk-of-ruin threshold breached")
+        return True
+    except Exception as e:
+        print(f"  (halt latch not persisted — {e})")
+        return False
+
+
+def clear_halt(conn, why: str = "", who: str = "owner") -> dict:
+    """THE ONLY DOOR OUT of a latched halt — a deliberate admin action.
+
+    Dept 3 ruling 2026-08-17 (the architect, after the capital-flow fix
+    exposed the dilution trap): *"Throwing capital at a broken strategy
+    does not fix the strategy."* A risk-of-ruin halt says the market
+    logic is failing; a bank transfer is not evidence that it stopped
+    failing. So the halt LATCHES, and nothing automatic — not a deposit,
+    not a recovering drawdown, not a new day — takes it off.
+
+    This SUPERSEDES the 2026-07-27 Walkaway ruling's "no override door"
+    only in mechanism, not in spirit: resume is still a deliberate human
+    decision, it is now merely a recorded one instead of hand-SQL.
+
+    Refuses silently-empty calls: an un-halt with no stated reason is
+    exactly the un-halt nobody can defend later."""
+    ensure_schema(conn)
+    if not why or not str(why).strip():
+        return {"cleared": False,
+                "reason": "refused: clearing a ruin halt requires a stated why"}
+    if not halt_latched(conn):
+        return {"cleared": False, "reason": "no latched halt to clear",
+                "halted": trading_halted(conn)}
+    dd = drawdown_pct(conn)
+    log_event(conn, HALT_CLEAR_EVENT,
+              f"latched ruin halt cleared by {who} at drawdown {dd:.2f}% "
+              f"(limit {MAX_DRAWDOWN_PCT:g}%) — {why}")
+    still = trading_halted(conn)   # re-latches instantly if still breached
+    return {"cleared": True, "drawdown_pct": dd, "why": why, "who": who,
+            "halted": still,
+            "reason": ("cleared, but drawdown is still past the limit — "
+                       "the latch re-armed immediately" if still
+                       else "cleared; entries are live again")}
+
+
 def trading_halted(conn) -> bool:
-    """True once trailing drawdown breaches the risk-of-ruin threshold."""
-    return drawdown_pct(conn) >= MAX_DRAWDOWN_PCT
+    """True while the risk-of-ruin brake is on. LATCHING (Dept 3 ruling
+    2026-08-17): breaching the threshold arms a persistent latch, and the
+    latch — not the live drawdown — is what keeps the brake on. Recovering
+    equity, and above all a capital injection that merely dilutes the
+    percentage, no longer resume trading by themselves; only
+    `clear_halt()` does."""
+    if halt_latched(conn):
+        return True
+    if drawdown_pct(conn) >= MAX_DRAWDOWN_PCT:
+        latch_halt(conn, f"drawdown {drawdown_pct(conn):.2f}% >= "
+                         f"{MAX_DRAWDOWN_PCT:g}% of peak equity")
+        return True
+    return False
 
 
 def log_event(conn, event_type: str, detail: str = "") -> None:
@@ -312,10 +399,14 @@ def _ruin_halt_card(conn) -> None:
                 "on both desks.\n"
                 "Open positions are still being managed — exits, stops "
                 "and settlements continue as normal.\n"
-                "This halt has NO automatic resume and no override "
-                "command: trading restarts only by an owner clean-sheet "
-                "decision (fresh capital era). This card repeats daily "
-                "while the halt is active."),
+                "This halt is LATCHED: it does NOT resume on its own, and "
+                "adding capital will not lift it (Dept 3 ruling "
+                "2026-08-17 — throwing capital at a broken strategy does "
+                "not fix the strategy). Clearing it is a deliberate owner "
+                "act, on the VM:\n"
+                "`python3 -m src.portfolio_manager --reset-halt "
+                "--why \"...\" --yes`\n"
+                "This card repeats daily while the halt is active."),
         })
     except Exception as e:
         print(f"  (ruin halt card skipped: {e})")
@@ -336,12 +427,14 @@ def halt_banner_lines(conn=None) -> list:
         if not trading_halted(conn):
             return []
         _ruin_halt_card(conn)
-        return [(f"🔴 SYSTEM PAUSED — risk-of-ruin halt active: drawdown "
-                 f"{drawdown_pct(conn):.2f}% ≥ {MAX_DRAWDOWN_PCT:g}% of peak "
-                 "equity. New entries are blocked on both desks; open "
-                 "positions are still managed (exits/stops/settlements "
-                 "run). Resume is an owner clean-sheet decision — there "
-                 "is no override command.")]
+        return [(f"🔴 SYSTEM PAUSED — risk-of-ruin halt LATCHED (drawdown "
+                 f"{drawdown_pct(conn):.2f}% vs the {MAX_DRAWDOWN_PCT:g}% "
+                 "limit on peak equity). New entries are blocked on both "
+                 "desks; open positions are still managed "
+                 "(exits/stops/settlements run). It will not lift by "
+                 "itself and capital cannot lift it — resume is a "
+                 "deliberate owner act: `python3 -m src.portfolio_manager "
+                 "--reset-halt --why \"...\" --yes`.")]
     except Exception as e:
         print(f"  (halt banner unavailable: {e})")
         return []
@@ -623,13 +716,39 @@ if __name__ == "__main__":
     ap.add_argument("--inject", type=float, default=None,
                     help="add this many rupees to starting_capital "
                          "(negative withdraws)")
-    ap.add_argument("--why", default="", help="audit note for --inject")
+    ap.add_argument("--reset-halt", action="store_true",
+                    help="clear a LATCHED risk-of-ruin halt (admin only). "
+                         "Requires --why and --yes. Nothing else clears it: "
+                         "not a capital injection, not a recovering "
+                         "drawdown, not a new day.")
+    ap.add_argument("--why", default="",
+                    help="audit note for --inject / --reset-halt "
+                         "(mandatory for --reset-halt)")
     ap.add_argument("--yes", action="store_true",
-                    help="required with --inject: this moves real paper "
-                         "capital and is written to the append-only ledger")
+                    help="required with --inject / --reset-halt: these move "
+                         "real paper capital or lift the brake, and are "
+                         "written to the append-only ledger")
     cli = ap.parse_args()
 
     connection = brain_map.connect()
+    if cli.reset_halt:
+        if not cli.why.strip():
+            print("Refusing to clear the halt without --why.")
+            print('e.g. --why "reviewed the 6 losing NIFTY bear puts, '
+                  'gamma-exit rule tightened"')
+            connection.close()
+            sys.exit(1)
+        if not cli.yes:
+            print("Refusing to clear the halt without --yes.")
+            print(f"Latched: {halt_latched(connection)} · drawdown "
+                  f"{drawdown_pct(connection):.2f}% (limit "
+                  f"{MAX_DRAWDOWN_PCT:g}%). Re-run with --yes.")
+            connection.close()
+            sys.exit(1)
+        outcome = clear_halt(connection, why=cli.why, who="owner (CLI)")
+        print(json.dumps(outcome, indent=2))
+        connection.close()
+        sys.exit(0 if outcome["cleared"] else 1)
     if cli.inject is not None:
         if not cli.yes:
             print("Refusing to move capital without --yes.")

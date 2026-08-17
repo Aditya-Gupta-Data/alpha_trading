@@ -1266,3 +1266,17 @@ evidence-gated decision and a new ingestion pipeline, i.e. freeze-breaking.
   disarms the halt (tested and documented, not hidden). That is a Dept 3
   ruling, not a code default. (b) any lifetime-performance figure quoted from
   `account_state` needs the pre-clean-sheet ₹26,982.14 added back by hand.
+
+**Follow-up (a) CLOSED, same day.** Dept 3 ruling from the architect: *"Throwing
+capital at a broken strategy does not fix the strategy."* A risk-of-ruin halt
+means the market logic is failing, and a deposit is not evidence that it
+stopped failing — so the halt now LATCHES (decision #92). Breaching the
+threshold writes a `ruin_halt_latched` row to `account_events`;
+`trading_halted` reads the latch rather than the live percentage, so dilution,
+recovery, a new day and a restart all leave the brake on. Only
+`python3 -m src.portfolio_manager --reset-halt --why "..." --yes` clears it,
+and it re-arms instantly if the breach is still real. Verified before deploy:
+the VM's `account_events` has never contained a single `risk_of_ruin_halt`
+row, so nothing latches retroactively on this deploy. Follow-up (b) — adding
+the pre-clean-sheet ₹26,982.14 back by hand to any lifetime figure — stays
+open.

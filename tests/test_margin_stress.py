@@ -321,17 +321,120 @@ def test_a_modest_infusion_keeps_an_armed_ruin_halt_armed(conn):
     assert pm.trading_halted(conn) is True          # 150k / 1.05L = 14.3%
 
 
-def test_a_recapitalisation_large_enough_DOES_clear_the_halt(conn):
-    """Stated out loud rather than hidden: rupee distance is preserved,
-    percent is not, so a big enough deposit dilutes the drawdown below the
-    10% threshold and the halt disarms. Arithmetic, not an accident — and
-    the Dept 3 ruling on whether a halt should survive its own
-    recapitalisation is deliberately NOT made in this layer."""
+def test_a_recapitalisation_does_NOT_clear_the_halt(conn):
+    """THE DILUTION TRAP, closed. Dept 3 ruling 2026-08-17: "throwing
+    capital at a broken strategy does not fix the strategy." A 9x deposit
+    dilutes the drawdown from 10% to 1% — and the halt stays armed anyway,
+    because the LATCH, not the live percentage, holds the brake on."""
     _drawn_down_account(conn)                       # 10% down, halted
     assert pm.trading_halted(conn) is True
+    assert pm.halt_latched(conn) is True
+
     pm.inject_capital(9_000_000.0, why="scale up", conn=conn)
-    assert pm.trading_halted(conn) is False
+
     assert pm.account_summary(conn)["drawdown_pct"] == pytest.approx(1.0)
+    assert pm.trading_halted(conn) is True          # money did not buy a resume
+    assert pm.account_summary(conn)["trading_halted"] is True
+    # the RUIN check specifically — not the daily breaker riding along
+    assert pm._risk_of_ruin_check(conn)["halted"] is True
+    assert pm.request_entry(conn, "post_injection", 1_000.0)["approved"] is False
+
+
+# --- the latch itself ----------------------------------------------------
+
+def test_a_recovering_drawdown_does_not_self_resume(conn):
+    """Not just capital: the halt does not lift because the market came
+    back either. Arming is automatic, clearing never is."""
+    _drawn_down_account(conn)
+    assert pm.trading_halted(conn) is True
+    pm.request_entry(conn, "rec", 10_000.0)         # rejected, nothing locked
+    conn.execute("UPDATE account_state SET realized_pnl = 0 WHERE id = 1")
+    conn.commit()
+    assert pm.drawdown_pct(conn) == 0.0
+    assert pm.trading_halted(conn) is True
+
+
+def test_clear_halt_is_the_only_door_out(conn):
+    _drawn_down_account(conn, loss=-100_000.0)
+    assert pm.trading_halted(conn) is True
+    conn.execute("UPDATE account_state SET realized_pnl = 0 WHERE id = 1")
+    conn.commit()
+
+    out = pm.clear_halt(conn, why="reviewed the losing setups, rule tightened")
+    assert out["cleared"] is True and out["halted"] is False
+    assert pm.trading_halted(conn) is False
+    assert pm._risk_of_ruin_check(conn)["halted"] is False
+
+
+def test_clearing_while_still_underwater_re_arms_immediately(conn):
+    """Clearing is not a licence to trade through the drawdown: if the
+    breach is still real, the latch re-arms on the very next read."""
+    _drawn_down_account(conn)
+    out = pm.clear_halt(conn, why="premature resume attempt")
+    assert out["cleared"] is True
+    assert out["halted"] is True                    # re-armed on the spot
+    assert pm.halt_latched(conn) is True
+
+
+def test_clearing_requires_a_stated_reason(conn):
+    _drawn_down_account(conn)
+    out = pm.clear_halt(conn, why="   ")
+    assert out["cleared"] is False and "stated why" in out["reason"]
+    assert pm.trading_halted(conn) is True
+
+
+def test_clearing_an_unhalted_account_is_a_no_op(conn):
+    out = pm.clear_halt(conn, why="nothing to do")
+    assert out["cleared"] is False and "no latched halt" in out["reason"]
+
+
+def test_every_arm_and_clear_lands_in_the_append_only_trail(conn):
+    """A brake that can be silently un-set is not a brake."""
+    _drawn_down_account(conn)
+    conn.execute("UPDATE account_state SET realized_pnl = 0 WHERE id = 1")
+    conn.commit()
+    pm.clear_halt(conn, why="post-mortem done", who="architect")
+    rows = conn.execute("SELECT event_type, detail FROM account_events WHERE "
+                        "event_type IN (?, ?) ORDER BY rowid",
+                        (pm.HALT_LATCH_EVENT, pm.HALT_CLEAR_EVENT)).fetchall()
+    assert [r[0] for r in rows] == [pm.HALT_LATCH_EVENT, pm.HALT_CLEAR_EVENT]
+    assert "architect" in rows[1][1] and "post-mortem done" in rows[1][1]
+
+
+def test_the_latch_is_idempotent_across_repeated_reads(conn):
+    """trading_halted is read a dozen times a cycle (both desks, the
+    dashboard, the digests) — it must not append a row each time."""
+    _drawn_down_account(conn)
+    for _ in range(5):
+        assert pm.trading_halted(conn) is True
+    n = conn.execute("SELECT COUNT(*) FROM account_events WHERE event_type = ?",
+                     (pm.HALT_LATCH_EVENT,)).fetchone()[0]
+    assert n == 1
+
+
+def test_entry_rejection_rows_do_not_themselves_latch(conn):
+    """`risk_of_ruin_halt` rows record a blocked entry, not the brake's
+    state — a fresh account with such rows must not read as halted."""
+    pm.log_event(conn, "risk_of_ruin_halt", "entry x rejected (historical row)")
+    assert pm.halt_latched(conn) is False
+    assert pm.trading_halted(conn) is False
+
+
+def test_the_latch_survives_a_reconnect(conn, tmp_path):
+    """It is DB state, not process state: a restart does not resume
+    trading."""
+    db = tmp_path / "acct.db"
+    c1 = sqlite3.connect(db)
+    pm.ensure_schema(c1)
+    pm.get_account(c1)
+    _drawn_down_account(c1)
+    assert pm.trading_halted(c1) is True
+    c1.close()
+
+    c2 = sqlite3.connect(db)
+    assert pm.trading_halted(c2) is True
+    assert pm.halt_latched(c2) is True
+    c2.close()
 
 
 def test_a_withdrawal_does_not_manufacture_a_drawdown(conn):

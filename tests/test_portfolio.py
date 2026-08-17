@@ -469,7 +469,10 @@ def test_ruin_halt_fires_one_system_paused_card(monkeypatch):
     card = sent[0]
     assert card["event"] == "ruin_halt"
     assert "SYSTEM PAUSED" in card["description"]
-    assert "clean-sheet" in card["description"]         # no override door
+    # Dept 3 ruling 2026-08-17: the halt LATCHES, and the card now names
+    # the one deliberate door out instead of promising there is none.
+    assert "--reset-halt" in card["description"]
+    assert "adding capital will not lift it" in card["description"]
     # a rejected entry the same day finds the halt up — but never re-cards
     assert not pm.request_entry(conn, "later", 1_000.0)["approved"]
     assert len(sent) == 1

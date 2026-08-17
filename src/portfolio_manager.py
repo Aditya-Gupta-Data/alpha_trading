@@ -467,11 +467,34 @@ def inject_capital(amount: float, why: str = "", conn=None,
       * open `margin_locks` are UNTOUCHED — live positions keep their
         locks and settle normally. Available cash rises because equity
         rose, not because anything was released.
-      * `peak_equity` is RATCHETED to the new equity. The drawdown halt
-        trails the peak, and leaving a ₹2L-era peak under a ₹10L book
-        would make the 10% ruin buffer meaningless in the other
-        direction (equity permanently above peak = a halt that can never
-        arm until the peak catches up).
+      * `peak_equity` is TRANSLATED by the exact amount moved — not
+        ratcheted to the new equity (architect ruling 2026-08-17, after
+        the P&L-gap audit). A deposit is not a recovery and a withdrawal
+        is not a loss, so the high-water mark must move with the base and
+        leave the trading result untouched:
+
+            peak_new = peak_old + amount
+
+        which holds the ABSOLUTE rupee distance `peak - equity` exactly
+        constant across the capital event. The old ratchet
+        (`max(peak, new_equity)`) set that distance to ZERO on every
+        injection, i.e. it reported a fresh high-water mark and a 0.00%
+        drawdown to an account that had just lost money — the flaw the
+        2026-08-07 ₹8L injection put in the record (equity_curve jumps
+        239,423.99 → 1,039,423.99 with dd 1.96% → 0.00%).
+
+        The `max(..., new_equity)` floor survives only as an invariant
+        guard: peak must never sit below equity, or the ruin halt could
+        never arm.
+
+        HONEST LIMIT, stated because it is a real consequence: rupee
+        distance is preserved, so the drawdown PERCENT is diluted by a
+        large infusion (₹1,00,000 down on a ₹10L book = 10%; the same
+        ₹1,00,000 down after a ₹90L deposit = 1%). That is arithmetic,
+        not a bug — but it means a big enough deposit CAN clear an armed
+        risk-of-ruin halt. Whether the halt should survive its own
+        recapitalisation is a Dept 3 ruling, deliberately not decided
+        here.
       * one `capital_injection` row is appended to `account_events` —
         that table is the append-only audit trail, and a capital change
         that isn't in it is a capital change nobody can reconstruct.
@@ -490,8 +513,9 @@ def inject_capital(amount: float, why: str = "", conn=None,
                     "why": why}
         conn.execute(
             "UPDATE account_state SET starting_capital = starting_capital + ?, "
-            "peak_equity = max(peak_equity, starting_capital + realized_pnl + ?) "
-            "WHERE id = 1", (amount, amount))
+            "peak_equity = max(peak_equity + ?, "
+            "                  starting_capital + realized_pnl + ?) "
+            "WHERE id = 1", (amount, amount, amount))
         conn.commit()
         after = account_summary(conn)
         log_event(conn, "capital_injection",

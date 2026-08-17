@@ -264,3 +264,94 @@ def test_a_withdrawal_is_the_same_door_in_reverse(conn):
     pm.inject_capital(800_000.0, conn=conn)
     pm.inject_capital(-300_000.0, why="trim", conn=conn)
     assert pm.account_summary(conn)["starting_capital"] == 1_500_000.0
+
+
+# --- capital flow must not launder the drawdown (architect, 2026-08-17) --
+# The 2026-08-07 ₹8L injection ratcheted peak_equity to the new equity and
+# reported 0.00% drawdown to an account that was 1.96% down. Funds move in
+# real life; the trading record must not move with them.
+
+def _drawn_down_account(conn, start=1_000_000.0, loss=-100_000.0):
+    """A book at its peak, then down `loss` — equity 9L under a 10L peak."""
+    conn.execute("UPDATE account_state SET starting_capital = ?, "
+                 "realized_pnl = 0, peak_equity = ? WHERE id = 1",
+                 (start, start))
+    conn.commit()
+    pm.request_entry(conn, "dd1", 50_000.0)
+    pm.release_margin(conn, "dd1", loss)
+    return pm.account_summary(conn)
+
+
+def test_a_ten_percent_drawdown_survives_a_large_infusion(conn):
+    """THE REGRESSION: 10% down, then a 9x deposit. The old ratchet moved
+    peak to the new equity and printed 0.00% — a losing book declared
+    whole by a bank transfer."""
+    before = _drawn_down_account(conn)
+    assert before["drawdown_pct"] == pytest.approx(10.0)
+    gap_before = before["peak_equity"] - before["equity"]
+
+    after = pm.inject_capital(9_000_000.0, why="architect: scale up",
+                              conn=conn)["after"]
+
+    # The rupee distance from the high-water mark is EXACTLY preserved.
+    assert after["peak_equity"] - after["equity"] == pytest.approx(gap_before)
+    assert after["peak_equity"] == pytest.approx(10_000_000.0)
+    assert after["equity"] == pytest.approx(9_900_000.0)
+    # The loss is still on the record — never laundered to zero.
+    assert after["drawdown_pct"] > 0.0
+    assert after["realized_pnl"] == pytest.approx(-100_000.0)
+
+
+def test_an_infusion_does_not_reset_the_high_water_mark(conn):
+    """Directly the 2026-08-07 shape: down 1.96%, deposit, still down."""
+    before = _drawn_down_account(conn, start=244_215.34, loss=-4_791.35)
+    assert before["drawdown_pct"] > 0.0
+    pm.inject_capital(800_000.0, conn=conn)
+    after = pm.account_summary(conn)
+    assert after["peak_equity"] == pytest.approx(1_044_215.34)
+    assert after["drawdown_pct"] > 0.0
+
+
+def test_a_modest_infusion_keeps_an_armed_ruin_halt_armed(conn):
+    """A deposit that does not materially change the base must not clear
+    the halt. Under the OLD ratchet any injection cleared it instantly."""
+    _drawn_down_account(conn, loss=-150_000.0)      # 15% down, halted
+    assert pm.trading_halted(conn) is True
+    pm.inject_capital(50_000.0, why="rounding top-up", conn=conn)
+    assert pm.trading_halted(conn) is True          # 150k / 1.05L = 14.3%
+
+
+def test_a_recapitalisation_large_enough_DOES_clear_the_halt(conn):
+    """Stated out loud rather than hidden: rupee distance is preserved,
+    percent is not, so a big enough deposit dilutes the drawdown below the
+    10% threshold and the halt disarms. Arithmetic, not an accident — and
+    the Dept 3 ruling on whether a halt should survive its own
+    recapitalisation is deliberately NOT made in this layer."""
+    _drawn_down_account(conn)                       # 10% down, halted
+    assert pm.trading_halted(conn) is True
+    pm.inject_capital(9_000_000.0, why="scale up", conn=conn)
+    assert pm.trading_halted(conn) is False
+    assert pm.account_summary(conn)["drawdown_pct"] == pytest.approx(1.0)
+
+
+def test_a_withdrawal_does_not_manufacture_a_drawdown(conn):
+    """Taking money out is not a loss: peak falls by the same rupees."""
+    conn.execute("UPDATE account_state SET starting_capital = 1000000.0, "
+                 "realized_pnl = 0, peak_equity = 1000000.0 WHERE id = 1")
+    conn.commit()
+    pm.inject_capital(-300_000.0, why="owner withdrawal", conn=conn)
+    after = pm.account_summary(conn)
+    assert after["peak_equity"] == pytest.approx(700_000.0)
+    assert after["equity"] == pytest.approx(700_000.0)
+    assert after["drawdown_pct"] == 0.0
+
+
+def test_peak_never_sits_below_equity_after_a_capital_move(conn):
+    """The invariant guard: a peak under equity is a halt that can never
+    arm, which is how the pre-fix docstring justified the ratchet."""
+    conn.execute("UPDATE account_state SET starting_capital = 200000.0, "
+                 "realized_pnl = 0, peak_equity = 100.0 WHERE id = 1")
+    conn.commit()
+    pm.inject_capital(800_000.0, conn=conn)
+    after = pm.account_summary(conn)
+    assert after["peak_equity"] >= after["equity"]

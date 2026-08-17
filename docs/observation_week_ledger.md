@@ -1191,3 +1191,78 @@ just the post. **It cannot replace our archiver:**
 history with L2 depth and 16 Greeks is exactly the class of data decision
 #36 says we cannot reconstruct after the fact. Any adoption is a separate,
 evidence-gated decision and a new ingestion pipeline, i.e. freeze-breaking.
+
+---
+
+## Issue 24 — reported P&L is ₹26,982.14 short of settled P&L, and the drawdown was zeroed by a deposit (2026-08-17, audit of the "portfolio vs tradebook" mismatch)
+
+- **Symptom:** the account reports `realized_pnl` **₹18,628.04**, but the sum
+  of `pnl_net` across all 27 released `margin_locks` is **₹45,610.18** — a
+  gap of **₹26,982.14**. Separately, `peak_equity` (₹10,39,423.99) is not a
+  high-water mark of trading: `drawdown_pct` reads 2.00% against a peak that
+  a deposit set.
+- **Root cause — TWO capital-layer events, both confirmed in `equity_curve`,
+  neither an engine bug:**
+
+  1. **2026-07-23 05:45:10 — the clean sheet.** `equity_curve` jumps
+     `1,026,982.14 → 205,538.96` with peak reset to the same value:
+     `starting_capital` was rewritten ₹10,00,000 → ₹2,00,000 and
+     `realized_pnl` zeroed (the ₹2L clean sheet of the VM-native migration).
+     `margin_locks` kept its full history; `account_state` did not. Split the
+     27 released locks at that date and the arithmetic is exact to the paisa:
+
+     | released | sum |
+     |---|---|
+     | before 2026-07-23 | **+26,982.14** ← the gap |
+     | 2026-07-23 onward | **+18,628.04** ← reported realized |
+
+     Neither writer of `account_state` — `release_margin` or
+     `inject_capital` — can lower `realized_pnl`. This was a DB reseed, not
+     code.
+
+  2. **2026-08-07 16:41:19 — an ₹8L injection.** `equity_curve` jumps
+     `239,423.99 → 1,039,423.99` and **drawdown 1.96% → 0.00%**, because
+     `inject_capital` ratcheted `peak_equity` to the new equity. The ₹2L-era
+     high-water mark (₹2,44,215.34, set 2026-07-25) was overwritten.
+
+- **Trade-level reconciliation: CLEAN.** All 19 closed option trades have a
+  matching lock with an identical `pnl_net`; zero mismatches. Journal real
+  closed P&L 45,503.30 + the 1,550.00 of unlocked TCS rows = **47,053.30**;
+  locks 45,610.18 − equity desk −1,443.12 = **47,053.30**. The equity desk's
+  −1,443.12 IS inside reported realized (eqd locks settle into the same
+  account). No trade is missing, mis-signed, or double-settled.
+
+- **The orphan rows.** The 2026-07-06 TCS buy is logged **twice**, both rows
+  `short_id: null`, `position_closed: false`, **no margin lock**, −₹775.00
+  each. It predates the capital layer, so it sits in neither figure — and
+  being duplicated, the journal double-counts −₹1,550 against one real trade.
+
+- **What the numbers actually mean:** ₹10,18,628.04 equity is correct for the
+  current era but is NOT lifetime performance. True paper P&L since inception
+  ≈ **+₹45,610** (all settled locks), or ≈ +₹44,835 counting the orphan once.
+  Since the clean sheet, realized peaked at +44,215.34 (07-25) and is now
+  18,628.04 — a **57.9% giveback of accumulated profit**, driven entirely by
+  six NIFTY 50 bear puts that died at the pre-expiry exit.
+
+- **Resolution (2026-08-17, architect ruling — "funds will be infused or
+  removed in real life too, so that shouldn't mess up the
+  performance/drawdown metrics"):** cause 2 is FIXED in
+  `src/portfolio_manager.inject_capital` — `peak_equity` is now TRANSLATED by
+  the exact amount moved (`peak_new = peak_old + amount`) instead of ratcheted
+  to the new equity, holding the absolute rupee distance `peak − equity`
+  constant across any deposit or withdrawal. `max(..., new_equity)` survives
+  only as an invariant guard. Six regression tests in
+  `tests/test_margin_stress.py`.
+
+  **Cause 1 is NOT fixed and must not be.** Backfilling the ₹26,982.14 and
+  de-duping the TCS rows means rewriting settled capital-ledger history,
+  which RULE 3 forbids; the clean sheet was also a deliberate decision, so
+  "restoring" it may be wrong on purpose. The historical rows stand as
+  written — this entry is the record of what they mean.
+
+- **Follow-up for triage:** (a) does an armed risk-of-ruin halt survive its
+  own recapitalisation? Rupee distance is preserved but PERCENT is diluted,
+  so a large enough deposit drops the drawdown under the 10% threshold and
+  disarms the halt (tested and documented, not hidden). That is a Dept 3
+  ruling, not a code default. (b) any lifetime-performance figure quoted from
+  `account_state` needs the pre-clean-sheet ₹26,982.14 added back by hand.

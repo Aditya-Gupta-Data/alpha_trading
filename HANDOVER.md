@@ -42,6 +42,62 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-08-17 — Sequences 5 + 6: capital flow and the latching halt (DEPLOYED)
+
+**What is live now.** VM at `20883b9`, pulled and verified 2026-08-17 ~11:15
+IST. Two Dept-3 rulings shipped in one session, both from the architect,
+both triggered by an audit rather than a bug report.
+
+1. **Capital moves no longer launder the trading record** (`d3f3303`,
+   decision #92a). `inject_capital` TRANSLATES `peak_equity` by the exact
+   rupees moved instead of ratcheting it to the new equity, so the absolute
+   distance `peak − equity` survives any deposit or withdrawal and drawdown
+   measures TRADING only. The 2026-08-07 ₹8L injection had printed a 0.00%
+   drawdown and a fresh high-water mark to a book that was 1.96% down.
+2. **The risk-of-ruin halt LATCHES** (`20883b9`, decision #92b). Breaching
+   the threshold writes `ruin_halt_latched` to the append-only
+   `account_events` trail, and `trading_halted` reads that latch, not the
+   live percentage — closing the dilution trap that (1) exposed, where a
+   large enough deposit would drop the drawdown under 10% and disarm an
+   armed halt. Nothing automatic clears it: not capital, not a recovering
+   drawdown, not a new day, not a restart. **The only door out is**
+
+   ```
+   python3 -m src.portfolio_manager --reset-halt --why "..." --yes
+   ```
+
+   which refuses without a stated reason and re-arms instantly if the breach
+   is still real. Supersedes the 07-27 "no override door" ruling in mechanism
+   only — resume is still a deliberate human act, now a recorded one.
+
+**Account state at deploy** (unchanged by the deploy): equity ₹10,18,628.04,
+peak ₹10,39,423.99, drawdown 2.00%, **not halted, latch not armed, zero latch
+rows**. Verified before pulling that the VM's `account_events` has never
+contained a `risk_of_ruin_halt` row, so nothing latched retroactively.
+
+**Also this session:** the P&L-gap audit that started it, written up as
+**ledger Issue 24**. Reported realized (₹18,628.04) is ₹26,982.14 short of
+settled P&L (₹45,610.18); the cause is the 2026-07-23 clean sheet reseeding
+`account_state` while `margin_locks` kept history, plus the duplicated,
+never-settled 07-06 TCS rows. Every trade reconciles exactly — no engine bug.
+**Those historical rows were deliberately NOT rewritten** (RULE 3).
+
+### What the next person should do first
+
+1. **One transient test failure on the VM, unreproduced.** During the deploy
+   smoke run at ~11:0x IST (market open, live loop writing),
+   `tests/test_portfolio.py::test_pm_run_headless_silently_rejects_when_the_gate_says_no`
+   failed at line 376 (`len(logged) == 1 and len(notified) == 1`) — an
+   assertion about journal/notify counts, unrelated to the halt work. It then
+   passed 5/5 in a row at the same commit, isolated and paired. Most likely a
+   hermeticity leak (the test seeing production state mid-session), which
+   RULE 6 forbids. **Re-run it during market hours to catch it again** before
+   deciding it is benign.
+2. **Any lifetime-performance figure needs ₹26,982.14 added by hand** to what
+   `account_state` reports. Ledger Issue 24 follow-up (b), still open.
+3. Suite: **2,118 green on the Mac** (~235s), 70/70 green on the VM for the
+   two touched files.
+
 ## 🔴 PENDING ISSUES / BACKLOG — carried forward, not archived
 
 *Created 2026-08-11 when this file was split. Every item below was an OPEN

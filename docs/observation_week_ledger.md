@@ -1324,3 +1324,32 @@ open.
 - **Follow-up:** `PAPER_AUTO_APPROVE` was the only ambient engine switch found.
   Any future one belongs in `conftest._AMBIENT_ENGINE_SWITCHES` on the same day
   it is introduced.
+
+---
+
+## Miner layer — first-pass corrections and DB purge (2026-08-19, architect directive, decision #93)
+
+Not an incident: the miner's rails held (stratified nulls, BH q=0.15, support
+floor 12, CANDIDATE status, promotion gated on 7 out-of-sample resolutions,
+nothing wired to sizing or entry). What failed was legibility.
+
+- **Verified before touching anything:** the 36 rows from the 2026-08-18 run
+  carried **0 attached `shadow_trades`** and **0 non-CANDIDATE statuses**, so
+  the purge destroyed no out-of-sample evidence. The script asserts both and
+  refuses otherwise (RULE 4). Full rows dumped to
+  `data/purged_candidates_20260818.json` on the VM (git-ignored) before the
+  DELETE. `shadow_trades` (53 rows) untouched.
+- **Collapse, measured on the live corpus** (read-only dry run, registered
+  nothing): real **35 → 4** survivors, sim **1 → 1**. The four are exactly the
+  four evidence cells the review identified (n=20/16/14/13), each now carrying
+  the 3–5 nested sets it absorbed. No `ctx:season:month_*` tag appears in any
+  survivor.
+- **State for tonight's 20:20 IST pass:** `candidate_patterns` = 0,
+  `daily_context` = 40 frames (depth gate OPEN), floors unchanged, cron line
+  18 intact. VM at `11cc35a`.
+- **Standing caveat, unchanged by any of this:** with 22 real transactions the
+  four survivors are still in-sample descriptions of a corpus that is mostly
+  one directional bet in one market regime. The n=20 cell still covers 91% of
+  the corpus. Collapsing fixed the COUNT, not the sample size — none of these
+  becomes evidence until the proving harness collects out-of-sample
+  resolutions.

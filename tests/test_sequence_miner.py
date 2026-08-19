@@ -35,11 +35,35 @@ def test_lagged_tags_read_strictly_prior_frames():
     # The fii tell sits at exactly lag2 — and ONLY lag2 (seasonal tags,
     # pure date math, ride along on every lag day by design).
     assert {t for t in tags if "season" not in t} == {"lag2:ctx:fii:up"}
-    assert "lag1:ctx:season:month_jan" in tags     # cycles present + lagged
+    # MONTHLY seasonality is banned from mining (architect directive
+    # 2026-08-19): with a corpus spanning weeks, "month_jan" is a synonym
+    # for "the data we have", not a repeating condition. Every lag of it
+    # is gone; the ban is enforced once, in stat_gates.is_minable_tag.
+    assert not any("season:month_" in t for t in tags)
     # No frame at/after entry is ever consulted.
     assert not any("2026-01-06" in t for t in tags)
     # Entry before the whole series -> nothing (no fabricated antecedent).
     assert sm.lagged_antecedent_tags("2025-12-01", ctx_dates, frames) == set()
+
+
+def test_only_MONTHLY_seasonality_is_banned_other_cycles_still_mine():
+    """The ban is surgical: expiry-week/expiry-day/quarter-end recur many
+    times a year, so they remain legitimate minable conditions. Only the
+    monthly tag — which cannot repeat inside a weeks-long corpus — is out."""
+    from src import cycles
+    from src.discovery import cooccurrence_miner as cm
+    from src.validation import stat_gates as sg
+
+    raw = cycles.cycle_tags_for_iso("2026-03-31")     # expiry + quarter-end
+    assert {"season:month_mar", "season:expiry_day",
+            "season:expiry_week", "season:quarter_end"} <= set(raw)
+
+    mined = cm.context_tags({"date": "2026-03-31"})
+    assert "ctx:season:month_mar" not in mined
+    assert {"ctx:season:expiry_day", "ctx:season:expiry_week",
+            "ctx:season:quarter_end"} <= mined
+    assert sg.is_minable_tag("ctx:season:month_mar") is False
+    assert sg.is_minable_tag("ctx:season:quarter_end") is True
 
 
 def test_no_lookahead_future_frames_never_change_antecedents():

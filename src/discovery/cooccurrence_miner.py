@@ -112,7 +112,13 @@ def context_tags(row) -> set:
         from src import cycles
         tags.update(f"ctx:{t}" for t in cycles.cycle_tags_for_iso(day))
 
-    return tags
+    # ONE door for "may the miners consume this?" — the ctx: tags built
+    # here go through the same `is_minable_tag` filter the outcome's own
+    # event tags already pass (build_transactions). Before 2026-08-19 only
+    # event tags were filtered, so a banned ctx: namespace would have had
+    # to be re-banned in every miner that calls this function; the
+    # month-seasonality ban is enforced here for both of them at once.
+    return {t for t in tags if sg.is_minable_tag(t)}
 
 
 # --------------------------------------------------- transactions
@@ -236,6 +242,60 @@ def _expected_rate(txns_with_itemset: list, rates: dict,
 
 # --------------------------------------------------- the mine
 
+def collapse_to_maximal(candidates: list) -> list:
+    """ONE SIGNAL = ONE PATTERN (architect directive 2026-08-19).
+
+    Apriori enumerates every subset, so a single cluster of trades gets
+    registered once per nested tag-combination. The first live pass made
+    the cost obvious: 35 "discoveries" off 22 transactions that collapsed
+    into FOUR distinct evidence cells — 16 of them sharing a byte-identical
+    `insample_stats` of 11/16, because they were the same 16 trades
+    described sixteen ways. A reader seeing "35 candidates" reads 35
+    findings; there was at most a handful.
+
+    Two candidates are the SAME FINDING when they cover the identical set
+    of transactions (`_covered`) — not merely the same n, which two
+    genuinely different clusters could coincidentally share. From each
+    such group this keeps the MAXIMAL itemset (most tags) and records the
+    absorbed ones on it:
+
+      * maximal, not minimal, because the in-sample evidence cannot
+        distinguish them and the longer tag-set is the STRICTER live
+        predicate — it fires on fewer future days, so a candidate that
+        only looked good by accident gets fewer chances to look good
+        again. The trade-off is honest and reversible: the stricter
+        predicate also accrues out-of-sample resolutions more slowly.
+      * ties on length break on the sorted tag list, so two runs over the
+        same data mint the same pattern_id (the registry's idempotence
+        contract depends on it).
+
+    Collapsing happens AFTER Benjamini-Hochberg, never before: every
+    enumerated itemset stays in the FDR denominator. Correcting for only
+    the survivors would be exactly the multiple-testing sin this whole
+    layer exists to avoid.
+
+    `absorbed` / `absorbed_n` ride the returned dict so the audit trail
+    can show what a single registered pattern stands for."""
+    groups = {}
+    for cand in candidates:
+        key = cand.get("_covered")
+        if key is None:                      # defensive: pre-collapse shape
+            key = (cand["n"], cand["wins"], cand["expected_rate"])
+        groups.setdefault(key, []).append(cand)
+
+    out = []
+    for members in groups.values():
+        winner = max(members, key=lambda c: (len(c["tags"]),
+                                             tuple(c["tags"])))
+        absorbed = sorted(tuple(c["tags"]) for c in members
+                          if c is not winner)
+        winner = {k: v for k, v in winner.items() if k != "_covered"}
+        winner["absorbed"] = [list(t) for t in absorbed]
+        winner["absorbed_n"] = len(absorbed)
+        out.append(winner)
+    return out
+
+
 def mine(transactions: list, min_support: int = None,
          fdr_q: float = None, max_len: int = MAX_ITEMSET_LEN) -> list:
     """The pure core: transactions -> surviving candidate itemsets.
@@ -259,7 +319,9 @@ def mine(transactions: list, min_support: int = None,
     for itemset, support in freq.items():
         if len(itemset) < 2:
             continue
-        supporting = [t for t in transactions if itemset <= t["items"]]
+        covered = frozenset(i for i, t in enumerate(transactions)
+                            if itemset <= t["items"])
+        supporting = [transactions[i] for i in sorted(covered)]
         n = len(supporting)
         wins = sum(1 for t in supporting if t["win"])
         expected = _expected_rate(supporting, rates, global_rate)
@@ -269,6 +331,7 @@ def mine(transactions: list, min_support: int = None,
             "wins": wins, "win_rate": wins / n if n else 0.0,
             "expected_rate": round(expected, 4), "p_value": p,
             "lift": (wins / n - expected) if n else 0.0,
+            "_covered": covered,
         })
 
     if not tested:
@@ -279,6 +342,7 @@ def mine(transactions: list, min_support: int = None,
         cand["bh_survives"] = ok
         if ok and cand["lift"] > 0:
             out.append(cand)
+    out = collapse_to_maximal(out)
     out.sort(key=lambda c: (-c["lift"], c["p_value"]))
     return out
 

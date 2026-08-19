@@ -17,6 +17,7 @@ from src import brain_map
 from src import daily_context as dc
 from src.discovery import cooccurrence_miner as cm
 from src.validation import registry as rg
+from src.validation import stat_gates as sg
 
 
 def _txn(items, win, stratum):
@@ -72,6 +73,89 @@ def test_mine_surfaces_a_real_edge_and_rejects_the_inverse():
     assert ("D", "E") not in tag_sets             # significant but WRONG way
     ab = next(s for s in survivors if s["tags"] == ["A", "B"])
     assert ab["lift"] > 0 and ab["expected_rate"] < ab["win_rate"]
+
+
+# ------------------------------------- one signal = one pattern (08-19)
+
+def test_nested_itemsets_over_the_same_trades_collapse_to_one_maximal():
+    """THE 2026-08-18 REGRESSION: Apriori enumerated {A,B}, {A,C}, {B,C}
+    and {A,B,C} over ONE cluster of trades and the registry minted four
+    "discoveries" with byte-identical stats. Now it mints one — the
+    maximal set — and says what it absorbed."""
+    txns = [_txn({"A", "B", "C"}, True, ("X", "CALM")) for _ in range(14)]
+    txns += [_txn({"A", "B", "C"}, False, ("X", "CALM")) for _ in range(1)]
+    txns += [_txn({"D", "E"}, False, ("X", "CALM")) for _ in range(12)]
+    txns += [_txn({"D", "E"}, True, ("X", "CALM")) for _ in range(3)]
+
+    survivors = cm.mine(txns, min_support=12, fdr_q=0.15)
+
+    assert len(survivors) == 1
+    winner = survivors[0]
+    assert winner["tags"] == ["A", "B", "C"]          # maximal, not a subset
+    assert winner["absorbed_n"] == 3                  # the three 2-tag sets
+    assert sorted(winner["absorbed"]) == [["A", "B"], ["A", "C"], ["B", "C"]]
+    assert "_covered" not in winner                   # internal key stripped
+
+
+def test_two_genuinely_different_clusters_are_not_collapsed():
+    """Same n is not the same finding. Collapsing keys on the identical
+    SET of transactions, so two disjoint clusters that happen to share a
+    support count both survive."""
+    txns = [_txn({"A", "B"}, True, ("X", "CALM")) for _ in range(13)]
+    txns += [_txn({"A", "B"}, False, ("X", "CALM")) for _ in range(1)]
+    txns += [_txn({"P", "Q"}, True, ("X", "CALM")) for _ in range(13)]
+    txns += [_txn({"P", "Q"}, False, ("X", "CALM")) for _ in range(1)]
+    txns += [_txn({"D", "E"}, False, ("X", "CALM")) for _ in range(20)]
+
+    tag_sets = [tuple(s["tags"]) for s in cm.mine(txns, min_support=12,
+                                                  fdr_q=0.15)]
+    assert ("A", "B") in tag_sets and ("P", "Q") in tag_sets
+
+
+def test_collapsing_happens_after_fdr_never_before():
+    """Every enumerated itemset must stay in the Benjamini-Hochberg
+    denominator — correcting for only the survivors would be the exact
+    multiple-testing sin this layer exists to prevent."""
+    seen = {}
+    real_bh = sg.benjamini_hochberg
+
+    def spy(pvals, q):
+        seen["n_tested"] = len(pvals)
+        return real_bh(pvals, q=q)
+
+    txns = [_txn({"A", "B", "C"}, True, ("X", "CALM")) for _ in range(14)]
+    txns += [_txn({"A", "B", "C"}, False, ("X", "CALM")) for _ in range(1)]
+    txns += [_txn({"D", "E"}, False, ("X", "CALM")) for _ in range(12)]
+    txns += [_txn({"D", "E"}, True, ("X", "CALM")) for _ in range(3)]
+    try:
+        sg.benjamini_hochberg = spy
+        survivors = cm.mine(txns, min_support=12, fdr_q=0.15)
+    finally:
+        sg.benjamini_hochberg = real_bh
+
+    assert seen["n_tested"] >= 4          # {A,B} {A,C} {B,C} {A,B,C} + ...
+    assert len(survivors) < seen["n_tested"]     # collapsed AFTER the test
+
+
+def test_collapse_is_deterministic_so_pattern_ids_stay_idempotent():
+    """Two runs over the same data must mint the same representative —
+    the registry's idempotence contract depends on it."""
+    txns = [_txn({"A", "B", "C"}, True, ("X", "CALM")) for _ in range(14)]
+    txns += [_txn({"A", "B", "C"}, False, ("X", "CALM")) for _ in range(1)]
+    txns += [_txn({"D", "E"}, False, ("X", "CALM")) for _ in range(12)]
+    txns += [_txn({"D", "E"}, True, ("X", "CALM")) for _ in range(3)]
+    first = [tuple(s["tags"]) for s in cm.mine(txns, min_support=12, fdr_q=0.15)]
+    second = [tuple(s["tags"]) for s in cm.mine(list(reversed(txns)),
+                                                min_support=12, fdr_q=0.15)]
+    assert first == second
+
+
+def test_month_seasonality_never_reaches_the_miner():
+    """The banned tag cannot enter a transaction, so it cannot enter an
+    itemset, so it cannot be registered — enforced at the one door."""
+    tags = cm.context_tags({"date": "2026-07-15", "fii_net": -3.0})
+    assert "ctx:season:month_jul" not in tags
+    assert "ctx:fii:down" in tags
 
 
 def test_stratification_defuses_a_pipeline_gate():

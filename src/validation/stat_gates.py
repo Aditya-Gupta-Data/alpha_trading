@@ -104,7 +104,16 @@ FDR_Q = 0.15
 # filter drops them without any of those call sites having to change.
 EXCLUDED_REF_PREFIXES = ("sim:", "shadow:", "trial:", "placebo:", "blocked:")
 # Tag namespaces the miners must not re-consume (tautological rediscovery).
-EXCLUDED_TAG_PREFIXES = ("auto:",)
+# `ctx:season:month_` joined 2026-08-19 by architect directive, after the
+# first miner pass: the real corpus spanned 2026-07-10 -> 08-18, so a
+# "ctx:season:month_jul" tag with n=16 was not seasonality — it was the
+# sample window wearing a seasonality costume, and it can never fire
+# out-of-sample until July 2027. Monthly cycles are un-minable until the
+# corpus spans a mathematically viable horizon (several years, so a month
+# is a repeated condition rather than a synonym for "the data we have").
+# The OTHER cycle tags (expiry-week, expiry-day, quarter-end) recur many
+# times per year and stay minable.
+EXCLUDED_TAG_PREFIXES = ("auto:", "ctx:season:month_")
 
 
 def is_learnable_ref(journal_ref: str) -> bool:

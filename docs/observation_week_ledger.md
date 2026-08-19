@@ -1280,3 +1280,47 @@ the VM's `account_events` has never contained a single `risk_of_ruin_halt`
 row, so nothing latches retroactively on this deploy. Follow-up (b) — adding
 the pre-clean-sheet ₹26,982.14 back by hand to any lifetime figure — stays
 open.
+
+---
+
+## Issue 25 — a suite run on the VM consumed a live supervision episode; the test was reading production state (2026-08-19, root-caused from the 08-17 deploy note)
+
+- **Symptom:** during the Sequence-6 deploy smoke run (~11:0x IST 2026-08-17,
+  market open), `tests/test_portfolio.py::test_pm_run_headless_silently_rejects_
+  when_the_gate_says_no` failed at `assert len(logged) == 1 and len(notified) == 1`,
+  then passed 5/5 in a row at the same commit, isolated and paired. Logged as a
+  suspected hermeticity leak, unreproduced.
+- **Root cause — CONFIRMED, deterministic.** The test read TWO pieces of live
+  production state that only exist on the trading box:
+  1. **`PAPER_AUTO_APPROVE=1`** from the VM's real environment, which flipped
+     `run_headless` onto its auto-approve branch — a branch the test never
+     intended to exercise and does not stub; and
+  2. the real **`data/human_pulse.json`**, whose engagement tripwire was in a
+     tripped-but-not-yet-alerted episode, so that branch fired an extra 🛑
+     BRAIN UNSUPERVISED card through the stubbed notifier. `notified` was 2,
+     not 1.
+
+  Reproduced exactly on the Mac by exporting `PAPER_AUTO_APPROVE=1` and
+  planting a tripped pulse file: `AssertionError: assert (1 == 1 and 2 == 1)`,
+  with the second message being the unsupervised card.
+- **The worse half.** `should_alert_once()` stamps `alerted_at` and — unlike
+  `touch()` — carried **no pytest muzzle**. So the failing run WROTE to the
+  live pulse file and consumed the owner's one-per-episode card, which is
+  both why the next run was green (self-erasing failure) and a case of a test
+  suppressing a real operational alert. Verified by A/B: pre-patch, the test
+  left `"alerted_at": "2026-08-19T17:35:35"` on the planted file; post-patch
+  the file is byte-identical after the run.
+- **Resolution (2026-08-19):** (a) new `tests/conftest.py` — autouse fixtures
+  clearing `PAPER_AUTO_APPROVE` and repointing `human_pulse.PULSE_PATH` at a
+  per-test tmp file; (b) `should_alert_once()` gains the same decision-#43
+  muzzle `touch()` already had (muzzled ⇒ returns False, no card, no write);
+  (c) the test now stubs `paper_auto_approve_enabled` to state its own
+  precondition, and the auto-approve branch it was hitting by accident gets
+  two purpose-built hermetic tests — one for the normal auto path, one
+  pinning the tripwire pause as the ONLY legitimate source of a second card.
+- **Verification:** 10/10 green under the hostile env
+  (`PAPER_AUTO_APPROVE=1` + tripped pulse) that reproduced the failure 1/1
+  before the patch; live pulse file unmutated. Suite 2,120 green.
+- **Follow-up:** `PAPER_AUTO_APPROVE` was the only ambient engine switch found.
+  Any future one belongs in `conftest._AMBIENT_ENGINE_SWITCHES` on the same day
+  it is introduced.

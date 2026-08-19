@@ -346,9 +346,17 @@ def test_pm_run_headless_silently_rejects_when_the_gate_says_no():
     from src import exposure_gate
     saved = (op.build_proposal, journal_mod.log, op._notify_discord,
              op._memory_context_for, op._skeptic_note_for,
-             pm.gate_headless_entry, exposure_gate.gate_entry)
+             pm.gate_headless_entry, exposure_gate.gate_entry,
+             op.paper_auto_approve_enabled)
     try:
         op.build_proposal = lambda *a, **k: canned
+        # This test owns the MANUAL branch, and says so instead of
+        # inheriting whatever PAPER_AUTO_APPROVE the host box has set
+        # (the 2026-08-19 RULE 6 patch: on the VM the real env flipped
+        # this on, the live human-pulse episode fired an extra
+        # unsupervised card, and "exactly one Discord message" saw two).
+        # The auto branch has its own hermetic test below.
+        op.paper_auto_approve_enabled = lambda: False
         # The #68 exposure gate reads the REAL data/journal.jsonl; on a box
         # with an open NIFTY BANK neutral it would block before the margin
         # gate under test ever ran (seen 2026-08-16). Stub it — this test is
@@ -390,7 +398,99 @@ def test_pm_run_headless_silently_rejects_when_the_gate_says_no():
     finally:
         (op.build_proposal, journal_mod.log, op._notify_discord,
          op._memory_context_for, op._skeptic_note_for,
-         pm.gate_headless_entry, exposure_gate.gate_entry) = saved
+         pm.gate_headless_entry, exposure_gate.gate_entry,
+         op.paper_auto_approve_enabled) = saved
+
+
+def test_pm_run_headless_auto_approve_branch_is_self_contained(monkeypatch):
+    """The branch the old test hit BY ACCIDENT on the VM, now covered on
+    purpose and hermetically: with auto-approve on and the engagement
+    tripwire quiet, run_headless journals ONE entry, sends ONE proposal
+    card, and hands the entry to decide_pending — with no live journal,
+    no live pulse file and no live env involved."""
+    from src import options_proposer as op
+    from src import journal as journal_mod
+    from src import exposure_gate, human_pulse
+
+    spread = {"strategy": "iron_condor", "lot_size": 35, "lots": 1,
+              "expiry": "2026-07-16", "entry_spot": 52_000.0,
+              "net_credit": 120.0, "net_debit": None, "spread_width": 200.0,
+              "max_loss": 2_800.0, "max_profit": 4_200.0,
+              "margin": {"total_margin": 2_800.0, "naked_margin": 90_000.0,
+                         "offset_savings": 87_200.0},
+              "legs": [{"side": "SELL", "option_type": "PE",
+                        "strike": 51_000.0, "premium": 90.0}]}
+    canned = {"proposal": {"action": "SPREAD", "ticker": "NIFTY BANK",
+                           "shares": 35, "price": 120.0, "signal": "test",
+                           "spread": spread, "view": "neutral", "vix": 14.0,
+                           "lots": 1},
+              "view": "neutral", "vix": 14.0, "reason": "ok"}
+
+    logged, notified, decided = [], [], []
+    monkeypatch.setattr(op, "build_proposal", lambda *a, **k: canned)
+    monkeypatch.setattr(exposure_gate, "gate_entry", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(journal_mod, "log", lambda e: logged.append(e))
+    monkeypatch.setattr(op, "_notify_discord",
+                        lambda t: notified.append(t) or True)
+    monkeypatch.setattr(op, "_memory_context_for", lambda *a, **k: "")
+    monkeypatch.setattr(op, "_skeptic_note_for", lambda *a, **k: "")
+    monkeypatch.setattr(pm, "gate_headless_entry",
+                        lambda ref, margin, conn=None: (True, "margin locked"))
+    monkeypatch.setattr(op, "paper_auto_approve_enabled", lambda: True)
+    # the tripwire is a SEPARATE contract with its own tests — pinned here
+    monkeypatch.setattr(human_pulse, "auto_approve_tripped", lambda: False)
+    monkeypatch.setattr(op, "decide_pending",
+                        lambda tid, approve, why="", human=True:
+                        decided.append((tid, approve, human))
+                        or {"status": "approved", "entry": logged[0]})
+
+    result = op.run_headless("NIFTY BANK", {})
+
+    assert result["proposed"] is True and result["auto_approved"] is True
+    assert len(logged) == 1 and len(notified) == 1      # exactly one card
+    assert decided == [(logged[0]["short_id"], True, False)]  # human=False
+
+
+def test_the_tripwire_pause_is_the_only_source_of_a_second_card(monkeypatch):
+    """The exact VM failure, pinned as a regression: a TRIPPED pulse adds
+    the 🛑 unsupervised card, so the count is two — and that must only
+    ever happen when a test asks for it, never from ambient state."""
+    from src import options_proposer as op
+    from src import journal as journal_mod
+    from src import exposure_gate, human_pulse
+
+    spread = {"strategy": "iron_condor", "lot_size": 35, "lots": 1,
+              "expiry": "2026-07-16", "entry_spot": 52_000.0,
+              "net_credit": 120.0, "net_debit": None, "spread_width": 200.0,
+              "max_loss": 2_800.0, "max_profit": 4_200.0,
+              "margin": {"total_margin": 2_800.0, "naked_margin": 90_000.0,
+                         "offset_savings": 87_200.0},
+              "legs": [{"side": "SELL", "option_type": "PE",
+                        "strike": 51_000.0, "premium": 90.0}]}
+    canned = {"proposal": {"action": "SPREAD", "ticker": "NIFTY BANK",
+                           "shares": 35, "price": 120.0, "signal": "test",
+                           "spread": spread, "view": "neutral", "vix": 14.0,
+                           "lots": 1},
+              "view": "neutral", "vix": 14.0, "reason": "ok"}
+    notified, logged = [], []
+    monkeypatch.setattr(op, "build_proposal", lambda *a, **k: canned)
+    monkeypatch.setattr(exposure_gate, "gate_entry", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(journal_mod, "log", lambda e: logged.append(e))
+    monkeypatch.setattr(op, "_notify_discord",
+                        lambda t: notified.append(t) or True)
+    monkeypatch.setattr(op, "_memory_context_for", lambda *a, **k: "")
+    monkeypatch.setattr(op, "_skeptic_note_for", lambda *a, **k: "")
+    monkeypatch.setattr(pm, "gate_headless_entry",
+                        lambda ref, margin, conn=None: (True, "margin locked"))
+    monkeypatch.setattr(op, "paper_auto_approve_enabled", lambda: True)
+    monkeypatch.setattr(human_pulse, "auto_approve_tripped", lambda: True)
+    monkeypatch.setattr(human_pulse, "should_alert_once", lambda: True)
+
+    result = op.run_headless("NIFTY BANK", {})
+
+    assert result["auto_approved"] is False          # paused, stays pending
+    assert len(notified) == 2                        # 🛑 card + proposal card
+    assert "UNSUPERVISED" in notified[0]
 
 
 def test_pm_decide_pending_approval_is_margin_gated():

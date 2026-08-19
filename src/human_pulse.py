@@ -129,7 +129,18 @@ def auto_approve_tripped(path=None, now: datetime = None,
 def should_alert_once(path=None, now: datetime = None) -> bool:
     """True exactly once per pause episode: the caller sends the
     'unsupervised' card and this stamps alerted_at so repeat proposals
-    during the same episode stay quiet. Never raises."""
+    during the same episode stay quiet. Never raises.
+
+    Muzzled under tests unless the caller passes its own path — the same
+    decision-#43 rule `touch()` already carries, extended here 2026-08-19
+    after a suite run on the VM consumed a live pause episode: this
+    function stamps `alerted_at` on the REAL pulse file, so a test that
+    reached it silently suppressed the owner's one 🛑 unsupervised card.
+    A muzzled call reports False (no card, no write), which is the safe
+    direction for a test process."""
+    if path is None and (os.environ.get("PYTEST_CURRENT_TEST")
+                         or os.environ.get("IS_TEST_ENV")):
+        return False
     now = now or datetime.now()
     state = _read_state(path) or {}
     if state.get("alerted_at"):

@@ -26,6 +26,7 @@
   "treasury_enabled": true,
   "adaptive_sizing_enabled": true,
   "max_risk_per_trade_rs": 10000,
+  "auto_approve_unsupervised_days": 30,
   "discord_budget_enabled": true,
   "discord_daily_budget": 5,
   "treasury_equity_min_pct": 15.0,

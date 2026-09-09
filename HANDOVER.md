@@ -42,6 +42,70 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-09 — Return after a three-week gap; the 08-19 session was never wrapped
+
+*Written from a claude.ai cloud session that could NOT reach the VM (no
+gcloud, no SSH key, egress policy blocks the VM's address and the Cloudflare
+tunnel). Every VM-side statement below is therefore either "as of 08-19" or
+marked UNVERIFIED. The next session must run on the Mac to check the box.*
+
+**What happened on 2026-08-19** (four commits, absent from this file and the
+timeline until now — assembled from `git log`, `DECISIONS.md` #93 and ledger
+Issue 25; nothing invented):
+
+1. **Ledger Issue 25 CLOSED — the "transient" VM test failure from the 08-17
+   deploy was a RULE 6 leak, deterministic.** The headless margin-gate test
+   read the VM's real `PAPER_AUTO_APPROVE=1` and the live
+   `data/human_pulse.json`, hit the auto-approve branch by accident, and its
+   `should_alert_once()` call WROTE `alerted_at` to the live pulse file —
+   consuming the owner's one-per-episode 🛑 BRAIN UNSUPERVISED card. Fixed in
+   `cdc107b`: new `tests/conftest.py` autouse fixtures (clear ambient engine
+   switches, repoint `PULSE_PATH` to tmp), the decision-#43 pytest muzzle
+   added to `should_alert_once()`, two purpose-built hermetic tests. Suite
+   **2,120 green** on the Mac. Standing rule: any future ambient engine switch
+   goes into `conftest._AMBIENT_ENGINE_SWITCHES` the day it is introduced.
+2. **Miner first live pass ran 20:20 IST 2026-08-18** and registered 36
+   CANDIDATEs (35 real / 1 sim) that collapsed to FOUR evidence cells.
+   **Decision #93** (`11cc35a`): `collapse_to_maximal()` after BH, and
+   `ctx:season:month_*` banned as un-minable. The 36 rows were purged on the
+   VM after asserting 0 attached `shadow_trades` and 0 non-CANDIDATE
+   statuses; backup at `data/purged_candidates_20260818.json` on the VM
+   (git-ignored). Nothing reaches sizing or entry — unchanged.
+3. **Human-pulse tripwire 3 → 30 trading days** (`c674835`, owner directive).
+4. **VM was at `11cc35a` on 08-19**, one commit behind the tip (`b743cd5` is
+   docs-only, so functionally current).
+
+**Account state:** last verified 08-17 (equity ₹10,18,628.04, drawdown 2.00%,
+halt latch not armed). **Three weeks of live paper trading since then are
+UNVERIFIED from here.**
+
+### What the next person should do first (on the Mac, where gcloud lives)
+
+1. **Look at the VM before touching anything:**
+   ```bash
+   gcloud compute ssh adigupta1998@alpha-trading-vm --project=project-37632031-10d0-47dd-b6f --zone=us-central1-a --command='
+   cd ~/alpha_trading && git log -1 --format="%h %ad" --date=short
+   python3 -m src.portfolio_manager --status 2>&1 | tail -15
+   python3 -m src.bug_ledger --report 2>&1 | tail -10
+   tail -20 logs/discovery_nightly.log
+   cat data/human_pulse.json
+   systemctl is-active alpha-trading alpha-discord-bot cloudflared-tunnel'
+   ```
+   Specifically: did the nightly miner keep passing after 08-19; what does
+   the pulse file say after a 30-day tripwire met a three-week absence; did
+   the halt latch arm; are the 2 bug-ledger rows still 2; is the 07:00 IST Dhan
+   token renewal (VM cron, `src.renew_token`) still minting cleanly.
+2. **Free-trial GCP credit expires 2026-10-01** (archive block, 07-xx). Three
+   weeks out. Decide billing before the VM stops.
+3. Carried unchanged from the backlog below: DH-905 at 08:03, NIFTY MID
+   SELECT quotes, `report_downloader` crawl, ledger Issue 24 follow-up (b).
+4. V1 CODE FREEZE still binds; the weekly release cadence staged on 08-16 has
+   not started.
+
+**This cloud session changed no code.** It wrote this block and the 08-19
+timeline entry, on branch `claude/back-after-long-1cyewz`. Bring it into
+`main` from the Mac with `git pull origin claude/back-after-long-1cyewz`.
+
 ## 2026-08-17 — Sequences 5 + 6: capital flow and the latching halt (DEPLOYED)
 
 **What is live now.** VM at `20883b9`, pulled and verified 2026-08-17 ~11:15

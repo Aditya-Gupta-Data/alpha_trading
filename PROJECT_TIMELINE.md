@@ -235,6 +235,14 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-08-19 · 4 commits · 11 files touched
+
+- `b743cd5` docs: ledger — miner first-pass corrections + the 08-18 candidate purge (decision #93)
+- `11cc35a` feat(miner): one signal = one pattern, and monthly seasonality is un-minable (decision #93)
+- `cdc107b` fix(tests): close the RULE 6 leak — the suite was reading (and writing) live supervision state
+- `c674835` config: human-pulse tripwire 3 -> 30 trading days (owner directive 2026-08-19)
+
+
 ### 2026-08-17 · 4 commits · 18 files touched
 
 - `20883b9` feat(dept3): the risk-of-ruin halt LATCHES — capital cannot buy a resume (decision #92)

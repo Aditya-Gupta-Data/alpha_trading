@@ -42,6 +42,43 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-10 — Data-plan lapse, VM hang + reset, swap added (OPS ONLY, no code change)
+
+**What is live now.** VM still at `b743cd5` (no deploy since 08-19), all 4
+services active, 31/31 cron lines, **1 GB swap now on** (`/swapfile`, in
+fstab), disk 81%. Dhan **Data API plan re-subscribed 09-10 11:43 IST, valid
+to 2026-10-10** — the 11:45 sweep captured 88/88. The desk was BLIND
+2026-09-07 → 09-10 11:43 (ledger Issue 26); the VM HUNG on 09-09 ~09:55 →
+15:10 and was hard-reset (Issue 27).
+
+**What is broken / unwired.**
+- Three NIFTY FIN SERVICE spreads 16 days past their 08-25 expiry, still
+  open, ₹73,845 locked, blocking every FIN SERVICE proposal — the tracker has
+  no expiry backstop (Issue 28). **Not fixed.** Watch whether bars returning
+  lets it settle them itself (exit would be dated 08-23).
+- `ceo_brief` labels DH-902 "authentication not valid" — wrong; it is the
+  data plan. No red card exists for consecutive zero-capture sessions;
+  `daily_health_and_queue.sh` said `all_ok=True` through the whole outage.
+- Stage B will have ~9 graded calls at the Oct-13 target; slow_burn has
+  carried 0 strategies in 52 nights (ledger Observation 09-09). Decision
+  needed on what the Oct-13 read means.
+- 13 positions were unmarked through the outage; today's brief is the first
+  honest MTM since 09-04. Issue 24's ₹26,982.14 hand-add still applies.
+
+**What the next person should do first.**
+1. Confirm tonight's CEO brief shows marks again and check whether the three
+   FIN SERVICE spreads settled; if not, take Issue 28 to Dept 3.
+2. Hotfix-size: relabel DH-902 in `ceo_brief`/ops sweep; add a
+   "N sessions zero capture" card; add a `mem_available < 100 MB` card.
+3. **Diarise 2026-10-10** — the data plan renews nothing on its own.
+4. Human pulse: last human action 08-11; the 30-trading-day tripwire fires
+   ~09-22 unless the owner touches `decide_pending`.
+
+**Critic's readiness verdict (09-09, owner asked):** not ready for real
+capital — 29 resolved trades, per-trade Sharpe 0.23, spread marks from a
+linear model, and this week's outage went unpaged. Gate table in the
+session transcript; nothing of it is in code.
+
 ## 2026-08-17 — Sequences 5 + 6: capital flow and the latching halt (DEPLOYED)
 
 **What is live now.** VM at `20883b9`, pulled and verified 2026-08-17 ~11:15

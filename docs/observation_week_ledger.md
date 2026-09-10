@@ -1353,3 +1353,119 @@ nothing wired to sizing or entry). What failed was legibility.
   the corpus. Collapsing fixed the COUNT, not the sample size — none of these
   becomes evidence until the proving harness collects out-of-sample
   resolutions.
+
+---
+
+## Issue 26 — DhanHQ Data API subscription lapsed; the desk ran blind for three sessions with no dedicated page and a wrong label (2026-09-07 → 2026-09-10 11:43 IST, found in a critic's audit on 09-09)
+
+- **Symptom:** every Dhan historical/quote call answered `DH-902 Invalid_Access`
+  — "HTTP Status 451. User has not subscribed to Data APIs". Counted per day
+  across `logs/*.log`: 09-07 **183**, 09-08 **180**, 09-09 **170**, 09-10 **180**
+  (before 11:43). Consequences, all read off the VM on 09-09 ~09:50 IST:
+  15-min sweep captured **0 / 2225** (09-07), **0 / 1691** (09-08), **0 / 178**
+  (09-09 to 09:40); `darlings_daily` 0 / 120 on 09-07 and 09-08; `chain_archiver`
+  **CA-BLACKOUT** (all 9 underlyings empty) on 09-07 and 09-08; every market-loop
+  cycle "no market state this cycle"; 13 positions unmarked, CEO brief still
+  printing a confident firm MTM with both unrealized legs at 0.
+- **Root cause — CONFIRMED** from the VM with the live token:
+  `GET /v2/profile` → `tokenValidity 10/09/2026 07:00` (auth fine) but
+  `dataPlan: "Deactive"`, `dataValidity: "NA"`. The paid Data API plan had
+  expired. Not a token problem: the 07:00 renewal succeeded every day.
+- **A wrong turn on 09-09 worth recording:** the owner added funds to the
+  trading account; `fundlimit` then showed `availabelBalance: 2000.0` while
+  `dataPlan` stayed `Deactive`. A fresh token mint changed nothing. **Account
+  funds and the Data API subscription are separate things** — the plan is
+  bought on the Dhan web "Trading APIs / Data APIs" page.
+- **Resolution (2026-09-10 ~11:43 IST, owner action, no code):** plan
+  subscribed; profile now `dataPlan: "Active"`, `dataValidity: 2026-10-10
+  11:43:39`. Verified through the system's own door, not a probe: the 11:45
+  IST sweep captured **88 / 88, 0 failed**, and zero 451s after 11:43.
+- **Code that was live:** `b743cd5` throughout (no deploy in the window).
+- **Follow-ups (open):**
+  (a) `ceo_brief` / ops sweep label DH-902 as "the authentication is not
+  valid" — **wrong diagnosis**; it points the owner at the token, not the plan.
+  (b) No dedicated red card for "N consecutive sessions with zero captures";
+  the ops sweep buried it in 1,390 problem lines and
+  `scripts/daily_health_and_queue.sh` printed `all_ok=True` every night because
+  its canary only watches `macro_nightly`.
+  (c) **Renewal date to diarise: 2026-10-10.** Nothing in the system knows it.
+  (d) Isolated 451 hits on 06-26, 07-29, 07-30, 08-05 (4–24 per day) predate
+  this lapse and are **unexplained** — not investigated here.
+  (e) Side observation, not root-caused: the 09-08 20:30 ops card reported
+  `data/sector_index_bars.json` **12.1 days stale** and self-disabled the
+  sector bullish veto; the Mac shipped 7/7 artifacts at 09-09 07:19 and the
+  local file was current to 09-08. The Mac had simply not been awake to ship.
+
+---
+
+## Issue 27 — the e2-micro hung under memory pressure in market hours; hard reset + 1 GB swap (2026-09-09, reset 15:10 IST; swap 2026-09-10 ~11:55 IST)
+
+- **Symptom:** at 09:47 IST `free -m` read 132 MB free, swap 0. A read-only
+  Dhan probe launched ~09:52 never returned; from ~09:55 every SSH attempt
+  failed with "Connection timed out during banner exchange" (TCP port 22 still
+  accepted connections). Serial console 09:55–10:04: `systemd-journald`
+  "Under memory pressure, flushing caches" ×7, then killed by its watchdog,
+  **restart counter 181**, restart timed out, "Failed to start
+  systemd-journald.service". Cloud Monitoring: CPU ~**94%** flat from 10:05
+  IST; the agent memory metric returned no series. Google's ops agent was
+  logging "Exporting failed. Dropping data" in a loop.
+- **What we do NOT know:** the exact trigger. Market-hour jobs
+  (master_scheduler + 15-min tracker + 10:00 portfolio_report) and the probe
+  overlapped; whether the probe was the last straw is unverified. No OOM-killer
+  line appeared in the serial buffer (which only held 09:55 onward).
+- **This supersedes the 2026-08-08 observation** ("the e2-micro is NOT
+  memory-starved"). That snapshot was true off-market with 353 MB available;
+  a journald restart counter of 181 says pressure had been recurring since,
+  and on 09-09 it became a full hang.
+- **Resolution:** (1) owner-approved `gcloud compute instances reset` at
+  **15:10:32 IST** — back at 15:11, 4/4 services active, 31/31 cron lines, IP
+  unchanged. The 09-09 market loop (09:10 job) died with the reset; it had been
+  blind all day anyway (Issue 26). (2) **1 GB `/swapfile`** created 09-10
+  ~11:55 IST, `mkswap`/`swapon`, persisted in `/etc/fstab`. Verified:
+  `swapon --show` 1024M, `free` Swap 1023 MB. Disk went 70% → **81%** (1.9 GB
+  free) — watch it.
+- **Follow-ups:** the ops sweep already reports `mem_available_mb`; a card
+  below ~100 MB would have named this a day earlier. Nothing built.
+
+---
+
+## Issue 28 — three NIFTY FIN SERVICE spreads sat 15 days past expiry, still "open", ₹73,845 of margin locked; the tracker has no wall-clock expiry backstop (found 2026-09-09, NOT fixed)
+
+- **Facts (journal + `margin_locks`, read 09-09):** `3af8c6ce`
+  (bull_call_spread, opened 08-06, ₹20,967 locked), `c03a52d4` (iron_condor,
+  08-11, ₹19,728), `e38312e1` (bear_put_spread, 08-12, ₹33,150) — all expiry
+  **2026-08-25**, all `outcome: null` on 09-09. The exposure gate (decision
+  #68) cites each of them to refuse every new FIN SERVICE proposal, every
+  cycle. Total unreleased locks on 09-09: 13 rows, ₹6,45,070.
+- **Mechanism:** `plan_tracker._resolve_spread` walks daily bars and exits at
+  `days_left <= 2`; with no bars it prints "no price data … will retry next
+  run" and moves on. There is **no rule that says "expiry has passed, settle"**.
+  The api-server journal since 09-07 shows that retry line **162×** for FIN
+  SERVICE.
+- **Unverified:** why they did not settle between 08-23 and 09-04, when Dhan
+  was answering. The api journal for that window has rotated; the 07-29/07-30/
+  08-05 451 hits on index ids (Issue 26 d) are a candidate, not a finding.
+- **Follow-up:** Department 3 decision — an expiry-date backstop (settle at the
+  last available close on or before expiry, named as such). Also watch whether
+  the tracker now closes them itself with bars back (09-10 onward); if it does,
+  the exit will be dated 08-23 and 17 days late.
+
+---
+
+## Observation — Stage-B maturity arithmetic: the 60-session clock counts declarations, not graded calls (2026-09-09)
+
+Read from `logs/macro_regime_declarations.jsonl` (52 nights, 07-22 → 09-08)
+and `macro_strategy_scores.jsonl` (9 rows, all resolved 08-18):
+
+| Horizon / phase | Declarations | Strategies attached | Sessions to mature |
+|---|---|---|---|
+| shock P1 | 3 | 3 each | 10 — the only graded set (9 rows) |
+| shock P2 | 8 | 3 each | 45 — first (08-11) matures ~mid-Oct |
+| shock P3 | 41 | 34×3, 7×0 | 120 — ~Jan 2027 |
+| slow_burn S1 / S2 | 52 | **0** | 120 / 300 — nothing to grade |
+
+`stage_b_tracker` reports "35/60 sessions, ok"; at the 2026-10-13 target the
+graded record will be **~9 calls from 3 declarations**, plus the P2 batch only
+if it matures in time. The slow-burn horizon has never carried a strategy in
+52 nights. Not a bug in the scorer (embargo logic is correct); a gap between
+what the clock promises and what Dept 5 will have to rule on. Needs a decision.

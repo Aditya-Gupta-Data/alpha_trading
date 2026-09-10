@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-10 · 1 commits · 2 files touched
+
+- `a57c5cf` docs: ledger Issues 26-28 + Stage-B observation; HANDOVER 09-10 ops block (data-plan lapse, VM reset, swap)
+
+
 ### 2026-08-17 · 4 commits · 18 files touched
 
 - `20883b9` feat(dept3): the risk-of-ruin halt LATCHES — capital cannot buy a resume (decision #92)

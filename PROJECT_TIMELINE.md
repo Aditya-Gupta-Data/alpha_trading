@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-11 · 1 commits · 4 files touched
+
+- `be000b9` docs: Dhan Orders API scoped as read-only broker-book sync — spec v1.0, decision #94, HANDOVER 09-11 (plan only, no code)
+
+
 ### 2026-09-10 · 1 commits · 2 files touched
 
 - `a57c5cf` docs: ledger Issues 26-28 + Stage-B observation; HANDOVER 09-10 ops block (data-plan lapse, VM reset, swap)

@@ -470,3 +470,26 @@ def test_health_verdict_is_stateless_and_names_the_red_lines():
         clean = om.health_verdict(make_logs(sub, {"a.log": "fine\n"}),
                                   now=MONDAY, telemetry={"mem_available_mb": 480})
         assert clean[0].startswith("  ✅")
+
+
+def test_health_verdict_counts_auth_codes_only_since_the_last_sweep():
+    """2026-09-11 false RED: the day after the plan renewal a raw tail still
+    held hundreds of outage-era DH-902 lines. The verdict must count only
+    what a log wrote after the nightly sweep's stored offset."""
+    with tempfile.TemporaryDirectory() as tmp:
+        logs = make_logs(tmp, {"master_scheduler.log": DH902_LINE + "\n" + DH902_LINE + "\n"})
+        log = logs / "master_scheduler.log"
+        state = logs / ".ops_monitor_state.json"
+        # a sweep already consumed both lines
+        state.write_text(json.dumps({"master_scheduler.log": log.stat().st_size}))
+        lines = om.health_verdict(logs, now=MONDAY, telemetry={"mem_available_mb": 480})
+        text = "\n".join(lines)
+        assert "AUTH/DATA ACCESS" not in text and "since the last ops sweep" in text
+        # a NEW refusal after the sweep is counted, and only that one
+        with open(log, "a") as f:
+            f.write(DH902_LINE + "\n")
+        text = "\n".join(om.health_verdict(logs, now=MONDAY,
+                                           telemetry={"mem_available_mb": 480}))
+        assert "AUTH/DATA ACCESS: DH-902 x1" in text
+        assert not state.read_text().startswith("{}")        # never rewritten
+        assert json.loads(state.read_text()) == {"master_scheduler.log": log.stat().st_size - len(DH902_LINE) - 1}

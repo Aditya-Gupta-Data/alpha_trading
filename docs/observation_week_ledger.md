@@ -1503,6 +1503,11 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - `scripts/daily_health_and_queue.sh` now runs `src.ops_monitor --verdict`
   (stateless, log tails) so the daily command cannot say all_ok through an
   outage again.
+- **First live `--verdict` on the VM (09-11 ~18:20 IST) read a FALSE RED:** 735
+  DH-902 lines from the outage were still inside the 512 KB log tails a day
+  after the renewal. Fixed the same hour (`dbb23a1` → follow-up): the verdict
+  now counts auth codes only in what each log wrote after the nightly sweep's
+  stored offset; re-run on the VM after the fix is recorded in HANDOVER.
 - **Unverified / not done:** the alarms have not yet fired on a real outage;
   the first live check is tonight's 20:30 card. `tests/test_darling_shadow.py::
   test_run_darling_cycle_resolves_forces_then_proposes_offline` fails on HEAD

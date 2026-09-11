@@ -241,29 +241,55 @@ def collect_alarms(problems: list, telemetry: dict, logs_dir: Path = LOGS_DIR,
 
 
 def health_verdict(logs_dir: Path = LOGS_DIR, now: datetime = None,
-                   telemetry: dict = None) -> list:
-    """On-demand (stateless) read for `daily_health_and_queue.sh`: the same
-    three detectors over the log TAILS, so a human running the command
-    during an outage sees RED without waiting for the 20:30 sweep."""
+                   telemetry: dict = None, state_path: Path = None) -> list:
+    """On-demand read for `daily_health_and_queue.sh`: the same three
+    detectors, so a human running the command during an outage sees RED
+    without waiting for the 20:30 sweep. Read-only — it never writes the
+    state file or the problem ledger.
+
+    Auth codes are counted in what each log has written SINCE THE LAST
+    NIGHTLY SWEEP (the sweep's stored byte offsets), because a raw tail has
+    no dates: on 2026-09-11, a day AFTER the plan was renewed, a 512 KB tail
+    still held 735 DH-902 lines from the outage and read RED. With no state
+    file yet, the last 512 KB is scanned and the line says so."""
     now = now or datetime.now()
-    tail_problems = []
+    state = _load_state(Path(state_path) if state_path else
+                        Path(logs_dir) / STATE_PATH.name)
+    recent_problems = []
     for path in sorted(Path(logs_dir).glob("*.log")):
         if path.name in REPORT_LOGS:
             continue
         counts: dict = {}
-        for line in _read_tail(path, 512_000).splitlines():
+        if path.name in state:
+            try:
+                offset = int(state[path.name])
+                with open(path, "r", errors="replace") as f:
+                    if path.stat().st_size >= offset:
+                        f.seek(offset)
+                        chunk = f.read()
+                    else:
+                        chunk = f.read()           # rotated: read it all
+            except OSError:
+                chunk = ""
+        else:
+            chunk = _read_tail(path, 512_000)
+        for line in chunk.splitlines():
             for code in DHAN_CODE_PATTERN.findall(line):
                 if code in AUTH_CODES:
                     counts[code] = counts.get(code, 0) + 1
         for code, n in counts.items():
-            tail_problems.append({"log": path.name, "line": code, "count": n})
+            recent_problems.append({"log": path.name, "line": code, "count": n})
     telemetry = telemetry if telemetry is not None else system_telemetry()
-    alarms = collect_alarms(tail_problems, telemetry, logs_dir, now)
+    alarms = collect_alarms(recent_problems, telemetry, logs_dir, now)
     blind = capture_blindness(logs_dir, now)
+    window = ("since the last ops sweep" if state
+              else "in the log tails (no sweep state yet)")
     lines = []
     if not alarms:
-        lines.append("  ✅ no auth/data-access refusals in the log tails, "
+        lines.append(f"  ✅ no auth/data-access refusals {window}, "
                      "no blind sessions, memory above the floor")
+    elif any(a["kind"] == "auth" for a in alarms):
+        lines.append(f"  (auth/data-access codes counted {window})")
     for a in alarms:
         lines.append("  " + a["text"])
     latest = blind.get("latest_session")

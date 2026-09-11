@@ -42,6 +42,41 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-11 — Dhan Orders API scoped: read-only broker-book sync, PLAN ONLY (docs only, no code change)
+
+**What is live now.** Unchanged from 09-10: VM at `b743cd5`, 4 services, 31/31
+cron lines, Data API plan valid to 2026-10-10. No deploy today. No code
+touched. Suite not run (docs-only day).
+
+**What happened.** Planning session on integrating Dhan's Orders API.
+Requirements were agreed with the owner and written to
+`docs/dhan_broker_book_sync_plan.md` (v1.0); scoping recorded as
+**decision #94**. Details were confirmed live against the official Dhan MCP
+connector: today's order book, super-order book, trade book and positions
+are all empty, holdings returns `DH-1111` (an empty state, not an error),
+funds ₹1,411.18. Dhan's docs confirm static-IP whitelisting binds ONLY
+placement (reads need none), no idempotency guarantee exists for orders,
+and one-token-per-client-id (#48) still holds.
+
+**Owner decisions (09-11).** First release = READ-ONLY sync (order/trade/super
+books, positions, funds). Rule 7 NOT lifted — plan only, **build not
+authorised.** Both desks reconciled from day one. Runs on the Mac with the
+token COPIED FROM THE VM (never minted on the Mac). 15-min cadence in market
+hours + EOD backfill. **No trading — infra readiness only**; the ₹1,411 Dhan
+account is unfunded infra.
+
+**What is broken / unwired.** Nothing new. The 09-10 list below still stands
+(FIN SERVICE spreads past expiry, DH-902 mislabel, zero-capture card
+missing, Issue 24 hand-add).
+
+**What the next person should do first.**
+1. Do NOT build the broker-book sync unless the owner says go. If they do:
+   first commit = a new DECISIONS.md entry permitting a read-only reader +
+   Rule 7 reworded to "no order *placement* path"; second = the NSE_FNO
+   contract-id resolver (the one real prerequisite); then the reader per
+   the spec. Never import `place_*`/`modify_*`/`cancel_*` from `dhanhq`.
+2. Everything from the 09-10 block's "do first" list is still open.
+
 ## 2026-09-10 — Data-plan lapse, VM hang + reset, swap added (OPS ONLY, no code change)
 
 **What is live now.** VM still at `b743cd5` (no deploy since 08-19), all 4

@@ -152,6 +152,7 @@ that is designed but not scheduled — none is stale, none is superseded):
 | `docs/discord_ingestion_pipeline.md` | Discord ingestion |
 | `docs/ews_phase2_spec.md` | Early-warning system phase 2 |
 | `docs/commercial_tip_verifier.md` | Tip verification (commercial, shelved with G2) |
+| `docs/dhan_broker_book_sync_plan.md` | Read-only Dhan broker-book sync (order/trade books, positions, funds → reconciliation). v1.0 agreed 2026-09-11, decision #94. **Plan only, build not authorised.** No placement. |
 
 **Retired 2026-08-11 to `docs/archive_v0/`** — nine Phase-4/5-era planning
 documents, kept verbatim, no longer part of the active surface:
@@ -167,7 +168,11 @@ them** — several contradict current state, which is exactly why they moved.
 ## Not on this roadmap, deliberately
 
 * **A broker/order path.** Paper money only. No order path exists in
-  `src/` and none is planned (house rule, `CLAUDE.md` §7).
+  `src/` and none is planned (house rule, `CLAUDE.md` §7). *Clarified
+  2026-09-11 (decision #94): a READ-ONLY broker-book sync — pulling Dhan's
+  order/trade books for reconciliation, placing nothing — has been scoped
+  in `docs/dhan_broker_book_sync_plan.md`. It is not an order path, it is
+  not built, and building it still needs the owner's go.*
 * **Wiring the Macro Regime Engine to sizing or entry.** Zero execution
   authority by standing rule; it is a Department 5 decision gated on a
   passed statistical test, never a code change taken on initiative.

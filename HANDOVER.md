@@ -42,6 +42,39 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-11 (evening) — Phase 1 hotfixes: expiry backstop + RED health alarms (CODE, deploy below)
+
+**What changed (architect directive, hotfix under the V1 freeze, decision
+#95).** `src/plan_tracker.py` gained a wall-clock **expiry backstop**: a
+spread past its expiry with no on-or-before-expiry bar exit is force-settled
+— at intrinsic on the last close ≤ expiry, or with no data at all at the
+defined max loss after a 3-day grace — margin released, `settlement_basis`
+stamped. `src/ops_monitor.py` gained three **RED alarms** that forbid the ✅
+card: DH-901/902/903/906 in any log, ≥2 consecutive zero-capture sessions in
+`intraday_15m.log`, MemAvailable < 100 MB. `src/ceo_brief.py` relabels DH-902
+as the Data API subscription. `scripts/daily_health_and_queue.sh` runs
+`src.ops_monitor --verdict`. Tests: `tests/test_expiry_backstop.py` (11) +
+10 new in `tests/test_ops_monitor.py`.
+
+**Stuck trades (Issue 28): already cleared.** The tracker settled all three
+FIN SERVICE spreads itself on 09-10 12:03–12:04 IST when bars returned;
+locks released, exits dated 08-18/21/24. Verified from the VM's live ledger
+copy. Ledger entry appended.
+
+**Suite.** Full run on the Mac 09-11: **2,146 passed, 1 failed** —
+`test_darling_shadow.py::test_run_darling_cycle_resolves_forces_then_proposes_offline`,
+which fails on HEAD *before* this change (calendar-dependent). Also
+pre-existing: `test_options_spreads.py` leaks seams into
+`test_intraday_exit.py` in that order. Neither touched. Deploy state is in
+the line below this block once done.
+
+**What the next person should do first.**
+1. Read tonight's 20:30 ops card: it is the first live run of the alarms.
+   A ✅ card tonight is the expected result (plan valid, 480 MB free).
+2. Fix the two pre-existing test issues above (hygiene, freeze-compatible).
+3. Everything in the 09-10 block's list still stands (DH-902 mislabel is now
+   done; the FIN SERVICE item is closed).
+
 ## 2026-09-11 — Dhan Orders API scoped: read-only broker-book sync, PLAN ONLY (docs only, no code change)
 
 **What is live now.** Unchanged from 09-10: VM at `b743cd5`, 4 services, 31/31

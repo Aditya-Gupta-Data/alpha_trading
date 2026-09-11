@@ -243,8 +243,13 @@ def _plain_subject(subject: str, limit: int = 80) -> str:
 # a confident wrong summary is worse than a raw line the owner can grep.
 DHAN_ERROR_CODES = {
     "DH-901": "the access token is invalid or expired",
-    "DH-902": "the authentication is not valid",
-    "DH-903": "the login failed",
+    # Relabelled 2026-09-11 (ledger Issue 26): Dhan's own DH-902 text is
+    # "User has not subscribed to Data APIs or does not have access". It is a
+    # SUBSCRIPTION lapse, not a token problem — the 09-07→09-10 outage was
+    # misread for three sessions because this line said "authentication".
+    "DH-902": ("the Dhan DATA API subscription has lapsed or is not active — "
+               "renew the plan at Dhan; a fresh token will NOT fix this"),
+    "DH-903": "the account or segment is inactive at Dhan",
     "DH-904": "too many requests — rate limited",
     "DH-905": "the request itself was malformed (bad symbol or date range)",
     "DH-906": "the data is not available for that instrument",

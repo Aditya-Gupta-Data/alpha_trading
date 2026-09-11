@@ -1469,3 +1469,44 @@ graded record will be **~9 calls from 3 declarations**, plus the P2 batch only
 if it matures in time. The slow-burn horizon has never carried a strategy in
 52 nights. Not a bug in the scorer (embargo logic is correct); a gap between
 what the clock promises and what Dept 5 will have to rule on. Needs a decision.
+
+---
+
+## Issues 26 / 27 / 28 — Phase 1 operational hotfixes (2026-09-11, architect directive)
+
+- **Issue 28, stuck FIN SERVICE spreads — CLEARED BY THE TRACKER ITSELF on
+  2026-09-10 12:03–12:04 IST**, once bars returned after the plan renewal:
+  `3af8c6ce` pre_expiry_exit dated 08-24 (₹-8,629.58), `c03a52d4` profit_take
+  dated 08-21 (₹+2,803.53), `e38312e1` profit_take dated 08-18 (₹+14,604.63);
+  all three `margin_locks` rows show `released_at` 2026-09-10 (read from the
+  VM's `brain_map.db` + `journal.jsonl` on 09-11 17:56 IST). Exits are dated
+  16–23 days late, exactly as the 09-10 block predicted. No open lock is past
+  expiry as of 09-11.
+- **Issue 28, the mechanism — FIXED** (`src/plan_tracker.py`, decision #95):
+  wall-clock expiry backstop. Past expiry with no on-or-before-expiry exit,
+  settle at intrinsic on the last close ≤ expiry; with no data at all, at the
+  defined max loss after a 3-day grace; margin released either way, basis
+  stamped on the outcome. A raising feed is now caught per entry.
+  `tests/test_expiry_backstop.py` (11 tests) covers both paths and the
+  unchanged 2-day rule.
+- **Issue 26, wrong label + no page — FIXED** (`src/ceo_brief.py`,
+  `src/ops_monitor.py`): DH-902 now reads "Data API subscription lapsed — a
+  fresh token will NOT fix this"; any DH-9xx is a problem line and the
+  auth/data-access subset is a 🔴 alarm above the card cap. Zero-capture
+  blindness: ≥2 consecutive sessions in which every `intraday_15m.log` slot
+  reports `captured: 0` is 🔴 (one session is ⚠️). Verified against the real
+  log: 09-07/08/09 would have read 3 blind sessions; 09-03 (23 empty of 53
+  slots) correctly does not.
+- **Issue 27, no memory warning — FIXED** (`src/ops_monitor.py`):
+  MemAvailable < 100 MB is 🔴 on the nightly card. VM read 09-11 17:5x IST:
+  MemTotal 964 MB, MemAvailable 480 MB, swap 1 GB.
+- `scripts/daily_health_and_queue.sh` now runs `src.ops_monitor --verdict`
+  (stateless, log tails) so the daily command cannot say all_ok through an
+  outage again.
+- **Unverified / not done:** the alarms have not yet fired on a real outage;
+  the first live check is tonight's 20:30 card. `tests/test_darling_shadow.py::
+  test_run_darling_cycle_resolves_forces_then_proposes_offline` fails on HEAD
+  before this change (calendar-dependent: `time_stop` now precedes
+  `strong_sell_tier`), and `tests/test_options_spreads.py` leaks tracker seams
+  into `tests/test_intraday_exit.py` when run in that order (RULE 6); both
+  pre-existing, both left for a separate hygiene fix.

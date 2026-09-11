@@ -226,6 +226,72 @@ def _resolve_spread(entry: dict, bars: list):
     return None
 
 
+# ------------------------------------------------- expiry backstop (Issue 28)
+#
+# 2026-09-11 hotfix. `_resolve_spread` only ever exits on a DAILY BAR: with
+# no bars (dead token, lapsed Data API plan — Issue 26) it printed "will
+# retry next run" forever, and three NIFTY FIN SERVICE spreads sat 15 days
+# past their 2026-08-25 expiry with ₹73,845 of margin locked, blocking every
+# new FIN SERVICE proposal through the exposure gate (Issue 28).
+#
+# The backstop is a WALL-CLOCK rule: once today's date is past the expiry,
+# the spread no longer exists at the exchange, so the journal must not say
+# it is open. Settlement price, in order of honesty:
+#
+#   1. the last available close ON OR BEFORE expiry -> intrinsic value only
+#      (time value is zero at expiry). Named `last_close_on_or_before_expiry`.
+#      Fires the first sweep after expiry.
+#   2. NO price data at all -> the defined max loss, named
+#      `no_price_data_max_loss`. Deliberately CONSERVATIVE (the ledger's
+#      loss-permanence bias, RULE 3): a settlement is never marked up on a
+#      guess. Waits EXPIRY_BACKSTOP_GRACE_DAYS after expiry so a one-day
+#      outage can still recover the real close via (1); after that the
+#      margin release matters more than the mark, and the outcome carries
+#      the basis so the row can be reviewed by hand.
+#
+# Both paths release the margin lock and journal the outcome exactly like a
+# normal resolution. Nothing here places an order (Rule 7).
+EXPIRY_BACKSTOP_RESOLUTION = "expiry_backstop"
+EXPIRY_BACKSTOP_GRACE_DAYS = 3        # calendar days past expiry before path (2)
+
+
+def _today() -> date:
+    """Wall clock seam — tests replace this to move the calendar."""
+    return date.today()
+
+
+def _expiry_backstop(entry: dict, bars: list, today: date = None):
+    """Force-settle a spread whose expiry date has passed.
+
+    Returns None while the backstop does not apply (expiry not yet past, or
+    no data and still inside the grace window). Otherwise returns
+      (resolution, exit_mark_per_share, frac_left, exit_day, exit_close,
+       settlement_basis, close_date)
+    where exit_close/close_date are None on the no-data path."""
+    spread = entry["spread"]
+    expiry = date.fromisoformat(spread["expiry"])
+    today = today or _today()
+    if today <= expiry:
+        return None
+    lot = int(spread["lot_size"])
+    m_entry = _spread_entry_mark(spread)
+    max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+    max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+
+    usable = [b for b in (bars or []) if b[0] <= spread["expiry"]]
+    if usable:
+        close_day, _low, _high, close = max(usable, key=lambda b: b[0])
+        m_now = _spread_mark(spread, float(close), 0.0)   # intrinsic only
+        profit_ps = max(-max_loss_ps, min(m_now - m_entry, max_profit_ps))
+        return (EXPIRY_BACKSTOP_RESOLUTION, m_entry + profit_ps, 0.0,
+                spread["expiry"], float(close),
+                "last_close_on_or_before_expiry", close_day)
+    if (today - expiry).days < EXPIRY_BACKSTOP_GRACE_DAYS:
+        return None
+    return (EXPIRY_BACKSTOP_RESOLUTION, m_entry - max_loss_ps, 0.0,
+            spread["expiry"], None, "no_price_data_max_loss", None)
+
+
 def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float,
                        vix: float = None) -> tuple:
     """(total_frictions, total_slippage) across ALL legs, both ends of the
@@ -414,6 +480,13 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
 
 def _spread_verdict(entry: dict, resolution: str, pnl_net: float, capture_pct: float) -> str:
     approved = entry["decision"] == "approved"
+    if resolution == EXPIRY_BACKSTOP_RESOLUTION:
+        basis = (entry.get("outcome") or {}).get("settlement_basis")
+        if basis == "no_price_data_max_loss":
+            return ("EXPIRY BACKSTOP — NO PRICE DATA: settled at the defined max loss "
+                    "(conservative, wall clock; review this row by hand)")
+        return (f"EXPIRY BACKSTOP — settled at intrinsic value on the last close "
+                f"before expiry (wall clock), net Rs.{pnl_net:+,.2f}")
     if resolution == "profit_take":
         return (f"WIN — auto-exit at {capture_pct:.0f}% of max profit (gamma discipline)"
                 if approved else
@@ -699,7 +772,9 @@ def _spread_outcome_line(entry: dict) -> str:
     o = entry["outcome"]
     s = entry["spread"]
     label = {"profit_take": "PROFIT TAKE (65% of max)",
-             "pre_expiry_exit": "PRE-EXPIRY EXIT (2-day gamma rule)"}[o["resolution"]]
+             "pre_expiry_exit": "PRE-EXPIRY EXIT (2-day gamma rule)",
+             EXPIRY_BACKSTOP_RESOLUTION: "EXPIRY BACKSTOP (wall-clock settlement)",
+             }.get(o["resolution"], o["resolution"].upper())
     head = (f"{label}: {s['strategy']} on {entry['ticker']} from {entry['date']} "
             f"closed atomically (all {len(s['legs'])} legs together) on "
             f"{o['exit_date']} — net Rs.{o['pnl_rs']:+,.2f} "
@@ -844,14 +919,28 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
     # ---- Phase 5: options spread sweep (atomic basket exits) ----------
     for entry in open_spreads:
         spread = entry["spread"]
-        bars = _daily_bars(entry["ticker"], entry["date"])
-        if not bars:
-            print(f"Plan tracker: no price data for {entry['ticker']} spread — will retry next run.")
-            continue
-        hit = _resolve_spread(entry, bars)
+        # A dead feed must not kill the sweep: the expiry backstop below is
+        # exactly for the days the feed is dead (Issues 26/28).
+        try:
+            bars = _daily_bars(entry["ticker"], entry["date"])
+        except Exception as e:
+            print(f"Plan tracker: price feed error for {entry['ticker']} spread ({e}).")
+            bars = []
+        hit = _resolve_spread(entry, bars) if bars else None
+        backstop = None
+        # The bar walk only settles on a bar. Past expiry with no usable
+        # exit (no bars, a gap over the exit window, or a "pre-expiry" hit
+        # that landed on a POST-expiry bar) the wall clock takes over.
+        if hit is None or hit[3] > spread["expiry"]:
+            backstop = _expiry_backstop(entry, bars)
+            if backstop is not None:
+                hit = backstop[:4]
         if hit is None:
-            print(f"Plan tracker: {spread['strategy']} on {entry['ticker']} still live "
-                  f"(expiry {spread['expiry']}).")
+            if not bars:
+                print(f"Plan tracker: no price data for {entry['ticker']} spread — will retry next run.")
+            else:
+                print(f"Plan tracker: {spread['strategy']} on {entry['ticker']} still live "
+                      f"(expiry {spread['expiry']}).")
             continue
 
         resolution, m_exit, frac_left, exit_day = hit
@@ -860,8 +949,17 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         m_entry = _spread_entry_mark(spread)
         gross_pnl = (m_exit - m_entry) * qty
 
-        _day, _low, _high, exit_close = bars[[b[0] for b in bars].index(exit_day)]
-        total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), frac_left)
+        if backstop is not None:
+            exit_close = backstop[4]
+            if exit_close is None:
+                # No price to cost an exit against: the mark is already the
+                # full defined loss; frictions/slippage are not invented.
+                total_frictions, total_slippage = 0.0, 0.0
+            else:
+                total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), 0.0)
+        else:
+            _day, _low, _high, exit_close = bars[[b[0] for b in bars].index(exit_day)]
+            total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), frac_left)
         pnl_net = round(gross_pnl - total_frictions - total_slippage, 2)
 
         max_profit_total = float(spread["max_profit"]) * int(spread.get("lots", 1))
@@ -891,8 +989,14 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             "exit_style": "atomic_basket",       # all legs closed together, always
             "hypothetical": not approved,
             "position_closed": settled,
-            "verdict": _spread_verdict(entry, resolution, pnl_net, capture_pct),
         }
+        if backstop is not None:
+            # Additive keys (older rows lack them; readers tolerate absence):
+            # WHICH price settled the row, and from WHICH session.
+            entry["outcome"]["settlement_basis"] = backstop[5]
+            entry["outcome"]["settlement_close_date"] = backstop[6]
+            entry["outcome"]["settled_on"] = _today().isoformat()
+        entry["outcome"]["verdict"] = _spread_verdict(entry, resolution, pnl_net, capture_pct)
         # Same immediate-persistence rule as the equity sweep above.
         journal.rewrite_all(entries)
         resolved += 1

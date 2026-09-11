@@ -31,6 +31,18 @@ echo
 
 echo
 echo "------------------------------------------------------------"
+echo " DATA & HOST HEALTH  (auth refusals / blind sessions / memory)"
+echo "------------------------------------------------------------"
+# 2026-09-11 (ledger Issues 26 + 27): this command said all_ok=True through a
+# three-session data outage because it only read the macro heartbeat. The
+# ops monitor's three RED detectors now run here too, stateless, over the
+# log tails — exit 2 means at least one RED line above.
+( cd "$ROOT" && "$PY" -m src.ops_monitor --verdict ) \
+  || { rc=$?; [ "$rc" -eq 2 ] && echo "  >>> RED: act on the line(s) above before anything else." \
+       || echo "  (ops_monitor --verdict unavailable, rc=$rc)"; }
+
+echo
+echo "------------------------------------------------------------"
 echo " MAC HANDOVER QUEUE"
 echo "------------------------------------------------------------"
 

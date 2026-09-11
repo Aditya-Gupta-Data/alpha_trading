@@ -95,8 +95,184 @@ ZERO_STAT_PATTERNS = re.compile(
     r")")
 
 
+# Dhan API error codes are problems in their own right, whatever words sit
+# around them (2026-09-11, ledger Issue 26: the DH-902 lines said "failure"
+# and were swept, but they were buried among twelve other problem lines and
+# nothing named them). Any DH-9xx code now (a) counts as a problem line and
+# (b) the AUTH/DATA-ACCESS subset below is raised as a RED ALARM at the top
+# of the card, outside the MAX_CARD_PROBLEMS cap.
+DHAN_CODE_PATTERN = re.compile(r"\b(DH-9\d\d)\b")
+AUTH_CODES = {
+    "DH-901": "access token invalid or expired",
+    "DH-902": ("Dhan DATA API subscription lapsed or not active — renew the "
+               "plan at Dhan; a fresh token will NOT fix this"),
+    "DH-903": "account or segment inactive at Dhan",
+    "DH-906": "invalid token (as observed in this repo since 2026-07-09)",
+}
+
+
 def is_problem_line(text: str) -> bool:
-    return bool(PROBLEM_PATTERNS.search(ZERO_STAT_PATTERNS.sub("", text)))
+    return bool(PROBLEM_PATTERNS.search(ZERO_STAT_PATTERNS.sub("", text))
+                or DHAN_CODE_PATTERN.search(text))
+
+
+# --------------------------------------------------------------------------
+# RED ALARMS (2026-09-11, ledger Issues 26 + 27). Three conditions that the
+# log sweep + heartbeats could not see, because each one leaves the logs
+# looking "touched" and the counters looking clean:
+#   * an AUTH / DATA-ACCESS refusal from Dhan (the desk is blind, every job
+#     still "ran")
+#   * ZERO-CAPTURE sessions — the 15-minute tracker wrote a line every slot
+#     and every line said captured: 0 (three sessions, 09-07 → 09-09, and the
+#     daily health command said all_ok=True throughout)
+#   * LOW MEMORY — the e2-micro hung at ~09:55 on 09-09 with no warning
+# Each is measured, never inferred; each has an injectable input.
+ZERO_CAPTURE_SESSIONS = 2            # consecutive blind sessions -> RED
+LOW_MEMORY_MB = 100                  # MemAvailable below this -> RED
+CAPTURE_LOG = "intraday_15m.log"     # the 15-minute tracker's cron log
+CAPTURE_TAIL_BYTES = 4_000_000       # enough for ~2 weeks of slots
+
+
+def _read_tail(path: Path, max_bytes: int = CAPTURE_TAIL_BYTES) -> str:
+    try:
+        size = path.stat().st_size
+        with open(path, "r", errors="replace") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+                f.readline()                   # drop the partial first line
+            return f.read()
+    except OSError:
+        return ""
+
+
+def capture_blindness(logs_dir: Path = LOGS_DIR, now: datetime = None,
+                      capture_log: str = CAPTURE_LOG) -> dict:
+    """Per-session capture tally from the 15-minute tracker's JSON lines.
+
+    A SESSION is a calendar date that has at least one non-skipped capture
+    line. It is BLIND when EVERY such line reports captured == 0 (a partial
+    day — some slots empty, others full — is not blind; 2026-09-03 had 23
+    empty slots and 30 full ones). `blind_streak` counts consecutive blind
+    sessions ending at the most recent session on or before `now`.
+    Returns {"sessions": {date: {"slots", "zero"}}, "blind_streak": int,
+             "blind_dates": [...], "latest_session": date|None}."""
+    now = now or datetime.now()
+    today = now.date().isoformat()
+    per_day: dict = {}
+    for line in _read_tail(Path(logs_dir) / capture_log).splitlines():
+        text = line.strip()
+        if not text.startswith("{") or '"captured"' not in text:
+            continue
+        try:
+            rec = json.loads(text)
+        except ValueError:
+            continue
+        if rec.get("skipped"):
+            continue
+        day = str(rec.get("ts", ""))[:10]
+        if len(day) != 10 or day > today:
+            continue
+        slot = per_day.setdefault(day, {"slots": 0, "zero": 0})
+        slot["slots"] += 1
+        if not rec.get("captured"):
+            slot["zero"] += 1
+    streak, blind_dates = 0, []
+    for day in sorted(per_day, reverse=True):
+        s = per_day[day]
+        if s["slots"] and s["zero"] == s["slots"]:
+            streak += 1
+            blind_dates.append(day)
+        else:
+            break
+    return {"sessions": per_day, "blind_streak": streak,
+            "blind_dates": sorted(blind_dates),
+            "latest_session": max(per_day) if per_day else None}
+
+
+def auth_alarms(problems: list) -> list:
+    """RED alarms for any AUTH / DATA-ACCESS code among the swept lines."""
+    counts: dict = {}
+    for p in problems:
+        for code in DHAN_CODE_PATTERN.findall(p.get("line", "")):
+            if code in AUTH_CODES:
+                counts[code] = counts.get(code, 0) + int(p.get("count", 1))
+    return [{"kind": "auth", "code": code, "count": n,
+             "text": f"🔴 AUTH/DATA ACCESS: {code} x{n} — {AUTH_CODES[code]}"}
+            for code, n in sorted(counts.items())]
+
+
+def capture_alarm(blind: dict) -> dict | None:
+    streak = int(blind.get("blind_streak") or 0)
+    if streak <= 0:
+        return None
+    dates = ", ".join(blind.get("blind_dates") or [])
+    if streak >= ZERO_CAPTURE_SESSIONS:
+        return {"kind": "zero_capture", "streak": streak, "red": True,
+                "text": (f"🔴 DATA BLIND: {streak} consecutive session(s) with "
+                         f"ZERO captures ({dates}) — the desk is not seeing prices")}
+    return {"kind": "zero_capture", "streak": streak, "red": False,
+            "text": (f"⚠️ zero captures all session on {dates} — one more "
+                     f"blind session turns this RED")}
+
+
+def memory_alarm(telemetry: dict) -> dict | None:
+    mb = (telemetry or {}).get("mem_available_mb")
+    if mb is None or mb >= LOW_MEMORY_MB:
+        return None
+    return {"kind": "low_memory", "mem_available_mb": mb, "red": True,
+            "text": (f"🔴 LOW MEMORY: {mb} MB available (< {LOW_MEMORY_MB} MB) — "
+                     f"the VM hung at this level on 2026-09-09")}
+
+
+def collect_alarms(problems: list, telemetry: dict, logs_dir: Path = LOGS_DIR,
+                   now: datetime = None) -> list:
+    """All red/amber alarms for one sweep, in card order. Fail-open per
+    detector: a broken detector costs its own line, never the sweep."""
+    alarms = []
+    for fn in (lambda: auth_alarms(problems),
+               lambda: [a for a in [capture_alarm(capture_blindness(logs_dir, now))] if a],
+               lambda: [a for a in [memory_alarm(telemetry)] if a]):
+        try:
+            alarms.extend(fn())
+        except Exception as e:                      # pragma: no cover - defensive
+            alarms.append({"kind": "detector_error", "red": False,
+                           "text": f"⚠️ an alarm detector failed open: {e}"})
+    return alarms
+
+
+def health_verdict(logs_dir: Path = LOGS_DIR, now: datetime = None,
+                   telemetry: dict = None) -> list:
+    """On-demand (stateless) read for `daily_health_and_queue.sh`: the same
+    three detectors over the log TAILS, so a human running the command
+    during an outage sees RED without waiting for the 20:30 sweep."""
+    now = now or datetime.now()
+    tail_problems = []
+    for path in sorted(Path(logs_dir).glob("*.log")):
+        if path.name in REPORT_LOGS:
+            continue
+        counts: dict = {}
+        for line in _read_tail(path, 512_000).splitlines():
+            for code in DHAN_CODE_PATTERN.findall(line):
+                if code in AUTH_CODES:
+                    counts[code] = counts.get(code, 0) + 1
+        for code, n in counts.items():
+            tail_problems.append({"log": path.name, "line": code, "count": n})
+    telemetry = telemetry if telemetry is not None else system_telemetry()
+    alarms = collect_alarms(tail_problems, telemetry, logs_dir, now)
+    blind = capture_blindness(logs_dir, now)
+    lines = []
+    if not alarms:
+        lines.append("  ✅ no auth/data-access refusals in the log tails, "
+                     "no blind sessions, memory above the floor")
+    for a in alarms:
+        lines.append("  " + a["text"])
+    latest = blind.get("latest_session")
+    if latest:
+        s = blind["sessions"][latest]
+        lines.append(f"  last capture session {latest}: "
+                     f"{s['slots'] - s['zero']}/{s['slots']} slots captured")
+    lines.append("  " + telemetry_line(telemetry))
+    return lines
 
 # What should have written its log today (name -> weekdays-only flag).
 # This default is the VM's schedule (the engine machine). Any deployment
@@ -345,16 +521,22 @@ def telemetry_line(t: dict) -> str:
 
 
 def build_card(problems: list, missing: list, when: str,
-               telemetry: dict = None, stale: dict = None) -> str:
+               telemetry: dict = None, stale: dict = None,
+               alarms: list = None) -> str:
     """The terse nightly health card.
 
     `stale` is `staleness_guard.alert_payload(...)` — None (the default, and
     the value on any clean scan) leaves this card BYTE-IDENTICAL to before the
     guard existed. A stale artifact is never folded into the problem count: a
     log line that says "failed" and a file that quietly stopped updating are
-    different diseases and the card must not blur them."""
+    different diseases and the card must not blur them.
+
+    `alarms` (2026-09-11) are the RED conditions from `collect_alarms`. Any
+    alarm forbids the ✅ card and is printed FIRST, above the problem cap —
+    "all OK" during a data outage is the failure this line exists to end."""
     total = sum(p["count"] for p in problems)
-    if not problems and not missing:
+    alarms = alarms or []
+    if not problems and not missing and not alarms:
         card = (f"✅ **Ops sweep {when}** — all jobs ran, "
                 "no problem lines in any log.")
         if stale:
@@ -362,8 +544,13 @@ def build_card(problems: list, missing: list, when: str,
         if telemetry:
             card += "\n" + telemetry_line(telemetry)
         return card
-    lines = [f"🩺 **Ops sweep {when}** — {total} problem line(s), "
-             f"{len(missing)} silent job(s):"]
+    red = sum(1 for a in alarms if a.get("red", True))
+    head = "🚨" if red else "🩺"
+    lines = [f"{head} **Ops sweep {when}** — "
+             + (f"{red} RED alarm(s), " if red else "")
+             + f"{total} problem line(s), {len(missing)} silent job(s):"]
+    for a in alarms:
+        lines.append(f"• {a['text']}")
     for m in missing:
         lines.append(f"• ⏰ {m}")
     for p in problems[:MAX_CARD_PROBLEMS]:
@@ -409,7 +596,9 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
         print(f"  (staleness scan skipped — failing open: {e})")
 
     telemetry = system_telemetry()
-    card = build_card(problems, missing, when, telemetry=telemetry, stale=stale)
+    alarms = collect_alarms(problems, telemetry, logs_dir, now)
+    card = build_card(problems, missing, when, telemetry=telemetry, stale=stale,
+                      alarms=alarms)
     print(card, flush=True)
     if notify_fn is None:
         def notify_fn(text):
@@ -430,9 +619,22 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
             "stale_artifacts": (stale or {}).get("count", 0),
             "disabled_components": (stale or {}).get("disabled", 0),
             "stale_names": (stale or {}).get("names", []),
-            "telemetry": telemetry}
+            "telemetry": telemetry,
+            "alarms": [a["kind"] for a in alarms],
+            "red_alarms": sum(1 for a in alarms if a.get("red", True)),
+            "auth_failures": sum(a["count"] for a in alarms if a["kind"] == "auth"),
+            "blind_sessions": next((a["streak"] for a in alarms
+                                    if a["kind"] == "zero_capture"), 0),
+            "low_memory": any(a["kind"] == "low_memory" for a in alarms)}
 
 
 if __name__ == "__main__":
+    import sys
+    if "--verdict" in sys.argv[1:]:
+        # Stateless read for the daily health command — no card, no state
+        # file, no ledger write. Exit 2 on a RED alarm so a shell can see it.
+        verdict = health_verdict()
+        print("\n".join(verdict))
+        sys.exit(2 if any("🔴" in v for v in verdict) else 0)
     summary = run_sweep()
     print(json.dumps(summary))

@@ -68,6 +68,15 @@ pre-existing: `test_options_spreads.py` leaks seams into
 `test_intraday_exit.py` in that order. Neither touched. Deploy state is in
 the line below this block once done.
 
+**DEPLOYED.** VM at `69b1a87` (pulled ~18:30 IST 09-11), `alpha-trading`
+restarted so the running tracker carries the backstop, `alpha-discord-bot`
+active. On the VM (venv): 123/123 scoped tests green; `src.ops_monitor
+--verdict` reads ✅ (25/25 slots captured today, 467 MB free); no open spread
+is past expiry; 13 open locks, all live. First `--verdict` had read a false
+RED from outage-era tail lines — fixed in `69b1a87` before this line was
+written. `wrap_session.sh --skip-tests` used because the gate would trip on
+the pre-existing darling failure; the full suite was run by hand (2,146/1).
+
 **What the next person should do first.**
 1. Read tonight's 20:30 ops card: it is the first live run of the alarms.
    A ✅ card tonight is the expected result (plan valid, 480 MB free).

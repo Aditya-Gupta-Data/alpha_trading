@@ -69,6 +69,10 @@ exists: the breakout gap leg is T+1 open vs prev close, or a live quote at
 the open. The court verdict needs `harness_min_resolutions` (7) real
 resolutions per primitive before it says anything.
 
+**DEPLOYED.** VM at `f4aff47` (~19:1x IST 09-11), `alpha-trading` restarted,
+`alpha-discord-bot` active; 95/95 scoped tests green on the VM venv; the
+shadow module is on no cron line (verified: 0 matches in `setup_cron.sh`).
+
 **Suite.** Full run: **2,173 passed, 1 failed** — the same pre-existing
 calendar-dependent `test_darling_shadow` failure as the evening block.
 New: `tests/test_glassbreaking.py` (17), `tests/test_tranches_trailing.py` (13).

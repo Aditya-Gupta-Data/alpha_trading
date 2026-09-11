@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-11 · 4 commits · 13 files touched
+### 2026-09-11 · 6 commits · 17 files touched
 
+- `8b7add9` docs: HANDOVER 09-11 night block — M4A shadow deploy state
+- `f4aff47` feat(m4a): Glassbreaking Profits shadow — falling-knife + early-breakout primitives routed only to debit spreads, tranche/trail prep in plan_tracker, Proving Court enrolment (decision #96)
 - `44e3ed9` docs: HANDOVER 09-11 evening block — deploy state for the Phase 1 hotfixes
 - `69b1a87` fix(ops): health verdict counts auth codes since the last sweep offset, not the raw tail (false RED on the VM after the plan renewal)
 - `dbb23a1` fix(ops): wall-clock expiry backstop for spreads + RED health alarms (auth / zero-capture / low memory) — Issues 26-28, decision #95

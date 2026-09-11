@@ -35,6 +35,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 _PLAN_KEYS = (
     "variant", "entry_rule", "stop_loss", "target", "risk_reward",
     "max_loss_rs", "invalidation", "rationale",
+    # M4A (2026-09-11, decision #96): the tracker's ATR trail and tranche
+    # ladder are read from these two keys. Before this line, `trailing` was
+    # silently dropped here and the trail could never fire on a real row.
+    # No live proposer stamps either key yet — additive and inert.
+    "trailing", "tranches",
 )
 
 

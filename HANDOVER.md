@@ -42,6 +42,43 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-11 (night) — Phase 4 "Glassbreaking Profits" (M4A) shipped as SHADOW (CODE; deploy below)
+
+**What changed (architect authorisation, decision #96).** New
+`src/strategies/glassbreaking.py`: `falling_knife` (RSI ≤ 30 or anchored-VWAP
+support after a ≥ 8% drop) and `early_breakout` (gap-up ≥ 2% + volume ≥ 2×
+avg or a bulk/block print; SMA 50/200 bypassed by design), each routed
+ONLY to a bull call spread with a post-build defined-risk assertion, sized
+at 0.5% of pool, carrying a +1R/+2R tranche ladder (max 3× base) and an ATR
+trail on the underlying. Writes `logs/glassbreaking_shadow.jsonl`; enrols
+each primitive as a TRIAL hypothesis in the Proving Court (registry +
+trial); `court_scorecard` gives n / wins / Wilson LB against the court's
+own bar. **On no schedule.** `plan_tracker`: `atr_trailing_stop` (one
+ratchet), tranche OBSERVATION on any plan with `plan.tranches`
+(`outcome.tranches.pyramid_pnl_rs`, never booked), `_resolve_spread_trailed`
+for the shadow grader only (live `_resolve_spread` unchanged — lock holds),
+`trail_hit` digest label, time-stop on the `_today` seam. `journal._PLAN_KEYS`
+now keeps `trailing` / `tranches` (they were silently dropped before — the
+08-05 equity trail could never have fired on a real row).
+
+**What is NOT done, on purpose.** No cron/sleep-phase task runs the shadow
+yet (needs a candidate feed: bhavcopy bars via `bhavcopy_clerk.bars_for_many`
++ a chain read through `dhan_guard`; the module owns rules, not data doors).
+Add-ons are not booked (M4A gaps 1–4 in PROP_ROADMAP). No pre-market feed
+exists: the breakout gap leg is T+1 open vs prev close, or a live quote at
+the open. The court verdict needs `harness_min_resolutions` (7) real
+resolutions per primitive before it says anything.
+
+**Suite.** Full run: **2,173 passed, 1 failed** — the same pre-existing
+calendar-dependent `test_darling_shadow` failure as the evening block.
+New: `tests/test_glassbreaking.py` (17), `tests/test_tranches_trailing.py` (13).
+
+**What the next person should do first.**
+1. Decide the candidate feed for the shadow (Mac-side bhavcopy scan +
+   chain read) and where it runs; then a nightly `run` + `grade` pass.
+2. Watch tonight's 20:30 ops card (first live run of the RED alarms).
+3. The two pre-existing test hygiene items (evening block) still stand.
+
 ## 2026-09-11 (evening) — Phase 1 hotfixes: expiry backstop + RED health alarms (CODE, deploy below)
 
 **What changed (architect directive, hotfix under the V1 freeze, decision

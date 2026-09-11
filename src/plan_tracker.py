@@ -226,6 +226,59 @@ def _resolve_spread(entry: dict, bars: list):
     return None
 
 
+def _resolve_spread_trailed(entry: dict, bars: list):
+    """M4A (2026-09-11, decision #96): `_resolve_spread` PLUS an ATR trail
+    on the UNDERLYING, for entries that carry `plan.trailing`. This is a
+    SEPARATE resolver on purpose: the live sweep keeps calling the
+    trail-free `_resolve_spread` (the 2026-08-05 anti-drift lock — a
+    vertical is defined-risk and a trail can only cut winners — still
+    holds byte-for-byte there). Only the Glassbreaking SHADOW grader calls
+    this one, so whether a trail helps a debit spread is a question the
+    Proving Court answers before the live path ever asks it.
+
+    Bullish structures trail BELOW the running peak close; bearish ones
+    ABOVE the running trough. One-way ratchet, tested against the NEXT
+    bar, exactly like the equity trail. Without `plan.trailing` this is
+    `_resolve_spread` exactly."""
+    trail = trailing_config(entry)
+    if trail is None:
+        return _resolve_spread(entry, bars)
+    spread = entry["spread"]
+    expiry = date.fromisoformat(spread["expiry"])
+    total_days = max(1, (expiry - date.fromisoformat(entry["date"])).days)
+    m_entry = _spread_entry_mark(spread)
+    lot = int(spread["lot_size"])
+    max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+    max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+    bullish = str(spread.get("direction", "bullish")).lower() != "bearish"
+    ratchet, extreme, seen = None, None, []
+
+    for idx, (day, _low, _high, close) in enumerate(bars):
+        seen.append(bars[idx])
+        if day <= entry["date"]:
+            continue
+        frac_left = max(0.0, (expiry - date.fromisoformat(day)).days / total_days)
+        profit_ps = max(-max_loss_ps, min(_spread_mark(spread, float(close), frac_left)
+                                          - m_entry, max_profit_ps))
+        m_now = m_entry + profit_ps
+        c = float(close)
+        if ratchet is not None and ((bullish and c <= ratchet)
+                                    or (not bullish and c >= ratchet)):
+            return "trail_hit", m_now, frac_left, day
+        if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
+            return "profit_take", m_now, frac_left, day
+        if (expiry - date.fromisoformat(day)).days <= _forced_exit_days(entry.get("ticker")):
+            return "pre_expiry_exit", m_now, frac_left, day
+        extreme = c if extreme is None else (max(extreme, c) if bullish
+                                             else min(extreme, c))
+        a = atr_from_bars(seen, trail["atr_n"])
+        if a is not None:
+            ratchet = atr_trailing_stop(extreme, a, trail["atr_mult"],
+                                        floor=None, current=ratchet,
+                                        bullish=bullish)
+    return None
+
+
 # ------------------------------------------------- expiry backstop (Issue 28)
 #
 # 2026-09-11 hotfix. `_resolve_spread` only ever exits on a DAILY BAR: with
@@ -491,6 +544,10 @@ def _spread_verdict(entry: dict, resolution: str, pnl_net: float, capture_pct: f
         return (f"WIN — auto-exit at {capture_pct:.0f}% of max profit (gamma discipline)"
                 if approved else
                 f"MISSED GAIN — it reached {capture_pct:.0f}% of max profit without you")
+    if resolution == "trail_hit":
+        return (f"{'WIN' if pnl_net > 0 else 'LOSS' if pnl_net < 0 else 'flat'} — "
+                f"ATR trail on the underlying ratcheted us out at "
+                f"{capture_pct:.0f}% of max profit")
     if pnl_net > 0:
         return ("WIN — closed ahead at the pre-expiry exit" if approved
                 else "MISSED GAIN — it closed ahead without you")
@@ -574,6 +631,158 @@ def atr_from_bars(bars: list, n: int = TRAIL_ATR_N):
     return round(sum(trs) / n, 4)
 
 
+def atr_trailing_stop(extreme: float, atr: float, atr_mult: float,
+                      floor: float = None, current: float = None,
+                      bullish: bool = True) -> float:
+    """The ratchet, as one pure function (M4A, 2026-09-11). For a long,
+    the candidate stop is `extreme − mult×ATR`, never below `floor` (the
+    plan's own hard stop) and never below the `current` trail — it only
+    ever rises. For a short/bearish structure the mirror: `trough +
+    mult×ATR`, only ever falls. `_resolve` (equity) and `_resolve_spread`
+    (spreads with `plan.trailing`) both call this."""
+    if bullish:
+        candidate = extreme - atr_mult * atr
+        if floor is not None:
+            candidate = max(candidate, float(floor))
+        return candidate if current is None else max(current, candidate)
+    candidate = extreme + atr_mult * atr
+    if floor is not None:
+        candidate = min(candidate, float(floor))
+    return candidate if current is None else min(current, candidate)
+
+
+# ------------------------------------------------- tranches (M4A pyramiding)
+#
+# STRUCTURE ONLY, deliberately (2026-09-11, decision #96). A plan may carry
+#     plan.tranches = {"levels": [{"at_r": 1.0, "add_lots": 1},
+#                                 {"at_r": 2.0, "add_lots": 1}],
+#                      "max_lots": 3}
+# and the tracker then OBSERVES where each add-on would have fired (the
+# first bar whose favourable excursion reaches +at_r × initial risk) and
+# what the add-ons would have earned to the exit. That observation lands
+# on the outcome as `tranches` with `pyramid_pnl_rs` kept SEPARATE from
+# `pnl_rs`: no add-on is booked to cash, no margin is locked for it, and
+# the capital layer never sees it. Booking pyramids for real is a Dept-5
+# decision gated on the Proving Court's read of exactly these rows.
+TRANCHE_MAX_MULT_DEFAULT = 3
+
+
+def tranche_config(entry: dict) -> dict | None:
+    """Normalised `plan.tranches` or None. Levels sorted by at_r; a level
+    with at_r <= 0 or add_lots < 1 is dropped; an empty ladder is None."""
+    cfg = (entry.get("plan") or {}).get("tranches")
+    if not isinstance(cfg, dict):
+        return None
+    levels = []
+    for lv in cfg.get("levels") or []:
+        try:
+            at_r, add = float(lv.get("at_r")), int(lv.get("add_lots"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if at_r > 0 and add >= 1:
+            levels.append({"at_r": at_r, "add_lots": add})
+    if not levels:
+        return None
+    levels.sort(key=lambda lv: lv["at_r"])
+    try:
+        max_lots = int(cfg.get("max_lots") or 0)
+    except (TypeError, ValueError):
+        max_lots = 0
+    return {"levels": levels, "max_lots": max_lots}
+
+
+def tranche_events(cfg: dict, base_lots: int, r_path: list) -> list:
+    """Walk [(day, r_high, add_price)] in order; the FIRST bar whose
+    favourable excursion reaches a level fires that level, once, capped so
+    base + adds never exceed max_lots. `add_price` is either a number (the
+    fill for any level on that bar — a spread's close mark) or a callable
+    `f(at_r) -> price` (an equity add fills AT the level price, entry +
+    at_r × risk, where the trigger was crossed intrabar — never at the
+    bar's high). Pure."""
+    events, total = [], int(base_lots)
+    pending = list(cfg["levels"])
+    cap = int(cfg.get("max_lots") or 0)
+    for day, r_high, add_price in r_path:
+        while pending and r_high >= pending[0]["at_r"]:
+            lv = pending.pop(0)
+            add = lv["add_lots"]
+            if cap and total + add > cap:
+                add = max(0, cap - total)
+            if add <= 0:
+                continue
+            total += add
+            px = add_price(lv["at_r"]) if callable(add_price) else add_price
+            events.append({"at_r": lv["at_r"], "date": day,
+                           "price": round(float(px), 2), "add_lots": add})
+    return events
+
+
+def _equity_r_path(entry: dict, bars: list, until_day: str) -> list:
+    """(day, r_high, add_price) per bar after entry up to the exit day,
+    R measured on the plan's own initial risk per share."""
+    price = float(entry["price"])
+    risk = price - float(entry["plan"]["stop_loss"]["price"])
+    if risk <= 0:
+        return []
+    out = []
+    for day, _low, high, _close in bars:
+        if day <= entry["date"]:
+            continue
+        if day > until_day:
+            break
+        r_high = (float(high) - price) / risk
+        out.append((day, r_high, lambda at_r, p=price, k=risk: p + at_r * k))
+    return out
+
+
+def _spread_r_path(entry: dict, bars: list, until_day: str) -> list:
+    """(day, r, mark) per bar after entry up to the exit day, R = modelled
+    profit per share ÷ max loss per share (the same clamp as _resolve_spread)."""
+    spread = entry["spread"]
+    expiry = date.fromisoformat(spread["expiry"])
+    total_days = max(1, (expiry - date.fromisoformat(entry["date"])).days)
+    lot = int(spread["lot_size"])
+    max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+    max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+    m_entry = _spread_entry_mark(spread)
+    if max_loss_ps <= 0:
+        return []
+    out = []
+    for day, _low, _high, close in bars:
+        if day <= entry["date"]:
+            continue
+        if day > until_day:
+            break
+        frac_left = max(0.0, (expiry - date.fromisoformat(day)).days / total_days)
+        profit_ps = max(-max_loss_ps, min(_spread_mark(spread, float(close), frac_left)
+                                          - m_entry, max_profit_ps))
+        out.append((day, profit_ps / max_loss_ps, m_entry + profit_ps))
+    return out
+
+
+def observe_tranches(entry: dict, bars: list, exit_day: str, exit_price: float,
+                     base_lots: int, unit: int) -> dict | None:
+    """The outcome's `tranches` block, or None when the plan has no ladder.
+    `unit` is shares-per-lot (1 for equity, lot_size for spreads);
+    `exit_price` the per-share exit price/mark the add-ons would close at.
+    pyramid_pnl_rs is a SHADOW figure — see the block comment above."""
+    cfg = tranche_config(entry)
+    if cfg is None:
+        return None
+    if entry.get("spread"):
+        path = _spread_r_path(entry, bars, exit_day)
+    else:
+        path = _equity_r_path(entry, bars, exit_day)
+    events = tranche_events(cfg, base_lots, path)
+    pyramid = sum(ev["add_lots"] * unit * (float(exit_price) - ev["price"])
+                  for ev in events)
+    return {"ladder": cfg, "events": events,
+            "added_lots": sum(ev["add_lots"] for ev in events),
+            "pyramid_pnl_rs": round(pyramid, 2),
+            "booked": False,
+            "note": "shadow observation — not in pnl_rs, no margin locked (decision #96)"}
+
+
 def trailing_config(entry: dict) -> dict | None:
     """The entry's own trail spec, or None when it was opened without one."""
     cfg = (entry.get("plan") or {}).get("trailing")
@@ -624,13 +833,11 @@ def _resolve(entry: dict, bars: list):
             peak = high if peak is None else max(peak, high)
             a = atr_from_bars(seen, trail["atr_n"])
             if a is not None:
-                candidate = peak - trail["atr_mult"] * a
                 # Never below the plan's own stop, and never downward.
-                candidate = max(candidate, float(stop))
-                trail_stop = (candidate if trail_stop is None
-                              else max(trail_stop, candidate))
+                trail_stop = atr_trailing_stop(peak, a, trail["atr_mult"],
+                                               floor=stop, current=trail_stop)
 
-    age = (date.today() - date.fromisoformat(entry["date"])).days
+    age = (_today() - date.fromisoformat(entry["date"])).days
     if bars and age >= PLAN_MAX_DAYS:
         day, _low, _high, close = bars[-1]
         return "time_stop", round(float(close), 2), day
@@ -748,7 +955,8 @@ def _fmt_signed(value, spec: str = "+.1f", suffix: str = "") -> str:
 def _outcome_line(entry: dict) -> str:
     o = entry["outcome"]
     label = {"stop_hit": "STOPPED OUT", "target_hit": "TARGET HIT",
-             "time_stop": "TIME STOP"}[o["resolution"]]
+             "time_stop": "TIME STOP", "trail_hit": "ATR TRAIL HIT",
+             }.get(o["resolution"], str(o["resolution"]).upper())
     if entry["decision"] == "approved":
         head = (f"{label}: {entry['ticker']} bought {entry['date']} at "
                 f"Rs.{entry['price']:,.2f} exited at Rs.{o['price']:,.2f} "
@@ -773,6 +981,7 @@ def _spread_outcome_line(entry: dict) -> str:
     s = entry["spread"]
     label = {"profit_take": "PROFIT TAKE (65% of max)",
              "pre_expiry_exit": "PRE-EXPIRY EXIT (2-day gamma rule)",
+             "trail_hit": "ATR TRAIL HIT (underlying ratchet)",
              EXPIRY_BACKSTOP_RESOLUTION: "EXPIRY BACKSTOP (wall-clock settlement)",
              }.get(o["resolution"], o["resolution"].upper())
     head = (f"{label}: {s['strategy']} on {entry['ticker']} from {entry['date']} "
@@ -865,6 +1074,10 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             "position_closed": closed,
             "verdict": _verdict(entry, resolution, pct),
         }
+        tr = observe_tranches(entry, bars, exit_day, exit_price,
+                              base_lots=int(entry["shares"]), unit=1)
+        if tr is not None:
+            entry["outcome"]["tranches"] = tr
         # Persist THIS resolution immediately — a crash anywhere later in
         # the sweep (digest formatting, another entry, email) must never
         # un-resolve it. Before this line existed, one such crash replayed
@@ -996,6 +1209,11 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             entry["outcome"]["settlement_basis"] = backstop[5]
             entry["outcome"]["settlement_close_date"] = backstop[6]
             entry["outcome"]["settled_on"] = _today().isoformat()
+        tr = observe_tranches(entry, bars, exit_day, m_exit,
+                              base_lots=int(spread.get("lots", 1)),
+                              unit=int(spread["lot_size"]))
+        if tr is not None:
+            entry["outcome"]["tranches"] = tr
         entry["outcome"]["verdict"] = _spread_verdict(entry, resolution, pnl_net, capture_pct)
         # Same immediate-persistence rule as the equity sweep above.
         journal.rewrite_all(entries)

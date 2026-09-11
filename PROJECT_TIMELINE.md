@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-11 · 1 commits · 4 files touched
+### 2026-09-11 · 4 commits · 13 files touched
 
+- `44e3ed9` docs: HANDOVER 09-11 evening block — deploy state for the Phase 1 hotfixes
+- `69b1a87` fix(ops): health verdict counts auth codes since the last sweep offset, not the raw tail (false RED on the VM after the plan renewal)
+- `dbb23a1` fix(ops): wall-clock expiry backstop for spreads + RED health alarms (auth / zero-capture / low memory) — Issues 26-28, decision #95
 - `be000b9` docs: Dhan Orders API scoped as read-only broker-book sync — spec v1.0, decision #94, HANDOVER 09-11 (plan only, no code)
 
 

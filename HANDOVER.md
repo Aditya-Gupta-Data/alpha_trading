@@ -42,6 +42,28 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-12 — System blueprint + gap analysis (DOCS ONLY, no code change)
+
+**What happened.** Architect paused feature work for a structural review.
+Wrote `docs/SYSTEM_BLUEPRINT.md`: ingestion → storage → memory → routing
+(live vs shadow) → risk/execution → telemetry, with the VM's real counts as
+of 09-11, and a three-gap analysis: **GAP 1** the Proving Court has never
+heard a case (9 candidates all CANDIDATE, 0 organic shadow fires, 0
+placebos, 0 graded declarations, new M4A hypotheses with no feed); **GAP 2**
+single token / single box / sleeping laptop / model marks — the 09-07→09-10
+blindness is a structure, the 09-11 alarms only detect it; **GAP 3** no order
+lifecycle or per-leg schema (one r_multiple per ref, one lock per ref),
+routing duplicated between `options_proposer` and the unwired
+`trade_planner` matrix. Smallest fixes named per gap. Indexed from README
+and ROADMAP. Doc drift recorded (treasury 19:50 vs 19:56, "31/31" vs 30
+lines, "4 services" vs 3 named, XRAY §9 fixes 1–4 already done).
+
+**What is live now.** Unchanged: VM at `1deb165`, services active, no deploy.
+
+**What the next person should do first.** Read the blueprint §7 before
+proposing any new pipeline; GAP 1's nightly Dept-5 job is the recommended
+first build after the freeze lifts (shadow only, one Discord slot).
+
 ## 2026-09-11 (night) — Phase 4 "Glassbreaking Profits" (M4A) shipped as SHADOW (CODE; deploy below)
 
 **What changed (architect authorisation, decision #96).** New

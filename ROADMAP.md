@@ -154,6 +154,7 @@ that is designed but not scheduled — none is stale, none is superseded):
 | `docs/commercial_tip_verifier.md` | Tip verification (commercial, shelved with G2) |
 | `docs/dhan_broker_book_sync_plan.md` | Read-only Dhan broker-book sync (order/trade books, positions, funds → reconciliation). v1.0 agreed 2026-09-11, decision #94. **Plan only, build not authorised.** No placement. |
 | `src/strategies/glassbreaking.py` (module docstring) + `PROP_ROADMAP.md` M4A | Glassbreaking Profits: falling-knife + early-breakout primitives → debit spreads, tranche/trail prep. **Shadow, decision #96, on no schedule** — promotion is a Dept-5 court verdict. |
+| `docs/SYSTEM_BLUEPRINT.md` | The 2026-09-12 structural review: bird's-eye map + GAP 1 (court never heard a case), GAP 2 (single-token/box/laptop/model-mark blindness), GAP 3 (no order lifecycle or leg schema; routing duplicated). Each gap names its smallest fix. |
 
 **Retired 2026-08-11 to `docs/archive_v0/`** — nine Phase-4/5-era planning
 documents, kept verbatim, no longer part of the active surface:

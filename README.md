@@ -21,6 +21,7 @@ repository — only a market-data connection. Every "trade" is paper.
 | Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 31 VM jobs + the Mac sync agent |
 | See how the project evolved | [PROJECT_TIMELINE.md](PROJECT_TIMELINE.md) — day by day, from git |
 | Know what is coming next | [ROADMAP.md](ROADMAP.md) — the single index of future work |
+| See the whole desk on one page, and its weak links | [docs/SYSTEM_BLUEPRINT.md](docs/SYSTEM_BLUEPRINT.md) — the 2026-09-12 CTO blueprint: flows, stores, routing, risk, ops + a 3-gap analysis |
 | Know the rules code may not break | [CLAUDE.md](CLAUDE.md) §7 — house conventions (`OVERVIEW.md` retired to [docs/archive_v0/](docs/archive_v0/) 2026-08-11) |
 | **Work on this repo as an AI agent** | **[CLAUDE.md](CLAUDE.md)** — standing rules, loaded automatically |
 

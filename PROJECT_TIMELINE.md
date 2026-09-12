@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-12 · 1 commits · 4 files touched
+
+- `8beb71a` docs: SYSTEM_BLUEPRINT.md — CTO structural review, bird's-eye map + 3-gap analysis (court never tried a case; single-token/box/model-mark blindness; no order lifecycle or leg schema)
+
+
 ### 2026-09-11 · 6 commits · 17 files touched
 
 - `8b7add9` docs: HANDOVER 09-11 night block — M4A shadow deploy state

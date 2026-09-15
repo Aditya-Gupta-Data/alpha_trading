@@ -296,7 +296,9 @@ def build_setup(signal: dict, symbol: str, buy_strike: float, sell_strike: float
         return {**base, "accepted": False, "reason": why}
     base["structure"] = structure
     if not is_index:
-        ok, why = fo_gate(symbol, fo=fo, path=fo_path)
+        # the F&O file keys bare NSE names (RELIANCE); callers may pass the
+        # option-underlying spelling (RELIANCE.NS)
+        ok, why = fo_gate(str(symbol).split(".")[0], fo=fo, path=fo_path)
         if not ok:
             return {**base, "accepted": False, "reason": why}
     halt = "not_run"
@@ -438,13 +440,26 @@ def run(day: str, candidates: list, pool_rupees: float = 200_000.0,
     for c in candidates:
         try:
             sym = c["symbol"]
-            sig = falling_knife_signal(c.get("bars") or [])
+            bars = c.get("bars") or []
+            sig = falling_knife_signal(bars)
             if sig is None and c.get("today"):
-                sig = early_breakout_signal(c.get("bars") or [], c["today"])
+                # history must END the session before "today": when the
+                # feed already includes today's bar, drop it.
+                hist = bars[:-1] if (bars and str(bars[-1].get("date")) ==
+                                     str(c["today"].get("date"))) else bars
+                sig = early_breakout_signal(hist, c["today"])
             if sig is None:
                 continue
             sig.setdefault("date", day)
             ch = c.get("chain") or {}
+            if not ch:
+                _append(ledger_path or SHADOW_LEDGER,
+                        {"mode": MODE, "strategy": STRATEGY, "run_day": day, "symbol": sym,
+                         "primitive": sig.get("primitive"), "signal": sig, "accepted": False,
+                         "reason": "no_chain_for_underlying"})
+                out.append({"mode": MODE, "symbol": sym, "primitive": sig.get("primitive"),
+                            "accepted": False, "reason": "no_chain_for_underlying"})
+                continue
             setup = build_setup(sig, sym, ch.get("buy_strike"), ch.get("sell_strike"),
                                 ch.get("buy_premium"), ch.get("sell_premium"),
                                 int(ch.get("lot_size") or 0), ch.get("expiry"),

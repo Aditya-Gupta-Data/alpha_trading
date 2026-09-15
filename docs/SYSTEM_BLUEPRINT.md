@@ -374,6 +374,12 @@ block. Each names the evidence, what it costs, and the smallest honest fix.
 
 ### GAP 1 — The proving court has never heard a case, so nothing can ever earn authority
 
+> **Status 2026-09-15 — the fix below is BUILT and on cron (decision #97,
+> `src/validation/run_proving_court.py`, 21:00 IST).** First sitting tonight.
+> Coverage caveat: spreads are priced only where a 15:40 chain is archived
+> (five equity-option names); tier1 names without one are counted as
+> signals, not fires.
+
 **Evidence.** Department 5 is the system's constitutional centre: only it may
 grant a pattern the right to size or veto (#63). On the VM's own database it
 holds 9 candidates that have sat in `CANDIDATE` since the first miner pass on

@@ -137,6 +137,9 @@ JOB_DUE_HOUR = {
     "daily_archiver.log": 19.75,
     "sleep_phase.log": 20.0,
     "discovery_nightly.log": 20.3,
+    # proving_court.log (21:00, #97) runs AFTER the 20:30 sweep, so it is not
+    # a heartbeat job here or in ops_monitor; collect_court's STALE flag is
+    # its liveness check.
 }
 DUE_GRACE_HOURS = 0.5      # a job gets half an hour to actually write its log
 
@@ -854,6 +857,84 @@ def _miner_field(m: dict) -> dict:
             "inline": False}
 
 
+# --------------------------------------------------------------------------
+# THE PROVING COURT (decision #97, 2026-09-15). Read-only view of the
+# artifact `src/validation/run_proving_court.py` writes at 21:00.
+# --------------------------------------------------------------------------
+
+COURT_STATE_PATH = ROOT / "data" / "proving_court.json"
+COURT_STALE_DAYS = 2
+COURT_TOP_N = 5
+
+
+def collect_court(state_path=None, clock=None) -> dict:
+    """{available, date, stale, registry, fires, graded, fdr, top:[cards]}.
+    Fail-open: an absent or unreadable artifact reads available=False."""
+    out = {"available": False, "date": None, "stale": False, "registry": {},
+           "fires": 0, "graded": 0, "promoted": 0, "placebos_seeded": 0,
+           "fdr": None, "top": [], "skips": {}}
+    try:
+        s = json.loads(Path(state_path or COURT_STATE_PATH).read_text())
+    except Exception:
+        return out
+    now = (clock or datetime.now)()
+    out["available"] = True
+    out["date"] = s.get("date")
+    try:
+        age = (now.date() - date.fromisoformat(str(s.get("date")))).days
+        out["stale"] = age > COURT_STALE_DAYS
+    except Exception:
+        out["stale"] = True
+    out["registry"] = s.get("registry") or {}
+    out["fires"] = int(s.get("fires") or 0)
+    out["graded"] = int(s.get("graded") or 0)
+    out["promoted"] = len(s.get("promoted") or [])
+    out["placebos_seeded"] = int(((s.get("placebos") or {}).get("seeded")) or 0)
+    out["fdr"] = ((s.get("fdr") or {}).get("fdr")) or None
+    out["skips"] = s.get("skips") or {}
+    cards = [c for c in (s.get("scorecards") or []) if isinstance(c, dict)]
+    out["top"] = cards[:COURT_TOP_N]
+    return out
+
+
+def _court_field(c: dict) -> dict:
+    """`⚖️ Proving Court` — the OOS scorecard, or an honest 'court has not
+    sat' line. A hypothesis is shown as n / wins / Wilson LB vs its null so
+    a headline win-rate never appears without its lower bound."""
+    name = "⚖️ Proving Court"
+    if not c.get("available"):
+        return {"name": name, "inline": False,
+                "value": "Court has not sat yet — no data/proving_court.json (the 21:00 job has not run)."}
+    reg = c.get("registry") or {}
+    head = (f"Sat {c.get('date')}"
+            + (" ⚠️ STALE" if c.get("stale") else "")
+            + f" · TRIAL {reg.get('TRIAL', 0)} · VALIDATED {reg.get('VALIDATED', 0)}"
+            + f" · CANDIDATE {reg.get('CANDIDATE', 0)} · DEAD {reg.get('DEAD', 0)}"
+            + f" · fires {c.get('fires', 0)} · graded {c.get('graded', 0)}")
+    lines = [head]
+    fdr = c.get("fdr") or {}
+    if fdr:
+        if fdr.get("state") == "measured":
+            lines.append(f"🎲 placebo FDR {fdr.get('rate')} (Wilson LB {fdr.get('wilson_lb')}, "
+                         f"budget q={fdr.get('designed_q')})"
+                         + (" 🔴 GATES LOOSE" if fdr.get("alarm") else " ✅"))
+        else:
+            lines.append(f"🎲 placebo FDR: {fdr.get('state')} (n={fdr.get('n')})")
+    top = c.get("top") or []
+    if not top:
+        lines.append("No hypothesis has evidence yet — every row is n=0.")
+    for t in top:
+        tag = "placebo" if t.get("placebo") else (t.get("kind") or "?")
+        lines.append(f"• [{t.get('status')}|{tag}] {t.get('description', '')[:60]} — "
+                     f"n={t.get('n', 0)} wins={t.get('wins', 0)} "
+                     f"LB={t.get('wilson_lb', 0):.2f} vs null {t.get('null_rate', 0):.2f}"
+                     + (" ✅ promote" if t.get("promote") else ""))
+    if c.get("skips"):
+        lines.append("skips: " + ", ".join(f"{k}={str(v)[:40]}" for k, v in c["skips"].items()))
+    lines.append("Nothing here sizes a trade; promotion is the court's own rule (#63).")
+    return {"name": name, "value": "\n".join(lines)[:1024], "inline": False}
+
+
 def build_brief_card(logs_dir: Path = LOGS_DIR,
                      state_path: Path = STATE_PATH,
                      deploy_log_path: Path = DEPLOY_LOG_PATH,
@@ -862,7 +943,8 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
                      clock=None,
                      halt_lines_fn=None,
                      macro_sentence_fn=None,
-                     miner_fn=None) -> dict:
+                     miner_fn=None,
+                     court_fn=None) -> dict:
     """The whole brief as ONE notifier payload (event="ceo_brief").
 
     Every seam is a parameter so the entire card is assertable offline. Each
@@ -909,6 +991,16 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
         m = miner_fn() if miner_fn else None
         if m is not None:
             fields.append(_miner_field(m))
+    except Exception:
+        pass
+
+    # Decision #97 (2026-09-15): the Proving Court's scorecard — n / wins /
+    # Wilson LB per hypothesis, the placebo FDR — read from the artifact the
+    # 21:00 court job wrote. Same injection rule; court_fn=None = no field.
+    try:
+        c = court_fn() if court_fn else None
+        if c is not None:
+            fields.append(_court_field(c))
     except Exception:
         pass
 
@@ -984,7 +1076,8 @@ def main(argv=None) -> int:
     from src import ceo_language
     kw = {"halt_lines_fn": pm.halt_banner_lines,
          "macro_sentence_fn": ceo_language.macro_regime_sentence,
-         "miner_fn": collect_miner}
+         "miner_fn": collect_miner,
+         "court_fn": collect_court}
     payload = build_brief_card(**kw) if dry else send_brief(**kw)
     print(_render_text(payload), flush=True)
     if dry:

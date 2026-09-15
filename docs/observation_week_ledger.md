@@ -1515,3 +1515,37 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   `strong_sell_tier`), and `tests/test_options_spreads.py` leaks tracker seams
   into `tests/test_intraday_exit.py` when run in that order (RULE 6); both
   pre-existing, both left for a separate hygiene fix.
+
+---
+
+## Observation — the ₹6,213 realized drop between 09-11 and 09-15 was one equity-desk stop-out, SUPREMEIND, settled 09-15 11:20 IST (post-mortem 2026-09-15, architect request)
+
+- **The trade (VM `equity_shadow_journal.jsonl` + `margin_locks`):** `eqd:b8de8cfa`
+  SUPREMEIND.NS, darling_buy on a `weak_buy` tier (valuation 43), entered
+  2026-09-03 09:42 IST at ₹3,546.40 (`fill_basis: live`, sizing ×0.995),
+  28 shares, ₹99,299.20 locked, stop ₹3,366.76, target ₹3,905.68, 45-day time
+  stop. Exit 2026-09-15 11:20:52 IST at **₹3,350.00**, `reason: stop_loss`,
+  autopsy "Buy-zone defense failed: price broke the ATR stop below the zone
+  (cheap got cheaper)", R −1.09, held 12 days. `pnl_net` **−₹6,212.94**
+  (gross 28 × (3,350.00 − 3,546.40) = −₹5,499.20; the remaining −₹713.74 is
+  delivery frictions + tier slippage both sides). `realized_pnl` moved
+  42,496.70 → 36,283.76 on that release; equity_curve 09-15 11:21 shows
+  drawdown 0.80% from the ₹10,44,673.98 peak.
+- **Not 09-12 → 09-14.** No journal or lock row settled on those dates; the
+  drop is dated 09-15 11:21 IST. The other release in the window is
+  `eqd:66b55d93` DIXON.NS on 09-11 09:20 (−₹2,177.28, `strong_sell_tier`,
+  R −0.3), already inside the 09-11 figure.
+- **What is worth noticing:** the exit printed ₹16.76 *through* the stop
+  (3,350 vs 3,366.76) — the stop was seen on a 15-minute sweep, not at the
+  cross. `master_scheduler.log` carries 50 "provider returned no price — rate
+  limit or empty envelope" lines for SUPREMEIND out of 52 mentions in the
+  window, so the position was **unmarked on most sweeps** in its last
+  sessions; whether the stop was crossed earlier than 09-15 11:20 is
+  **unverified** (no bar-level check done). A handful of the tail lines read
+  `no_security_id — not in the darling id map` — timing relative to the
+  exit not established.
+- **Follow-up (not done):** Dept-3 question whether a desk position that
+  cannot be marked for N consecutive sweeps should be flagged on the EOD
+  card (it is a named skip on stderr today, RULE 7 abstention, but not a
+  card); and the quote-failure rate for darling ids under the 1 req/s
+  throttle.

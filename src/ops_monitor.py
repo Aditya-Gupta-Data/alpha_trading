@@ -353,6 +353,10 @@ EXPECTED_JOBS = {
     # measure the DATA's age rather than a log's presence and therefore work
     # across the machine boundary. On the Mac itself, add it with
     #     OPS_EXPECTED_JOBS="...,fo_bhavcopy.log:1"
+    # proving_court.log (21:00 IST, #97) is deliberately ABSENT: this sweep
+    # runs at 20:30, so a heartbeat for a 21:00 job would read SILENT every
+    # night (the cross_asset precedent). Its liveness check is the CEO
+    # brief's ⚖️ field, which flags the artifact STALE after 2 days.
     "discovery_nightly.log": False,  # daily 20:20 IST (gated miner pass #76,
                                      # pre-sweep like every job here — the log
                                      # is touched even on a gate-skip, so

@@ -45,6 +45,7 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | 20:20 daily | `src.discovery.nightly` | Gated Phase-5 miner pass (#76): skips (exit 0) unless ops heartbeats green + no INGESTION problems + `daily_context` ≥ 40 frames (60 → 50 → 40 on 2026-08-16, decisions #87/#88). Every 7th skip fires one Discord note. |
 | 20:30 daily | `src.ops_monitor` | Log sweep + job heartbeats → Discord health card. |
 | 20:40 daily | `src.bug_ledger` | Folds the ops sweep's problem lines + silent rejections/halts into `logs/autonomous_bug_report.jsonl` for the Thursday Protocol (#84). |
+| 21:00 daily | `src.validation.run_proving_court` | **The Proving Court (#97).** Ages CANDIDATEs → TRIAL, enrols the Glassbreaking primitives, seeds a weekly placebo batch, runs the shadow strategies over the bhavcopy universe priced from the 15:40 archived chain, grades open shadows, writes n/wins/Wilson LB + placebo FDR to `data/proving_court.json` for the 16:30 CEO brief. Shadow only. Log: `logs/proving_court.log` |
 | every 2h :00 | `src.portfolio_report` | Report card; the SCRIPT self-gates to market hours and exits quietly otherwise. Even-hour slots never touch the 07:00 renewal minute. |
 | every 2h :30 | `src.portfolio_greeks` | Book-level net delta/vega budget advisory (#71); self-gates like the report. One card/day only on a breach. Kill switch in `config.json`. |
 | Sat 10:00 | `src.validation.digest` | Weekly proving-harness digest — what's in trial, what validated/died, the placebo false-discovery rate. Read-only. |

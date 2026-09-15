@@ -329,6 +329,15 @@ CRON_TZ=Asia/Kolkata
 #     into logs/autonomous_bug_report.jsonl for the Thursday Protocol.
 40 20 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.bug_ledger >> "$REPO_ROOT/logs/bug_ledger.log" 2>&1
 
+# 31. THE PROVING COURT (Daily 21:00 IST, decision #97, closes SYSTEM_BLUEPRINT
+#     GAP 1) — the nightly Department-5 job: ages CANDIDATEs into TRIAL,
+#     enrols the structural primitives, seeds one placebo batch a week,
+#     runs the shadow strategies over the bhavcopy universe priced from the
+#     15:40 archived chain, grades open shadows, prints n/wins/Wilson LB per
+#     hypothesis and the realized placebo FDR into data/proving_court.json
+#     (the CEO brief reads it). ZERO execution authority; shadow only.
+0 21 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.validation.run_proving_court >> "$REPO_ROOT/logs/proving_court.log" 2>&1
+
 # 23. Intraday 15-minute price snapshot (every 15 min, Mon-Fri 09:00-15:45) —
 #     the read-only lake tap (data/lake/intraday_15m.jsonl); the module
 #     self-gates to 09:15-15:30 IST so the edge slots exit quietly. Was

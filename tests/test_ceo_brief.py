@@ -868,3 +868,62 @@ def test_the_brief_carries_the_miner_field_only_when_injected(tmp_path):
                                      journal_path=tmp_path / "j.jsonl",
                                      miner_fn=lambda: {"available": False})
     assert any(f["name"] == "🤖 Pattern Miner" for f in with_miner["fields"])
+
+
+# --------------------------------------------------------------------------
+# ⚖️ Proving Court field (decision #97, 2026-09-15)
+# --------------------------------------------------------------------------
+
+def _court_state(tmp_path, **over):
+    s = {"date": "2026-09-15", "promoted": ["a", "b"], "placebos": {"seeded": 10},
+         "feed": {"symbols": 6, "signals": 1, "accepted": 1}, "fires": 1, "graded": 0,
+         "registry": {"CANDIDATE": 10, "TRIAL": 4, "VALIDATED": 0, "DEAD": 0},
+         "fdr": {"batches": 1, "fdr": {"n": 10, "state": "insufficient placebo n", "alarm": False}},
+         "scorecards": [{"pattern_id": "p1", "kind": "strategy_rule", "placebo": False,
+                         "description": "glassbreaking.falling_knife -> bull_call_spread",
+                         "status": "TRIAL", "n": 1, "wins": 1, "wilson_lb": 0.05,
+                         "null_rate": 0.4, "promote": False, "reason": "insufficient n (1/7)"}],
+         "skips": {}}
+    s.update(over)
+    p = tmp_path / "proving_court.json"
+    p.write_text(json.dumps(s))
+    return p
+
+
+def test_collect_court_reads_the_artifact_fail_open(tmp_path):
+    missing = ceo_brief.collect_court(state_path=tmp_path / "nope.json")
+    assert missing["available"] is False
+    f = ceo_brief._court_field(missing)
+    assert f["name"] == "⚖️ Proving Court" and "has not sat" in f["value"]
+
+    c = ceo_brief.collect_court(state_path=_court_state(tmp_path),
+                                clock=lambda: datetime(2026, 9, 15, 16, 30))
+    assert c["available"] and c["stale"] is False and c["fires"] == 1
+    v = ceo_brief._court_field(c)["value"]
+    assert "TRIAL 4" in v and "fires 1" in v
+    assert "n=1 wins=1 LB=0.05 vs null 0.40" in v
+    assert "placebo FDR: insufficient placebo n (n=10)" in v
+    assert "STALE" not in v and len(v) <= 1024
+
+
+def test_collect_court_flags_a_stale_artifact_and_a_loose_fdr(tmp_path):
+    p = _court_state(tmp_path, fdr={"batches": 3, "fdr": {"n": 30, "state": "measured", "rate": 0.3,
+                                                          "wilson_lb": 0.2, "designed_q": 0.15,
+                                                          "alarm": True}})
+    c = ceo_brief.collect_court(state_path=p, clock=lambda: datetime(2026, 9, 19, 16, 30))
+    v = ceo_brief._court_field(c)["value"]
+    assert "STALE" in v and "GATES LOOSE" in v
+
+
+def test_the_brief_carries_the_court_field_only_when_injected(tmp_path):
+    bare = ceo_brief.build_brief_card(logs_dir=tmp_path, state_path=tmp_path / "s.json",
+                                      deploy_log_path=tmp_path / "d.jsonl", repo_root=tmp_path,
+                                      journal_path=tmp_path / "j.jsonl",
+                                      clock=lambda: datetime(2026, 9, 15, 16, 30))
+    assert all(f["name"] != "⚖️ Proving Court" for f in bare["fields"])
+    with_court = ceo_brief.build_brief_card(logs_dir=tmp_path, state_path=tmp_path / "s.json",
+                                            deploy_log_path=tmp_path / "d.jsonl", repo_root=tmp_path,
+                                            journal_path=tmp_path / "j.jsonl",
+                                            clock=lambda: datetime(2026, 9, 15, 16, 30),
+                                            court_fn=lambda: {"available": False})
+    assert any(f["name"] == "⚖️ Proving Court" for f in with_court["fields"])

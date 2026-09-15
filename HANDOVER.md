@@ -42,6 +42,36 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-15 — Loss post-mortem + THE PROVING COURT sits nightly (CODE, decision #97; deploy below)
+
+**Post-mortem (ledger Observation 09-15).** The ₹6,213 realized drop is ONE
+trade: `eqd:b8de8cfa` SUPREMEIND.NS, weak_buy darling entered 09-03 at
+₹3,546.40 ×28, stopped out **09-15 11:20 IST** at ₹3,350 (₹16.76 through the
+₹3,366.76 stop), R −1.09, pnl −₹6,212.94. Not 09-12→14. Position was
+unmarked on most sweeps (50/52 quote failures); whether the stop crossed
+earlier is unverified.
+
+**GAP 1 closed (code).** `src/validation/run_proving_court.py` — ages
+CANDIDATEs → TRIAL (7 d), enrols the Glassbreaking primitives, seeds 10
+placebos per ISO week, feeds bhavcopy bars for the 5 archived option
+underlyings + tier1 F&O names, prices only off the 15:40 archived chain,
+fires/grades shadows through `trial`, scorecards every hypothesis (n / wins
+/ Wilson LB vs null), `evaluate_trial` past the floor, audits placebo FDR,
+writes `data/proving_court.json`. `ceo_brief` gained the ⚖️ Proving Court
+field (STALE after 2 days = liveness). Cron 21:00 (`setup_cron.sh` #31);
+deliberately not a 20:30 heartbeat job. Tests: `tests/test_proving_court.py`
+(15) + 3 in `test_ceo_brief.py`.
+
+**Suite.** 2,191 passed, 1 failed — the same pre-existing `test_darling_shadow`
+calendar failure.
+
+**What the next person should do first.**
+1. Read tomorrow's 16:30 CEO card: the ⚖️ field's first real numbers
+   (expect n=0 everywhere, placebos seeded 10, TRIAL count ≥ 11).
+2. Coverage: tier1 names fire as `no_chain_for_underlying`; widening the
+   chain archiver's universe is the lever if the court needs more cases.
+3. Dept-3: an unmarkable desk position should be a card (post-mortem follow-up).
+
 ## 2026-09-12 — System blueprint + gap analysis (DOCS ONLY, no code change)
 
 **What happened.** Architect paused feature work for a structural review.

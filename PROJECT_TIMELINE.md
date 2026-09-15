@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-15 · 2 commits · 13 files touched
+
+- `587d777` docs: HANDOVER 09-15 — court deployed, first sitting numbers
+- `f03d4b3` feat(validation): the Proving Court sits nightly — run_proving_court (age→TRIAL, weekly placebos, bhavcopy feed priced off the archived chain, shadow fires/grades, Wilson scorecards, FDR), ⚖️ field on the CEO brief, cron 21:00 (decision #97, closes GAP 1); SUPREMEIND post-mortem
+
+
 ### 2026-09-12 · 1 commits · 4 files touched
 
 - `8beb71a` docs: SYSTEM_BLUEPRINT.md — CTO structural review, bird's-eye map + 3-gap analysis (court never tried a case; single-token/box/model-mark blindness; no order lifecycle or leg schema)

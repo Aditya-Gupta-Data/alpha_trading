@@ -62,6 +62,15 @@ field (STALE after 2 days = liveness). Cron 21:00 (`setup_cron.sh` #31);
 deliberately not a 20:30 heartbeat job. Tests: `tests/test_proving_court.py`
 (15) + 3 in `test_ceo_brief.py`.
 
+**DEPLOYED + FIRST SITTING.** VM at `f03d4b3` (~20:1x IST 09-15), cron
+line #31 installed (`crontab -l` shows it), 101/101 scoped tests green on
+the venv. The court sat once by hand: **promoted 9 → TRIAL, enrolled 2
+primitives (TRIAL 11 total), seeded 10 placebos (batch court-w202638), feed
+28 names / 7 signals / 0 fires** (6 `no_chain_for_underlying`, 1
+`no_listed_options`; `with_today_bar: 0` — today's bhavcopy had not landed
+by the run), graded 0, FDR insufficient placebo n (10). `data/proving_court.json`
+written; the ⚖️ field renders. No service restart needed (cron-only code).
+
 **Suite.** 2,191 passed, 1 failed — the same pre-existing `test_darling_shadow`
 calendar failure.
 

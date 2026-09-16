@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-16 · 2 commits · 12 files touched
+
+- `ede0aec` docs+test: decision #98 record (MODULES, DECISIONS, HANDOVER); pin the live VIX read in the unknown-VIX proposer test (RULE 6 leak seen on the VM)
+- `5496220` feat(risk): reward-to-risk guardrail — refuse any spread under 1.5 (directional) or 0.35 (iron condor/butterfly) before sizing; REJECTED_POOR_RR ledger fate; same floor in both shadow strategies (decision #98)
+
+
 ### 2026-09-15 · 2 commits · 13 files touched
 
 - `587d777` docs: HANDOVER 09-15 — court deployed, first sitting numbers

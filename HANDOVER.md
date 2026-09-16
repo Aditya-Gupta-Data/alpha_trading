@@ -42,6 +42,32 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-16 (evening) — Home node: the Mac lane ported to the Linux Mini PC (CODE, decision #99)
+
+**What changed.** `scripts/node_env.sh` (one interpreter resolver, Mac or
+Linux), `scripts/setup_mininode_cron.sh` (the node's crontab: 3 sync slots,
+edge miner, evolution, Saturday scrip + recalibration; refuses macOS / the
+VM / a non-IST clock; never touches the token), `mac_auto_sync.sh` /
+`mine_edges.sh` / `run_evolution.sh` now source the resolver,
+`ollama_session.sh` finds the binary, `config.GCLOUD_PATH` falls back to
+PATH. CRON_SETUP.md has the node section + the Mac-retirement command.
+Tests: `tests/test_mininode.py` (7).
+
+**Where the migration stands.** The Mini PC's own Claude Code session
+("New mini PC") was sent a bootstrap task (clone, env report, venv + suite,
+`.env` presence by key name, gcloud auth state) and asked to push
+`docs/mininode_bootstrap_report.md` on branch `mininode/bootstrap`; that
+route is one-way, so check the branch. Not yet done, in order: the owner
+copies `.env` by USB/scp and runs `gcloud auth login` on the node; the node
+runs `bash scripts/setup_mininode_cron.sh`; first hand `mac_auto_sync.sh
+--force` from the node ships 7/7; THEN the Mac's LaunchAgents/crontab are
+retired (command in CRON_SETUP.md). Until then the Mac still owns the lane.
+
+**What the next person should do first.**
+1. `git fetch && git log origin/mininode/bootstrap` — read the node's report.
+2. Walk the owner through `.env` copy + `gcloud auth login` on the node.
+3. Install the node cron, verify one 7/7 ship, retire the Mac's agents.
+
 ## 2026-09-16 — Reward-to-risk guardrail (CODE, decision #98; DEPLOYED)
 
 **What changed.** `strategy.reward_risk_gate`: max_profit / max_loss on the

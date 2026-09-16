@@ -4,7 +4,7 @@
 # it's actually due (>20h since last success, Ollama up, gcloud present) and
 # skips silently otherwise — so firing this often is free.
 
-export PATH="/opt/homebrew/share/google-cloud-sdk/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:$PATH"
+. "$(dirname "${BASH_SOURCE[0]}")/node_env.sh"   # one explicit interpreter on Mac or Linux (#99)
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mkdir -p logs
 
@@ -23,7 +23,7 @@ ollama_session_start || true   # miner fail-opens; it re-checks ollama_up() itse
 # silently neutered the miner's LLM calls on 2026-07-09 — the third
 # unpinned-interpreter incident this week (Mac cron: CommandLineTools
 # python; VM cron: bare python3; LaunchAgent: Homebrew python).
-/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.edge_miner >> logs/edge_miner.log 2>&1
+"$PY" -m src.edge_miner >> logs/edge_miner.log 2>&1
 _rc=$?
 ollama_session_stop
 exit $_rc

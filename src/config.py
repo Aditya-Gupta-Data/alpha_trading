@@ -119,8 +119,23 @@ TREASURY_DEADBAND_RS = float(_CONFIG.get("treasury_deadband_rs", 50000.0))
 TREASURY_MAX_STEP_RS = float(_CONFIG.get("treasury_max_step_rs", 100000.0))
 # Absolute path because the 19:15 cron's PATH is minimal (the standing
 # three-unpinned-interpreter lesson applies to gcloud too).
-GCLOUD_PATH = str(_CONFIG.get(
-    "gcloud_path", "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"))
+def _resolve_gcloud(configured: str) -> str:
+    """The configured absolute path when it exists (the Mac), else the first
+    gcloud on a widened PATH (the Linux home node, decision #99) — still an
+    absolute path once resolved, never a bare `gcloud` for a cron shell."""
+    import os
+    import shutil
+    if configured and os.access(configured, os.X_OK):
+        return configured
+    extra = ("/usr/bin:/usr/local/bin:/snap/bin:/usr/lib/google-cloud-sdk/bin:"
+             "/usr/local/google-cloud-sdk/bin:" + os.path.expanduser("~/google-cloud-sdk/bin")
+             + ":/opt/homebrew/bin:/opt/homebrew/share/google-cloud-sdk/bin")
+    found = shutil.which("gcloud", path=os.environ.get("PATH", "") + ":" + extra)
+    return found or configured
+
+
+GCLOUD_PATH = _resolve_gcloud(str(_CONFIG.get(
+    "gcloud_path", "/opt/homebrew/share/google-cloud-sdk/bin/gcloud")))
 
 
 def gcloud_env(env=None, executable=None) -> dict:

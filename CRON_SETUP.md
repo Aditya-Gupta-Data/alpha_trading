@@ -63,6 +63,48 @@ for `dhan-pin` / `dhan-totp-secret` / `dhan-api-key` / `dhan-api-secret`.
 `src.evolution` is deliberately NOT on the VM (it needs a local Ollama) — it runs
 on the Mac via launchd (`scripts/com.alphatrading.evolution.plist`).
 
+## The home node — the always-on Linux Mini PC (decision #99, 2026-09-16)
+
+**This box replaces the Mac's role, and nothing else.** Every job below is
+one the Mac used to run from a LaunchAgent or its crontab and missed whenever
+the lid was shut (the sync shipped 2/7 on 09-15; the Saturday recalibration
+had not run since 08-01). The VM's schedule above is untouched. The node
+NEVER renews or pushes a Dhan token (#48) and never runs `setup_cron.sh`.
+
+Install / replace (clock must be IST — `sudo timedatectl set-timezone
+Asia/Kolkata` first; the installer refuses macOS, the VM and a non-IST clock):
+
+```bash
+cd ~/alpha_trading && bash scripts/setup_mininode_cron.sh
+```
+
+| IST | Job | Replaces | Log |
+|---|---|---|---|
+| 07:30, 12:30, 19:20 daily | `scripts/mac_auto_sync.sh` | the `com.aditrader.sync` LaunchAgent (sector bars, valuation, F&O bundle, darling ids, bars cache → the 7-file ship to the VM; keeps its own 180-min throttle) | `logs/mac_auto_sync.log` (+ `.cron.log`) |
+| 21:00 daily | `scripts/mine_edges.sh` | the edge-miner LaunchAgent (local Ollama, self-gates on > 20 h) | `logs/edge_miner.log` |
+| 02:00 Saturday | `scripts/run_evolution.sh` | the evolution LaunchAgent (local Ollama, never auto-applies) | `logs/evolution.log` |
+| 09:30 Saturday | `src.ingestion.scrip_master` | Mac crontab | `logs/scrip_master.log` |
+| 10:00 Saturday | `src.analysis.weekly_recalibration` | Mac crontab | `logs/weekly_recalibration.log` |
+
+Every script resolves ONE explicit interpreter through `scripts/node_env.sh`
+(`$ALPHA_PY` → the repo `venv/bin/python` → the Mac framework python →
+`command -v python3`, and it logs which), pins `CLOUDSDK_PYTHON` to it, and
+`config.GCLOUD_PATH` falls back from the Mac's Homebrew path to the first
+`gcloud` on a widened PATH. Prerequisites on the node: python 3.12+, a
+`venv` with `requirements.txt`, `.env` copied from the Mac by USB/scp (never
+through chat), `gcloud auth login` + `gcloud config set project
+project-37632031-10d0-47dd-b6f`, optionally `ollama` for the two LLM jobs.
+
+**Once the node's first sync ships 7/7, retire the Mac's copies** so two
+machines never ship the same files:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.aditrader.sync.plist ~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist ~/Library/LaunchAgents/com.alphatrading.evolution.plist 2>/dev/null; ( crontab -l 2>/dev/null | grep -v -e 'src.analysis.patience_basket' -e 'src.analysis.weekly_recalibration' -e 'src.ingestion.scrip_master' -e 'fetch_sector_bars' ) | crontab -
+```
+
+> **The Mac section below is HISTORY once the node is live** — kept for the
+> lessons in it (absolute interpreter paths, the gcloud python trap).
+
 ## The Mac (development + chat agent + opportunistic miner)
 
 **LaunchAgent** (`~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist`):

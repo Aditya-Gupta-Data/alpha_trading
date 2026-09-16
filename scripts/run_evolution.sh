@@ -9,7 +9,7 @@
 # #47), which is why the equivalent VM cron entry was removed from
 # setup_cron.sh (Phase 5 scratchpad build).
 
-export PATH="/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:$PATH"
+. "$(dirname "${BASH_SOURCE[0]}")/node_env.sh"   # one explicit interpreter on Mac or Linux (#99)
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 mkdir -p logs
 
@@ -26,7 +26,7 @@ ollama_session_start || true   # evolution fail-closes without Ollama; a misfire
 # THREE unpinned-interpreter incidents in 48h (Mac cron: CommandLineTools
 # python; VM cron: bare python3; edge-miner LaunchAgent: package-less
 # Homebrew python). Same pin as scripts/mine_edges.sh.
-/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m src.evolution >> logs/evolution.log 2>&1
+"$PY" -m src.evolution >> logs/evolution.log 2>&1
 _rc=$?
 ollama_session_stop
 exit $_rc

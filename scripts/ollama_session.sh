@@ -27,7 +27,7 @@
 # unpinned-interpreter incidents (see mine_edges.sh). This is a symlink
 # into Ollama.app, and it runs fine with the app itself never launched,
 # which is the entire point of disabling the background item.
-OLLAMA_BIN="${OLLAMA_BIN:-/usr/local/bin/ollama}"
+OLLAMA_BIN="${OLLAMA_BIN:-$(command -v ollama 2>/dev/null || echo /usr/local/bin/ollama)}"   # Mac or Linux (#99)
 
 # Loopback only. An on-demand server must never be reachable off-box.
 export OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"

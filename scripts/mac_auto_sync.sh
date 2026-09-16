@@ -53,9 +53,10 @@ mkdir -p logs
 # CommandLineTools python; VM cron picked a bare python3; the edge-miner
 # LaunchAgent picked a package-less Homebrew python). Same pin as
 # scripts/run_evolution.sh and scripts/mine_edges.sh.
-PY="/Library/Frameworks/Python.framework/Versions/3.14/bin/python3"
-[ -x "$PY" ] || PY="$(command -v python3)"
-export PATH="/opt/homebrew/bin:/opt/homebrew/share/google-cloud-sdk/bin:$PATH"
+# 2026-09-16 (decision #99): the pin now lives in scripts/node_env.sh so the
+# same script runs on the Mac (framework python) and the Linux home node
+# (repo venv) with ONE explicit interpreter either way.
+. "$(dirname "${BASH_SOURCE[0]}")/node_env.sh"
 
 STAMP="data/.mac_auto_sync_state"
 MIN_GAP_MINUTES=180        # the agent may fire hourly; the work is daily

@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-16 · 2 commits · 12 files touched
+### 2026-09-16 · 4 commits · 30 files touched
 
+- `535bce7` fix(tests): RULE 6 — muzzle the Dhan market-data door, the Gemini post-mortem door and h4_shadow's live bars default under pytest (ledger Issue 29); suite 24 min → 57 s
+- `5550555` feat(ops): home node — port the Mac lane to the Linux Mini PC: node_env.sh interpreter resolver, setup_mininode_cron.sh, portable gcloud/ollama resolution (decision #99)
 - `ede0aec` docs+test: decision #98 record (MODULES, DECISIONS, HANDOVER); pin the live VIX read in the unknown-VIX proposer test (RULE 6 leak seen on the VM)
 - `5496220` feat(risk): reward-to-risk guardrail — refuse any spread under 1.5 (directional) or 0.35 (iron condor/butterfly) before sizing; REJECTED_POOR_RR ledger fate; same floor in both shadow strategies (decision #98)
 

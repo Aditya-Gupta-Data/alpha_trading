@@ -37,7 +37,7 @@ from src import journal
 from src import portfolio as pf
 from src.config import MAX_RISK_PER_TRADE_RS, OPTIONS_RISK_PER_TRADE_PCT
 from src.dhan_client import get_expiry_list, get_india_vix, get_option_chain
-from src.strategy import StrategyConstructor
+from src.strategy import StrategyConstructor, reward_risk_gate
 from src.suggestions import analyze
 
 # NSE lot sizes for the option-enabled underlyings (contract spec, not
@@ -586,6 +586,18 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         leg["fill_basis"] = fill_bases.get(
             (leg["strike"], leg["option_type"].upper(), leg["side"].upper()),
             "ltp")
+
+    # REWARD-TO-RISK GUARDRAIL (decision #98, 2026-09-16): the built
+    # structure's max_profit / max_loss must clear the floor for its family
+    # (1.5 directional, 0.35 range-bound) BEFORE sizing, margin or any
+    # card. The refused structure rides on `rejected_spread` for the
+    # ghost tracker, exactly like a sizing refusal.
+    rr_ok, rr, rr_floor, rr_why = reward_risk_gate(spread)
+    if not rr_ok:
+        return {"proposal": None, "view": view, "vix": vix,
+                "rejected_spread": spread, "expiry": expiry,
+                "reward_risk": rr, "reward_risk_floor": rr_floor,
+                "reason": rr_why}
 
     if book is None:
         book = pf.load()

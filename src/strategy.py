@@ -195,6 +195,60 @@ from src.portfolio import calculate_span_margin  # noqa: E402  (Phase 5 section)
 VIX_BLOCK_ABOVE = 16.0
 RANGE_BOUND_STRATEGIES = {"iron_condor", "iron_butterfly"}
 
+# ---------------------------------------------------------------------------
+# REWARD-TO-RISK GUARDRAIL (architect directive 2026-09-16, decision #98).
+# The ledger held approved trades with an inverted payoff (max profit ~3k
+# against max loss ~9k, R:R 0.33). Rule: reward_risk = max_profit / max_loss
+# on the BUILT structure, per lot, must clear the floor or the trade is
+# refused with a named reason — before sizing, before margin, before any
+# card. Directional debit spreads (bull call / bear put) obey the strict
+# 1.5 floor. Range-bound credit structures (iron condor / iron butterfly)
+# are structurally inverted — they earn a small credit against a wider
+# wing in exchange for a high probability of profit — and the ledger shows
+# 6 of 9 condors between 0.32 and 0.67, so the 1.5 floor would end condor
+# routing outright; they get their own floor, NEUTRAL_MIN_REWARD_RISK.
+# A structure whose max_loss is missing or non-positive FAILS the gate:
+# an unmeasurable payoff is not a tradeable one.
+MIN_REWARD_RISK = 1.5             # directional spreads: max_profit / max_loss
+NEUTRAL_MIN_REWARD_RISK = 0.35    # iron condor / iron butterfly only
+POOR_RR_REASON = "REJECTED_POOR_RR"
+
+
+def reward_risk_ratio(spread: dict):
+    """max_profit / max_loss per lot, or None when either is unusable."""
+    try:
+        mp = float(spread.get("max_profit"))
+        ml = float(spread.get("max_loss"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if ml <= 0 or mp != mp or ml != ml:        # non-positive loss / NaN
+        return None
+    return round(mp / ml, 4)
+
+
+def reward_risk_floor(strategy: str) -> float:
+    return (NEUTRAL_MIN_REWARD_RISK if strategy in RANGE_BOUND_STRATEGIES
+            else MIN_REWARD_RISK)
+
+
+def reward_risk_gate(spread: dict) -> tuple:
+    """(ok, ratio, floor, why). `why` is the exact rejection sentence the
+    journal/ledger carries; it always contains "R:R below" so
+    proposal_ledger.classify buckets it as REJECTED_POOR_RR."""
+    strategy = (spread or {}).get("strategy")
+    floor = reward_risk_floor(strategy)
+    ratio = reward_risk_ratio(spread or {})
+    if ratio is None:
+        return (False, None, floor,
+                f"{POOR_RR_REASON}: R:R below {floor:g} threshold — max_profit/max_loss "
+                f"not measurable on {strategy or 'unknown structure'}")
+    if ratio < floor:
+        return (False, ratio, floor,
+                f"{POOR_RR_REASON}: R:R below {floor:g} threshold — {strategy} pays "
+                f"Rs.{float(spread['max_profit']):,.0f} against Rs.{float(spread['max_loss']):,.0f} "
+                f"(R:R {ratio:.2f})")
+    return True, ratio, floor, "ok"
+
 
 class StrategyConstructor:
     """Builds defined-risk multi-leg option structures as plain dicts.
@@ -267,6 +321,9 @@ class StrategyConstructor:
             "net_debit": round(-net, 2) if net < 0 else None,
             "max_loss": round(max_loss, 2),
             "max_profit": round(max_profit, 2),
+            # decision #98: the payoff ratio rides on every built structure
+            # (additive; None when max_loss is not positive)
+            "reward_risk": (round(max_profit / max_loss, 4) if max_loss > 0 else None),
             "margin": calculate_span_margin(legs, lot),
         }
 

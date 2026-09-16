@@ -169,6 +169,12 @@ def build_setup(trigger: dict, spot: float, buy_strike: float,
                                    buy_premium, sell_premium)
     if not spread:
         return {**base, "accepted": False, "reason": "spread_incoherent"}
+    # decision #98: the live reward-to-risk floor applies to the shadow too
+    from src.strategy import reward_risk_gate
+    rr_ok, rr, rr_floor, rr_why = reward_risk_gate(spread)
+    if not rr_ok:
+        return {**base, "accepted": False, "reason": rr_why,
+                "reward_risk": rr, "reward_risk_floor": rr_floor}
     max_loss = float(spread.get("max_loss") or 0)
     lots = lots_for(pool_rupees, max_loss)
     if lots < 1:

@@ -48,9 +48,16 @@ def make_analysis(uptrend=True, fresh_cross=False, rsi=50.0, price=25000.0):
             "fresh_cross": fresh_cross, "rsi": rsi, "price": price}
 
 
-def make_chain(spot=25000.0, step=50.0, span=20, base_premium=100.0):
+def make_chain(spot=25000.0, step=50.0, span=20, base_premium=160.0):
     """A fake Dhan chain: strikes around spot; premiums fall linearly as
-    strikes move OTM (floor 5), keyed the way Dhan keys them."""
+    strikes move OTM (floor 5), keyed the way Dhan keys them.
+
+    base_premium 100 -> 160 on 2026-09-16 (decision #98): at 100 the
+    fixture's condor/butterfly paid Rs.2,340 against Rs.10,660 (R:R 0.22),
+    which the reward-to-risk guardrail now refuses; at 160 the neutral
+    structures clear the 0.35 floor (R:R 0.40) and the debit verticals
+    still clear 1.5 by a mile. Tests that need a specific ratio pass
+    their own base_premium (see tests/test_reward_risk.py)."""
     oc = {}
     for i in range(-span, span + 1):
         strike = spot + i * step
@@ -779,7 +786,7 @@ def test_an_equity_option_far_from_expiry_DOES_build():
     """Proves the gate blocks on settlement risk, not on being an equity."""
     res = op.build_proposal(
         "RELIANCE.NS", analysis=make_analysis(uptrend=False),
-        vix=13.0, expiry=_in(21), chain=make_chain(spot=1400.0, step=10.0),
+        vix=13.0, expiry=_in(21), chain=make_chain(spot=1400.0, step=10.0, base_premium=80.0),
         book=dict(BIG_BOOK), prices={})
     assert res["proposal"] is not None, res["reason"]
     assert res["proposal"]["spread"]["strategy"] == "bear_put_spread"

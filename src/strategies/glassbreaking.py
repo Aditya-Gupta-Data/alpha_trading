@@ -319,6 +319,14 @@ def build_setup(signal: dict, symbol: str, buy_strike: float, sell_strike: float
     ok, why = assert_defined_risk(spread)
     if not ok:
         return {**base, "accepted": False, "reason": why}
+    # decision #98: the same reward-to-risk floor the live proposer enforces
+    # (1.5 for these directional debit spreads) — a shadow that would be
+    # refused live must not be graded as if it could have traded.
+    from src.strategy import reward_risk_gate
+    rr_ok, rr, rr_floor, rr_why = reward_risk_gate(spread)
+    if not rr_ok:
+        return {**base, "accepted": False, "reason": rr_why,
+                "reward_risk": rr, "reward_risk_floor": rr_floor}
     max_loss = float(spread["max_loss"])
     lots = lots_for(pool_rupees, max_loss, RISK_PCT_PER_SETUP)
     if lots < 1:

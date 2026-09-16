@@ -46,6 +46,37 @@ def _wide_risk_cap():
 
 # ------------------------------------------------------------ unit level
 
+# decision #98 (2026-09-16): the live reward-to-risk floor (0.35 for a
+# condor) now runs inside build_proposal, and the shipped synthetic chain
+# prices a 2%-OTM condor with 4-step wings at R:R ~0.26-0.33 (7-13 days
+# out) — the replay would refuse every condor and these mechanic tests
+# would prove nothing. The real ledger's condors sit at 0.32-0.67, i.e.
+# real OTM premium is richer at the shorts and decays faster than the
+# model's. This fixture prices the chain with ATM time value 0.6 (model:
+# 0.4) and half the model's decay scale, for the tests only (condor R:R
+# ~0.42-0.60); the shipped model is untouched — recalibrating it is a
+# Dept-8 call, recorded in HANDOVER.
+@pytest.fixture(autouse=True)
+def _condor_tradeable_chain(monkeypatch):
+    real = sim.build_synthetic_chain
+
+    def richer(spot, vix, days_to_expiry, step):
+        chain = real(spot, vix, days_to_expiry, step)
+        sigma = ((vix if vix else sim.DEFAULT_SIGMA_PCT) / 100.0)
+        t_years = max(days_to_expiry, 1) / 365.0
+        atm_tv = 0.6 * spot * sigma * (t_years ** 0.5)
+        decay_scale = max(1.0, 1.25 * spot * sigma * (t_years ** 0.5))
+        for key, node in chain["oc"].items():
+            strike = float(key)
+            dist = abs(strike - spot)
+            tv = max(0.5, atm_tv * pow(2.718281828, -dist / decay_scale))
+            node["ce"]["last_price"] = round((max(0.5, spot - strike) + tv) if spot > strike else tv, 2)
+            node["pe"]["last_price"] = round((max(0.5, strike - spot) + tv) if strike > spot else tv, 2)
+        return chain
+
+    monkeypatch.setattr(sim, "build_synthetic_chain", richer)
+
+
 def test_signal_age_hours_overnight_and_over_weekend():
     # Friday deals print (19:30) -> Monday 09:15 open: 61.75h, not 13.75h.
     assert et.signal_age_hours("deals", "2026-07-10", "2026-07-13") == 61.75

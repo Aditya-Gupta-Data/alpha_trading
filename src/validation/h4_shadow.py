@@ -109,6 +109,13 @@ def run_shadow_pass(conn=None, *, entries=None, bars_fn=None,
         if entries is None:
             from src import journal
             entries = journal.read_all()
+        # RULE 6 (2026-09-16, Issue 29): the default bars door is LIVE Dhan.
+        # sleep_phase passes a conn, so the conn/record_fn muzzle below never
+        # fired and every sleep-phase test dialled Dhan for real — invisible
+        # while Dhan answered fast, 8 minutes per test the night it did not.
+        if bars_fn is None and os.environ.get("PYTEST_CURRENT_TEST"):
+            _skip("muzzled_under_pytest")
+            return summary
         bars_fn = bars_fn or _default_bars_fn
 
         open_spreads = [e for e in entries if _spread_trackable(e)]

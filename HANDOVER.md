@@ -63,6 +63,13 @@ runs `bash scripts/setup_mininode_cron.sh`; first hand `mac_auto_sync.sh
 --force` from the node ships 7/7; THEN the Mac's LaunchAgents/crontab are
 retired (command in CRON_SETUP.md). Until then the Mac still owns the lane.
 
+**Also this session — RULE 6, ledger Issue 29.** The suite had crept to 24
+minutes: five tests were dialling Dhan (via `h4_shadow`'s default bars door
+inside sleep_phase) and Gemini (the post-mortem analyst) for real, hidden
+while both answered fast. Muzzled at the doors (`dhan_client._get_client`,
+`analyst.generate_post_mortem`, `h4_shadow`). **Suite is now 57 s, 2,216
+passed**, 1 pre-existing failure. CLAUDE.md RULE 6 numbers updated.
+
 **What the next person should do first.**
 1. `git fetch && git log origin/mininode/bootstrap` — read the node's report.
 2. Walk the owner through `.env` copy + `gcloud auth login` on the node.

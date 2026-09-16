@@ -1549,3 +1549,34 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   card (it is a named skip on stderr today, RULE 7 abstention, but not a
   card); and the quote-failure rate for darling ids under the 1 req/s
   throttle.
+
+---
+
+## Issue 29 — the suite ran 24 minutes instead of 4: five tests were dialling Dhan and Gemini for real, invisible until the Mac's network stalled (2026-09-16, found during the home-node port; FIXED)
+
+- **Symptom:** the full suite took 1,419 s then 1,474 s (baseline ~220 s).
+  `--durations` named `test_daily_context::test_sleep_phase_runs_task_g`
+  506 s, `test_pnl_card::test_gateway_pnl_endpoint` 490 s, two
+  `test_intraday_exit` tests 146 s each, the sleep-phase / edge-decay
+  tests ~22 s each. CPU time 1.4 s per 500 s test — pure waiting.
+- **Root cause (verified with `faulthandler_timeout` stack dumps):**
+  `sleep_phase` Task J → `h4_shadow.run_shadow_pass(conn=…)` →
+  `_default_bars_fn` → `dhan_client.get_daily_ohlc` → a LIVE
+  `requests.post` to api.dhan.co blocked in `create_connection`; and the
+  tracker's resolution path → `analyst.generate_post_mortem` → a LIVE
+  Gemini call that answered in 146 s (measured directly; 0.34 s for the
+  same test with the key blanked). Both doors had been reached from tests
+  for weeks; Dhan's fast DH-901 refusal and Gemini's ~2 s reply had hidden
+  it. The h4 muzzle only covered the "no conn injected" case, and
+  sleep_phase always injects a conn.
+- **Fix (`dbb… → 5550555` follow-up commit):** the muzzle now sits at the
+  ONE market-data door — `dhan_client._get_client` returns None under
+  `PYTEST_CURRENT_TEST` (escape hatch `ALPHA_ALLOW_SDK_CLIENT_IN_TESTS`,
+  used by the one rebuild test that also fakes the SDK module);
+  `analyst.generate_post_mortem` returns None under pytest;
+  `h4_shadow` skips `muzzled_under_pytest` when `bars_fn` is the live
+  default. Tests: `tests/test_rule6_muzzles.py`, `tests/test_analyst_muzzle.py`.
+  Full suite now **57 s, 2,216 passed** (1 pre-existing calendar failure).
+- **Unverified:** why the Mac's TCP connects to Dhan and Google were slow
+  tonight (IPv6 path? ISP?) — the same night the sync's gcloud scp timed
+  out. Nothing on the VM was affected.

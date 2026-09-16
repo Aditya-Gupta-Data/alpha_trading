@@ -125,7 +125,11 @@ def test_dhan_client_rebuilds_exactly_when_the_token_changes():
     dc._client, dc._client_token = None, None
     try:
         with mock.patch.dict(sys.modules, {"dhanhq": fake}), \
-             mock.patch.dict(os.environ, {"DHAN_CLIENT_ID": "123"}), \
+             mock.patch.dict(os.environ, {"DHAN_CLIENT_ID": "123",
+                                          # the door is muzzled under pytest
+                                          # (RULE 6); this test wants the
+                                          # (fake) SDK object on purpose
+                                          "ALPHA_ALLOW_SDK_CLIENT_IN_TESTS": "1"}), \
              mock.patch.object(tp, "get_token",
                                side_effect=["tokA", "tokA", "tokB"]):
             c1 = dc._get_client()

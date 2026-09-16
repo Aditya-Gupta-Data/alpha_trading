@@ -95,7 +95,9 @@ not running** — whatever its docstring claims.
 
 ## RULE 6 — Testing
 
-The suite is hermetic and fast: **2,005 tests, ~135 seconds.**
+The suite is hermetic and fast: **2,216 tests, ~60 seconds** (2026-09-16;
+it was ~220 s while five tests were quietly dialling Dhan and Gemini — ledger
+Issue 29 — so a run that creeps back toward minutes is a leak, not growth).
 
 ```bash
 python3 -m pytest -q                      # full suite — the pre-deploy gate

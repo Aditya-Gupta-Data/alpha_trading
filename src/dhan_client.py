@@ -262,6 +262,17 @@ def _get_client():
     restart. A stat-per-call is negligible at the engine's cadences."""
     global _client, _client_token
     from src import token_provider
+    # THE MUZZLE AT THE ONE MARKET-DATA DOOR (RULE 6, 2026-09-16, Issue 29).
+    # Inside pytest this returns None — the same "no credentials" state every
+    # caller already degrades from — so no test can dial Dhan by accident.
+    # The leaks had been invisible because Dhan answered DH-901 in
+    # milliseconds; the night TCP connects to api.dhan.co hung, five tests
+    # took 8 minutes each and the suite 24 minutes. A test that needs the
+    # SDK object itself (the rebuild seam) sets ALPHA_ALLOW_SDK_CLIENT_IN_TESTS
+    # and patches the dhanhq module, so it still never reaches the network.
+    if (os.environ.get("PYTEST_CURRENT_TEST")
+            and not os.environ.get("ALPHA_ALLOW_SDK_CLIENT_IN_TESTS")):
+        return None
     cid = os.environ.get("DHAN_CLIENT_ID")
     token = token_provider.get_token()
     if not cid or not token:

@@ -116,6 +116,14 @@ def generate_post_mortem(initial_plan: dict, actual_execution: dict) -> dict | N
     dict out -- or None on ANY failure. Never raises."""
     try:
         _load_env()
+        # THE MUZZLE (RULE 6, 2026-09-16). This is a live Gemini call, and the
+        # tracker's resolution path reaches it from a dozen tests that never
+        # stub it. On the Mac it answered in ~2 s until the night Gemini took
+        # 146 s per call and the suite went from 4 minutes to 24 (Issue 29).
+        # Same doctrine as h4_shadow / proposal_ledger: from inside pytest the
+        # door returns the honest "no post-mortem" without dialling out.
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return None
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             print("Post-mortem analyst: GEMINI_API_KEY not set — skipping post-mortem.")

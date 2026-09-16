@@ -678,7 +678,11 @@ def test_the_hard_VIX_16_gate_still_blocks_BOTH_range_structures():
         assert "range-bound structure blocked" in res["reason"]
 
 
-def test_an_unknown_vix_refuses_both_range_structures_fail_safe():
+def test_an_unknown_vix_refuses_both_range_structures_fail_safe(monkeypatch):
+    # RULE 6 (found 2026-09-16 on the VM): `vix=None` makes build_proposal
+    # call the LIVE get_india_vix(); on a box with a valid token that returns
+    # a real reading and the condor builds. Pin the "unknown" the test means.
+    monkeypatch.setattr(op, "get_india_vix", lambda: None)
     res = build(graded(fast_pct=-0.6, slow_pct=-1.05), vix=None)
     assert res["proposal"] is None
     assert "range-bound structure blocked" in res["reason"]

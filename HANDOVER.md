@@ -42,6 +42,45 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-16 — Reward-to-risk guardrail (CODE, decision #98; DEPLOYED)
+
+**What changed.** `strategy.reward_risk_gate`: max_profit / max_loss on the
+BUILT structure must clear **1.5** (bull call / bear put) or **0.35** (iron
+condor / butterfly — structurally inverted; six of the ledger's nine sit
+0.32–0.67) or the trade is refused `REJECTED_POOR_RR: R:R below <floor>
+threshold — …` before sizing, margin or any card. Wired into
+`options_proposer.build_proposal` (after fill basis, before `size_lots`;
+`rejected_spread` still goes to the ghost tracker), both shadow strategies,
+and `proposal_ledger` (new fate). Every built spread carries `reward_risk`.
+Tests: `tests/test_reward_risk.py` (16).
+
+**Deployed.** VM at `5496220` + this docs commit, `alpha-trading` restarted
+(the proposer runs inside it); smoke test on the box: the 3k-vs-9k example
+returns `REJECTED_POOR_RR … (R:R 0.33)`.
+
+**Finding for Dept 8 (not acted on).** The Phase-7 synthetic chain prices a
+2%-OTM condor with 4-step wings at R:R 0.26–0.33 at every expiry the replay
+uses — below the floor — while real condors mostly clear it: the model's
+OTM premium is too thin at the shorts. `test_simulator.py` /
+`test_execution_timing.py` now carry a richer fixture chain so the replay
+mechanics stay testable; the shipped model is unchanged.
+`test_options_proposer.make_chain` base premium 100→160 for the same reason.
+
+**RULE 6 leak fixed.** `test_an_unknown_vix_refuses_both_range_structures_fail_safe`
+called the LIVE `get_india_vix()` (vix=None path) and failed on the VM with
+a valid token — pre-existing (fails at `3f18f25` on the box, passes with the
+token blanked). Now pins the VIX read.
+
+**Suite.** Mac: 2,204 passed, 1 failed — the pre-existing `test_darling_shadow`
+calendar failure. The `test_options_spreads` → `test_intraday_exit` ordering
+leak also still stands.
+
+**What the next person should do first.**
+1. Watch the proposal ledger for `REJECTED_POOR_RR` over the first sessions
+   — how many condor and bear-put proposals the floor removes.
+2. Dept 8: decide whether to recalibrate `simulator.build_synthetic_chain`
+   so backtests price condors the desk can actually trade.
+
 ## 2026-09-15 — Loss post-mortem + THE PROVING COURT sits nightly (CODE, decision #97; deploy below)
 
 **Post-mortem (ledger Observation 09-15).** The ₹6,213 realized drop is ONE

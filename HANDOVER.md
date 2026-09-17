@@ -42,6 +42,26 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-17 — Session close (docs only): Mini PC not yet live, may be auto-suspending
+
+**State.** VM at `41fdbb4` (+ docs `f7409b7`), all services active, suite 57 s /
+2,216 green. The Mac STILL owns the home lane. The Mini PC has Claude Code
+installed and three messages queued in its session ("New mini PC" via
+ListAgents, one-way): (1) bootstrap + report on branch `mininode/bootstrap`,
+(2) cron install + one forced sync, (3) stop auto-suspend (owner reports the
+box switches itself off). None has reported back yet — the owner must approve
+them in that session. Owner-only steps outstanding on the node: copy `.env`
+by USB/scp, `gcloud auth login` + project, BIOS "Restore on AC Power Loss =
+Power On".
+
+**What the next person should do first.**
+1. `git fetch && git log origin/mininode/bootstrap` — has the node reported?
+2. If the Mac lane is still on the Mac, keep the lid open at 07:30/12:30/19:20
+   and Saturday 09:30–11:00 until the node ships 7/7; then retire the Mac
+   agents (CRON_SETUP.md).
+3. Watch tonight's 21:00 court sitting and tomorrow's ⚖️ CEO field; the
+   16:30 card should now show `REJECTED_POOR_RR` counts if any fired.
+
 ## 2026-09-16 (evening) — Home node: the Mac lane ported to the Linux Mini PC (CODE, decision #99)
 
 **What changed.** `scripts/node_env.sh` (one interpreter resolver, Mac or

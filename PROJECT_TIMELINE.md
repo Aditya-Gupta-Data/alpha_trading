@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-17 · 2 commits · 2 files touched
+
+- `66bd199` docs: HANDOVER 09-17 session close — Mini PC status, owner steps outstanding
+- `f7409b7` docs: home node must never sleep — mask suspend targets, logind IdleAction, BIOS power-loss setting (CRON_SETUP)
+
+
 ### 2026-09-16 · 4 commits · 30 files touched
 
 - `535bce7` fix(tests): RULE 6 — muzzle the Dhan market-data door, the Gemini post-mortem door and h4_shadow's live bars default under pytest (ledger Issue 29); suite 24 min → 57 s

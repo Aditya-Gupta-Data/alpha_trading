@@ -90,7 +90,12 @@ Every script resolves ONE explicit interpreter through `scripts/node_env.sh`
 (`$ALPHA_PY` → the repo `venv/bin/python` → the Mac framework python →
 `command -v python3`, and it logs which), pins `CLOUDSDK_PYTHON` to it, and
 `config.GCLOUD_PATH` falls back from the Mac's Homebrew path to the first
-`gcloud` on a widened PATH. Prerequisites on the node: python 3.12+, a
+`gcloud` on a widened PATH. Prerequisites on the node: **automatic suspend disabled** (the box must
+never sleep — `sudo systemctl mask sleep.target suspend.target
+hibernate.target hybrid-sleep.target`, `IdleAction=ignore` in
+`/etc/systemd/logind.conf`, GNOME `sleep-inactive-ac-type 'nothing'`, and in
+the BIOS "Restore on AC Power Loss = Power On" with any auto power-off timer
+off), python 3.12+, a
 `venv` with `requirements.txt`, `.env` copied from the Mac by USB/scp (never
 through chat), `gcloud auth login` + `gcloud config set project
 project-37632031-10d0-47dd-b6f`, optionally `ollama` for the two LLM jobs.

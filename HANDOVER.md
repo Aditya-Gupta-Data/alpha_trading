@@ -42,6 +42,37 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-19 (evening) — LIVE TRADE BOOK shipped (cron #32) + VM→Mac pull lane; Issue 30 found
+
+**State.** VM at `61ce6a7`, cron block reinstalled (32 jobs), 27+12 scoped
+tests green on the VM venv; full suite on the Mac 2,261 passed / 1 failed
+(the same pre-existing `test_darling_shadow` calendar failure), 58 s.
+Portfolio audit from the VM's ledgers (paper): starting ₹10,00,000 ·
+realized ₹95,901 · equity ₹10,95,901 at peak (drawdown 0.00%, curve max
+-4.07%) · 12 open trades (10 options spreads + 2 funded equity) ·
+performance.py n=36 real resolved, 61% win, +0.45R avg, Sharpe 0.38.
+
+**What changed.** `src/reporting/markdown_ledger.py` renders
+`docs/LIVE_TRADE_BOOK.md` (account table, OPEN TRADES, last 50 RESOLVED,
+orphan-lock section, notes) read-only from journal + equity events +
+brain_map.db. Cron #32 Mon-Fri 16:35 IST on the VM (after the 16:30 CEO
+brief). `firm_treasury.vm_pull_file` is the new VM→Mac lane;
+`scripts/mac_auto_sync.sh` stage 3 pulls the book every run (LaunchAgent
+`com.aditrader.sync`, loaded). First pull verified on the Mac at 14:02 IST.
+The file is gitignored on both machines.
+
+**Open — Issue 30.** `eqd:3fedfeeb` (TCS.NS) ₹98,377 locked since 08-13
+for a position the equity journal shows EXITED. Not reconciled — the
+sweep moves ledger money; owner's call. Details in the ledger.
+
+**What the next person should do first.**
+1. Owner decides on `python3 -m src.equity_desk --sweep` for Issue 30 (on
+   the VM); then confirm the ⚠️ section disappears from Monday's book.
+2. Monday 16:35: `logs/markdown_ledger.log` shows the write; the Mac copy
+   refreshes on the next sync tick (`launchctl kickstart -k
+   gui/$(id -u)/com.aditrader.sync` forces it).
+3. The Monday checklist below is unchanged.
+
 ## 2026-09-19 — Session close
 
 **State.** VM at `14595a6` (+ docs `748a71b`), all services active, suite

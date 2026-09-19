@@ -1580,3 +1580,22 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Unverified:** why the Mac's TCP connects to Dhan and Google were slow
   tonight (IPv6 path? ISP?) — the same night the sync's gcloud scp timed
   out. Nothing on the VM was affected.
+
+## Issue 30 — `eqd:3fedfeeb` (TCS.NS, ₹98,376.60) has been locked since 2026-08-13 for a desk position whose EXIT event is in the equity journal; the lock was never released (found 2026-09-19 by the first LIVE_TRADE_BOOK render on the VM; NOT fixed)
+
+- **Verified:** on the VM at `61ce6a7`, `margin_locks` holds 13 open rows
+  (10 options short_ids + 3 `eqd:`); the equity event stream pairs
+  `3fedfeeb` as entry (PAPER_CAPITAL, funded, lock_ref `eqd:3fedfeeb`) AND
+  exit, while `255781d3` (PANAMAPET) and `618b7691` (DABUR) are open. So the
+  account's "margin locked" ₹622,970 overstates the live book by ₹98,377
+  and available cash is understated by the same amount. The other 10
+  options locks match the 10 open journal spreads exactly.
+- **Not verified:** which path exited TCS without settling — the
+  proposer's own resolver vs the desk's live cycle (`settle_exit`) — and
+  whether `desk_state.realized` (−₹12,237) is missing that trade's P&L.
+  `python3 -m src.equity_desk --sweep` is the documented reconciler for
+  `eqd:` orphans; NOT run — it moves money in the ledger and is the
+  owner's call (Rule 4 / #79 no-retro-funding discipline).
+- **Detection now permanent:** the trade book renders a "⚠️ Locks without
+  an open position" section whenever an open lock has no open row
+  (`tests/test_markdown_ledger.py::test_orphan_locks_are_surfaced_not_hidden`).

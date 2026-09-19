@@ -61,6 +61,12 @@ longs-first) and `issue`. **Nothing on the live path calls `issue`; no
 venue exists; Rule 7 unchanged.** Tests: `tests/test_oms.py` (12), +5 in
 `test_chain_archiver.py`.
 
+**DEPLOYED.** VM at `07cca58` (~10:xx IST 09-19), `alpha-trading` restarted;
+100/100 scoped tests green on the venv; on the VM's own files the extension
+resolves 12 names (abb, bajaj_auto, bse, dixon, godrejcp, godrejprop, hal,
+heromotoco, kei, lauruslabs, solarinds, trent), 11 skipped by name. First
+by-id capture is Monday 15:40 (today is Saturday).
+
 **Suite.** 2,233 passed, 1 failed (the same pre-existing `test_darling_shadow`
 calendar failure), 60 s.
 

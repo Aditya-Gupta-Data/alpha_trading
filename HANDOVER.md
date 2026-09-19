@@ -42,6 +42,25 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-19 — Session close
+
+**State.** VM at `14595a6` (+ docs `748a71b`), all services active, suite
+59 s / 2,248 green (1 known calendar failure). Today: chain archiver
+extended to all 25 tier-1 names by id (#100/#101), OMS schema + one
+strategy router (#100), the paper venue live for approved entries (#101,
+`paper_venue_enabled: true`). Nothing places an order; Rule 7 unchanged.
+
+**Still pending on the owner.** The Mini PC has never reported
+(`origin/mininode/bootstrap` absent); its three queued messages need
+approval in that session, plus `.env` copy, `gcloud auth login`, BIOS
+power-on-after-loss. The Mac still owns the home lane.
+
+**Monday checklist (in order).** (1) First approved entry carries
+`execution.mode = paper_venue` + `spread.ticket_id`; a `trade_tickets` row
+FILLED on the VM. (2) 15:40: ~23 new `data/lake/chains/` slugs. (3) 21:00:
+the court's first fires > 0; 16:30 Tuesday the ⚖️ field shows n > 0.
+(4) `REJECTED_POOR_RR` counts in the proposal ledger.
+
 ## 2026-09-19 (later) — The paper venue is live for entries; all 25 tier-1 names resolve (CODE, decision #101; deploy below)
 
 **What changed.** (1) `darling_ids.json` rebuilt on the Mac with the tier-1

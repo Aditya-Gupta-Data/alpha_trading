@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-19 · 16 commits · 40 files touched
+### 2026-09-19 · 19 commits · 46 files touched
 
+- `b7dccbd` feat(ops): scripts/audit_logs.py — the 15-day forensic log sweep (API frictions, stale data, memory runs, missed exits → logs/audit_report_15day.md, MANUAL OFFLINE TOOL) + decision #103 docs (MODULES, DECISIONS, HANDOVER)
+- `b0b2335` chore: micro-commit — exits through the OMS: EXIT tickets (trade_tickets.kind, flipped legs, one atomic basket) issued and venue-filled inside the tracker's own settlement (EOD + intraday), venue exit slippage booked as a cost, primary + shadow accounts (decision #103)
+- `737b701` chore: micro-commit — per-trade options stop: OPTION_STOP_LOSS_FRACTION (0.5, 0=off), one predicate spread_stop_hit in both EOD resolvers + the live bridge's stop_loss signal, verdict text, tests (decision #103)
 - `b7ffb42` docs: decision #102 — dual paper treasury (MODULES, DECISIONS, ARCHITECTURE Dept 3, HANDOVER 09-19 night)
 - `0ff709e` chore: micro-commit — proposer judges the 2L shadow account at both gate points and issues its venue ticket; LIVE_TRADE_BOOK renders both accounts side by side; 16 dual-treasury tests (decision #102)
 - `c055eea` chore: micro-commit — OMS tickets carry account_id (additive column), router builds shadow-account tickets, venue journals shadow fills to the shadow ledger (decision #102)

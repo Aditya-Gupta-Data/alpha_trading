@@ -134,6 +134,9 @@ def test_underlyings_are_paced_apart():
     rate budget. The pause makes the sweep a drip."""
     with tempfile.TemporaryDirectory() as tmp:
         f, calls = _fetchers()
+        # the tier-1 extension (#100) adds one pause per extension name;
+        # this test measures the CORE drip, so point the extension at nothing
+        f["fo_path"] = Path(tmp) / "no_fo.json"
         ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
         pauses = [s for s in calls["sleeps"] if s == ca.UNDERLYING_PAUSE_SECONDS]
         assert len(pauses) == len(ca.UNDERLYINGS) - 1
@@ -225,3 +228,92 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}: {e}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+# ------------------------------------------ tier-1 extension (2026-09-19, #100)
+
+import json as _json
+
+
+def _ext_files(tmp, tier1=("ABB", "BAJAJ-AUTO", "TCS", "AMBER", "BANNEDCO"),
+               banned=("BANNEDCO",), ids=None):
+    fo = tmp / "fo.json"
+    fo.write_text(_json.dumps({"as_of": "2026-09-19", "banned": list(banned),
+                               "symbols": {s: {"tier": "tier1"} for s in tier1}
+                               | {"TIER2CO": {"tier": "tier2"}}}))
+    idp = tmp / "ids.json"
+    idp.write_text(_json.dumps({"ids": ids if ids is not None else
+                                {"ABB": {"id": "13"}, "BAJAJ-AUTO": {"id": "16669"}}}))
+    return fo, idp
+
+
+def test_tier1_extension_resolves_by_id_skips_core_banned_and_unresolved(tmp_path):
+    fo, idp = _ext_files(tmp_path)
+    ext = ca.tier1_extension(fo, idp)
+    assert set(ext["names"]) == {"ABB.NS", "BAJAJ-AUTO.NS"}      # TCS is core, TIER2CO not tier1
+    assert ext["names"]["BAJAJ-AUTO.NS"] == {"slug": "bajaj_auto", "security_id": "16669",
+                                             "segment": "NSE_EQ", "symbol": "BAJAJ-AUTO"}
+    assert ("BANNEDCO", "fo_banned") in ext["skipped"]
+    assert ("AMBER", "no_scrip_master_id") in ext["skipped"]
+    assert ca.extension_slug("GVT&D") == "gvt_d"
+    assert not set(v["slug"] for v in ext["names"].values()) & set(ca.UNDERLYINGS.values())
+
+
+def test_tier1_extension_fails_open_by_name_when_a_file_is_missing(tmp_path):
+    ext = ca.tier1_extension(tmp_path / "nope.json", tmp_path / "nope2.json")
+    assert ext["names"] == {} and ext["skipped"][0][1].startswith("fo_liquidity unavailable")
+    fo, _ = _ext_files(tmp_path)
+    ext = ca.tier1_extension(fo, tmp_path / "nope2.json")
+    assert ext["names"] == {}
+    assert any(r.startswith("darling_ids unavailable") for _, r in ext["skipped"])
+    assert ("ABB", "no_scrip_master_id") in ext["skipped"]
+
+
+def test_run_captures_the_extension_by_id_after_the_core_nine(tmp_path):
+    fo, idp = _ext_files(tmp_path)
+    f, calls = _fetchers()
+    seen = {"expiry": [], "chain": [], "spot": []}
+    f["fo_path"], f["ids_path"] = fo, idp
+    f["expiry_by_id_fn"] = lambda sid, seg: seen["expiry"].append((sid, seg)) or ["2026-09-30", "2026-10-28", "2026-11-25"]
+    f["chain_by_id_fn"] = lambda sid, e, seg: seen["chain"].append((sid, e)) or {
+        "last_price": 1000.0, "oc": {"1000.000000": {"ce": {"last_price": 20, "lotSize": 250}}}}
+    f["spot_by_id_fn"] = lambda sid, seg: seen["spot"].append(sid) or 1000.0
+    summary = ca.run(today=date(2026, 7, 10), lake_root=tmp_path, **f)
+    assert summary["captured"]["NIFTY 50"] == 4                    # core untouched
+    ext = summary["extension"]
+    assert ext["captured"] == {"ABB.NS": 2, "BAJAJ-AUTO.NS": 2}    # EXTENSION_MAX_EXPIRIES
+    assert ext["empty"] == [] and ("AMBER", "no_scrip_master_id") in ext["skipped"]
+    assert {s for s, _ in seen["expiry"]} == {"13", "16669"}
+    assert all(seg == "NSE_EQ" for _, seg in seen["expiry"])
+    assert len(seen["chain"]) == 4
+    assert lake.read_day("chains/bajaj_auto", "2026-07-10", root=tmp_path)[0]["underlying"] == "BAJAJ-AUTO.NS"
+    assert summary["skipped"] is None                              # extension holes never taint the core verdict
+
+
+def test_an_empty_extension_name_is_noted_not_a_core_blackout(tmp_path):
+    fo, idp = _ext_files(tmp_path)
+    f, _ = _fetchers()
+    f["fo_path"], f["ids_path"] = fo, idp
+    f["expiry_by_id_fn"] = lambda sid, seg: []
+    f["chain_by_id_fn"] = lambda sid, e, seg: None
+    f["spot_by_id_fn"] = lambda sid, seg: None
+    summary = ca.run(today=date(2026, 7, 10), lake_root=tmp_path, **f)
+    assert summary["extension"]["captured"] == {"ABB.NS": 0, "BAJAJ-AUTO.NS": 0}
+    assert set(summary["extension"]["empty"]) == {"ABB.NS", "BAJAJ-AUTO.NS"}
+    assert summary["skipped"] is None and summary["empty"] == []
+
+
+def test_the_court_reads_extension_slugs_and_lot_size_from_the_chain(tmp_path, monkeypatch):
+    from src.validation import run_proving_court as court
+    from src import lake as _lake
+    oc = {f"{k:.6f}": {"ce": {"last_price": p, "top_ask_price": p + 0.5, "top_bid_price": p - 0.5,
+                              "lotSize": 250}, "pe": {"last_price": 1.0, "lotSize": 250}}
+          for k, p in ((980.0, 40.0), (1000.0, 25.0), (1020.0, 15.0), (1040.0, 9.0),
+                       (1060.0, 5.0), (1080.0, 3.0), (1100.0, 1.5))}
+    rows = [{"underlying": "BAJAJ-AUTO.NS", "slug": "bajaj_auto", "expiry": "2026-09-30",
+             "spot": 1005.0, "oc": oc}]
+    monkeypatch.setattr(_lake, "read_day", lambda ds, day, name=None, root=None:
+                        rows if ds == "chains/bajaj_auto" else [])
+    ch = court.chain_from_lake("BAJAJ-AUTO.NS", "2026-09-19", today=date(2026, 9, 19))
+    assert ch is not None and ch["lot_size"] == 250 and ch["buy_strike"] == 1000.0
+    assert court.lot_size_from_chain({}) is None

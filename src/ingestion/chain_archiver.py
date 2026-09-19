@@ -105,6 +105,22 @@ MAX_EXPIRIES = 3
 MAX_EXPIRIES_BY_UNDERLYING = {"NIFTY 50": 4}
 THROTTLE_SECONDS = 3.0
 
+# TIER-1 EXTENSION (2026-09-19, decision #100 — feeds the Proving Court).
+# The court's first sittings produced 0 fires: every Glassbreaking signal
+# landed on a tier-1 F&O name with no archived chain, and the court prices
+# ONLY off an archived chain (never a synthetic premium). So the sweep now
+# also captures every `tier1` name in data/fo_liquidity.json that is not
+# already in UNDERLYINGS, addressed by its scrip-master id from
+# data/darling_ids.json (never hand-typed, #78). Slug = lower-cased symbol,
+# with the same "&"/"-" characters the lake's other slugs avoid folded to
+# "_". Extension names take EXTENSION_MAX_EXPIRIES (monthly-only stocks;
+# the court's `pick_expiry(short)` wants the nearest usable one). Missing
+# id file, missing F&O file, banned or unresolved names => skipped BY NAME
+# in the summary, never guessed. The core nine and their slugs are untouched.
+EXTENSION_MAX_EXPIRIES = 2
+FO_PATH = ROOT / "data" / "fo_liquidity.json"
+IDS_PATH = ROOT / "data" / "darling_ids.json"
+
 # RATE-LIMIT HEADROOM (2026-08-07). Going 2 -> 9 underlyings turns ~10
 # chain calls into ~28, on an account with ONE rate budget. Two protections
 # already exist and both still apply: `dhan_client._throttle()` spaces
@@ -117,6 +133,47 @@ THROTTLE_SECONDS = 3.0
 UNDERLYING_PAUSE_SECONDS = 5.0
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def extension_slug(symbol: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in str(symbol).lower())
+
+
+def tier1_extension(fo_path=None, ids_path=None) -> dict:
+    """{display_name: {"slug", "security_id", "segment", "symbol"}} for every
+    tier1 F&O name not already a core underlying, plus a "skipped" list
+    (name, reason). Pure file reads; a missing or unreadable file yields
+    an empty extension with the reason named, never a crash."""
+    out, skipped = {}, []
+    try:
+        fo = json.loads(Path(fo_path or FO_PATH).read_text())
+    except (OSError, ValueError) as e:
+        return {"names": {}, "skipped": [("*", f"fo_liquidity unavailable: {type(e).__name__}")]}
+    try:
+        ids = (json.loads(Path(ids_path or IDS_PATH).read_text()) or {}).get("ids") or {}
+    except (OSError, ValueError) as e:
+        ids = {}
+        skipped.append(("*", f"darling_ids unavailable: {type(e).__name__}"))
+    banned = {str(b).upper() for b in fo.get("banned") or []}
+    core_bare = {u.split(".")[0].upper() for u in UNDERLYINGS}
+    core_slugs = set(UNDERLYINGS.values())
+    for sym, row in sorted((fo.get("symbols") or {}).items()):
+        sym = str(sym).upper()
+        if not isinstance(row, dict) or row.get("tier") != "tier1":
+            continue
+        if sym in core_bare:
+            continue                                  # already captured by name
+        if sym in banned:
+            skipped.append((sym, "fo_banned")); continue
+        sid = (ids.get(sym) or {}).get("id")
+        if not sid:
+            skipped.append((sym, "no_scrip_master_id")); continue
+        slug = extension_slug(sym)
+        if slug in core_slugs:
+            skipped.append((sym, "slug_collides_with_core")); continue
+        out[f"{sym}.NS"] = {"slug": slug, "security_id": str(sid),
+                            "segment": "NSE_EQ", "symbol": sym}
+    return {"names": out, "skipped": skipped}
 
 
 def _is_weekday(day: date) -> bool:
@@ -205,6 +262,10 @@ def run(today: date = None, lake_root=None, force: bool = False,
         print(f"(chain archiver: {today} is a weekend — nothing to capture)")
         return summary
     sleep_fn = fetchers.get("sleep_fn") or time.sleep
+    # the tier-1 extension's seams (#100) are split off so the core capture
+    # call keeps its exact signature
+    _EXT_KEYS = ("fo_path", "ids_path", "expiry_by_id_fn", "chain_by_id_fn", "spot_by_id_fn")
+    ext_seams = {k: fetchers.pop(k) for k in _EXT_KEYS if k in fetchers}
     for i, (underlying, slug) in enumerate(UNDERLYINGS.items()):
         if i:
             # Nine underlyings back-to-back is a burst; this makes it a
@@ -231,6 +292,45 @@ def run(today: date = None, lake_root=None, force: bool = False,
                       "no expiry answered")
             print(f"  (chain archiver: CA-EMPTY {underlying} {today} — "
                   f"{reason}, chain UNAVAILABLE and NOT recoverable later)")
+
+    # ---- tier-1 extension (decision #100): id-addressed, after the core nine
+    ext = tier1_extension(ext_seams.get("fo_path"), ext_seams.get("ids_path"))
+    summary["extension"] = {"captured": {}, "empty": [], "skipped": ext["skipped"]}
+    if ext["names"]:
+        from src import dhan_client as _dc
+        by_id_expiry = ext_seams.get("expiry_by_id_fn") or _dc.get_expiry_list_by_id
+        by_id_chain = ext_seams.get("chain_by_id_fn") or _dc.get_option_chain_by_id
+        by_id_spot = ext_seams.get("spot_by_id_fn") or _dc.get_live_price_by_id
+        vix_fn = fetchers.get("vix_fn")
+        for name, meta in ext["names"].items():
+            sleep_fn(UNDERLYING_PAUSE_SECONDS)
+            sid, seg = meta["security_id"], meta["segment"]
+            rows = capture_underlying(
+                name, meta["slug"], today,
+                expiry_fn=lambda _u, _sid=sid, _seg=seg: by_id_expiry(_sid, _seg),
+                chain_fn=lambda _u, e, _sid=sid, _seg=seg: by_id_chain(_sid, e, _seg),
+                spot_fn=lambda _u, _sid=sid, _seg=seg: by_id_spot(_sid, _seg),
+                vix_fn=vix_fn, sleep_fn=sleep_fn,
+                max_expiries=EXTENSION_MAX_EXPIRIES)
+            path = lake.write_partition(f"chains/{meta['slug']}", today.isoformat(),
+                                        rows, root=lake_root) if rows else None
+            if rows and path:
+                summary["extension"]["captured"][name] = len(rows)
+            else:
+                summary["extension"]["captured"][name] = 0
+                summary["extension"]["empty"].append(name)
+        print(f"(chain archiver: tier-1 extension — "
+              f"{sum(1 for v in summary['extension']['captured'].values() if v)}/"
+              f"{len(ext['names'])} names captured"
+              + (f", {len(ext['skipped'])} skipped by name" if ext["skipped"] else "") + ")")
+        if summary["extension"]["empty"]:
+            # extension holes are recoverable-by-design for the court (it
+            # counts them as no_chain_for_underlying), so this is a note,
+            # not a CA-EMPTY on the irreversible core archive
+            print(f"  (chain archiver: extension empty for "
+                  f"{', '.join(summary['extension']['empty'])})")
+    elif ext["skipped"]:
+        print(f"(chain archiver: tier-1 extension skipped — {ext['skipped'][0][1]})")
 
     if summary["empty"]:
         summary["skipped"] = (

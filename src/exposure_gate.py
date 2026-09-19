@@ -57,12 +57,10 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # spread["direction"]. The stamp (StrategyConstructor._package) is the
 # authoritative source; tests/test_exposure_gate.py asserts this map
 # agrees with every constructor so the two can never drift.
-DIRECTION_BY_STRATEGY = {
-    "bull_call_spread": "bullish",
-    "bear_put_spread":  "bearish",
-    "iron_condor":      "neutral",
-    "iron_butterfly":   "neutral",
-}
+# decision #100 (2026-09-19): ONE routing table. This name is kept for
+# every existing reader; the values come from strategy_router.
+from src.strategy_router import ROUTING_TABLE as _ROUTING
+DIRECTION_BY_STRATEGY = {k: v["direction"] for k, v in _ROUTING.items()}
 
 _DIRECTIONS = ("bullish", "bearish", "neutral")
 

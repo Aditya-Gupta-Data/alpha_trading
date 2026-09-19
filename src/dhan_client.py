@@ -546,14 +546,8 @@ def get_expiry_list(index_ticker: str) -> list:
     return data if isinstance(data, list) else []
 
 
-def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:
-    """Option chain for an index underlying at a given expiry (YYYY-MM-DD).
-
-    Returns the flat {"last_price", "oc": {...}} dict options_proposer
-    expects. Same doubly-nested SDK response as get_expiry_list
-    (`{"data": {"data": {"last_price", "oc"}}}`) — found live 2026-07-09
-    right after fixing that one; unwrap defensively here too."""
-    instr = _resolve(index_ticker)
+def _chain_call(instr: dict, expiry_date: str) -> dict | None:
+    """The one Dhan option-chain request, given a resolved instrument."""
     client = _get_client()
     if instr is None or client is None:
         return None
@@ -567,6 +561,42 @@ def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:
         return None
     data = unwrap_payload(resp, inner_marker="oc")
     return data if isinstance(data, dict) else None
+
+
+def get_expiry_list_by_id(security_id, segment: str = "NSE_EQ") -> list:
+    """Expiry list for an instrument NOT in SECURITY_ID_MAP, addressed by
+    its scrip-master id (decision #100: the tier-1 F&O names the chain
+    archiver now captures live in data/darling_ids.json, never hand-typed).
+    Same defensive unwrap and empty-state contract as get_expiry_list."""
+    client = _get_client()
+    if client is None or security_id in (None, ""):
+        return []
+    _throttle()
+    try:
+        resp = client.expiry_list(int(security_id), segment)
+    except Exception as e:
+        print(f"  Dhan expiry_list error (id={security_id}): {e}")
+        return []
+    data = unwrap_payload(resp)
+    return data if isinstance(data, list) else []
+
+
+def get_option_chain_by_id(security_id, expiry_date: str,
+                           segment: str = "NSE_EQ") -> dict | None:
+    """Option chain for an id-addressed instrument (see get_expiry_list_by_id)."""
+    if security_id in (None, ""):
+        return None
+    return _chain_call({"id": security_id, "seg": segment}, expiry_date)
+
+
+def get_option_chain(index_ticker: str, expiry_date: str) -> dict | None:
+    """Option chain for an index underlying at a given expiry (YYYY-MM-DD).
+
+    Returns the flat {"last_price", "oc": {...}} dict options_proposer
+    expects. Same doubly-nested SDK response as get_expiry_list
+    (`{"data": {"data": {"last_price", "oc"}}}`) — found live 2026-07-09
+    right after fixing that one; unwrap defensively here too."""
+    return _chain_call(_resolve(index_ticker), expiry_date)
 
 
 if __name__ == "__main__":

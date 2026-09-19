@@ -90,8 +90,8 @@ VOLUME_SPIKE_MULT = 2.0
 # --- routing + risk --------------------------------------------------------
 STRUCTURES = {"falling_knife": "bull_call_spread",
               "early_breakout": "bull_call_spread"}
-DEFINED_RISK_STRUCTURES = frozenset({"bull_call_spread", "bear_put_spread",
-                                     "iron_condor", "iron_butterfly"})
+from src.strategy_router import ROUTING_TABLE as _ROUTING           # decision #100
+DEFINED_RISK_STRUCTURES = frozenset(k for k, v in _ROUTING.items() if v["defined_risk"])
 RISK_PCT_PER_SETUP = 0.005                # 0.5% of the pool per setup
 HOLD_SESSIONS = 10                        # time exit for the shadow grader
 

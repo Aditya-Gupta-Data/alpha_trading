@@ -149,6 +149,23 @@ def default_bars_fn(symbols: list, days: int = BARS_DAYS) -> dict:
     return bc.bars_for_many(symbols, days=days)
 
 
+def lot_size_from_chain(oc: dict):
+    """A tier-1 name's lot size is not in the repo's tables; Dhan's chain
+    nodes carry it per leg (`lot_size` / `lotSize`). None when absent —
+    the court then counts the name, never guesses a contract size."""
+    for node in (oc or {}).values():
+        for leg in (node or {}).values():
+            if isinstance(leg, dict):
+                for k in ("lot_size", "lotSize", "lot"):
+                    try:
+                        v = int(float(leg.get(k)))
+                        if v > 0:
+                            return v
+                    except (TypeError, ValueError):
+                        pass
+    return None
+
+
 def chain_from_lake(symbol_display: str, day: str, today: date = None) -> dict | None:
     """The EOD chain the archiver captured at 15:40 -> the four legs a bull
     call spread needs: buy ATM, sell ATM + WING_STEPS steps, both priced by
@@ -159,7 +176,8 @@ def chain_from_lake(symbol_display: str, day: str, today: date = None) -> dict |
     from src.ingestion import chain_archiver as ca
     slug = ca.UNDERLYINGS.get(symbol_display)
     if not slug:
-        return None
+        # decision #100: tier-1 names are archived under extension slugs
+        slug = ca.extension_slug(str(symbol_display).split(".")[0])
     rows = [r for r in lake.read_day(f"chains/{slug}", day) if isinstance(r, dict) and r.get("oc")]
     if not rows:
         return None
@@ -183,7 +201,8 @@ def chain_from_lake(symbol_display: str, day: str, today: date = None) -> dict |
     sell_px, _ = op._leg_fill(chain, sell, "ce", "SELL")
     if not buy_px or not sell_px:
         return None
-    lot = op.LOT_SIZES.get(symbol_display) or op.EQUITY_OPTION_UNDERLYINGS.get(symbol_display)
+    lot = (op.LOT_SIZES.get(symbol_display) or op.EQUITY_OPTION_UNDERLYINGS.get(symbol_display)
+           or lot_size_from_chain(row.get("oc")))
     if not lot:
         return None
     return {"buy_strike": atm, "sell_strike": sell, "buy_premium": float(buy_px),

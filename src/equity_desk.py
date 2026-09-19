@@ -406,6 +406,20 @@ def run_darling_live_cycle(tiers_path=None, levels_path=None, path=None,
                 continue
             if s:
                 settlements.append(s)
+    # Issue 30 root cause (2026-09-19): the block-shadow leg runs FIRST in
+    # master_scheduler's combined cycle and `track_open_shadows` resolves
+    # EVERY open position it can quote — the event stream is shared and
+    # `kg.open_positions` does not filter by setup. For a funded darling
+    # whose name is also in SECURITY_ID_MAP (TCS, DABUR) `get_live_price`
+    # answers, so the block leg logs the exit itself with no settle_fn, and
+    # this leg then finds nothing open to settle: 10/10 non-map darlings
+    # settled within a minute, the one map name (TCS) sat locked 9 days.
+    # Re-drive settlement for any active eqd: lock whose entry already
+    # carries an exit — idempotent, ledger-driven, cheap, fail-open.
+    try:
+        settlements += sweep_orphan_locks(ledger_path=path, conn=conn)
+    except Exception as exc:
+        print(f"  (darling orphan sweep failed: {exc})")
     entries = []
     if fresh:
         entries = sp.propose_darling_entries(

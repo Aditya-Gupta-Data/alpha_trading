@@ -1616,3 +1616,33 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Root cause still not verified:** why the 09-10 exit did not settle at
   the time (which resolver path logged it). One occurrence; the book now
   surfaces any recurrence the same day.
+
+### Issue 30 — ROOT CAUSE FOUND and FIXED (2026-09-19, later)
+
+- **Verified on the VM's ledgers:** of the 11 funded darling exits ever
+  logged, 10 (WAAREERTL, WABAG, SUPREMEIND ×2, FIEMIND, CIEINDIA,
+  BALAMINES, FINEORG, DIXON, LTF — none in `SECURITY_ID_MAP`) settled
+  within one minute of their exit event. The ONE name that is in
+  `SECURITY_ID_MAP` (TCS.NS) never settled. DABUR.NS — open, funded, also
+  in the map — would have hit the same bug on exit.
+- **Mechanism:** `master_scheduler._shadow_cycle_fn` runs the block-shadow
+  leg (`equity_shadow_proposer.run_cycle`) BEFORE the darling desk leg.
+  `run_cycle` → `track_open_shadows` walks EVERY open position in the
+  shared event stream (`kg.open_positions` has no setup filter) with
+  `dhan_client.get_live_price`, which answers only for `SECURITY_ID_MAP`
+  names. For a map-name darling it logs the exit itself — correctly stamped
+  `PAPER_CAPITAL`, but with no `settle_fn` — and `run_darling_live_cycle`,
+  one call later, finds nothing open and settles nothing. For every
+  non-map darling `get_live_price` returns None, the block leg skips it,
+  and the desk leg (quoting via `darling_ids.json`) exits AND settles.
+  Nothing was logged either way: settlement success never prints.
+- **Fix (`src/equity_desk.py`, this commit):** `run_darling_live_cycle`
+  ends its settlement stage with `sweep_orphan_locks(ledger_path, conn)` —
+  idempotent, ledger-driven — so an exit logged by any leg releases its
+  lock within the same 60-second cycle. Regression test:
+  `tests/test_equity_desk.py::test_live_cycle_settles_an_exit_the_block_leg_logged_first`.
+  Suite 2,264 passed (1 pre-existing calendar failure).
+- **Not changed (deliberately):** the block leg still resolves map-name
+  darlings itself — its exit rows are honest (mode rides the entry) and
+  narrowing its universe would change exit timing for those names; the
+  sweep closes the money gap without touching exit semantics.

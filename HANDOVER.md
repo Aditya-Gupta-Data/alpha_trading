@@ -67,6 +67,12 @@ pnl_net −₹6,471, ₹98,377 released; firm equity now ₹10,89,430 (dd 0.59%)
 available ₹5,64,837, 12 open locks = 12 open trades. DB backup
 `brain_map.db.pre_issue30_*` on the VM. Book re-rendered + pulled to the
 Mac (the file stays gitignored — the scp lane, not git, carries it).
+**Root cause FOUND + FIXED (`src/equity_desk.py`):** the block-shadow leg
+runs first in the market loop and exits any darling it can quote — i.e.
+`SECURITY_ID_MAP` names (TCS, DABUR) — with no settle_fn; the desk leg then
+had nothing to settle (10/10 non-map darlings settled in <1 min, the one
+map name never). The desk cycle now ends with `sweep_orphan_locks`, so any
+leg's exit releases its lock within the same cycle. Ledger has the detail.
 
 **What the next person should do first.**
 1. Issue 30 closed; Monday's book should show no ⚠️ section and 12 locks.

@@ -307,6 +307,37 @@ def test_sweep_reconciles_orphan_locks():
         conn.close()
 
 
+def test_live_cycle_settles_an_exit_the_block_leg_logged_first():
+    """Issue 30 (2026-09-19): TCS.NS sat locked for 9 days. The block-shadow
+    leg runs before this one in the market loop and — because TCS is in
+    SECURITY_ID_MAP — quoted and exited the funded darling itself, with no
+    settle_fn. This leg then saw nothing open. Reproduce: a funded entry, an
+    exit written by "someone else", this leg's own quote_fn returning None
+    (it cannot even see the name) — the lock must still release this cycle."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        conn = _firm_conn()
+        journal = tmp / "shadow.jsonl"
+        tiers, levels = _write_artifacts(tmp, {"strong_buy": []}, [])
+        entry = _entry()
+        entry["funding"] = desk.fund_entry(entry, conn=conn)
+        kg.log_event(entry, path=journal)
+        assert desk.desk_state(conn)["open_locks"] == 1
+        kg.log_event({"event": "exit", "id": entry["id"], "mode": "PAPER_CAPITAL",
+                      "ticker": "TCS.NS", "reason": "stop_loss",
+                      "exit_price": 2080.0}, path=journal)      # block leg
+        res = desk.run_darling_live_cycle(
+            tiers_path=tiers, levels_path=levels, path=journal, conn=conn,
+            quote_fn=lambda t: None, check_fn=_allow_all, universe={},
+            vix_fn=lambda: None, broadcast_fn=lambda *a, **k: None)
+        assert res["exits"] == []                    # not this leg's exit
+        [s] = res["settlements"]                     # but its settlement
+        assert s["lock_ref"] == entry["funding"]["lock_ref"] and s["pnl_net"] < 0
+        assert desk.desk_state(conn)["open_locks"] == 0
+        assert pm.equity(conn) == 1_000_000.0 + s["pnl_net"]
+        conn.close()
+
+
 def test_render_book_lines_live_view():
     with tempfile.TemporaryDirectory() as tmp:
         conn = _firm_conn()

@@ -44,7 +44,7 @@ the agent's job under the Session Wrap rule above.
 
 ## 2026-09-19 (evening) — LIVE TRADE BOOK shipped (cron #32) + VM→Mac pull lane; Issue 30 found
 
-**State.** VM at `61ce6a7`, cron block reinstalled (32 jobs), 27+12 scoped
+**State.** VM at `0f39c04` (`alpha-trading` restarted 14:4x IST after the Issue 30 fix; `sweep_orphan_locks()` on the VM returns [] — clean), cron block reinstalled (32 jobs), 27+12 scoped
 tests green on the VM venv; full suite on the Mac 2,261 passed / 1 failed
 (the same pre-existing `test_darling_shadow` calendar failure), 58 s.
 Portfolio audit from the VM's ledgers (paper): starting ₹10,00,000 ·

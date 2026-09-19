@@ -203,7 +203,12 @@ def test_the_oms_places_nothing_and_is_on_no_live_path():
                           "portfolio_manager", "request_entry", "get_option_chain",
                           "get_live_price", "requests.", "httpx"):
             assert forbidden not in src, (name, forbidden)
-    for live in ("src/options_proposer.py", "src/plan_tracker.py", "src/market_loop.py",
+    # decision #101: the ONE live caller of the router's write door is
+    # options_proposer.decide_pending (approved ENTRIES, flag-gated); the
+    # exit path and the equity desk still never touch it.
+    for live in ("src/plan_tracker.py", "src/market_loop.py",
                  "src/live_bridge.py", "src/equity_desk.py"):
         assert "strategy_router.issue" not in (ROOT / live).read_text(), live
         assert "oms.issue_ticket" not in (ROOT / live).read_text(), live
+    op = (ROOT / "src/options_proposer.py").read_text()
+    assert op.count("strategy_router.issue(") == 1 and "PAPER_VENUE_ENABLED" in op

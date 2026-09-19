@@ -171,8 +171,8 @@ def test_an_open_position_outside_the_tier_table_still_gets_an_id(tmp_path):
     from the Mac's screen, so it had no id and could not be priced."""
     tiers = _tiers_file(tmp_path, ["TCS"])
     journal = _journal_file(tmp_path, ["RELIANCE.NS"])
-    assert SM._darling_symbols(tiers, journal,
-                               tmp_path / "absent.json") == ["RELIANCE", "TCS"]
+    assert SM._darling_symbols(tiers, journal, tmp_path / "absent.json",
+                               fo_path=tmp_path / "no_fo.json") == ["RELIANCE", "TCS"]
 
 
 def test_an_exited_position_drops_out_of_the_universe(tmp_path):

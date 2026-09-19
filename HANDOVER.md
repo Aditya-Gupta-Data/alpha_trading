@@ -42,6 +42,34 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-19 (later) — The paper venue is live for entries; all 25 tier-1 names resolve (CODE, decision #101; deploy below)
+
+**What changed.** (1) `darling_ids.json` rebuilt on the Mac with the tier-1
+F&O names in the universe (`scrip_master._tier1_fo_symbols`): 148 ids, 0
+unresolved, all 25 tier-1 covered; shipped to the VM. The archiver's
+extension now resolves **23** names (25 minus the core RELIANCE/TCS), 0
+skipped. (2) `src/execution/paper_venue.py`: sweeps PENDING legs, fills at
+limit ± tier slippage via `oms.apply_fill`, rejects by name, stamps venue
+fills onto the journal legs. (3) `decide_pending(approve=True)` → ticket +
+venue sweep + stamp, before the rewrite, when `paper_venue_enabled`
+(config, now **true**); `execution` record on every approved row; legacy
+instant fill on flag-off or error. Tracker skips entry slippage on `venue`
+fills. Tests: `tests/test_paper_venue.py` (15), OMS guard updated.
+
+**Suite.** 2,248 passed, 1 failed (the same pre-existing `test_darling_shadow`).
+
+**What the next person should do first.**
+1. Monday: the first approved entry should carry `execution.mode =
+   paper_venue` and `spread.ticket_id` in the journal; `trade_tickets` /
+   `trade_legs` on the VM should hold it FILLED with the 15:40 archived
+   chain untouched. If `execution.error` is set, the legacy fill applied —
+   read the error, nothing was lost.
+2. Monday 15:40: `ls data/lake/chains/` should show ~23 new slugs; the
+   21:00 court should report its first fires.
+3. M2 next steps (each a decision): partial fills from the 15-min tape
+   instead of a whole fill at the close; `margin_locks.parent_ref`; exits
+   through the OMS; the #94 broker-book sync as reconciliation.
+
 ## 2026-09-19 — Court unblocked (tier-1 chains) + Phase M2 OMS schema and one strategy router (CODE, decision #100; deploy below)
 
 **What changed.** (1) `chain_archiver` now captures every tier-1 F&O name

@@ -182,3 +182,9 @@ TREASURY_ROUND_RS = float(_CONFIG.get("treasury_round_rs", 5000.0))
 # so a stale config copy never mutes anything unexpectedly.
 DISCORD_BUDGET_ENABLED = bool(_CONFIG.get("discord_budget_enabled", False))
 DISCORD_DAILY_BUDGET = int(_CONFIG.get("discord_daily_budget", 5))
+# Phase M2 paper execution (decision #101, 2026-09-19): when ON, an APPROVED
+# options entry is issued as an Order Ticket (strategy_router.issue) and
+# filled by the PAPER venue (execution.paper_venue) instead of the legacy
+# instant frictionless fill. Code default OFF — a stale config copy must
+# never switch the desk's fill model on its own.
+PAPER_VENUE_ENABLED = bool(_CONFIG.get("paper_venue_enabled", False))

@@ -14,14 +14,17 @@
   "take_profit_rr": 2.0,
   "options_risk_per_trade_pct": 10.0,
   "sleep_decay_lambda": 0.05,
-  "sleep_prune_threshold": 0.20,
+  "sleep_prune_threshold": 0.2,
   "sleep_consolidation_hours": 24,
   "max_concurrent_positions": 4,
   "alt_entry_pullback_pct": 2.0,
   "plan_max_days": 30,
   "tuner_min_samples": 10,
   "tuner_weight_sensitivity": 0.25,
-  "tuner_weight_bounds": [0.5, 1.5],
+  "tuner_weight_bounds": [
+    0.5,
+    1.5
+  ],
   "equity_desk_enabled": true,
   "treasury_enabled": true,
   "adaptive_sizing_enabled": true,
@@ -46,5 +49,6 @@
   "text_intelligence_backend": "ollama",
   "text_intelligence_model": "claude-opus-4-8",
   "text_intelligence_daily_call_cap": 200,
-  "rss_model": "claude-haiku-4-5"
+  "rss_model": "claude-haiku-4-5",
+  "paper_venue_enabled": true
 }

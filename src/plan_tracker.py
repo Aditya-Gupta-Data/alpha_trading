@@ -368,7 +368,7 @@ def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float,
         frictions += pf.calculate_trade_frictions("OPTION", exit_side, exit_premium, qty)
         # #70: a "quoted" fill already crossed the bid-ask at entry (the
         # premium IS the worse side) — the ladder would double-charge it.
-        if leg.get("fill_basis") != "quoted":
+        if leg.get("fill_basis") not in ("quoted", "venue"):   # #70; "venue" = paper venue already slipped (#101)
             slippage += apply_slippage(leg["premium"], "OPTION", lots=lots) * qty
         # The EXIT crossing pays the CRISIS blowout at the exit-day VIX (P1).
         slippage += apply_slippage(exit_premium, "OPTION", vix=vix, lots=lots) * qty
@@ -401,7 +401,7 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict) -> tuple:
         frictions += pf.calculate_trade_frictions("OPTION", entry_side, leg["premium"], qty)
         frictions += pf.calculate_trade_frictions("OPTION", exit_side, exit_premium, qty)
         # #70: same double-charge guard as _spread_exit_costs.
-        if leg.get("fill_basis") != "quoted":
+        if leg.get("fill_basis") not in ("quoted", "venue"):   # #70; "venue" = paper venue already slipped (#101)
             slippage += apply_slippage(leg["premium"], "OPTION") * qty
         slippage += apply_slippage(exit_premium, "OPTION") * qty
     return frictions, slippage

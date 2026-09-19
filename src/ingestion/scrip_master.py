@@ -377,7 +377,7 @@ def _already_resolved_symbols(out_path=None) -> set:
 
 
 def _darling_symbols(tiers_path=None, journal_path=None,
-                     out_path=None) -> list:
+                     out_path=None, fo_path=None) -> list:
     """The id universe the VM desk may ever need to quote: every symbol in
     the tier table, plus every open position, plus everything a previous
     build already resolved."""
@@ -390,7 +390,25 @@ def _darling_symbols(tiers_path=None, journal_path=None,
     screened = {r.get("symbol") for rows in tiers.values()
                 for r in rows if r.get("symbol")}
     return sorted(screened | _open_position_symbols(journal_path)
-                  | _already_resolved_symbols(out_path))
+                  | _already_resolved_symbols(out_path)
+                  | _tier1_fo_symbols(fo_path))
+
+
+def _tier1_fo_symbols(fo_path=None) -> set:
+    """decision #101 (2026-09-19): every tier1 F&O name joins the id
+    universe so the chain archiver's tier-1 extension (#100) can capture
+    all of them, not only the ones that happen to be darlings. Banned
+    names are left out; a missing/unreadable file contributes nothing."""
+    import json as _json
+    p = Path(fo_path) if fo_path else ROOT / "data" / "fo_liquidity.json"
+    try:
+        fo = _json.loads(p.read_text())
+    except (OSError, ValueError):
+        return set()
+    banned = {str(b).upper() for b in fo.get("banned") or []}
+    return {str(sym).upper() for sym, row in (fo.get("symbols") or {}).items()
+            if isinstance(row, dict) and row.get("tier") == "tier1"
+            and str(sym).upper() not in banned}
 
 
 def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,

@@ -1226,6 +1226,15 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     decision = "approved" if approve else "rejected"
     target["decision"] = decision
     target["why"] = (why or "").strip() or "(no reason given)"
+    if approve:
+        # Phase M2 (decision #101): an approved ENTRY becomes an Order
+        # Ticket the PAPER venue fills leg by leg — the legacy "the journal
+        # line IS the fill" model is replaced for new entries when the
+        # flag is on. Runs BEFORE the rewrite so the venue's fill prices
+        # land on the row the tracker will read. Fail-open: a venue error
+        # leaves the legacy fill in place and says so; nothing here touches
+        # margin or the exit path.
+        target["execution"] = _execute_paper_entry(target)
     journal.rewrite_all(entries)
     if not approve:
         # Phase 6G: a human rejection frees the entry's margin lock right
@@ -1259,6 +1268,63 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
         except Exception as _bcast_err:
             print(f"  (broadcast alert skipped: {_bcast_err})")
     return {"status": decision, "entry": target}
+
+
+_PAPER_VENUE_KEEP_CONN = False     # test seam: a shared in-memory conn must survive the call
+
+
+def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
+    """Issue the ticket and run one venue pass for THIS entry (decision
+    #101). Returns a small execution record stamped on the journal row:
+    {mode, ticket_id, status, filled_legs, error}. `mode` is
+    "legacy_instant" when PAPER_VENUE_ENABLED is off or the venue could
+    not run — the entry then behaves exactly as before."""
+    from src.config import PAPER_VENUE_ENABLED
+    record = {"mode": "legacy_instant", "ticket_id": None, "status": None,
+              "filled_legs": 0, "error": None}
+    if not PAPER_VENUE_ENABLED or not (entry.get("spread") or {}).get("legs"):
+        return record
+    try:
+        from src import brain_map, oms, strategy_router
+        venue = venue_mod
+        if venue is None:
+            from src.execution import paper_venue as venue
+        own = conn is None
+        if own:
+            conn = brain_map.connect()
+        try:
+            proposal = {"ticker": entry["ticker"], "short_id": entry.get("short_id"),
+                        "signal": entry.get("signal"), "spread": entry["spread"]}
+            issued = strategy_router.issue(conn, proposal, journal_ref=entry.get("short_id"),
+                                           source="options_proposer.decide_pending")
+            tid = issued["ticket_id"]
+            # journal.rewrite_all just wrote this row; the venue's stamp goes
+            # through update_entry, so stamping is deferred to the caller's
+            # next read — here we only fill and report.
+            venue.sweep(conn, stamp=False)
+            view = oms.ticket_view(conn, tid) or {}
+            record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"),
+                          filled_legs=sum(1 for l in view.get("legs", [])
+                                          if l.get("state") == oms.FILLED))
+            if view.get("status") == oms.FILLED:
+                fills = {(str(l["side"]).upper(), str(l.get("option_type") or "").upper(),
+                          float(l["strike"])): l for l in view["legs"]}
+                for leg in entry["spread"]["legs"]:
+                    f = fills.get((str(leg.get("side")).upper(),
+                                   str(leg.get("option_type") or "").upper(),
+                                   float(leg.get("strike"))))
+                    if f and f.get("avg_fill_price") is not None:
+                        leg["venue_fill"] = leg.get("premium")
+                        leg["premium"] = float(f["avg_fill_price"])
+                        leg["fill_basis"] = venue.FILL_BASIS
+                entry["spread"]["ticket_id"] = tid
+                entry["spread"]["venue"] = venue.VENUE
+        finally:
+            if own and not _PAPER_VENUE_KEEP_CONN:
+                conn.close()
+    except Exception as e:
+        record["error"] = f"{type(e).__name__}: {e}"
+    return record
 
 
 def review_pending() -> int:

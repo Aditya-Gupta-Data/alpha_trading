@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-19 · 5 commits · 23 files touched
+### 2026-09-19 · 6 commits · 23 files touched
 
+- `b95394d` docs: HANDOVER 09-19 session close
 - `33eea76` docs: HANDOVER 09-19 — paper venue deploy state
 - `14595a6` feat(m2): paper venue fills Order Tickets with tier slippage; approved options entries go through the OMS (entry only, flag-gated, fail-open to legacy); tier-1 names join the scrip-master id universe — all 25 resolved (decision #101)
 - `5f856bf` docs: HANDOVER 09-19 deploy state

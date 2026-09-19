@@ -47,6 +47,8 @@ Inspect the account from the project folder:
 from datetime import datetime, timedelta, timezone
 
 from src import brain_map
+from src.config import (MAX_RISK_PER_TRADE_RS, OPTIONS_RISK_PER_TRADE_PCT,
+                        PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_STARTING_CAPITAL_RS)
 from src.portfolio import span_stress_factor
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -644,6 +646,417 @@ def account_summary(conn) -> dict:
     }
 
 
+# --- THE DUAL PAPER TREASURY (Phase M1.B, decision #102, 2026-09-19) ------
+# The architect's proving ground: "nothing goes near live APIs or real money
+# until the system proves profitable on a Rs.2,00,000 PAPER portfolio." A
+# 10L pool hides margin constraints, so the SAME signal stream is judged
+# a second time against a Rs.2L account with its own cash, its own locks,
+# its own P&L and its own halts.
+#
+# ISOLATION BY TABLE, NOT BY COLUMN. The primary account (ACCOUNT_PAPER_10L)
+# stays on the four tables above, untouched -- `account_state` / `margin_locks`
+# / `equity_curve` / `account_events` are the live ledger and RULE 3 forbids
+# rewriting them. Every other account lives in the `paper_*` tables below,
+# keyed by `account_id`, so a 2L lock can never land in the 10L ledger and
+# `equity()` / `available_cash()` / `request_entry()` are byte-identical.
+# The `paper_*` functions delegate to the primary functions when asked
+# about ACCOUNT_PAPER_10L, so a caller can treat both accounts uniformly.
+#
+# WHO ENTERS. The primary gate decides whether the trade EXISTS (journal
+# row, tracker, venue). A shadow account then evaluates the same built
+# structure INDEPENDENTLY: lots re-sized to its own equity and liquid cash
+# (same formula as strategy.size_lots + the hard rupee cap), capped at the
+# primary's lots (a shadow never holds more of a trade than was actually
+# taken), then its own halt list and margin-exhaustion check. Approved =
+# a `paper_margin_locks` row carrying `lots` and `primary_lots`; refused =
+# a named `paper_account_events` row AND the reason stamped on the journal
+# entry (`entry["accounts"][account]`). "Approved for 10L, refused for 2L
+# on margin" is the finding this layer exists to record.
+#
+# WHO SETTLES. One settlement path (Rule 7): when `plan_tracker` releases
+# the primary lock through `release_entry`, the shadow locks on the same
+# journal_ref release in the same call with the P&L SCALED BY LOT RATIO
+# (pnl_shadow = pnl_primary x lots_shadow / lots_primary -- spread P&L and
+# its frictions are linear in lots). A human rejection releases both at
+# zero. No second resolver, no second price read.
+
+ACCOUNT_PAPER_10L = "PAPER_10L"     # the primary: account_state id=1 & co.
+ACCOUNT_PAPER_2L = "PAPER_2L"       # the Rs.2L stress-test shadow
+
+# account_id -> starting capital. The primary's pool is whatever the live
+# `account_state` row says (STARTING_CAPITAL only seeds an empty DB).
+PAPER_ACCOUNTS = {
+    ACCOUNT_PAPER_2L: float(PAPER_2L_STARTING_CAPITAL_RS),
+}
+
+_ACCOUNTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS paper_accounts (
+    account_id        TEXT PRIMARY KEY,
+    starting_capital  REAL NOT NULL,
+    realized_pnl      REAL NOT NULL DEFAULT 0,
+    peak_equity       REAL NOT NULL,
+    created_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS paper_margin_locks (
+    account_id    TEXT NOT NULL,
+    journal_ref   TEXT NOT NULL,
+    margin_rs     REAL NOT NULL,
+    lots          INTEGER NOT NULL DEFAULT 1,
+    primary_lots  INTEGER NOT NULL DEFAULT 1,   -- the 10L trade's lots at lock time
+    locked_at     TEXT NOT NULL,
+    released_at   TEXT,
+    pnl_net       REAL,
+    PRIMARY KEY (account_id, journal_ref)
+);
+CREATE TABLE IF NOT EXISTS paper_equity_curve (
+    account_id    TEXT NOT NULL,
+    ts            TEXT NOT NULL,
+    equity        REAL NOT NULL,
+    peak_equity   REAL NOT NULL,
+    drawdown_pct  REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS paper_account_events (
+    account_id  TEXT NOT NULL,
+    ts          TEXT NOT NULL,
+    event_type  TEXT NOT NULL,   -- margin_exhaustion | risk_of_ruin_halt | sizing_refused | venue_fill | ...
+    journal_ref TEXT,
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_paper_locks_ref ON paper_margin_locks (journal_ref);
+"""
+
+
+def shadow_accounts_enabled() -> bool:
+    """Kill switch (config `paper_2l_account_enabled`). OFF = no shadow row
+    is ever written; the primary path is byte-identical either way."""
+    return bool(PAPER_2L_ACCOUNT_ENABLED)
+
+
+def shadow_account_ids() -> tuple:
+    return tuple(PAPER_ACCOUNTS) if shadow_accounts_enabled() else ()
+
+
+def ensure_accounts_schema(conn) -> None:
+    ensure_schema(conn)
+    conn.executescript(_ACCOUNTS_SCHEMA)
+    conn.commit()
+
+
+def _is_primary(account: str) -> bool:
+    return account in (None, "", ACCOUNT_PAPER_10L)
+
+
+def get_paper_account(conn, account: str) -> dict:
+    """The account row (seeded from PAPER_ACCOUNTS on first touch). The
+    primary delegates to get_account(). Unknown ids raise: an account that
+    was never declared must never be silently created with guessed money."""
+    if _is_primary(account):
+        acct = get_account(conn)
+        return dict(acct, account_id=ACCOUNT_PAPER_10L)
+    if account not in PAPER_ACCOUNTS:
+        raise KeyError(f"unknown paper account {account!r}")
+    ensure_accounts_schema(conn)
+    row = conn.execute("SELECT account_id, starting_capital, realized_pnl, peak_equity, "
+                       "created_at FROM paper_accounts WHERE account_id = ?",
+                       (account,)).fetchone()
+    if row is None:
+        cap = float(PAPER_ACCOUNTS[account])
+        conn.execute("INSERT INTO paper_accounts (account_id, starting_capital, "
+                     "realized_pnl, peak_equity, created_at) VALUES (?, ?, 0, ?, ?)",
+                     (account, cap, cap, _now_iso()))
+        conn.commit()
+        row = conn.execute("SELECT account_id, starting_capital, realized_pnl, "
+                           "peak_equity, created_at FROM paper_accounts WHERE "
+                           "account_id = ?", (account,)).fetchone()
+    keys = ("account_id", "starting_capital", "realized_pnl", "peak_equity", "created_at")
+    return dict(zip(keys, tuple(row)))
+
+
+def paper_equity(conn, account: str) -> float:
+    if _is_primary(account):
+        return equity(conn)
+    a = get_paper_account(conn, account)
+    return round(float(a["starting_capital"]) + float(a["realized_pnl"]), 2)
+
+
+def paper_locked_margin(conn, account: str) -> float:
+    if _is_primary(account):
+        return locked_margin(conn)
+    ensure_accounts_schema(conn)
+    row = conn.execute("SELECT COALESCE(SUM(margin_rs), 0) FROM paper_margin_locks "
+                       "WHERE account_id = ? AND released_at IS NULL", (account,)).fetchone()
+    return round(float(row[0]), 2)
+
+
+def paper_available_cash(conn, account: str) -> float:
+    return round(paper_equity(conn, account) - paper_locked_margin(conn, account), 2)
+
+
+def paper_drawdown_pct(conn, account: str) -> float:
+    if _is_primary(account):
+        return drawdown_pct(conn)
+    a = get_paper_account(conn, account)
+    peak = float(a["peak_equity"])
+    if peak <= 0:
+        return 0.0
+    return round(max(0.0, (peak - paper_equity(conn, account)) / peak * 100), 4)
+
+
+def paper_log_event(conn, account: str, event_type: str, journal_ref: str = None,
+                    detail: str = "") -> None:
+    """The shadow ledger's append-only trail. Never the primary's
+    `account_events`: a 2L refusal must not read as a 10L halt."""
+    ensure_accounts_schema(conn)
+    conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, "
+                 "journal_ref, detail) VALUES (?, ?, ?, ?, ?)",
+                 (account, _now_iso(), event_type, journal_ref, detail))
+    conn.commit()
+
+
+def paper_halt_latched(conn, account: str) -> bool:
+    if _is_primary(account):
+        return halt_latched(conn)
+    ensure_accounts_schema(conn)
+    row = conn.execute(
+        "SELECT event_type FROM paper_account_events WHERE account_id = ? AND "
+        "event_type IN (?, ?) ORDER BY ts DESC, rowid DESC LIMIT 1",
+        (account, HALT_LATCH_EVENT, HALT_CLEAR_EVENT)).fetchone()
+    return bool(row) and row[0] == HALT_LATCH_EVENT
+
+
+def paper_trading_halted(conn, account: str) -> bool:
+    """The shadow account's own risk-of-ruin brake: same 10% rule, same
+    latch semantics (Dept 3 ruling 2026-08-17), its own events table. No
+    Discord card -- a shadow ledger has zero authority and one Discord
+    door is not for telemetry."""
+    if _is_primary(account):
+        return trading_halted(conn)
+    if paper_halt_latched(conn, account):
+        return True
+    dd = paper_drawdown_pct(conn, account)
+    if dd >= MAX_DRAWDOWN_PCT:
+        paper_log_event(conn, account, HALT_LATCH_EVENT, None,
+                        f"drawdown {dd:.2f}% >= {MAX_DRAWDOWN_PCT:g}% of peak equity")
+        return True
+    return False
+
+
+def paper_daily_breaker_status(conn, account: str, today: str = None) -> dict:
+    if _is_primary(account):
+        return daily_breaker_status(conn, today)
+    ensure_accounts_schema(conn)
+    today = today or ist_today()
+    row = conn.execute("SELECT COALESCE(SUM(pnl_net), 0) FROM paper_margin_locks WHERE "
+                       "account_id = ? AND released_at LIKE ?",
+                       (account, f"{today}%")).fetchone()
+    pnl_today = round(float(row[0]), 2)
+    return check_daily_breaker(paper_equity(conn, account) - pnl_today, pnl_today)
+
+
+def size_for_account(conn, account: str, spread: dict, primary_lots: int,
+                     risk_pct: float = None) -> dict:
+    """Lots the shadow account would take of THIS structure: the
+    strategy.size_lots formula on the account's own equity and liquid cash,
+    the decision #84 hard rupee cap, then capped at the primary's lots.
+    Returns {lots, by_risk, by_margin, by_cap, reason}; lots 0 = refused."""
+    risk_pct = OPTIONS_RISK_PER_TRADE_PCT if risk_pct is None else float(risk_pct)
+    max_loss = float(spread.get("max_loss") or 0)
+    per_lot = float((spread.get("margin") or {}).get("total_margin") or 0)
+    if max_loss <= 0:
+        return {"lots": 0, "by_risk": 0, "by_margin": 0, "by_cap": 0,
+                "reason": "unmeasurable max loss"}
+    eq = paper_equity(conn, account)
+    cash = paper_available_cash(conn, account)
+    by_risk = int((eq * risk_pct / 100) // max_loss)
+    by_margin = int(cash // per_lot) if per_lot > 0 else by_risk
+    by_cap = int(MAX_RISK_PER_TRADE_RS // max_loss)
+    lots = max(0, min(by_risk, by_margin, by_cap, int(primary_lots or 0)))
+    if lots <= 0:
+        if by_cap <= 0:
+            why = (f"max loss Rs.{max_loss:,.0f}/lot exceeds the "
+                   f"Rs.{MAX_RISK_PER_TRADE_RS:,.0f} hard per-trade risk cap")
+        elif by_risk <= 0:
+            why = (f"max loss Rs.{max_loss:,.0f}/lot doesn't fit the {risk_pct:g}% "
+                   f"options risk budget of Rs.{eq * risk_pct / 100:,.0f} on "
+                   f"Rs.{eq:,.0f} equity")
+        elif by_margin <= 0:
+            why = (f"SPAN margin Rs.{per_lot:,.0f}/lot exceeds liquid cash "
+                   f"Rs.{cash:,.0f}")
+        else:
+            why = "primary trade carries zero lots"
+        return {"lots": 0, "by_risk": by_risk, "by_margin": by_margin,
+                "by_cap": by_cap, "reason": why}
+    return {"lots": lots, "by_risk": by_risk, "by_margin": by_margin,
+            "by_cap": by_cap, "reason": "sized"}
+
+
+def paper_request_entry(conn, account: str, journal_ref: str, required_margin: float,
+                        lots: int = 1, primary_lots: int = 1) -> dict:
+    """The shadow account's strict entry guard: same order as request_entry
+    (idempotent re-request -> approve; halt list; margin exhaustion), its
+    own tables. The primary delegates to request_entry()."""
+    if _is_primary(account):
+        return request_entry(conn, journal_ref, required_margin)
+    get_paper_account(conn, account)
+    active = conn.execute("SELECT 1 FROM paper_margin_locks WHERE account_id = ? AND "
+                          "journal_ref = ? AND released_at IS NULL",
+                          (account, journal_ref)).fetchone()
+    if active:
+        return {"approved": True, "reason": "margin already locked for this entry"}
+    if paper_trading_halted(conn, account):
+        reason = (f"risk-of-ruin halt: drawdown {paper_drawdown_pct(conn, account):.2f}% "
+                  f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked")
+        paper_log_event(conn, account, "risk_of_ruin_halt", journal_ref,
+                        f"entry {journal_ref} rejected ({reason})")
+        return {"approved": False, "reason": reason}
+    breaker = paper_daily_breaker_status(conn, account)
+    if breaker["halted"]:
+        paper_log_event(conn, account, "daily_breaker_halt", journal_ref,
+                        f"entry {journal_ref} rejected ({breaker['reason']})")
+        return {"approved": False, "reason": breaker["reason"]}
+    cash = paper_available_cash(conn, account)
+    margin = round(float(required_margin), 2)
+    if margin > cash:
+        reason = (f"margin exhaustion: needs Rs.{margin:,.2f} but only "
+                  f"Rs.{cash:,.2f} liquid (Rs.{paper_locked_margin(conn, account):,.2f} "
+                  "already locked)")
+        paper_log_event(conn, account, "margin_exhaustion", journal_ref,
+                        f"entry {journal_ref} rejected ({reason})")
+        return {"approved": False, "reason": reason}
+    conn.execute("INSERT INTO paper_margin_locks (account_id, journal_ref, margin_rs, "
+                 "lots, primary_lots, locked_at) VALUES (?, ?, ?, ?, ?, ?)",
+                 (account, journal_ref, margin, int(lots), int(primary_lots), _now_iso()))
+    conn.commit()
+    return {"approved": True, "reason": "margin locked"}
+
+
+def _paper_snapshot(conn, account: str) -> dict:
+    eq, dd = paper_equity(conn, account), paper_drawdown_pct(conn, account)
+    peak = float(get_paper_account(conn, account)["peak_equity"])
+    conn.execute("INSERT INTO paper_equity_curve (account_id, ts, equity, peak_equity, "
+                 "drawdown_pct) VALUES (?, ?, ?, ?, ?)", (account, _now_iso(), eq, peak, dd))
+    conn.commit()
+    return {"equity": eq, "peak_equity": peak, "drawdown_pct": dd}
+
+
+def paper_release_margin(conn, account: str, journal_ref: str, pnl_net: float = 0.0) -> dict:
+    """Settle one shadow lock (the primary delegates to release_margin).
+    `pnl_net` is THIS account's P&L, already scaled by the caller."""
+    if _is_primary(account):
+        return release_margin(conn, journal_ref, pnl_net)
+    ensure_accounts_schema(conn)
+    active = conn.execute("SELECT margin_rs FROM paper_margin_locks WHERE account_id = ? "
+                          "AND journal_ref = ? AND released_at IS NULL",
+                          (account, journal_ref)).fetchone()
+    if active is None:
+        return {"released": False, "reason": "no active lock for this ref"}
+    was_halted = paper_trading_halted(conn, account)
+    pnl = round(float(pnl_net), 2)
+    conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = ? WHERE "
+                 "account_id = ? AND journal_ref = ?", (_now_iso(), pnl, account, journal_ref))
+    conn.execute("UPDATE paper_accounts SET realized_pnl = round(realized_pnl + ?, 2), "
+                 "peak_equity = max(peak_equity, starting_capital + realized_pnl + ?) "
+                 "WHERE account_id = ?", (pnl, pnl, account))
+    conn.commit()
+    snap = _paper_snapshot(conn, account)
+    if not was_halted and paper_trading_halted(conn, account):
+        paper_log_event(conn, account, "risk_of_ruin_halt", journal_ref,
+                        f"drawdown hit {snap['drawdown_pct']:.2f}% after settling "
+                        f"{journal_ref} (pnl Rs.{pnl:,.2f}) — execution blocked")
+    return dict(snap, released=True, reason="settled", pnl_net=pnl,
+                halted=paper_trading_halted(conn, account))
+
+
+def paper_account_summary(conn, account: str) -> dict:
+    """The account_summary() shape for any account, plus `account_id`."""
+    if _is_primary(account):
+        return dict(account_summary(conn), account_id=ACCOUNT_PAPER_10L)
+    a = get_paper_account(conn, account)
+    return {
+        "account_id": account,
+        "starting_capital": a["starting_capital"],
+        "realized_pnl": a["realized_pnl"],
+        "equity": paper_equity(conn, account),
+        "peak_equity": a["peak_equity"],
+        "locked_margin": paper_locked_margin(conn, account),
+        "available_cash": paper_available_cash(conn, account),
+        "drawdown_pct": paper_drawdown_pct(conn, account),
+        "trading_halted": paper_trading_halted(conn, account),
+        "open_locks": conn.execute("SELECT COUNT(*) FROM paper_margin_locks WHERE "
+                                   "account_id = ? AND released_at IS NULL",
+                                   (account,)).fetchone()[0],
+        "rejections": conn.execute("SELECT COUNT(*) FROM paper_account_events WHERE "
+                                   "account_id = ? AND event_type IN ('margin_exhaustion', "
+                                   "'sizing_refused', 'risk_of_ruin_halt', "
+                                   "'daily_breaker_halt')", (account,)).fetchone()[0],
+    }
+
+
+def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
+                             risk_pct: float = None) -> dict:
+    """Judge one PRIMARY-APPROVED proposal against every shadow account,
+    independently: size on the account's own capital, then its own gate.
+    Returns {account_id: {status, lots, margin_rs, reason}} -- `status` is
+    "approved" | "rejected" | "error"; {} when the switch is off.
+
+    Fail-safe seam (the gate_headless_entry contract): never raises, and
+    a broken shadow ledger can never touch the primary decision."""
+    out = {}
+    if not shadow_accounts_enabled():
+        return out
+    owns = conn is None
+    try:
+        if conn is None:
+            conn = brain_map.connect()
+        spread = proposal.get("spread") or {}
+        primary_lots = int(spread.get("lots", proposal.get("lots", 1)) or 0)
+        for account in shadow_account_ids():
+            try:
+                sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
+                if sized["lots"] <= 0:
+                    paper_log_event(conn, account, "sizing_refused", journal_ref,
+                                    f"entry {journal_ref} refused ({sized['reason']})")
+                    out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
+                                    "reason": f"sizing refused: {sized['reason']}"}
+                    continue
+                required = required_margin_for(
+                    {"spread": dict(spread, lots=sized["lots"]), "vix": proposal.get("vix")})
+                verdict = paper_request_entry(conn, account, journal_ref, required,
+                                              lots=sized["lots"], primary_lots=primary_lots)
+                out[account] = {"status": "approved" if verdict["approved"] else "rejected",
+                                "lots": sized["lots"] if verdict["approved"] else 0,
+                                "margin_rs": required if verdict["approved"] else None,
+                                "reason": verdict["reason"]}
+            except Exception as e:
+                out[account] = {"status": "error", "lots": 0, "margin_rs": None,
+                                "reason": f"shadow account unavailable ({e})"}
+        return out
+    except Exception as e:
+        print(f"  (shadow accounts unavailable — primary decision unaffected: {e})")
+        return out
+    finally:
+        if owns and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0) -> dict:
+    """Settle every shadow lock on `journal_ref` in the same call that
+    settled the primary, P&L scaled by lot ratio. Safe on unknown refs."""
+    out = {}
+    ensure_accounts_schema(conn)
+    rows = conn.execute("SELECT account_id, lots, primary_lots FROM paper_margin_locks "
+                        "WHERE journal_ref = ? AND released_at IS NULL",
+                        (journal_ref,)).fetchall()
+    for account, lots, primary_lots in (tuple(r) for r in rows):
+        ratio = (float(lots) / float(primary_lots)) if primary_lots else 0.0
+        pnl = round(float(primary_pnl_net) * ratio, 2)
+        out[account] = paper_release_margin(conn, account, journal_ref, pnl)
+    return out
+
+
 # --- fail-safe seams for the proposer / tracker -------------------------
 # These are the ONLY functions the pipeline calls. They open the real DB,
 # never raise, and fail OPEN with a printed note: this layer is a paper
@@ -690,6 +1103,17 @@ def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None) -> dict:
     # flip the answer back to released=False, or the caller keeps
     # accounting a lock the DB has already let go. The sweep is advisory:
     # its failure is recorded on the result, never propagated.
+    # Dual treasury (#102): the shadow accounts settle HERE, off the same
+    # tracker call, P&L scaled by lot ratio — the one settlement path.
+    # Runs whether or not the primary had a lock (a human rejection
+    # releases both at zero); fail-open, recorded on the result.
+    try:
+        shadow = release_shadow_locks(conn, journal_ref, pnl_net)
+        if shadow:
+            result["shadow_accounts"] = shadow
+    except Exception as e:
+        print(f"  (shadow account release skipped: {e})")
+        result["shadow_accounts_error"] = str(e)
     if result.get("released") and float(pnl_net) > 0:
         try:
             from src import wealth_lock
@@ -758,5 +1182,8 @@ if __name__ == "__main__":
         print(json.dumps(inject_capital(cli.inject, why=cli.why,
                                         conn=connection), indent=2))
     else:
-        print(json.dumps(account_summary(connection), indent=2))
+        summary = {ACCOUNT_PAPER_10L: account_summary(connection)}
+        for _acct in shadow_account_ids():
+            summary[_acct] = paper_account_summary(connection, _acct)
+        print(json.dumps(summary, indent=2))
     connection.close()

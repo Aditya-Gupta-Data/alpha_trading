@@ -188,3 +188,13 @@ DISCORD_DAILY_BUDGET = int(_CONFIG.get("discord_daily_budget", 5))
 # instant frictionless fill. Code default OFF — a stale config copy must
 # never switch the desk's fill model on its own.
 PAPER_VENUE_ENABLED = bool(_CONFIG.get("paper_venue_enabled", False))
+# Phase M1.B — the DUAL PAPER TREASURY (decision #102, 2026-09-19): the
+# Rs.2,00,000 stress-test account judged beside the primary pool on every
+# signal (portfolio_manager.evaluate_shadow_accounts). Code default ON: it
+# is a zero-authority shadow ledger in its own tables — it locks nothing
+# in the primary account and changes no decision — and the architect's
+# directive is that the 2L proof runs. `paper_2l_account_enabled: false`
+# in config.json switches it off; the starting pool is a config value so
+# the proof can be re-run at another scale by a numbered decision.
+PAPER_2L_ACCOUNT_ENABLED = bool(_CONFIG.get("paper_2l_account_enabled", True))
+PAPER_2L_STARTING_CAPITAL_RS = float(_CONFIG.get("paper_2l_starting_capital_rs", 200000.0))

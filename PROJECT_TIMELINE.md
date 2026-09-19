@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-19 · 6 commits · 23 files touched
+### 2026-09-19 · 9 commits · 36 files touched
 
+- `59f64b3` docs: HANDOVER 09-19 evening — live trade book live, Issue 30 (orphan eqd lock) logged
+- `61ce6a7` feat(reporting): trade book surfaces orphan margin locks (found eqd:3fedfeeb on the first VM render)
+- `b1dd11c` feat(reporting): LIVE_TRADE_BOOK.md markdown ledger — cron #32 (16:35 IST) + VM→Mac pull lane
 - `b95394d` docs: HANDOVER 09-19 session close
 - `33eea76` docs: HANDOVER 09-19 — paper venue deploy state
 - `14595a6` feat(m2): paper venue fills Order Tickets with tier slippage; approved options entries go through the OMS (entry only, flag-gated, fail-open to legacy); tier-1 names join the scrip-master id universe — all 25 resolved (decision #101)

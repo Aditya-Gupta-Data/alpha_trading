@@ -375,6 +375,23 @@ def render(journal_path=None, equity_path=None, db_path=None, today=None,
         out.append("_No resolved trades yet._")
     out.append("")
 
+    # --- reconciliation -------------------------------------------------
+    # A lock still open for a position the ledgers say is closed (or never
+    # tabled) is money the book cannot spend. Found on the first VM render
+    # 2026-09-19: eqd:3fedfeeb (TCS.NS) exited 08-xx, lock never released.
+    open_refs = {r["id"] for r in opt_open} | {EQD_PREFIX + r["id"] for r in eq_open}
+    orphans = sorted((ref, l) for ref, l in locks.items()
+                     if l.get("released_at") is None and ref not in open_refs)
+    if orphans:
+        out += ["## ⚠️ Locks without an open position", "",
+                "_Margin still locked in `margin_locks` for a ref no open row "
+                "carries — an orphan. `python3 -m src.equity_desk --sweep` "
+                "reconciles desk (`eqd:`) locks; an options orphan needs a look "
+                "at the tracker._", ""]
+        out += _table(["Lock ref", "Margin", "Locked at"],
+                      [(ref, _rs(l["margin_rs"]), l.get("locked_at")) for ref, l in orphans])
+        out.append("")
+
     # --- footnotes ------------------------------------------------------
     out += ["## Notes", "",
             f"- Equity telemetry shadows (zero capital, never tabled): "

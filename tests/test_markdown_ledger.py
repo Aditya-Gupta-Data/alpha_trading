@@ -204,3 +204,22 @@ def test_cron_and_sync_wiring_present():
     sync = (root / "scripts" / "mac_auto_sync.sh").read_text()
     assert "vm_pull_file" in sync and "docs/LIVE_TRADE_BOOK.md" in sync
     assert "docs/LIVE_TRADE_BOOK.md" in (root / ".gitignore").read_text()
+
+
+def test_orphan_locks_are_surfaced_not_hidden(book):
+    """First VM render (2026-09-19) found eqd:3fedfeeb locked for an exited
+    position. The book must say so rather than silently counting it into
+    'margin locked'."""
+    conn = sqlite3.connect(book["db"])
+    conn.execute("INSERT INTO margin_locks VALUES ('eqd:ghost', 98376.6, "
+                 "'2026-08-13T09:21:34', NULL, NULL)")
+    conn.commit()
+    conn.close()
+    text = _render(book)
+    assert "## ⚠️ Locks without an open position" in text
+    assert "| eqd:ghost | ₹98,377 | 2026-08-13T09:21:34 |" in text
+    assert "| open1 |" not in text.split("Locks without")[1].split("## Notes")[0]
+
+
+def test_no_orphan_section_when_every_lock_has_a_position(book):
+    assert "Locks without an open position" not in _render(book)

@@ -1599,3 +1599,20 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Detection now permanent:** the trade book renders a "⚠️ Locks without
   an open position" section whenever an open lock has no open row
   (`tests/test_markdown_ledger.py::test_orphan_locks_are_surfaced_not_hidden`).
+
+### Issue 30 — RESOLVED 2026-09-19 14:15 IST (owner-directed sweep on the VM)
+
+- **Verified:** `data/brain_map.db` backed up on the VM as
+  `brain_map.db.pre_issue30_20260919_*`; `equity_desk.sweep_orphan_locks()`
+  re-drove the real settlement for `eqd:3fedfeeb` from the recorded exit
+  (TCS.NS, 42 sh, stop_loss at ₹2,198.20 on 2026-09-10 12:21 IST):
+  **pnl_net −₹6,471.27** (incl. ₹190.70 tier slippage + delivery frictions),
+  lock released 14:15:58, ₹98,376.60 freed. Firm: realized ₹95,901.49 →
+  ₹89,430.22, equity ₹10,89,430.22, locked ₹6,22,970.30 → ₹5,24,593.70,
+  available ₹4,72,931.19 → ₹5,64,836.52, drawdown 0.00% → 0.59% (peak
+  unchanged ₹10,95,901.49), open locks 13 → 12. Desk: realized −₹12,237.09
+  → −₹18,708.36, open locks 3 → 2. The trade book re-rendered on the VM
+  with the ⚠️ orphan section gone and was pulled to the Mac.
+- **Root cause still not verified:** why the 09-10 exit did not settle at
+  the time (which resolver path logged it). One occurrence; the book now
+  surfaces any recurrence the same day.

@@ -61,13 +61,15 @@ brief). `firm_treasury.vm_pull_file` is the new VM→Mac lane;
 `com.aditrader.sync`, loaded). First pull verified on the Mac at 14:02 IST.
 The file is gitignored on both machines.
 
-**Open — Issue 30.** `eqd:3fedfeeb` (TCS.NS) ₹98,377 locked since 08-13
-for a position the equity journal shows EXITED. Not reconciled — the
-sweep moves ledger money; owner's call. Details in the ledger.
+**Issue 30 — RESOLVED 14:15 IST (owner-directed).** `sweep_orphan_locks`
+on the VM settled `eqd:3fedfeeb` (TCS.NS) at its recorded 09-10 stop:
+pnl_net −₹6,471, ₹98,377 released; firm equity now ₹10,89,430 (dd 0.59%),
+available ₹5,64,837, 12 open locks = 12 open trades. DB backup
+`brain_map.db.pre_issue30_*` on the VM. Book re-rendered + pulled to the
+Mac (the file stays gitignored — the scp lane, not git, carries it).
 
 **What the next person should do first.**
-1. Owner decides on `python3 -m src.equity_desk --sweep` for Issue 30 (on
-   the VM); then confirm the ⚠️ section disappears from Monday's book.
+1. Issue 30 closed; Monday's book should show no ⚠️ section and 12 locks.
 2. Monday 16:35: `logs/markdown_ledger.log` shows the write; the Mac copy
    refreshes on the next sync tick (`launchctl kickstart -k
    gui/$(id -u)/com.aditrader.sync` forces it).

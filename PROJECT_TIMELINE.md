@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-19 · 3 commits · 13 files touched
+### 2026-09-19 · 5 commits · 23 files touched
 
+- `33eea76` docs: HANDOVER 09-19 — paper venue deploy state
+- `14595a6` feat(m2): paper venue fills Order Tickets with tier slippage; approved options entries go through the OMS (entry only, flag-gated, fail-open to legacy); tier-1 names join the scrip-master id universe — all 25 resolved (decision #101)
 - `5f856bf` docs: HANDOVER 09-19 deploy state
 - `07cca58` docs: decision #100 record — MODULES rows for oms/strategy_router/archiver extension, HANDOVER 09-19, blueprint GAP 3 status
 - `321d574` feat(m2): tier-1 chain archiver extension by scrip-master id (unblocks the court); OMS schema trade_tickets/trade_legs/leg_events with five order states; one strategy_router issuing multi-leg Order Tickets — plumbing only, no order path (decision #100)

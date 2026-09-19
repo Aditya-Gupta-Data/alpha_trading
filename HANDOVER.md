@@ -42,6 +42,47 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-19 (late night) — Options stop + OMS exits (CODE, decision #103) + the forensic log sweep tool; NOT YET DEPLOYED
+
+**What changed.** (1) `OPTION_STOP_LOSS_FRACTION` = 0.5 (config
+`option_stop_loss_fraction`, 0 = off): `plan_tracker.spread_stop_hit` is
+the one predicate; both EOD resolvers return `stop_loss` at half the
+defined max loss, `live_bridge` emits the same signal as a 🛑 advisory
+(square-off stays profit-take only). (2) Exits go through the OMS:
+`strategy_router.issue_exit` + `trade_tickets.kind = EXIT`;
+`plan_tracker._execute_paper_exit` issues one EXIT ticket per paper
+account holding the entry and the venue fills it; the venue's exit cost
+lands in `outcome.venue_slippage_rs`, the ticket on `outcome.execution`.
+Same `PAPER_VENUE_ENABLED` flag, fail-open to the modeled exit. (3)
+`scripts/audit_logs.py` — MANUAL OFFLINE TOOL, the 15-day forensic sweep
+(API frictions, stale data, memory runs, missed exits) →
+`logs/audit_report_15day.md`. Tests: `tests/test_option_stop_loss.py` (8),
+`tests/test_audit_logs.py` (3), guard test in `test_oms.py` updated for
+the exit door. Existing clamp tests pin the stop OFF where the clamp is
+the point.
+
+**The audit was NOT run on real logs.** This container holds no VM logs
+(`logs/` is empty here, `data/lake` has no bars), so the script ran on an
+empty box and reported every source as absent. Run it on the VM:
+`python3 scripts/audit_logs.py` then read `logs/audit_report_15day.md`.
+
+**Suite (this container).** Scoped files green; the full suite still has
+the same 13 pre-existing failures as origin/main here (six files need
+`discord`/`fastapi`). Run on the Mac before deploying.
+
+**NOT deployed.** VM at `0f39c04`. Deploy = pull + restart `alpha-trading`;
+the `kind` column is added in place. Two config choices land with it:
+the stop at 0.5 (code default) and the 2L shadow account ON. Set
+`option_stop_loss_fraction: 0` to keep the old resolver.
+
+**What the next person should do first.**
+1. On the VM: `python3 scripts/audit_logs.py` — read the CRITICAL rows
+   before deploying anything else.
+2. Mac suite, then deploy #102 + #103 together (one restart).
+3. First tracker exit after deploy: the outcome row carries
+   `execution.ticket_id` and `venue_slippage_rs`; `trade_tickets` holds a
+   `kind = EXIT` row FILLED for it (and one per 2L position).
+
 ## 2026-09-19 (night) — Phase M1.B: the DUAL PAPER TREASURY (CODE, decision #102; NOT YET DEPLOYED)
 
 **What changed.** A Rs.2,00,000 stress-test paper account (`PAPER_2L`) now

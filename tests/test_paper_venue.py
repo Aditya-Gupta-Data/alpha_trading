@@ -173,7 +173,10 @@ def test_an_approved_entry_is_issued_and_filled_through_the_venue_when_the_flag_
     assert legs[1]["premium"] == 29.97
     assert row["spread"]["ticket_id"] == ex["ticket_id"]
     assert oms.ticket_view(conn, ex["ticket_id"])["journal_ref"] == "sp000001"
-    assert conn.execute("SELECT COUNT(*) FROM leg_events").fetchone()[0] == 4
+    # the PRIMARY ticket's audit trail (a #102 shadow-account ticket, when the
+    # 2L account also accepts the trade, keeps its own legs and events)
+    assert conn.execute("SELECT COUNT(*) FROM leg_events e JOIN trade_legs l ON l.leg_id = "
+                        "e.leg_id WHERE l.ticket_id = ?", (ex["ticket_id"],)).fetchone()[0] == 4
 
 
 def test_the_flag_off_keeps_the_legacy_instant_fill_byte_for_byte(monkeypatch, tmp_path):

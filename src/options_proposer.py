@@ -1033,6 +1033,13 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
         if not allowed:
             return {"proposed": False, "reason": gate_reason, "entry": None,
                     "rejected": _rejected_facts(underlying, result, p)}
+        # DUAL PAPER TREASURY (decision #102): the SAME signal, judged again
+        # against the Rs.2L stress-test account — its own sizing, its own
+        # margin, its own halts. Records only; the primary decision above
+        # is already made. Stamped on the row so "approved for 10L, refused
+        # for 2L" is readable per trade. Fail-open inside the seam.
+        entry["accounts"] = _judge_shadow_accounts(entry["short_id"], p,
+                                                   risk_pct=bp_extras.get("risk_pct"))
     journal.log(entry)
     # Auto-approve NEVER applies to an injected book: decide_pending's
     # margin gate only knows the REAL Rs.10L account, so auto-approving a
@@ -1222,6 +1229,12 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
             if not allowed:
                 return {"status": "margin_blocked", "entry": target,
                         "reason": gate_reason}
+            # #102: approval is the acceptance moment for the shadow
+            # accounts too (idempotent re-request on an active lock; a
+            # proposal-time refusal is re-judged on today's cash).
+            target["accounts"] = _judge_shadow_accounts(
+                trade_id, {"spread": spread, "lots": spread.get("lots"),
+                           "vix": (target.get("receipt") or {}).get("vix")})
 
     decision = "approved" if approve else "rejected"
     target["decision"] = decision
@@ -1270,6 +1283,34 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     return {"status": decision, "entry": target}
 
 
+def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None) -> dict:
+    """The dual-treasury seam (#102): {account_id: {status, lots, margin_rs,
+    reason}} from `portfolio_manager.evaluate_shadow_accounts`, {} when the
+    switch is off. Never raises — a broken shadow ledger cannot touch the
+    primary path. Each refusal is printed so the session log reads it."""
+    try:
+        from src import brain_map, portfolio_manager as pm
+        if not pm.shadow_accounts_enabled():
+            return {}
+        conn = brain_map.connect()
+        try:
+            verdicts = pm.evaluate_shadow_accounts(journal_ref, proposal, conn=conn,
+                                                   risk_pct=risk_pct)
+        finally:
+            if not _PAPER_VENUE_KEEP_CONN:      # same seam as the venue step
+                conn.close()
+    except Exception as e:
+        print(f"  (shadow accounts unavailable: {e})")
+        return {}
+    for acct, v in (verdicts or {}).items():
+        if v.get("status") == "approved":
+            print(f"  [{acct}] {journal_ref}: approved {v['lots']} lot(s), "
+                  f"margin Rs.{float(v['margin_rs'] or 0):,.0f}")
+        else:
+            print(f"  [{acct}] {journal_ref}: REJECTED — {v.get('reason')}")
+    return verdicts or {}
+
+
 _PAPER_VENUE_KEEP_CONN = False     # test seam: a shared in-memory conn must survive the call
 
 
@@ -1295,9 +1336,22 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
         try:
             proposal = {"ticker": entry["ticker"], "short_id": entry.get("short_id"),
                         "signal": entry.get("signal"), "spread": entry["spread"]}
-            issued = strategy_router.issue(conn, proposal, journal_ref=entry.get("short_id"),
-                                           source="options_proposer.decide_pending")
-            tid = issued["ticket_id"]
+            # ONE ticket per paper account that ACCEPTED this entry (#102):
+            # the primary first (its lots = the trade), then every shadow
+            # account at its own lot count. Same legs, same limits, same
+            # venue, same slippage; the venue journals each fill to the
+            # account that owns the ticket.
+            tickets = [(oms.PRIMARY_ACCOUNT, None)]
+            for acct, verdict in (entry.get("accounts") or {}).items():
+                if (verdict or {}).get("status") == "approved" and int(verdict.get("lots") or 0) > 0:
+                    tickets.append((acct, int(verdict["lots"])))
+            tids = {}
+            for acct, lots in tickets:
+                issued = strategy_router.issue(conn, proposal, journal_ref=entry.get("short_id"),
+                                               source="options_proposer.decide_pending",
+                                               account_id=acct, lots=lots)
+                tids[acct] = issued["ticket_id"]
+            tid = tids[oms.PRIMARY_ACCOUNT]
             # journal.rewrite_all just wrote this row; the venue's stamp goes
             # through update_entry, so stamping is deferred to the caller's
             # next read — here we only fill and report.
@@ -1306,6 +1360,16 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
             record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"),
                           filled_legs=sum(1 for l in view.get("legs", [])
                                           if l.get("state") == oms.FILLED))
+            for acct, stid in tids.items():
+                if acct == oms.PRIMARY_ACCOUNT:
+                    continue
+                sview = oms.ticket_view(conn, stid) or {}
+                record.setdefault("accounts", {})[acct] = {
+                    "ticket_id": stid, "status": sview.get("status"),
+                    "lots": sview.get("lots")}
+                if isinstance(entry.get("accounts"), dict) and acct in entry["accounts"]:
+                    entry["accounts"][acct]["ticket_id"] = stid
+                    entry["accounts"][acct]["venue_status"] = sview.get("status")
             if view.get("status") == oms.FILLED:
                 fills = {(str(l["side"]).upper(), str(l.get("option_type") or "").upper(),
                           float(l["strike"])): l for l in view["legs"]}

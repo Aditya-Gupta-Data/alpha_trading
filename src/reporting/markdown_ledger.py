@@ -149,6 +149,53 @@ def read_account(db_path=None) -> dict:
     return acct
 
 
+def read_paper_accounts(db_path=None) -> dict:
+    """The DUAL TREASURY's shadow accounts (decision #102), read-only:
+    {account_id: {starting_capital, realized_pnl, peak_equity, open_locks,
+    locked, curve_dd, max_dd, rejections}}. {} when the tables are absent
+    (a DB from before #102) — the book then shows the primary alone."""
+    path = Path(db_path or DEFAULT_DB_PATH)
+    out = {}
+    if not path.exists():
+        return out
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return out
+    try:
+        try:
+            rows = conn.execute("SELECT account_id, starting_capital, realized_pnl, "
+                                "peak_equity FROM paper_accounts ORDER BY account_id").fetchall()
+        except sqlite3.Error:
+            return out
+        for acct, cap, pnl, peak in rows:
+            rec = {"starting_capital": cap, "realized_pnl": pnl, "peak_equity": peak,
+                   "open_locks": 0, "locked": 0.0, "curve_dd": None, "max_dd": None,
+                   "rejections": 0}
+            try:
+                n, locked = conn.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(margin_rs), 0) FROM paper_margin_locks "
+                    "WHERE account_id = ? AND released_at IS NULL", (acct,)).fetchone()
+                rec["open_locks"], rec["locked"] = int(n), float(locked)
+                row = conn.execute("SELECT drawdown_pct FROM paper_equity_curve WHERE "
+                                   "account_id = ? ORDER BY ts DESC LIMIT 1", (acct,)).fetchone()
+                rec["curve_dd"] = row[0] if row else None
+                row = conn.execute("SELECT MAX(drawdown_pct) FROM paper_equity_curve WHERE "
+                                   "account_id = ?", (acct,)).fetchone()
+                rec["max_dd"] = row[0] if row else None
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM paper_account_events WHERE account_id = ? AND "
+                    "event_type IN ('margin_exhaustion', 'sizing_refused', "
+                    "'risk_of_ruin_halt', 'daily_breaker_halt')", (acct,)).fetchone()
+                rec["rejections"] = int(row[0]) if row else 0
+            except sqlite3.Error:
+                pass
+            out[acct] = rec
+    finally:
+        conn.close()
+    return out
+
+
 # ------------------------------------------------------------------ shaping
 
 def _label(raw, table=STRATEGY_LABELS) -> str:
@@ -338,6 +385,45 @@ def render(journal_path=None, equity_path=None, db_path=None, today=None,
         if c and c.get("ts"):
             out += ["", f"_Curve last written {c['ts']}._"]
     out.append("")
+
+    # --- the dual treasury, side by side (decision #102) ----------------
+    shadows = read_paper_accounts(db_path)
+    if shadows:
+        cols = ["PAPER_10L (primary)"] + [f"{acct} (shadow)" for acct in shadows]
+        def _row(label, primary, per_shadow):
+            return (label, primary, *[per_shadow(rec) for rec in shadows.values()])
+        if a is None:
+            p_start = p_pnl = p_eq = p_peak = p_locked = p_avail = p_open = p_dd = "—"
+        else:
+            p_start, p_pnl = _rs(a["starting_capital"]), _rs(a["realized_pnl"])
+            p_eq, p_peak = _rs(equity), _rs(a["peak_equity"])
+            p_locked, p_avail = _rs(open_locked), _rs(equity - open_locked)
+            p_open = str(len(open_rows))
+            p_dd = "—" if dd_now is None else f"-{dd_now:.2f}%"
+        def _dd(v):
+            return "—" if v is None else f"-{float(v):.2f}%"
+        out += ["## Accounts — side by side (paper)", "",
+                "_The primary is the book above. Each shadow account judges the SAME "
+                "signals against its own cash, margin and halts; it holds at most the "
+                "primary's lots and settles off the primary's exit, P&L scaled by lot "
+                "ratio. `Refusals` = entries the primary took that this account could "
+                "not (sizing, margin, halt)._", ""]
+        out += _table(["Metric"] + cols, [
+            _row("Starting capital", p_start, lambda r: _rs(r["starting_capital"])),
+            _row("Realized P&L (ledger)", p_pnl, lambda r: _rs(r["realized_pnl"])),
+            _row("Equity", p_eq, lambda r: _rs(float(r["starting_capital"]) + float(r["realized_pnl"]))),
+            _row("Peak equity", p_peak, lambda r: _rs(r["peak_equity"])),
+            _row("Drawdown now", p_dd, lambda r: _dd(r["curve_dd"])),
+            _row("Max drawdown (curve)",
+                 "—" if acct["max_drawdown_pct"] is None else f"-{float(acct['max_drawdown_pct']):.2f}%",
+                 lambda r: _dd(r["max_dd"])),
+            _row("Margin locked (open)", p_locked, lambda r: _rs(r["locked"])),
+            _row("Available margin", p_avail,
+                 lambda r: _rs(float(r["starting_capital"]) + float(r["realized_pnl"]) - float(r["locked"]))),
+            _row("Open trades", p_open, lambda r: str(r["open_locks"])),
+            _row("Refusals (this account only)", "—", lambda r: str(r["rejections"])),
+        ])
+        out.append("")
 
     # --- open trades ----------------------------------------------------
     out += ["## OPEN TRADES", ""]

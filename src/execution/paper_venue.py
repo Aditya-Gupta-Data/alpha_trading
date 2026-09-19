@@ -39,6 +39,7 @@ are injectable; the pytest muzzle refuses to open the real brain map.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, datetime, timedelta, timezone
 
@@ -95,9 +96,13 @@ def fill_leg(conn, leg: dict, ticket: dict, slippage_fn=None,
 
 def stamp_journal(ticket_id: str, conn, journal_mod=None) -> bool:
     """Write the venue's fills back onto the journal entry's legs (see
-    THE JOURNAL HANDSHAKE). Returns True when a row was updated."""
+    THE JOURNAL HANDSHAKE). Returns True when a row was updated. Only the
+    PRIMARY account's ticket stamps — the journal legs ARE the 10L fill; a
+    shadow account's fill is journaled on its own ledger (#102)."""
     view = oms.ticket_view(conn, ticket_id)
     if not view or not view.get("journal_ref") or view["status"] != oms.FILLED:
+        return False
+    if (view.get("account_id") or oms.PRIMARY_ACCOUNT) != oms.PRIMARY_ACCOUNT:
         return False
     from src import journal as _journal
     journal_mod = journal_mod or _journal
@@ -125,12 +130,46 @@ def stamp_journal(ticket_id: str, conn, journal_mod=None) -> bool:
     return journal_mod.update_entry(view["journal_ref"], mutate) is not None
 
 
+def journal_shadow_fill(conn, ticket_id: str) -> bool:
+    """THE SHADOW ACCOUNT'S FILL RECORD (#102). A FILLED ticket issued for a
+    non-primary paper account is journaled on that account's own ledger
+    (`paper_account_events`, event `venue_fill`, with the per-leg venue
+    prices and lots) — never on `journal.jsonl`, which is the 10L book.
+    The table is owned by the capital layer; this writes one audit row and
+    nothing else. Returns True when a row was written."""
+    view = oms.ticket_view(conn, ticket_id)
+    if not view or view["status"] != oms.FILLED:
+        return False
+    account = view.get("account_id") or oms.PRIMARY_ACCOUNT
+    if account == oms.PRIMARY_ACCOUNT:
+        return False
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'paper_account_events'")}
+    if not tables:
+        return False
+    fills = [{"leg": l["leg_index"], "side": l["side"], "type": l.get("option_type"),
+              "strike": l.get("strike"), "limit": l.get("limit_price"),
+              "fill": l.get("avg_fill_price"), "qty": l.get("qty_filled")}
+             for l in view["legs"]]
+    detail = json.dumps({"ticket_id": ticket_id, "underlying": view["underlying"],
+                         "strategy": view["strategy"], "lots": view["lots"],
+                         "lot_size": view["lot_size"], "venue": VENUE, "legs": fills})
+    conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, journal_ref, "
+                 "detail) VALUES (?, ?, 'venue_fill', ?, ?)",
+                 (account, datetime.now(IST).replace(tzinfo=None).isoformat(timespec="seconds"),
+                  view.get("journal_ref"), detail))
+    conn.commit()
+    return True
+
+
 def sweep(conn=None, today: date = None, slippage_fn=None, fill_fraction_fn=None,
           journal_mod=None, stamp: bool = True) -> dict:
-    """One venue pass over every PENDING/PARTIAL leg. Returns
-    {legs, filled, partial, rejected, refused, tickets_filled, stamped}."""
+    """One venue pass over every PENDING/PARTIAL leg — every account's
+    tickets, same slippage. Returns {legs, filled, partial, rejected,
+    refused, tickets_filled, stamped, shadow_journaled, by_account}."""
     summary = {"venue": VENUE, "legs": 0, "filled": 0, "partial": 0, "rejected": 0,
-               "refused": 0, "tickets_filled": [], "stamped": 0, "skip": None}
+               "refused": 0, "tickets_filled": [], "stamped": 0, "shadow_journaled": 0,
+               "by_account": {}, "skip": None}
     own = None
     if conn is None:
         if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -162,8 +201,15 @@ def sweep(conn=None, today: date = None, slippage_fn=None, fill_fraction_fn=None
         for tid in sorted(touched):
             if oms.ticket_status(conn, tid) == oms.FILLED:
                 summary["tickets_filled"].append(tid)
-                if stamp and stamp_journal(tid, conn, journal_mod):
-                    summary["stamped"] += 1
+                row = conn.execute("SELECT account_id FROM trade_tickets WHERE ticket_id = ?",
+                                   (tid,)).fetchone()
+                account = (row[0] if row else None) or oms.PRIMARY_ACCOUNT
+                summary["by_account"][account] = summary["by_account"].get(account, 0) + 1
+                if account == oms.PRIMARY_ACCOUNT:
+                    if stamp and stamp_journal(tid, conn, journal_mod):
+                        summary["stamped"] += 1
+                elif journal_shadow_fill(conn, tid):
+                    summary["shadow_journaled"] += 1
     finally:
         if own is not None:
             own.close()

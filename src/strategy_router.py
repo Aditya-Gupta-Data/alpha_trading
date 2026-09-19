@@ -86,17 +86,23 @@ def leg_working_order(legs: list) -> list:
 
 
 def build_ticket(proposal: dict, source: str = "options_proposer",
-                 issued_at: str = None, journal_ref: str = None) -> dict:
+                 issued_at: str = None, journal_ref: str = None,
+                 account_id: str = None, lots: int = None) -> dict:
     """A pure Order Ticket from a proposal dict of the shape
     `options_proposer.build_proposal` returns (`proposal["spread"]` with
-    legs/lots/lot_size/expiry, `proposal["ticker"]`). No I/O."""
+    legs/lots/lot_size/expiry, `proposal["ticker"]`). No I/O.
+
+    `account_id` / `lots` (decision #102): a SHADOW paper account's ticket
+    for the same journal_ref — its own id, its own (smaller) lot count,
+    the same legs and limits."""
     spread = proposal["spread"]
-    lots = int(spread.get("lots") or 1)
+    lots = int(lots if lots is not None else (spread.get("lots") or 1))
     lot_size = int(spread["lot_size"])
     strategy = spread["strategy"]
     issued_at = issued_at or datetime.now(IST).isoformat(timespec="seconds")
+    account_id = account_id or oms.PRIMARY_ACCOUNT
     tid = oms.ticket_id_for(journal_ref or proposal.get("short_id"),
-                           proposal["ticker"], strategy, issued_at)
+                           proposal["ticker"], strategy, issued_at, account_id=account_id)
     legs = []
     for i, leg in enumerate(leg_working_order(spread["legs"])):
         legs.append({
@@ -116,6 +122,7 @@ def build_ticket(proposal: dict, source: str = "options_proposer",
             "direction": spread.get("direction") or direction_of(strategy),
             "lots": lots, "lot_size": lot_size,
             "reward_risk": spread.get("reward_risk"),
+            "account_id": account_id,
             "source": source, "issued_at": issued_at,
             "note": (proposal.get("signal") or "")[:200],
             "legs": legs}

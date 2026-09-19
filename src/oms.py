@@ -73,6 +73,7 @@ LEGAL_TRANSITIONS = {
     CANCELLED: set(),
 }
 CORRELATION_ID_MAX = 30
+PRIMARY_ACCOUNT = "PAPER_10L"     # = the capital layer's ACCOUNT_PAPER_10L (kept as a literal: no Dept-3 import here)
 
 
 def _now() -> str:
@@ -131,14 +132,26 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_leg_events_leg ON leg_events (leg_id);
     """)
+    # Dual paper treasury (decision #102): every ticket names the PAPER
+    # ACCOUNT it was issued for. Additive in-place upgrade (the brain_map
+    # post_mortem pattern) — rows that predate the column are the primary's.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(trade_tickets)")}
+    if "account_id" not in cols:
+        conn.execute("ALTER TABLE trade_tickets ADD COLUMN account_id TEXT NOT NULL "
+                     f"DEFAULT '{PRIMARY_ACCOUNT}'")
     conn.commit()
 
 
 # ------------------------------------------------------------------ ids
 
 def ticket_id_for(journal_ref: str | None, underlying: str, strategy: str,
-                  issued_at: str) -> str:
+                  issued_at: str, account_id: str = None) -> str:
+    """Deterministic ticket id. The primary account's id is unchanged from
+    #100; a shadow account's ticket for the SAME journal_ref carries the
+    account in its key so the two tickets never collide."""
     key = f"{journal_ref or ''}|{underlying}|{strategy}|{issued_at}"
+    if account_id and account_id != PRIMARY_ACCOUNT:
+        key += f"|{account_id}"
     return "tkt:" + hashlib.sha1(key.encode()).hexdigest()[:14]
 
 
@@ -163,12 +176,13 @@ def issue_ticket(conn, ticket: dict) -> dict:
     now = _now()
     conn.execute(
         "INSERT INTO trade_tickets (ticket_id, journal_ref, underlying, strategy, direction, "
-        "lots, lot_size, reward_risk, source, status, issued_at, updated_at, note) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "lots, lot_size, reward_risk, source, status, issued_at, updated_at, note, "
+        "account_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (tid, ticket.get("journal_ref"), ticket["underlying"], ticket["strategy"],
          ticket.get("direction"), int(ticket["lots"]), int(ticket["lot_size"]),
          ticket.get("reward_risk"), ticket.get("source", "unknown"), PENDING,
-         ticket.get("issued_at") or now, now, ticket.get("note")))
+         ticket.get("issued_at") or now, now, ticket.get("note"),
+         ticket.get("account_id") or PRIMARY_ACCOUNT))
     for leg in ticket["legs"]:
         conn.execute(
             "INSERT INTO trade_legs (leg_id, ticket_id, leg_index, side, option_type, strike, "

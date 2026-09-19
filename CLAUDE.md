@@ -81,7 +81,7 @@ apply to exactly one of four files; the other three were current.
 
 ## RULE 5 — What "live" means
 
-The live execution path is: the 31 VM cron jobs in `scripts/setup_cron.sh`, the
+The live execution path is: the 32 VM cron jobs in `scripts/setup_cron.sh`, the
 3 Mac cron jobs, the 2 Mac LaunchAgents, the systemd services, and the MCP
 server in `.mcp.json`. **If a module is not reachable from one of those, it is
 not running** — whatever its docstring claims.

@@ -174,5 +174,23 @@ if failed:
     print(f"NOT shipped: {', '.join(failed)}")
 PYEOF
 
+# ---------------------------------------------------------------- 3. the pull
+# VM→Mac: the LIVE TRADE BOOK (2026-09-19). The VM renders
+# docs/LIVE_TRADE_BOOK.md after its 16:30 CEO brief (cron #32,
+# src.reporting.markdown_ledger); this copies it down so the owner reads the
+# book locally every morning without opening the database. Fail-open: a
+# missed pull keeps yesterday's copy (vm_pull_file renames into place only
+# on success). The file is gitignored runtime data on both machines.
+log "pulling the live trade book from the VM"
+"$PY" - <<'PYEOF' 2>&1 | tee -a logs/mac_auto_sync.log
+from src import firm_treasury
+PULLS = ("docs/LIVE_TRADE_BOOK.md",)
+ok = [p for p in PULLS if firm_treasury.vm_pull_file(p, p)]
+print(f"pulled {len(ok)}/{len(PULLS)}: {', '.join(ok) or 'none'}")
+missed = [p for p in PULLS if p not in ok]
+if missed:
+    print(f"NOT pulled: {', '.join(missed)}")
+PYEOF
+
 date +%s > "$STAMP"
 log "=== mac auto-sync done ==="

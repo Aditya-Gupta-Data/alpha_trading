@@ -18,7 +18,7 @@ repository — only a market-data connection. Every "trade" is paper.
 | Know what a specific file does | [MODULES.md](MODULES.md) — one line per file, grouped by department |
 | Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 85 numbered decisions, append-only |
 | Pick up cold / know what's broken | [HANDOVER.md](HANDOVER.md) — current state + the PENDING ISSUES backlog; older blocks in [docs/handover_archive.md](docs/handover_archive.md) |
-| Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 31 VM jobs + the Mac sync agent |
+| Know what runs when, and where | [CRON_SETUP.md](CRON_SETUP.md) — all 32 VM jobs + the Mac sync agent |
 | See how the project evolved | [PROJECT_TIMELINE.md](PROJECT_TIMELINE.md) — day by day, from git |
 | Know what is coming next | [ROADMAP.md](ROADMAP.md) — the single index of future work |
 | See the whole desk on one page, and its weak links | [docs/SYSTEM_BLUEPRINT.md](docs/SYSTEM_BLUEPRINT.md) — the 2026-09-12 CTO blueprint: flows, stores, routing, risk, ops + a 3-gap analysis |
@@ -73,7 +73,7 @@ ideas:
 
 ## Where it runs
 
-- **The VM** (`alpha-trading-vm`, GCP, Debian, IST clock) is the engine: 31 cron
+- **The VM** (`alpha-trading-vm`, GCP, Debian, IST clock) is the engine: 32 cron
   jobs plus three systemd services. It holds only a short-lived market-data
   token — never the account credentials that could mint one.
 - **The Mac** is analysis-only. It builds the heavy artifacts (bhavcopy lake,

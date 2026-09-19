@@ -27,7 +27,7 @@ touch anything:
 1. **Find the department, then its Manager.** Eight departments, each with ONE
    file/seam you approach to change its behaviour. Never dig through 50 files.
    The table is in `MODULES.md`; the departments are described below.
-2. **The live execution path is the 31 VM cron jobs in `scripts/setup_cron.sh`**
+2. **The live execution path is the 32 VM cron jobs in `scripts/setup_cron.sh`**
    plus 3 Mac cron jobs, 2 Mac LaunchAgents, three systemd services, and the
    MCP server in `.mcp.json`. That list is the definition of "live". If a
    module is not reachable from one of those, it is not running, whatever its

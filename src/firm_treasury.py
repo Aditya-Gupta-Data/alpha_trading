@@ -400,6 +400,46 @@ def vm_push_file(local_path, remote_rel: str = "data/", run_fn=None,
         return False
 
 
+def vm_pull_file(remote_rel: str, local_path, run_fn=None, env_fn=None) -> bool:
+    """VM→Mac artifact pull — the mirror of `vm_push_file`, added 2026-09-19
+    for `docs/LIVE_TRADE_BOOK.md` (the VM renders the book after its 16:30
+    CEO brief; the Mac reads it locally). Same discipline as the push: the
+    pinned gcloud interpreter, the failure NAMED on stdout, False never
+    raise. scp lands on a temp path and is renamed into place so a reader
+    never sees a half-copied file and a failed pull keeps yesterday's copy.
+    Read-only on the VM: it copies a file, changes nothing, restarts nothing.
+    """
+    local = Path(local_path)
+    tmp = local.with_suffix(local.suffix + ".pulling")
+    cmd = [GCLOUD_PATH, "compute", "scp",
+           f"{VM_SSH_TARGET}:~/alpha_trading/{remote_rel}", str(tmp),
+           f"--project={VM_SSH_PROJECT}", f"--zone={VM_SSH_ZONE}"]
+    name = Path(remote_rel).name
+    try:
+        local.parent.mkdir(parents=True, exist_ok=True)
+        env = (env_fn or gcloud_env)()
+        run = run_fn or subprocess.run
+        proc = run(cmd, capture_output=True, timeout=120, env=env)
+        if proc.returncode == 0 and tmp.exists():
+            tmp.replace(local)
+            return True
+        err = (proc.stderr or b"")
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        print(f"  (vm pull FAILED [{name}] rc={proc.returncode}: "
+              f"{err.strip()[:400] or 'no stderr'})")
+        return False
+    except Exception as exc:
+        print(f"  (vm pull FAILED [{name}] {type(exc).__name__}: "
+              f"{str(exc)[:300]})")
+        return False
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
     import sys
     if "--rebase" in sys.argv:

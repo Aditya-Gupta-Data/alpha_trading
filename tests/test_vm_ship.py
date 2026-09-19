@@ -161,3 +161,50 @@ def test_every_manifest_entry_is_a_bare_filename():
     from src.analysis.patience_basket import SHIP_MANIFEST
     for art in SHIP_MANIFEST:
         assert "/" not in art and art.endswith(".json")
+
+
+# ------------------------------------------------------------ vm_pull_file
+# The VM→Mac mirror (2026-09-19, the live trade book). Same discipline as
+# the push: pinned env, named failure, never raises — plus the rename-into-
+# place rule so a failed pull keeps yesterday's copy.
+
+def _puller(box=None, proc=None, land=True):
+    """Fake gcloud that 'lands' the file on the temp path like scp would."""
+    def run(cmd, **kw):
+        if box is not None:
+            box["cmd"], box["kw"] = cmd, kw
+        if land:
+            Path(cmd[4]).write_text("# book\n")
+        return proc or _Proc()
+    return run
+
+
+def test_pull_builds_the_mirror_scp_command_and_renames_into_place(tmp_path):
+    box = {}
+    local = tmp_path / "docs" / "LIVE_TRADE_BOOK.md"
+    assert ft.vm_pull_file("docs/LIVE_TRADE_BOOK.md", local,
+                           run_fn=_puller(box=box)) is True
+    cmd = box["cmd"]
+    assert cmd[0] == ft.GCLOUD_PATH and cmd[1:3] == ["compute", "scp"]
+    assert cmd[3].endswith(":~/alpha_trading/docs/LIVE_TRADE_BOOK.md")
+    assert cmd[4].endswith(".pulling")            # lands on the temp path
+    assert box["kw"]["env"]["CLOUDSDK_PYTHON"] == sys.executable
+    assert local.read_text() == "# book\n"
+    assert not list(tmp_path.glob("docs/*.pulling"))
+
+
+def test_a_failed_pull_keeps_yesterdays_copy_and_names_the_reason(tmp_path, capsys):
+    local = tmp_path / "LIVE_TRADE_BOOK.md"
+    local.write_text("yesterday")
+    proc = _Proc(returncode=1, stderr=b"ERROR: (gcloud.compute.scp) no such file")
+    assert ft.vm_pull_file("docs/LIVE_TRADE_BOOK.md", local,
+                           run_fn=_puller(proc=proc, land=False)) is False
+    assert local.read_text() == "yesterday"
+    assert "no such file" in capsys.readouterr().out
+
+
+def test_pull_never_raises(tmp_path):
+    def boom(cmd, **kw):
+        raise OSError("gcloud missing")
+    assert ft.vm_pull_file("docs/LIVE_TRADE_BOOK.md", tmp_path / "x.md",
+                           run_fn=boom) is False

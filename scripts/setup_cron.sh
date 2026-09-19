@@ -72,6 +72,12 @@
 #                             and the 20:30 ops sweep judges them. Read-only;
 #                             keeps its OWN log-sweep offset so it never
 #                             consumes ops_monitor's findings (#6).
+#  32. src.reporting.markdown_ledger: Mon-Fri 16:35 IST. Renders the LIVE
+#                             TRADE BOOK (docs/LIVE_TRADE_BOOK.md) from the
+#                             journal + equity events + brain_map.db —
+#                             open positions with locked margin and age,
+#                             last 50 resolved with P&L / R / verdict. The
+#                             Mac's sync agent pulls it down. Read-only.
 #
 #  30. src.analysis.dynamic_pricer + src.analysis.darling_tiers:
 #                             Mon-Fri 19:18 / 19:22 IST (wired 2026-08-11).
@@ -312,6 +318,16 @@ CRON_TZ=Asia/Kolkata
 #     eod_summary, never recomputed). Weekdays only: on a weekend there is
 #     no session to report and the evening jobs are the ops sweep's business.
 30 16 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ceo_brief >> "$REPO_ROOT/logs/ceo_brief.log" 2>&1
+
+# 32. Live trade book (Mon-Fri 16:35 IST, 2026-09-19) — the human-readable
+#     markdown ledger docs/LIVE_TRADE_BOOK.md: account line, OPEN TRADES
+#     (ticker / strategy / entry date / margin locked / days held) and the
+#     last 50 RESOLVED (P&L / R-multiple / verdict). Reads only the journal,
+#     the equity event stream and brain_map.db (mode=ro); no Dhan calls.
+#     After the 16:30 CEO brief so the day's settlements are already in the
+#     ledger; the Mac's launchd sync agent (scripts/mac_auto_sync.sh) pulls
+#     the file down so the owner reads it locally each morning.
+35 16 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.reporting.markdown_ledger >> "$REPO_ROOT/logs/markdown_ledger.log" 2>&1
 
 # 21. Firm treasury rotation (Mon-Fri 19:56 IST, decision #83) — re-routes
 #     the equity desk's budget AFTER the Mac's ~19:20 artifact ship (fresh

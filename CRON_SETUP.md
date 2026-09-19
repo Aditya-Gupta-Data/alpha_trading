@@ -33,6 +33,7 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | 15:40 Mon-Fri | `src.ingestion.chain_archiver` | EOD option-chain capture — unbuyable later (#36). After the 15:30 self-termination ⇒ zero token contention. |
 | 15:45 Mon-Fri | `src.eod_summary` | MTM P&L + active positions + net-delta card. Journal + brain_map only (no Dhan token). |
 | 16:30 Mon-Fri | `src.ceo_brief` | ONE cross-department card (ops / issues / deploys / risk / P&L). Reuses eod_summary's numbers. |
+| 16:35 Mon-Fri | `src.reporting.markdown_ledger` | **NEW 2026-09-19 (cron #32):** renders the LIVE TRADE BOOK `docs/LIVE_TRADE_BOOK.md` (account line, open trades with margin/age, last 50 resolved with P&L/R/verdict) from the journal + equity events + brain_map.db (read-only). After the CEO brief so the day's settlements are in. The Mac's launchd sync agent pulls it down (`mac_auto_sync.sh` stage 3). Log: `logs/markdown_ledger.log` |
 | 18:50 daily | `src.ingestion.rss_ingester` | Publishers' own RSS → dedup → classify NEW via Text Intelligence Manager (#75). Cost-safe: inherits the `ollama` backend ⇒ zero API spend on the VM until enabled. |
 | 19:10 daily | `src.news_processor` | Google-News RSS → Gemini → `data/news_sentiment.json` (the cloud LLM the VM can reach). Feeds `forecast.py`. |
 | 19:20 daily | `src.ingestion.earnings_calendar` | `days_to_results` feed; whole-calendar overwrite so postponements heal. |

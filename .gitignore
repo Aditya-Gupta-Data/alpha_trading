@@ -51,3 +51,10 @@ archive/
 htmlcov/
 coverage.xml
 .pytest_cache/
+
+# Live trade book (src/reporting/markdown_ledger.py, cron #32) — a regenerable
+# render of the personal journal, written on the VM and pulled to the Mac;
+# same class of data as data/ and trade_book_audit.csv
+docs/LIVE_TRADE_BOOK.md
+docs/LIVE_TRADE_BOOK.md.tmp
+docs/LIVE_TRADE_BOOK.md.pulling

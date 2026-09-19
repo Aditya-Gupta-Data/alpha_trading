@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-19 · 9 commits · 36 files touched
+### 2026-09-19 · 12 commits · 38 files touched
 
+- `24be2d8` docs: HANDOVER — Issue 30 fix deployed to the VM (0f39c04)
+- `0f39c04` fix(equity_desk): settle exits the block-shadow leg logged first (Issue 30 root cause)
+- `6e285ec` docs: Issue 30 resolved — eqd:3fedfeeb settled on the VM (−₹6,471 net, ₹98,377 released)
 - `59f64b3` docs: HANDOVER 09-19 evening — live trade book live, Issue 30 (orphan eqd lock) logged
 - `61ce6a7` feat(reporting): trade book surfaces orphan margin locks (found eqd:3fedfeeb on the first VM render)
 - `b1dd11c` feat(reporting): LIVE_TRADE_BOOK.md markdown ledger — cron #32 (16:35 IST) + VM→Mac pull lane

@@ -254,7 +254,8 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
 
     Returns {"short_id", "ticker", "strategy", "signal", "live_pnl_rs",
     "capture_pct", "days_left"} where signal is "profit_take" /
-    "pre_expiry_exit" / "hold". Purely advisory — nothing is mutated."""
+    "stop_loss" (#103) / "pre_expiry_exit" / "hold". Purely advisory —
+    nothing is mutated."""
     spread = entry["spread"]
     today = today or date.today()
     expiry = date.fromisoformat(spread["expiry"])
@@ -278,6 +279,10 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
     if (max_profit_ps > 0
             and profit_ps >= pt.OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
         signal = "profit_take"
+    elif pt.spread_stop_hit(profit_ps, max_loss_ps):
+        # Decision #103: the SAME predicate the EOD resolver uses. Advisory
+        # here (a 🛑 card); the settlement is the tracker's, at the close.
+        signal = "stop_loss"
     elif days_left <= pt._forced_exit_days(entry.get("ticker")):
         # Stock options leave before expiry WEEK (physical settlement);
         # index options keep the 2-day rule. Same one predicate as the
@@ -455,7 +460,7 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                     f"{sig['capture_pct']:.0f}%).")
             continue
         if notify_fn:
-            emoji = "🎯" if sig["signal"] == "profit_take" else "⏳"
+            emoji = {"profit_take": "🎯", "stop_loss": "🛑"}.get(sig["signal"], "⏳")
             fallback = ""
             if squared is not None:
                 fallback = (f" (intraday fill declined: "

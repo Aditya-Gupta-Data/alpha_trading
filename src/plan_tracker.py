@@ -126,6 +126,18 @@ OPTION_PROFIT_TAKE_FRACTION = 0.65
 PRE_EXPIRY_EXIT_DAYS = 2
 
 
+def spread_stop_hit(profit_ps: float, max_loss_ps: float, fraction: float = None) -> bool:
+    """THE ONE STOP PREDICATE (decision #103): True when the modeled loss per
+    share has reached `fraction` of the structure's defined max loss. Used
+    by both EOD resolvers and the live bridge so the daily settlement and
+    the intraday signal can never disagree. fraction <= 0 = no stop."""
+    if fraction is None:
+        from src.config import OPTION_STOP_LOSS_FRACTION as fraction
+    if not fraction or fraction <= 0 or max_loss_ps <= 0:
+        return False
+    return profit_ps <= -float(fraction) * float(max_loss_ps)
+
+
 def _forced_exit_days(underlying: str) -> int:
     """Days-before-expiry at which an OPEN spread is force-closed.
     Delegates to options_proposer, the ONE place that knows which
@@ -188,9 +200,12 @@ def _resolve_spread(entry: dict, bars: list):
     once an exit trigger fires, else None while the spread is live.
     Triggers, checked on each daily close after the entry day:
       profit_take       modeled profit >= 65% of the structure's max profit
+      stop_loss         modeled loss >= OPTION_STOP_LOSS_FRACTION of max loss
+                        (decision #103; 0 = off, the pre-#103 resolver)
       pre_expiry_exit   PRE_EXPIRY_EXIT_DAYS or fewer days to expiry
-    Defined-risk structures need no stop trigger: max loss is capped by
-    construction and realized, at worst, at the pre-expiry exit."""
+    Defined-risk structures never NEED a stop — max loss is capped by
+    construction and realized, at worst, at the pre-expiry exit — the stop
+    is the architect's choice to cut a loser before it rides to the cap."""
     spread = entry["spread"]
     expiry = date.fromisoformat(spread["expiry"])
     entry_day = date.fromisoformat(entry["date"])
@@ -214,6 +229,8 @@ def _resolve_spread(entry: dict, bars: list):
         m_now = m_entry + profit_ps
         if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
             return "profit_take", m_now, frac_left, day
+        if spread_stop_hit(profit_ps, max_loss_ps):
+            return "stop_loss", m_now, frac_left, day
         # PHYSICAL SETTLEMENT (2026-08-05): a STOCK option leaves before
         # expiry WEEK, not two days out. An ITM short leg held to expiry
         # is a delivery obligation on the full notional — not the spread's
@@ -267,6 +284,8 @@ def _resolve_spread_trailed(entry: dict, bars: list):
             return "trail_hit", m_now, frac_left, day
         if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
             return "profit_take", m_now, frac_left, day
+        if spread_stop_hit(profit_ps, max_loss_ps):
+            return "stop_loss", m_now, frac_left, day
         if (expiry - date.fromisoformat(day)).days <= _forced_exit_days(entry.get("ticker")):
             return "pre_expiry_exit", m_now, frac_left, day
         extreme = c if extreme is None else (max(extreme, c) if bullish
@@ -548,6 +567,11 @@ def _spread_verdict(entry: dict, resolution: str, pnl_net: float, capture_pct: f
         return (f"{'WIN' if pnl_net > 0 else 'LOSS' if pnl_net < 0 else 'flat'} — "
                 f"ATR trail on the underlying ratcheted us out at "
                 f"{capture_pct:.0f}% of max profit")
+    if resolution == "stop_loss":
+        from src.config import OPTION_STOP_LOSS_FRACTION as _f
+        return (f"LOSS — stop hit at {_f * 100:.0f}% of the defined max loss "
+                f"(decision #103), net Rs.{pnl_net:+,.2f}" if approved else
+                f"GOOD SKIP — it would have hit the {_f * 100:.0f}% stop")
     if pnl_net > 0:
         return ("WIN — closed ahead at the pre-expiry exit" if approved
                 else "MISSED GAIN — it closed ahead without you")

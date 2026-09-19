@@ -223,7 +223,17 @@ def test_evaluate_position_clamps_at_the_structures_max_loss():
     # unclamped model says -165/share; a 200-wide condor at 70 credit can
     # only ever lose 130/share — the clamp must hold
     assert sig["live_pnl_rs"] == -130.0 * 35
-    assert sig["signal"] == "hold"  # defined risk: no stop, exit by rules
+    # decision #103: a loss at (or past) the stop fraction IS the stop signal;
+    # with the stop off it is the pre-#103 "hold" (defined risk, exit by rules)
+    assert sig["signal"] == "stop_loss"
+    import src.config as cfg
+    old = cfg.OPTION_STOP_LOSS_FRACTION
+    cfg.OPTION_STOP_LOSS_FRACTION = 0.0
+    try:
+        assert lb.evaluate_position(make_condor_entry(), spot=50_000.0,
+                                    today=date(2026, 7, 6))["signal"] == "hold"
+    finally:
+        cfg.OPTION_STOP_LOSS_FRACTION = old
 
 
 def test_evaluate_open_positions_matches_only_active_approved_spreads():

@@ -197,4 +197,13 @@ PAPER_VENUE_ENABLED = bool(_CONFIG.get("paper_venue_enabled", False))
 # in config.json switches it off; the starting pool is a config value so
 # the proof can be re-run at another scale by a numbered decision.
 PAPER_2L_ACCOUNT_ENABLED = bool(_CONFIG.get("paper_2l_account_enabled", True))
+# Per-trade OPTIONS STOP (decision #103, 2026-09-19, architect directive):
+# an open spread whose MODELED loss reaches this fraction of its defined
+# max loss exits at that daily close (`plan_tracker._resolve_spread`) and
+# fires a `stop_loss` signal intraday (`live_bridge.evaluate_position`) —
+# ONE predicate, `plan_tracker.spread_stop_hit`. 0 disables it (the pre-#103
+# resolver, byte-identical: defined-risk needed no stop, decision #27/#40).
+# Config `option_stop_loss_fraction`; code default 0.5 = exit at half the
+# max loss, i.e. a Rs.10k-capped trade is cut at about Rs.5k.
+OPTION_STOP_LOSS_FRACTION = float(_CONFIG.get("option_stop_loss_fraction", 0.5))
 PAPER_2L_STARTING_CAPITAL_RS = float(_CONFIG.get("paper_2l_starting_capital_rs", 200000.0))

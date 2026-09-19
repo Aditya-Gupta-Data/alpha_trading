@@ -42,6 +42,41 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-19 — Court unblocked (tier-1 chains) + Phase M2 OMS schema and one strategy router (CODE, decision #100; deploy below)
+
+**What changed.** (1) `chain_archiver` now captures every tier-1 F&O name
+after the core nine, by scrip-master id from `darling_ids.json`
+(`get_expiry_list_by_id` / `get_option_chain_by_id` added to dhan_client),
+2 expiries each, under `extension_slug(symbol)`; today 12 of 25 tier-1
+names resolve (the other 13 are not darlings → no id → skipped BY NAME:
+AMBER, ANGELONE, BOSCHLTD, GAIL, GLENMARK, …). The court's `chain_from_lake`
+reads extension slugs and takes lot size from the chain nodes. Extension
+holes are notes, never a CA-EMPTY/BLACKOUT on the core. (2) `src/oms.py`:
+`trade_tickets` / `trade_legs` / `leg_events` (additive in brain_map.db),
+states PENDING → PARTIAL → FILLED, PENDING → REJECTED, PENDING/PARTIAL →
+CANCELLED, fills never reduced, VWAP average, ≤30-char deterministic
+`correlation_id`. (3) `src/strategy_router.py`: ONE routing table
+(exposure_gate + glassbreaking derive from it), `build_ticket` (pure,
+longs-first) and `issue`. **Nothing on the live path calls `issue`; no
+venue exists; Rule 7 unchanged.** Tests: `tests/test_oms.py` (12), +5 in
+`test_chain_archiver.py`.
+
+**Suite.** 2,233 passed, 1 failed (the same pre-existing `test_darling_shadow`
+calendar failure), 60 s.
+
+**What the next person should do first.**
+1. After Monday's 15:40 archiver run: `ls data/lake/chains/` on the VM should
+   show ~12 new slugs (abb, bajaj_auto, …); the 21:00 court should then
+   report fires > 0 for the first time. If the by-id chain call answers
+   nothing, the log names it under "tier-1 extension".
+2. Widen `darling_ids.json` to the whole tier-1 list (a `scrip_master`
+   `--symbols` run on the home node) so the other 13 names resolve.
+3. M2 sequence, each a decision: `margin_locks.parent_ref` + exposure gate on
+   parent; a PAPER venue that drives `oms.apply_fill` from the 15-min tape
+   and archived chain (partials, rejects, real-quote slippage); the read-only
+   broker-book sync (#94) as the reconciliation source; only then the Dhan
+   Trading API, by a numbered decision lifting Rule 7.
+
 ## 2026-09-17 — Session close (docs only): Mini PC not yet live, may be auto-suspending
 
 **State.** VM at `41fdbb4` (+ docs `f7409b7`), all services active, suite 57 s /

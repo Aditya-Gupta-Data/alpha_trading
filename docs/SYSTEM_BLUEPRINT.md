@@ -447,6 +447,12 @@ number.
 
 ### GAP 3 — Execution realism and the memory schema stop at "one whole position, one number"
 
+> **Status 2026-09-19 — the schema half is BUILT (decision #100):** `src/oms.py`
+> (`trade_tickets` / `trade_legs` / `leg_events`, five order states) and
+> `src/strategy_router.py` (one routing table; proposals → multi-leg Order
+> Tickets). Not yet wired to any live path, no venue behind it; `margin_locks`
+> parent_ref and the exposure gate keyed on parent remain open.
+
 **Evidence.** Fills are instantaneous and whole: `_leg_fill` prints the
 top-of-book at entry, exits come from the model, there is no partial fill, no
 order state, no rejection, and no reconciliation against any broker book

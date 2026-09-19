@@ -128,6 +128,60 @@ def build_ticket(proposal: dict, source: str = "options_proposer",
             "legs": legs}
 
 
+def build_exit_ticket(entry: dict, leg_limits: dict, resolution: str,
+                      source: str = "plan_tracker", issued_at: str = None,
+                      account_id: str = None, lots: int = None) -> dict:
+    """The EXIT Order Ticket for an open journal entry (decision #103): the
+    same legs with every side FLIPPED (long legs sold, short legs bought
+    back), worked as one atomic basket, each leg's limit = the exit
+    premium the caller priced it at (`leg_limits[(strike, 'CE'/'PE')]` —
+    the tracker's modeled close or the intraday chain's real quote).
+    `resolution` rides on the note. Pure; no I/O."""
+    spread = entry["spread"]
+    lots = int(lots if lots is not None else (spread.get("lots") or 1))
+    lot_size = int(spread["lot_size"])
+    strategy = spread["strategy"]
+    issued_at = issued_at or datetime.now(IST).isoformat(timespec="seconds")
+    account_id = account_id or oms.PRIMARY_ACCOUNT
+    ref = entry.get("short_id")
+    tid = oms.ticket_id_for(ref, entry["ticker"], strategy, issued_at,
+                           account_id=account_id, kind=oms.EXIT)
+    flipped = []
+    for leg in spread["legs"]:
+        side = "SELL" if str(leg["side"]).upper() == "BUY" else "BUY"
+        key = (float(leg["strike"]), str(leg.get("option_type") or "").upper())
+        flipped.append(dict(leg, side=side, premium=leg_limits.get(key)))
+    legs = []
+    for i, leg in enumerate(leg_working_order(flipped)):
+        legs.append({
+            "leg_id": f"{tid}:{i}",
+            "leg_index": i,
+            "side": leg["side"],
+            "option_type": leg.get("option_type"),
+            "strike": leg.get("strike"),
+            "expiry": spread.get("expiry"),
+            "qty_target": lots * lot_size,
+            "limit_price": leg.get("premium"),
+            "fill_basis": "exit_limit",
+            "correlation_id": oms.correlation_id_for(tid, i),
+        })
+    return {"ticket_id": tid, "journal_ref": ref, "underlying": entry["ticker"],
+            "strategy": strategy,
+            "direction": spread.get("direction") or direction_of(strategy),
+            "lots": lots, "lot_size": lot_size, "reward_risk": spread.get("reward_risk"),
+            "account_id": account_id, "kind": oms.EXIT,
+            "source": source, "issued_at": issued_at,
+            "note": f"EXIT {resolution}"[:200], "legs": legs}
+
+
+def issue_exit(conn, entry: dict, leg_limits: dict, resolution: str, **kw) -> dict:
+    """Persist an EXIT ticket (every leg PENDING). The tracker's one write
+    door into the OMS on the way OUT (decision #103)."""
+    ticket = build_exit_ticket(entry, leg_limits, resolution, **kw)
+    res = oms.issue_ticket(conn, ticket)
+    return {**res, "ticket": ticket}
+
+
 def issue(conn, proposal: dict, **kw) -> dict:
     """Build and persist a ticket (every leg PENDING). The only write door
     from a proposal into the OMS. Not on any live path."""

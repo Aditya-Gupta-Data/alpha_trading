@@ -365,7 +365,7 @@ def _expiry_backstop(entry: dict, bars: list, today: date = None):
 
 
 def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float,
-                       vix: float = None) -> tuple:
+                       vix: float = None, exit_slipped: bool = False) -> tuple:
     """(total_frictions, total_slippage) across ALL legs, both ends of the
     trade, priced per leg: entry legs pay their side's 2026 frictions on
     the entry premium; the atomic basket exit flips each side (short legs
@@ -390,7 +390,10 @@ def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float,
         if leg.get("fill_basis") not in ("quoted", "venue"):   # #70; "venue" = paper venue already slipped (#101)
             slippage += apply_slippage(leg["premium"], "OPTION", lots=lots) * qty
         # The EXIT crossing pays the CRISIS blowout at the exit-day VIX (P1).
-        slippage += apply_slippage(exit_premium, "OPTION", vix=vix, lots=lots) * qty
+        # #103: when the paper venue filled the exit, its slipped fills ARE
+        # the exit cost — the ladder must not charge the crossing twice.
+        if not exit_slipped:
+            slippage += apply_slippage(exit_premium, "OPTION", vix=vix, lots=lots) * qty
     return frictions, slippage
 
 
@@ -406,7 +409,8 @@ def _settle_spread_cash(pnl_net: float) -> bool:
 
 # ------------------------------------------------- intraday square-off
 
-def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict) -> tuple:
+def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict,
+                              exit_slipped: bool = False) -> tuple:
     """(total_frictions, total_slippage) like _spread_exit_costs, but the
     exit side is priced on REAL quoted premiums instead of the linear
     model — the intraday square-off's cost basis (decision #69)."""
@@ -422,8 +426,89 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict) -> tuple:
         # #70: same double-charge guard as _spread_exit_costs.
         if leg.get("fill_basis") not in ("quoted", "venue"):   # #70; "venue" = paper venue already slipped (#101)
             slippage += apply_slippage(leg["premium"], "OPTION") * qty
-        slippage += apply_slippage(exit_premium, "OPTION") * qty
+        if not exit_slipped:                                   # #103: venue exit already slipped
+            slippage += apply_slippage(exit_premium, "OPTION") * qty
     return frictions, slippage
+
+
+# ------------------------------------------------- the OMS exit (decision #103)
+#
+# An exit the tracker decided (profit_take / stop_loss / pre_expiry_exit /
+# trail_hit, or the intraday square-off) becomes an EXIT Order Ticket —
+# every leg flipped, worked as one atomic basket — that the PAPER venue
+# fills at the leg's exit limit worsened by tier slippage. The venue's
+# fills then ARE the exit prices: the basket mark is rebuilt from them and
+# the exit-side slippage ladder is skipped. STILL ONE SETTLEMENT PATH: the
+# ticket is a record of the exit this function is already performing; the
+# decision, the P&L and the journal write stay here. Flag-gated by the same
+# PAPER_VENUE_ENABLED as entries; fail-OPEN to the modeled exit, error
+# named on the outcome. The expiry backstop never goes through the venue
+# (there is no price to fill against).
+
+def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
+                        conn=None, venue_mod=None, today: date = None) -> dict:
+    """Issue + fill the exit ticket(s) — the primary's, and one per shadow
+    paper account holding this entry (#102). Returns {mode, ticket_id,
+    status, exit_mark, venue_slippage_ps, fills, accounts, error}.
+    `venue_slippage_ps` = the per-share cost the venue's fills added over
+    the exit limits (always adverse: Σ |fill − limit|); None unless every
+    leg of the primary ticket FILLED. The caller keeps its own (clamped)
+    exit mark and books this in place of the exit-side slippage ladder —
+    so the no-arbitrage clamp still holds and the venue's cost is a COST."""
+    from src.config import PAPER_VENUE_ENABLED
+    record = {"mode": "model", "ticket_id": None, "status": None, "exit_mark": None,
+              "venue_slippage_ps": None, "fills": {}, "accounts": {}, "error": None}
+    if not PAPER_VENUE_ENABLED or not (entry.get("spread") or {}).get("legs"):
+        return record
+    try:
+        from src import oms, strategy_router
+        venue = venue_mod
+        if venue is None:
+            from src.execution import paper_venue as venue
+        own = conn is None
+        if own:
+            conn = _brain_connect()
+        try:
+            tickets = [(oms.PRIMARY_ACCOUNT, None)]
+            for acct, v in (entry.get("accounts") or {}).items():
+                if (v or {}).get("status") == "approved" and v.get("ticket_id") \
+                        and int(v.get("lots") or 0) > 0:
+                    tickets.append((acct, int(v["lots"])))
+            tids = {}
+            for acct, lots in tickets:
+                issued = strategy_router.issue_exit(conn, entry, leg_limits, resolution,
+                                                    source=f"plan_tracker.{resolution}",
+                                                    account_id=acct, lots=lots)
+                tids[acct] = issued["ticket_id"]
+            venue.sweep(conn, today=today, stamp=False)
+            tid = tids[oms.PRIMARY_ACCOUNT]
+            view = oms.ticket_view(conn, tid) or {}
+            record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"))
+            if view.get("status") == oms.FILLED:
+                mark = slip = 0.0
+                for l in view["legs"]:
+                    key = (float(l["strike"]), str(l.get("option_type") or "").upper())
+                    fill = float(l["avg_fill_price"])
+                    limit = float(l.get("limit_price") or fill)
+                    record["fills"][f"{key[0]:g}{key[1]}"] = {"limit": limit, "fill": fill,
+                                                             "side": l["side"]}
+                    # the EXIT leg's side is the flipped one: a SELL here closes
+                    # a long (value received), a BUY closes a short (value paid)
+                    mark += fill if str(l["side"]).upper() == "SELL" else -fill
+                    slip += abs(fill - limit)
+                record["exit_mark"] = round(mark, 4)
+                record["venue_slippage_ps"] = slip          # full precision; rounded in rupees
+            for acct, stid in tids.items():
+                if acct != oms.PRIMARY_ACCOUNT:
+                    sv = oms.ticket_view(conn, stid) or {}
+                    record["accounts"][acct] = {"ticket_id": stid, "status": sv.get("status"),
+                                                "lots": sv.get("lots")}
+        finally:
+            if own:
+                conn.close()
+    except Exception as e:
+        record["error"] = f"{type(e).__name__}: {e}"
+    return record
 
 
 def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
@@ -481,6 +566,14 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
             gross_pnl = profit_ps * qty
             frictions, slippage = _spread_exit_costs_quoted(
                 spread, leg_quotes)
+            # Decision #103: the square-off is an EXIT ticket the paper
+            # venue fills at the REAL quotes (+ tier slippage).
+            execution = _execute_paper_exit(entry, leg_quotes, "profit_take", today=today)
+            if execution.get("venue_slippage_ps") is not None:
+                frictions, slippage = _spread_exit_costs_quoted(
+                    spread, leg_quotes, exit_slipped=True)
+                slippage = round(slippage + float(execution["venue_slippage_ps"]) * qty, 2)
+                frictions = round(frictions, 2)
             pnl_net = round(gross_pnl - frictions - slippage, 2)
             capture_pct = (gross_pnl / (max_profit_ps * qty) * 100
                            if max_profit_ps > 0 else 0.0)
@@ -506,6 +599,11 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
                 "exit_style": "atomic_basket",
                 "exit_basis": "intraday_chain",    # vs the EOD path's bars
                 "model_capture_pct": model_capture_pct,  # signal-vs-fill gap
+                **({"execution": execution,
+                    "venue_slippage_rs": (round(float(execution["venue_slippage_ps"]) * qty, 2)
+                                          if execution.get("venue_slippage_ps") is not None
+                                          else None)}
+                   if execution.get("mode") == "paper_venue" or execution.get("error") else {}),
                 "hypothetical": False,
                 "position_closed": True,
                 "verdict": _spread_verdict(entry, "profit_take", pnl_net,
@@ -1197,6 +1295,24 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         else:
             _day, _low, _high, exit_close = bars[[b[0] for b in bars].index(exit_day)]
             total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), frac_left)
+        execution = None
+        if backstop is None and approved:
+            # Decision #103: the exit is an OMS ticket the paper venue fills
+            # at the modeled per-leg exit premium (+ tier slippage). Filled
+            # -> the venue's basket mark is the exit and the exit-side
+            # ladder is skipped; anything else -> the modeled exit above.
+            limits = {(float(l["strike"]), str(l.get("option_type") or "").upper()):
+                      round(_leg_model_premium(l, float(exit_close), spread.get("entry_spot"),
+                                               frac_left), 2)
+                      for l in spread["legs"]}
+            execution = _execute_paper_exit(entry, limits, resolution,
+                                            today=date.fromisoformat(exit_day))
+            if execution.get("venue_slippage_ps") is not None:
+                total_frictions, total_slippage = _spread_exit_costs(
+                    spread, float(exit_close), frac_left, exit_slipped=True)
+                total_slippage = round(total_slippage
+                                       + float(execution["venue_slippage_ps"]) * qty, 2)
+                total_frictions = round(total_frictions, 2)
         pnl_net = round(gross_pnl - total_frictions - total_slippage, 2)
 
         max_profit_total = float(spread["max_profit"]) * int(spread.get("lots", 1))
@@ -1227,6 +1343,15 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             "hypothetical": not approved,
             "position_closed": settled,
         }
+        if execution is not None and (execution.get("mode") == "paper_venue"
+                                      or execution.get("error")):
+            # #103: the exit ticket record. `exit_basis` keeps describing
+            # the PRICE basis (bars / intraday chain); the venue's cost sits
+            # inside slippage_rs and is itemised here.
+            entry["outcome"]["execution"] = execution
+            if execution.get("venue_slippage_ps") is not None:
+                entry["outcome"]["venue_slippage_rs"] = round(
+                    float(execution["venue_slippage_ps"]) * qty, 2)
         if backstop is not None:
             # Additive keys (older rows lack them; readers tolerate absence):
             # WHICH price settled the row, and from WHICH session.

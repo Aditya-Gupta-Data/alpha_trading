@@ -235,8 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-19 · 12 commits · 38 files touched
+### 2026-09-19 · 16 commits · 40 files touched
 
+- `b7ffb42` docs: decision #102 — dual paper treasury (MODULES, DECISIONS, ARCHITECTURE Dept 3, HANDOVER 09-19 night)
+- `0ff709e` chore: micro-commit — proposer judges the 2L shadow account at both gate points and issues its venue ticket; LIVE_TRADE_BOOK renders both accounts side by side; 16 dual-treasury tests (decision #102)
+- `c055eea` chore: micro-commit — OMS tickets carry account_id (additive column), router builds shadow-account tickets, venue journals shadow fills to the shadow ledger (decision #102)
+- `de9fc1b` chore: micro-commit — dual paper treasury: PAPER_2L shadow account tables, gate, scaled release, config flags (decision #102)
 - `24be2d8` docs: HANDOVER — Issue 30 fix deployed to the VM (0f39c04)
 - `0f39c04` fix(equity_desk): settle exits the block-shadow leg logged first (Issue 30 root cause)
 - `6e285ec` docs: Issue 30 resolved — eqd:3fedfeeb settled on the VM (−₹6,471 net, ₹98,377 released)

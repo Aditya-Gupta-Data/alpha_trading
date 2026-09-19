@@ -235,6 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-19 · 3 commits · 13 files touched
+
+- `5f856bf` docs: HANDOVER 09-19 deploy state
+- `07cca58` docs: decision #100 record — MODULES rows for oms/strategy_router/archiver extension, HANDOVER 09-19, blueprint GAP 3 status
+- `321d574` feat(m2): tier-1 chain archiver extension by scrip-master id (unblocks the court); OMS schema trade_tickets/trade_legs/leg_events with five order states; one strategy_router issuing multi-leg Order Tickets — plumbing only, no order path (decision #100)
+
+
 ### 2026-09-17 · 2 commits · 2 files touched
 
 - `66bd199` docs: HANDOVER 09-17 session close — Mini PC status, owner steps outstanding

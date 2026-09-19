@@ -464,6 +464,15 @@ the cash once. On profitable settlement, `wealth_lock` records the advisory 50%
 GOLDBEES sweep (paper ledger + card, never a cash movement), hooked from
 `portfolio_manager.release_entry`.
 
+**The dual paper treasury (decision #102, 2026-09-19):** the same options
+signal is judged twice — once by the primary Rs.10L account (the book above,
+unchanged) and once by a Rs.2L stress-test account in its own tables
+(`paper_*`), with its own sizing, margin gate and halts. The 2L account never
+changes a decision: it records, per trade, whether a retail-scale book could
+have taken it and at what size, gets its own venue ticket when it could, and
+settles off the primary's exit with P&L scaled by lot ratio (still ONE
+settlement path). `docs/LIVE_TRADE_BOOK.md` shows both side by side.
+
 **The halt-stack rule (review #2 ruling — REALIZED 2026-07-19):** entry halts
 COMPOSE at one point. `request_entry` evaluates the single ordered
 `ENTRY_HALT_CHECKS` list, each check answering (halted?, reason): (1) the 10%

@@ -42,6 +42,48 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-19 (night) — Phase M1.B: the DUAL PAPER TREASURY (CODE, decision #102; NOT YET DEPLOYED)
+
+**What changed.** A Rs.2,00,000 stress-test paper account (`PAPER_2L`) now
+judges every options signal beside the Rs.10L primary. `portfolio_manager`:
+four new additive tables (`paper_accounts`, `paper_margin_locks`,
+`paper_equity_curve`, `paper_account_events`) — the primary's four tables
+and functions are untouched. `evaluate_shadow_accounts` runs after the
+primary gate approves (proposal time AND approval time): re-sizes the same
+structure on the 2L account's own equity/cash (+ the Rs.10k cap, capped at
+the primary's lots), then its own halts + margin check. Verdict on the
+journal row as `accounts.PAPER_2L`; every refusal a named row in the 2L
+events table. An accepted 2L entry gets its own OMS ticket
+(`trade_tickets.account_id`, additive column) filled by the paper venue at
+the same slippage and journaled to the 2L ledger (`venue_fill`); only the
+primary's ticket stamps `journal.jsonl`. `release_entry` settles the shadow
+lock in the same tracker call, P&L × lots_2L/lots_10L; rejection = zero.
+`LIVE_TRADE_BOOK.md` gains **Accounts — side by side**. Config:
+`paper_2l_account_enabled` (code default ON), `paper_2l_starting_capital_rs`.
+Tests: `tests/test_dual_paper_accounts.py` (16). Scope: options only — the
+equity desk is not mirrored (separate decision).
+
+**Suite (cloud container, not the Mac).** 2,190 passed / 13 failed with six
+files uncollectable for missing `discord` / `fastapi` packages; **all 13
+failures reproduce on origin/main in the same container** (the known
+`test_darling_shadow` calendar failure, the `test_options_spreads` →
+`test_intraday_exit` leak, and data-file-dependent tests). Run the suite on
+the Mac before deploying — expected: the same 1 pre-existing failure.
+
+**NOT deployed.** The VM is still at `0f39c04`. Deploy = `git pull`, restart
+`alpha-trading`; the new tables create themselves on first touch, the
+`account_id` column is added in place. No config change is required for
+the switch (default ON); set `paper_2l_account_enabled: false` to disable.
+
+**What the next person should do first.**
+1. Run the suite on the Mac, then deploy to the VM and restart `alpha-trading`.
+2. First approved entry after deploy: the journal row carries
+   `accounts.PAPER_2L` (approved with lots ≤ the primary's, or a named
+   refusal); `python3 -m src.portfolio_manager` prints both accounts.
+3. 16:35 book: the side-by-side table shows the 2L column; watch
+   `Refusals (this account only)` — that count is the finding this phase
+   exists to produce.
+
 ## 2026-09-19 (evening) — LIVE TRADE BOOK shipped (cron #32) + VM→Mac pull lane; Issue 30 found
 
 **State.** VM at `0f39c04` (`alpha-trading` restarted 14:4x IST after the Issue 30 fix; `sweep_orphan_locks()` on the VM returns [] — clean), cron block reinstalled (32 jobs), 27+12 scoped

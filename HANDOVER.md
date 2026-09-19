@@ -56,6 +56,11 @@ venue sweep + stamp, before the rewrite, when `paper_venue_enabled`
 instant fill on flag-off or error. Tracker skips entry slippage on `venue`
 fills. Tests: `tests/test_paper_venue.py` (15), OMS guard updated.
 
+**DEPLOYED.** VM at `14595a6`, `alpha-trading` restarted; 122/122 scoped tests
+green on the venv; `PAPER_VENUE_ENABLED` reads True on the VM; the extension
+resolves 23 names / 0 skipped on the VM's own files; OMS tables created,
+0 tickets (first one lands with Monday's first approval).
+
 **Suite.** 2,248 passed, 1 failed (the same pre-existing `test_darling_shadow`).
 
 **What the next person should do first.**

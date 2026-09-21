@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-21 · 2 commits · 2 files touched
+### 2026-09-21 · 5 commits · 13 files touched
 
+- `ddcb1a5` docs: HANDOVER 09-21 night + ledger Issue 31 (retroactive #103 stop-outs invisible on the cards) + MODULES rows for the embed fitter and named unmarked positions
+- `5515fc3` fix(firm_mtm): two unmarked positions on one underlying read 'NIFTY 50 ×2' so names add up to the count
+- `826b1be` fix(telemetry): Discord embed limits enforced at the one door + partial MTM names its unmarked positions
 - `5782ef4` docs: HANDOVER 09-21 — #102 + #103 merged and deployed to the VM (c3e73cc)
 - `c3e73cc` fix(tests): pin the #103 options stop OFF in the post-expiry backstop test (the crash bars stop the spread out first; the backstop is the point)
 

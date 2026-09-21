@@ -86,7 +86,9 @@ def test_render_line_states_the_edge_and_partial_marks():
                               ledger_path=ledger, quote_fn=lambda t: None)
         assert "Firm MTM Rs.200,000" in line
         assert "CAGR unlocks at day 30" in line and "(day 1" in line
-        assert "1 position(s) unmarked" in line       # honest partial
+        # honest partial — and it NAMES the blind position (09-21 directive)
+        assert "⚠️ Unmarked: TCS" in line and "marked 0 of 1" in line
+        assert line.split("\n")[1].startswith("⚠️ Unmarked")   # right under the headline
         conn.close()
     # Past the floor the line carries BOTH numbers.
     with tempfile.TemporaryDirectory() as tmp:
@@ -144,3 +146,36 @@ def test_digests_carry_the_mtm_line():
 
 if __name__ == "__main__":
     print("Run via pytest: python -m pytest tests/test_firm_mtm.py")
+
+
+def test_unmarked_positions_are_named_across_both_books():
+    """Owner directive 2026-09-21: 'x of y' must say WHICH trades are blind.
+    Options are matched on short_id; the darling book on its quote."""
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = _acct(days_ago=2, realized=0.0)
+        ledger, _ = _ledger(tmp)
+        import src.portfolio_report as pr
+        book = [{"short_id": "aa11", "ticker": "NIFTY 50"},
+                {"short_id": "bb22", "ticker": "SUPREMEIND.NS"}]
+        real = pr._open_entries
+        pr._open_entries = lambda entries=None: (book, [])
+        try:
+            m = fm.compute(conn=conn, entries=book,
+                           marks=[{"short_id": "aa11", "ticker": "NIFTY 50",
+                                   "live_pnl_rs": 500.0}],
+                           ledger_path=ledger, quote_fn=lambda t: None)
+        finally:
+            pr._open_entries = real
+        assert m["unmarked"] == 2 and m["marked"] == 1 and m["open"] == 3
+        assert m["unmarked_names"] == ["SUPREMEIND", "TCS"]
+        line = fm.render_line(m)
+        assert "⚠️ Unmarked: SUPREMEIND, TCS — MTM partial, marked 1 of 3" in line
+        conn.close()
+
+
+def test_fully_marked_book_carries_no_unmarked_line():
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger, quote = _ledger(tmp)
+        line = fm.render_line(conn=_acct(days_ago=1), entries=[], marks=[],
+                              ledger_path=ledger, quote_fn=quote)
+        assert "Unmarked" not in line

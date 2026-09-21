@@ -51,31 +51,46 @@ def _run_start(conn) -> str:
     return str(pm.get_account(conn)["created_at"])
 
 
+def _label(ticker) -> str:
+    return str(ticker or "?").replace(".NS", "")
+
+
 def _options_unrealized(entries=None, marks=None):
-    """(unrealized_rs, marked, open) for the open options book, via the
-    one shared mark ladder. Injectable for tests."""
+    """(unrealized_rs, marked, open, unmarked_names) for the open options
+    book, via the one shared mark ladder. Injectable for tests."""
     try:
         from src.portfolio_report import _open_entries, get_live_marks
         spreads, equities = _open_entries(entries)
-        open_count = len(spreads) + len(equities)
+        book = spreads + equities
+        open_count = len(book)
         if marks is None:
             from src.equity_desk import market_data_muzzled
             if market_data_muzzled():
-                return None, 0, open_count   # test envs never fetch marks
-            marks, _src = get_live_marks(entries=spreads + equities)
+                # test envs never fetch marks
+                return None, 0, open_count, [_label(e.get("ticker")) for e in book]
+            marks, _src = get_live_marks(entries=book)
+        # A position is marked when the ladder returned ITS row: match on
+        # short_id, and fall back to the ticker for rows that carry none.
+        ids = {m.get("short_id") for m in marks if m.get("short_id")}
+        tickers = {m.get("ticker") for m in marks if not m.get("short_id")}
+        missing = [_label(e.get("ticker")) for e in book
+                   if not (e.get("short_id") in ids
+                           or (not e.get("short_id")
+                               and e.get("ticker") in tickers))]
         return (round(sum(m["live_pnl_rs"] for m in marks), 2),
-                len(marks), open_count)
+                len(marks), open_count, missing)
     except Exception:
-        return None, 0, 0
+        return None, 0, 0, []
 
 
 def _equity_unrealized(ledger_path=None, quote_fn=None):
-    """(unrealized_rs, marked, open) for the funded darling book."""
+    """(unrealized_rs, marked, open, unmarked_names) for the funded
+    darling book."""
     try:
         from src import knowledge_graph_logger as kg
         from src.equity_desk import live_quote
         quote_fn = quote_fn or live_quote
-        total, marked, open_count = 0.0, 0, 0
+        total, marked, open_count, missing = 0.0, 0, 0, []
         for ticker, entry in kg.open_positions(path=ledger_path).items():
             funding = entry.get("funding") or {}
             if not funding.get("funded"):
@@ -87,13 +102,14 @@ def _equity_unrealized(ledger_path=None, quote_fn=None):
             except Exception:
                 last = None
             if last is None or action.get("entry_price") is None:
+                missing.append(_label(ticker))
                 continue
             total += (float(last) - float(action["entry_price"])) \
                 * int(funding.get("qty") or 0)
             marked += 1
-        return round(total, 2), marked, open_count
+        return round(total, 2), marked, open_count, missing
     except Exception:
-        return None, 0, 0
+        return None, 0, 0, []
 
 
 def compute(conn=None, entries=None, marks=None, ledger_path=None,
@@ -107,8 +123,8 @@ def compute(conn=None, entries=None, marks=None, ledger_path=None,
         if owns:
             conn.close()
     base = float(acct["starting_capital"])
-    opt_u, opt_marked, opt_open = _options_unrealized(entries, marks)
-    eq_u, eq_marked, eq_open = _equity_unrealized(ledger_path, quote_fn)
+    opt_u, opt_marked, opt_open, opt_missing = _options_unrealized(entries, marks)
+    eq_u, eq_marked, eq_open, eq_missing = _equity_unrealized(ledger_path, quote_fn)
     mtm = round(float(acct["equity"]) + (opt_u or 0.0) + (eq_u or 0.0), 2)
     unmarked = (opt_open - opt_marked) + (eq_open - eq_marked)
     now = now or datetime.now(IST)
@@ -135,8 +151,14 @@ def compute(conn=None, entries=None, marks=None, ledger_path=None,
     return {"base": base, "equity_realized": float(acct["equity"]),
             "realized_pnl": round(float(acct["equity"]) - base, 2),
             "options_unrealized": opt_u, "equity_unrealized": eq_u,
-            "mtm": mtm, "unmarked": unmarked, "days": days,
+            "mtm": mtm, "unmarked": unmarked,
+            "unmarked_names": opt_missing + eq_missing,
+            "marked": opt_marked + eq_marked, "open": opt_open + eq_open,
+            "days": days,
             "abs_return": abs_return, "cagr": cagr}
+
+
+MAX_UNMARKED_NAMES = 15
 
 
 def render_line(m: dict = None, **kwargs) -> str:
@@ -162,8 +184,17 @@ def render_line(m: dict = None, **kwargs) -> str:
                          f"at day {CAGR_MIN_DAYS}; annualizing a "
                          f"days-old number would be noise)")
         if m["unmarked"]:
-            parts.append(f"{m['unmarked']} position(s) unmarked — MTM "
-                         f"partial")
+            # Owner directive 2026-09-21: "x of y" without the names is not
+            # acceptable — a partial MTM must say WHICH positions it left
+            # out. Second line, right under the headline, so a field that
+            # is later split or trimmed can never lose it.
+            names = list(dict.fromkeys(m.get("unmarked_names") or []))
+            shown = ", ".join(names[:MAX_UNMARKED_NAMES]) or "names unavailable"
+            if len(names) > MAX_UNMARKED_NAMES:
+                shown += f" …+{len(names) - MAX_UNMARKED_NAMES} more"
+            cover = (f" — MTM partial, marked {m['marked']} of {m['open']}"
+                     if m.get("open") else " — MTM partial")
+            parts.insert(1, f"⚠️ Unmarked: {shown}{cover} (no live quote)")
         return "\n".join(parts)
     except Exception as exc:
         return f"💹 Firm MTM unavailable ({exc})"

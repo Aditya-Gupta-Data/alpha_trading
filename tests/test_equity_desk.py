@@ -356,7 +356,8 @@ def test_render_book_lines_live_view():
         # Absent quote -> em-dash, counted, never guessed.
         out = desk.render_book_lines(conn=conn, path=journal,
                                      quote_fn=lambda t: None)
-        assert "(1 unmarked)" in out and "—" in out
+        assert "marked 0 of 1" in out and "⚠️ Unmarked: TCS" in out
+        assert "—" in out
         conn.close()
 
 

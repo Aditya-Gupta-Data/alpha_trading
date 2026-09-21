@@ -508,7 +508,10 @@ def render_book_lines(conn=None, path=None, quote_fn=None) -> str:
             total = sum(marked)
             head += f" · unrealized {'+' if total >= 0 else ''}Rs.{total:,.0f}"
         if positions and len(marked) < len(positions):
-            head += f" ({len(positions) - len(marked)} unmarked)"
+            blind = [str(t).replace(".NS", "") for t, *_, u in positions
+                     if u is None]
+            head += (f" (marked {len(marked)} of {len(positions)} — "
+                     f"⚠️ Unmarked: {', '.join(blind)})")
         if state["ruin_halted"]:
             head += " · ⛔ DESK HALTED"
         if not positions:

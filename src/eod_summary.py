@@ -408,7 +408,7 @@ def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None,
     try:
         from src.firm_mtm import render_line
         fields.insert(0, {"name": "💹 Firm MTM & Return",
-                          "value": render_line()[:1024], "inline": False})
+                          "value": render_line(), "inline": False})
     except Exception:
         pass
 

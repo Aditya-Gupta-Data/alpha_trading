@@ -766,8 +766,9 @@ def _risk_field(risk: dict) -> dict:
         value += "\n" + render_line()
     except Exception:
         pass
-    return {"name": "💰 Risk & Capital", "value": value[:1024],
-            "inline": False}
+    # No [:1024] here: the MTM line rides LAST and a blind cut was eating it.
+    # notifier._fit_embed splits an over-long field into "(cont.)" fields.
+    return {"name": "💰 Risk & Capital", "value": value, "inline": False}
 
 
 # ---------------------------------------------------------------- miner

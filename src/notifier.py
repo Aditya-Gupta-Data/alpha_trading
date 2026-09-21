@@ -149,6 +149,122 @@ def _embed_colour(payload: dict) -> int:
     return _COLOUR.get(event, 0x95A5A6)   # grey fallback for unknown events
 
 
+# ------------------------------------------- Discord hard limits (one door)
+#
+# Discord rejects the WHOLE embed (HTTP 400) when any one limit is breached,
+# and renders a field with a blank value as nothing at all. Every card leaves
+# through `_build_embed`, so the limits are enforced HERE, once — a summary
+# job that grows a section (the dual paper treasury, the OMS rows) can never
+# again cost the owner the card. Nothing is silently cut: an over-long field
+# is SPLIT into "(cont.)" fields on line boundaries (a code fence is closed
+# and reopened across the split), and only when the 6000-char embed budget
+# itself runs out are the trailing sections dropped — and the card says so.
+EMBED_TITLE_MAX = 256
+EMBED_DESCRIPTION_MAX = 4096
+EMBED_FIELD_NAME_MAX = 256
+EMBED_FIELD_VALUE_MAX = 1024
+EMBED_FIELDS_MAX = 25
+EMBED_FOOTER_MAX = 2048
+EMBED_TOTAL_MAX = 6000
+_EMPTY_VALUE = "—"
+_FENCE = "```"
+
+
+def _cut(text: str, limit: int) -> str:
+    text = str(text)
+    return text if len(text) <= limit else text[:max(0, limit - 1)] + "…"
+
+
+def _split_value(value: str, limit: int = EMBED_FIELD_VALUE_MAX) -> list:
+    """One field value → a list of chunks, each <= limit, broken on line
+    boundaries. A chunk that ends inside a ``` fence gets the fence closed,
+    and the next chunk reopens it, so a table never bleeds into prose."""
+    value = str(value)
+    if len(value) <= limit:
+        return [value]
+    room = limit - 2 * (len(_FENCE) + 1)     # worst case: reopen + close
+    chunks, cur, in_fence = [], [], False
+
+    def flush():
+        nonlocal cur
+        if not cur:
+            return
+        body = "\n".join(cur)
+        if in_fence:
+            body += "\n" + _FENCE
+        chunks.append(body)
+        cur = [_FENCE] if in_fence else []
+
+    for line in value.split("\n"):
+        while len(line) > room:              # one giant line: hard-wrap it
+            head, line = line[:room], line[room:]
+            if len("\n".join(cur + [head])) > room:
+                flush()
+            cur.append(head)
+        if len("\n".join(cur + [line])) > room:
+            flush()
+        cur.append(line)
+        if line.strip().startswith(_FENCE):
+            in_fence = not in_fence
+    if cur and cur != [_FENCE]:
+        chunks.append("\n".join(cur))
+    return [c for c in chunks if c.strip()] or [_cut(value, limit)]
+
+
+def _embed_size(embed: dict) -> int:
+    """The character count Discord totals against the 6000 limit."""
+    n = len(embed.get("title") or "") + len(embed.get("description") or "")
+    n += len((embed.get("footer") or {}).get("text") or "")
+    for f in embed.get("fields") or []:
+        n += len(f["name"]) + len(f["value"])
+    return n
+
+
+def _fit_embed(embed: dict) -> dict:
+    """Make any embed structurally valid for Discord. Pure; never raises."""
+    try:
+        embed["title"] = _cut(embed.get("title") or _EMPTY_VALUE,
+                              EMBED_TITLE_MAX)
+        if embed.get("description"):
+            embed["description"] = _cut(embed["description"],
+                                        EMBED_DESCRIPTION_MAX)
+        if (embed.get("footer") or {}).get("text"):
+            embed["footer"]["text"] = _cut(embed["footer"]["text"],
+                                           EMBED_FOOTER_MAX)
+        fitted = []
+        for f in embed.get("fields") or []:
+            if not isinstance(f, dict):
+                continue
+            name = str(f.get("name") or "").strip() or _EMPTY_VALUE
+            raw = f.get("value")
+            value = "" if raw is None else str(raw)
+            if not value.strip():
+                value = _EMPTY_VALUE         # a blank value renders as nothing
+            for i, chunk in enumerate(_split_value(value)):
+                label = name if i == 0 else f"{name} (cont.)"
+                fitted.append({"name": _cut(label, EMBED_FIELD_NAME_MAX),
+                               "value": chunk,
+                               "inline": bool(f.get("inline")) and i == 0})
+        note = {"name": "✂️ Card trimmed", "value": "", "inline": False}
+        dropped = 0
+
+        def over() -> bool:
+            embed["fields"] = fitted + ([note] if dropped else [])
+            return (len(embed["fields"]) > EMBED_FIELDS_MAX
+                    or _embed_size(embed) > EMBED_TOTAL_MAX)
+
+        while fitted and over():
+            fitted.pop()
+            dropped += 1
+            note["value"] = (f"{dropped} trailing section(s) did not fit "
+                             f"Discord's {EMBED_TOTAL_MAX}-character card "
+                             f"limit — the full text is in this job's log.")
+        over()
+    except Exception as exc:                 # a broken fitter never mutes
+        print(f"  (notifier: embed fit failed, sending as built: {exc})")
+    return embed
+
+
 def _build_embed(payload: dict) -> dict:
     """payload dict → one Discord embed object.
 
@@ -251,7 +367,7 @@ def _build_embed(payload: dict) -> dict:
     }
     if payload.get("description"):
         embed["description"] = payload["description"]
-    return embed
+    return _fit_embed(embed)
 
 
 # --------------------------- Discord budget (Directive 4, decision #84)

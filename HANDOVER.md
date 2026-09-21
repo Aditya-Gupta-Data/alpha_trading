@@ -42,6 +42,51 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-21 (midday) — #102 + #103 merged to main and DEPLOYED to the VM
+
+**What happened.** The architect approved `claude/vigilant-feynman-i2kz45`;
+it was fast-forwarded into `main` (9 commits, `57dd72e` → `289a339`). The Mac
+suite then showed ONE new failure:
+`test_expiry_backstop::test_post_expiry_bars_do_not_mark_the_exit_on_a_post_expiry_close`
+— the new 50% stop (#103) legitimately stops that fixture out on its
+pre-expiry crash bars before the backstop can act. Test-only fix `c3e73cc`
+pins the stop OFF in that one test (same convention as the clamp tests); no
+production code changed. Mac suite after the fix: **2,291 passed / 1 failed**
+(61 s) — the 1 is the pre-existing `test_darling_shadow` calendar failure,
+reproduced on `57dd72e` before the merge.
+
+**DEPLOYED.** VM at `c3e73cc` (pulled 12:06 IST Mon 09-21, mid-session),
+`alpha-trading` restarted 12:06, all three services active, `/api/health`
+ok, 62/62 scoped tests green on the VM venv. DB backed up first:
+`data/brain_map.db.bak-pre-102-103-20260921-1206` (on the VM). Schema
+verified on the live `brain_map.db`: `trade_tickets` now has `account_id` +
+`kind` (0 tickets existed), the four `paper_*` tables exist,
+`PRAGMA integrity_check` = ok. Live config as loaded on the VM: stop 0.5,
+2L account ON, paper venue ON. Accounts at deploy: PAPER_10L equity
+₹10,89,430 (realized ₹89,430, 14 open locks, drawdown 0.59%); PAPER_2L
+fresh at ₹2,00,000, 0 locks, 0 refusals.
+
+**Known caveats — not bugs, but know them.**
+- Today's `master_scheduler` (pid started 09:10 IST) was NOT restarted; it
+  runs in-process and holds the pre-deploy code it had already imported
+  until it self-terminates at 15:30. No traceback in its log after the
+  pull. The 15:35+ cron jobs and tomorrow's 09:10 session run the new code.
+  So: the first EOD settlement under the 50% stop is **today's**; the first
+  intraday session with 2L judging + OMS exits is **Tue 09-22**.
+- NOT yet observed live (nothing has triggered them): a 2L verdict on a
+  journal row, an EXIT ticket, a `stop_loss` resolution.
+- `scripts/audit_logs.py` has still NOT been run on the VM's real logs.
+
+**What the next person should do first.**
+1. After 16:35 IST today: read the tracker output — any open spread at or
+   past half its max loss will resolve `stop_loss` at today's close. That is
+   approved behaviour (#103), not a fault.
+2. On the VM: `venv/bin/python scripts/audit_logs.py`, then read
+   `logs/audit_report_15day.md` (CRITICAL rows first).
+3. Tue 09-22: first approved entry should carry `accounts.PAPER_2L` on its
+   journal row; first tracker exit should leave a `kind = EXIT` FILLED row
+   in `trade_tickets` and `venue_slippage_rs` on the outcome.
+
 ## 2026-09-19 (late night) — Options stop + OMS exits (CODE, decision #103) + the forensic log sweep tool; NOT YET DEPLOYED
 
 **What changed.** (1) `OPTION_STOP_LOSS_FRACTION` = 0.5 (config

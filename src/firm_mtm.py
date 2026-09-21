@@ -188,7 +188,11 @@ def render_line(m: dict = None, **kwargs) -> str:
             # acceptable — a partial MTM must say WHICH positions it left
             # out. Second line, right under the headline, so a field that
             # is later split or trimmed can never lose it.
-            names = list(dict.fromkeys(m.get("unmarked_names") or []))
+            # Two blind positions on one underlying read "NIFTY 50 ×2", so
+            # the names always add up to the count.
+            raw = m.get("unmarked_names") or []
+            names = [n if raw.count(n) == 1 else f"{n} ×{raw.count(n)}"
+                     for n in dict.fromkeys(raw)]
             shown = ", ".join(names[:MAX_UNMARKED_NAMES]) or "names unavailable"
             if len(names) > MAX_UNMARKED_NAMES:
                 shown += f" …+{len(names) - MAX_UNMARKED_NAMES} more"

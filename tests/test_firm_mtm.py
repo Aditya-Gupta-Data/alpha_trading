@@ -173,6 +173,15 @@ def test_unmarked_positions_are_named_across_both_books():
         conn.close()
 
 
+def test_two_blind_positions_on_one_underlying_are_counted_not_collapsed():
+    line = fm.render_line({"mtm": 1.0, "base": 1.0, "realized_pnl": 0.0,
+                           "options_unrealized": None, "equity_unrealized": None,
+                           "abs_return": 0.0, "cagr": None, "days": 1,
+                           "unmarked": 3, "marked": 0, "open": 3,
+                           "unmarked_names": ["NIFTY 50", "TCS", "NIFTY 50"]})
+    assert "⚠️ Unmarked: NIFTY 50 ×2, TCS — MTM partial, marked 0 of 3" in line
+
+
 def test_fully_marked_book_carries_no_unmarked_line():
     with tempfile.TemporaryDirectory() as tmp:
         ledger, quote = _ledger(tmp)

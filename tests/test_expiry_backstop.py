@@ -152,10 +152,13 @@ def test_gap_over_exit_window_settles_at_last_close_before_expiry():
         assert "intrinsic" in o["verdict"]
 
 
-def test_post_expiry_bars_do_not_mark_the_exit_on_a_post_expiry_close():
+def test_post_expiry_bars_do_not_mark_the_exit_on_a_post_expiry_close(monkeypatch):
     """Feed returns AFTER expiry with only post-expiry bars: the bar walk
     would have 'pre-expiry exited' on a bar dated after expiry. The
     backstop takes over with the last close ON OR BEFORE expiry."""
+    # The per-trade stop (decision #103) is pinned OFF: the pre-expiry crash
+    # bars would stop this spread out first, and the backstop is the point.
+    monkeypatch.setattr("src.config.OPTION_STOP_LOSS_FRACTION", 0.0)
     with tempfile.TemporaryDirectory() as tmp:
         entry = make_open_spread()
         entry["spread"]["max_profit"] = 0.0          # profit-take can never fire

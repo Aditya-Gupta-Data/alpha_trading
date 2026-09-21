@@ -42,6 +42,66 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-21 (night) — Card telemetry fix DEPLOYED; audit sweep run; ⚠️ Issue 31: the new stop settled 4 spreads retroactively (−₹31.5k) and the cards never showed it
+
+**READ FIRST — Issue 31 (open, owner decision).** The first tracker run after
+the midday deploy (13:06 IST) applied the 50% stop to every historical bar and
+settled four open spreads with exit dates of 08-17, 09-09, 09-15, 09-15 —
+−₹31,486.69 net, realized ₹89,430 → ₹57,944, locks 14 → 10. Because both
+evening cards define "closed today" as `exit_date == today`, the EOD card
+said "Resolved Today: None" and the brief said "Nothing closed today". Full
+verified detail and the two open questions are in
+`docs/observation_week_ledger.md` Issue 31. Nothing was changed for it: the
+journal is append-only and the rule's intended scope is the architect's call.
+The OMS exit door itself worked — 4 EXIT tickets FILLED, slippage on the
+outcome (first live observation of #103 exits).
+
+**What changed (code, `826b1be` + `5515fc3`, VM pulled to `5515fc3`, no
+restart — the cards are cron jobs).** (1) `notifier._fit_embed`: Discord's
+limits enforced once, at the door every card uses — over-long fields split
+into "(cont.)" fields on line boundaries, blank values render "—", trailing
+sections dropped only past 6000 chars and announced. (2) `firm_mtm`: a
+partial MTM names its blind positions on the line under the headline
+(`⚠️ Unmarked: DABUR, LTF — MTM partial, marked 8 of 10`);
+`equity_desk.render_book_lines` does the same. (3) The brief's Risk & Capital
+field and the EOD MTM field lost their blind `[:1024]` — on tonight's real
+data Risk & Capital is 1,015/1,024 chars with the MTM line LAST, so that cut
+is what was eating the MTM/unmarked text. Suite **2,303 passed / 1 failed**
+(the known `test_darling_shadow`), 61 s.
+
+**What I could NOT confirm.** No Discord rejection is logged after the
+deploy: the only `broadcast_alert: HTTP 400` in the VM logs is from
+2026-07-23. Tonight's rebuilt cards (dry, nothing sent) were already inside
+the limits before fitting (brief 3,804/6,000; EOD 1,448/6,000). So the
+"empty parts" the architect saw are explained by the 1,024 tail-cut, not by
+a proven 400 — if it recurs after tonight, capture a screenshot. PAPER_2L is
+not on either card yet (it lives in `LIVE_TRADE_BOOK.md`); the door now
+protects the cards whenever it is added.
+
+**Audit sweep (`scripts/audit_logs.py`) — RUN on the VM 21:19 IST.** Report
+at `logs/audit_report_15day.md` on the VM (129 KB): CRITICAL 35 · WARNING
+656 · INFO 30. The real content: the 09-07 → 09-11 DH-902 data-plan lapse
+and DNS failures (1,903 / 1,372 / 837 friction lines on 09-07/08/09 —
+already known, memory + Issues 26-28), persistent `live_quote` "no price"
+for PANAMAPET / DABUR / LTF / MOTHERSON (open funded darlings — this is what
+the Unmarked line now names), `fo_bhavcopy_lake` stale every night, 6
+`missed_exit` rows (NOT read in detail — do that next). **The tool
+over-reports:** its auth pattern matches the digits 401/502/503 inside
+prices (`Rs.401.45`, `close 5030.0` flagged CRITICAL as auth failures) and
+every nightly ops_monitor telemetry row is flagged "memory failure" because
+it contains `mem_`. Treat the counts as inflated until those two patterns
+are tightened.
+
+**Also seen, not acted on.** `discord_bot` has been running `b743cd5` since
+09-09 (the brief flags the version split nightly). The 12:06 DB backup fell
+back to `cp` — the VM has no `sqlite3` CLI.
+
+**What the next person should do first.**
+1. Get the architect's ruling on Issue 31's two questions.
+2. Read the 6 `missed_exit` rows in the VM audit report.
+3. Tue 09-22 16:30 brief: confirm the Unmarked line names tickers in the
+   real Discord card.
+
 ## 2026-09-21 (midday) — #102 + #103 merged to main and DEPLOYED to the VM
 
 **What happened.** The architect approved `claude/vigilant-feynman-i2kz45`;

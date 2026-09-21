@@ -1646,3 +1646,42 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   darlings itself — its exit rows are honest (mode rides the entry) and
   narrowing its universe would change exit timing for those names; the
   sweep closes the money gap without touching exit semantics.
+
+## Issue 31 — the 50% options stop (#103) settled four open spreads RETROACTIVELY on its first tracker run, booking −₹31,486.69 with exit dates up to five weeks in the past; neither evening card showed them (found 2026-09-21 evening while fixing card telemetry; NOT fixed — owner decision needed)
+
+- **Verified on the VM (`data/journal.jsonl` + `brain_map.db`, read-only, 2026-09-21 ~21:45 IST):**
+  four EXIT tickets, all `PAPER_10L`, all `FILLED`, issued 13:06:31–13:06:40 IST
+  on 09-21 — the first `plan_tracker` run after the 12:06 deploy of #102/#103:
+
+  | short_id | underlying | structure | resolution | outcome `exit_date` | net P&L | venue slippage |
+  |---|---|---|---|---|---|---|
+  | `f8356c9c` | TCS.NS | iron_condor | stop_loss | **2026-08-17** | −8,180.93 | 180.00 |
+  | `bd73554d` | NIFTY BANK | iron_condor | stop_loss | **2026-09-09** | −10,341.80 | 167.40 |
+  | `efe1681e` | HDFCBANK.NS | bear_put_spread | stop_loss | **2026-09-15** | −5,001.79 | 6.50 |
+  | `54365ef1` | NIFTY MID SELECT | iron_condor | stop_loss | **2026-09-15** | −7,962.17 | 168.00 |
+
+  Account effect matches: realized ₹89,430.22 at 12:06 → ₹57,944 on the 16:30
+  brief; open locks 14 → 10.
+- **Mechanism (read from `src/plan_tracker._resolve_spread`):** the resolver
+  walks EVERY daily bar since the entry date and returns on the first bar
+  where a trigger is true. A rule added today is therefore evaluated against
+  bars from before it existed; each of these four had a historical close at
+  or past half its max loss, so each settled at THAT bar's modeled mark and
+  carries THAT bar's date. Whether any had since recovered was not checked
+  here — unknown.
+- **Why the cards were blind:** `eod_summary.build_eod_card` and
+  `ceo_brief.collect_risk` both define "closed today" as
+  `outcome.exit_date == today`. All four exit dates are in the past, so the
+  15:45 EOD card said `Resolved Today: None` and the 16:30 brief said
+  "Nothing closed today" on a day that booked −₹31.5k. The outcome row has no
+  wall-clock settlement timestamp; the only record of WHEN it settled is the
+  EXIT ticket's `issued_at`.
+- **What worked:** the OMS exit door itself (#103) — four EXIT tickets, venue
+  fills, slippage booked on the outcome. First live observation of it.
+- **Not touched:** the outcomes are in the append-only journal and stay as
+  written (RULE 3). No code change made for this issue.
+- **Open questions for the owner/architect:** (1) is a backdated stop-out the
+  intended reading of #103, or should a newly introduced exit rule only judge
+  bars from its own effective date? (2) should the cards key "closed today"
+  on settlement time rather than `exit_date`? Until (2) is answered, any
+  future backdated resolution is invisible on Discord the same way.

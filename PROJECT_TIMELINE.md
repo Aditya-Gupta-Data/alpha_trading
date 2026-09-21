@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-21 · 2 commits · 2 files touched
+
+- `5782ef4` docs: HANDOVER 09-21 — #102 + #103 merged and deployed to the VM (c3e73cc)
+- `c3e73cc` fix(tests): pin the #103 options stop OFF in the post-expiry backstop test (the crash bars stop the spread out first; the backstop is the point)
+
+
 ### 2026-09-19 · 19 commits · 46 files touched
 
 - `b7dccbd` feat(ops): scripts/audit_logs.py — the 15-day forensic log sweep (API frictions, stale data, memory runs, missed exits → logs/audit_report_15day.md, MANUAL OFFLINE TOOL) + decision #103 docs (MODULES, DECISIONS, HANDOVER)

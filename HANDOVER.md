@@ -42,6 +42,58 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-23 — V1.2 SMART EXITS (decision #104) + READ-ONLY RECON ENGINE (#94 built) — DEPLOYED
+
+**Rulings applied (Issue 31).** The architect vetoed the #103 50% premium
+stop. (1) An options spread now exits only on THESIS INVALIDATION of the
+UNDERLYING — directional: first daily close beyond `entry_spot ∓ 2×ATR(14)`
+(fixed at entry, not a trail); neutral condor/fly: first close beyond a
+short strike. One predicate `plan_tracker.thesis_invalidated`, both EOD
+resolvers + `live_bridge` (advisory 🛑). Bars before
+`THESIS_STOP_EFFECTIVE_DATE = 2026-09-23` are never judged — **a rule can no
+longer settle a trade on a bar from before it existed.** Before deploying,
+the new resolver was dry-run on the VM over the open book: RELIANCE /
+NIFTY 50 / NIFTY FIN SERVICE bear-put spreads all HOLD (stops 1310.4 /
+23660.3 / 25796.2 vs closes 1240.4 / 23329 / 25418); the other four locks are
+today's fresh `pending_approval` entries with no post-entry bar yet. (2)
+Every outcome row now carries a wall-clock `settled_at`; the EOD card and
+the CEO brief count "closed today" by `eod_summary.settled_today` (cash
+settlement date; pre-09-23 rows fall back to `exit_date`) and print
+`🏦 Net Equity = realized equity + unrealized MTM (marked x of y)` under
+the MTM headline.
+
+**Recon engine (`src/execution/recon_engine.py`, MANUAL OFFLINE TOOL, not on
+cron).** GET-only mirror of Dhan `/v2/positions`, `/v2/holdings`,
+`/v2/fundlimit` vs the paper book (active locks on both accounts + open
+FILLED tickets). Broker row the book cannot explain → CRITICAL
+`🔴 RECON MISMATCH` → `logs/recon.jsonl` + the one Discord door. Failed or
+muzzled read → verdict `unknown`, never parity. `tests/test_recon_engine.py`
+fails the build on any write verb / order path / SDK placement method.
+**First live run on the VM 11:43 IST: PARITY — broker 0 positions, 0
+holdings, funds ₹1,411.18; 15 paper-only rows (11 on PAPER_10L incl. 4
+`eqd:` equity locks, 4 on PAPER_2L).** Rule 7 unchanged. Scheduling it is a
+separate decision (#94 said Mac + copied token; today's run was on the VM
+by hand).
+
+**DEPLOYED.** VM at `2360a67` (pulled 11:43 IST, `alpha-trading`
+restarted; today's 09:10 `master_scheduler` still holds the old code in
+memory until 15:30 — its live-bridge advisory would still say `stop_loss`;
+the EOD settlement at 15:35+ runs the new resolver). Suite on the Mac
+**2,314 passed / 1 failed** (the known `test_darling_shadow`), 58 s; 137
+scoped green on the VM venv. `OPTION_STOP_LOSS_FRACTION` no longer exists —
+a `config.json` still carrying `option_stop_loss_fraction` is ignored.
+
+**What the next person should do first.**
+1. 15:45 EOD card: "Settled today" must be None unless something actually
+   settled today; the 💹 field shows the 🏦 Net Equity line.
+2. First `thesis_break` outcome (whenever it comes): the row carries
+   `settled_at` and its `exit_date` is ≥ 2026-09-23 by construction.
+3. Decide whether to schedule the recon engine (15-min market hours per
+   #94) — and where (Mac with copied token, or VM).
+4. Still open from 09-21: the 6 `missed_exit` rows in the audit report;
+   `discord_bot` still on `b743cd5`; equity desk cash showed −₹21,381
+   against a ₹300,000 budget on 09-23 11:32 (budget was 4L on 09-21).
+
 ## 2026-09-21 (night) — Card telemetry fix DEPLOYED; audit sweep run; ⚠️ Issue 31: the new stop settled 4 spreads retroactively (−₹31.5k) and the cards never showed it
 
 **READ FIRST — Issue 31 (open, owner decision).** The first tracker run after

@@ -42,6 +42,25 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-23 (final) — G3 archetype audit (decision #108): the playbook already had all three; regime read now journaled
+
+**Audit before code (RULE 4).** Bull call, bear put, iron condor and iron
+butterfly builders, the 1.5 / 0.35 reward-to-risk floors (#98) and the
+graded regime router (`market_view` → `structure_for_view`) all already
+existed and were tested. Live mix from the VM journal: Aug 9 bear put /
+3 bull call / 8 condor; Sep 16 / 1 / 5 — September's concentration is the
+regime (a downtrend month), not a missing archetype. Nothing was rebuilt.
+Added: `options_proposer.regime_read` on every proposal (grade, SMA %s,
+RSI, flat band, VIX → view/structure) and `tests/test_g3_archetypes.py`
+(6) pinning read → archetype → legs → R:R floor → V1.1 sizing → OMS ticket
+→ no stop (#105) for all three regimes. NOT added on purpose: an ATR-band
+regime input (a live-router change is a Dept 5 decision).
+
+**Housekeeping.** A `gcloud compute ssh` from 19:28 IST (the timed-out
+restart call, task `b9i0brjf4`) sat hung for 2h44m on the Mac; killed at
+22:1x. Its work had already been redone at 20:xx. Nothing on the VM was
+stuck (load 0.06).
+
 ## 2026-09-23 (night, last) — V1.2 EQUITY ATR TRAIL + MACRO EXPIRY GUARD (decision #107); DEPLOYED — the guard's first run found three more dead ids
 
 **Equity desk exits.** A funded darling no longer exits at its static

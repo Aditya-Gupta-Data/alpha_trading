@@ -273,6 +273,30 @@ def market_view(analysis: dict) -> str:
     return "bearish"
 
 
+def regime_read(analysis: dict, vix: float = None) -> dict:
+    """The regime inputs behind `market_view`, on the record (G3 audit,
+    2026-09-23): the graded trend (spot's % distance to the fast/slow SMAs
+    → `classify_trend`), the RSI, whether the flat band pinned it to a
+    range, the VIX, and the view + structure that followed. Rides on every
+    proposal AND every refusal so the archetype mix can be read back from
+    the journal / proposal ledger instead of guessed."""
+    from src.trade_planner import classify_trend
+    from src.strategy_router import structure_for_view
+    fast_pct = analysis.get("sma_fast_distance_pct")
+    slow_pct = analysis.get("sma_slow_distance_pct")
+    view = market_view(analysis)
+    graded = fast_pct is not None and slow_pct is not None
+    flat = bool(graded and abs(float(slow_pct)) < FLAT_BAND_PCT
+                and abs(float(fast_pct)) < FLAT_BAND_PCT)
+    return {"view": view,
+            "structure": structure_for_view(view, vix, BUTTERFLY_MIN_VIX),
+            "grade": classify_trend(fast_pct, slow_pct) if graded else "legacy",
+            "sma_fast_pct": fast_pct, "sma_slow_pct": slow_pct,
+            "flat_band_pct": FLAT_BAND_PCT, "flat": flat,
+            "rsi": analysis.get("rsi"), "fresh_cross": bool(analysis.get("fresh_cross")),
+            "vix": vix}
+
+
 # ============ TIME HORIZONS (2026-08-05) ================================
 #
 # A signal's SHELF LIFE should pick its expiry. An RSI bounce plays out in
@@ -654,6 +678,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         "lots": lots,
         # decision #106: how this ticket was sized, on the record.
         "sizing": dict(sizing, account="PAPER_10L", lots_final=lots),
+        # G3 audit (2026-09-23): the regime inputs that chose this archetype.
+        "regime_read": regime_read(analysis, vix),
     }
     return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
             "horizon": horizon}

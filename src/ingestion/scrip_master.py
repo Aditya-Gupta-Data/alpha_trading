@@ -72,7 +72,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 
 # our SECURITY_ID_MAP segment -> the master's (exchange, segment) pair
-SEGMENTS = {"NSE_EQ": ("NSE", "E"), "IDX_I": ("NSE", "I")}
+# V1.3 (decision #106, 2026-09-23): MCX commodities join the map. In the
+# master an MCX row is exchange "MCX", segment "M"; Dhan's API segment name
+# for it is "MCX_COMM" (the same string `cross_asset` already uses).
+SEGMENTS = {"NSE_EQ": ("NSE", "E"), "IDX_I": ("NSE", "I"),
+            "MCX_COMM": ("MCX", "M")}
+
+# The commodity underlyings the data pipelines follow (read-only capture —
+# NO trading path opens on them; that is a separate numbered decision).
+# Resolved by exact SM_SYMBOL_NAME on MCX FUTCOM rows, front-month contract.
+COMMODITY_SYMBOLS = ("GOLD", "SILVER", "CRUDEOIL")
 
 # the master's own name columns, most specific first
 NAME_COLS = ("SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SM_SYMBOL_NAME")
@@ -181,6 +190,57 @@ def lookup_wanted(symbols: list, master: dict) -> dict:
                                "series": (row.get("SEM_SERIES")
                                           or "").strip()})
     return found
+
+
+def _expiry_iso(row: dict) -> str:
+    return (row.get("SEM_EXPIRY_DATE") or "").strip()[:10]
+
+
+def lookup_commodities(symbols: list, master: dict, today=None) -> dict:
+    """{symbol: {id, seg, inst, expiry, master_symbol, lot_units, next: [...],
+    option_expiries: [...]}} for MCX commodity underlyings (V1.3). The id is
+    the FRONT-MONTH futures contract (`FUTCOM`, earliest expiry on or after
+    today) — that is the instrument Dhan quotes bars and option chains
+    against. `next` carries the following contracts so a roll is a lookup,
+    not a re-derivation (the CA-410 expired-id trap in cross_asset).
+    `option_expiries` lists the OPTFUT expiries the master holds, so the
+    archiver knows there is a chain to ask for. Exact name match on
+    SM_SYMBOL_NAME only — a guessed id silently prices the wrong metal (#78).
+    A symbol with no live contract is absent from the result, never
+    invented."""
+    from datetime import date as _date
+    today = (today or _date.today()).isoformat()
+    want = {_norm(s): s for s in symbols or []}
+    futs, opts = {s: [] for s in want.values()}, {s: set() for s in want.values()}
+    for (exch, seg, sid), row in master.items():
+        if exch != "MCX" or seg != "M":
+            continue
+        hit = want.get(_norm(row.get("SM_SYMBOL_NAME")))
+        if not hit:
+            continue
+        inst = (row.get("SEM_INSTRUMENT_NAME") or "").strip()
+        exp = _expiry_iso(row)
+        if inst == "FUTCOM" and exp >= today:
+            futs[hit].append({"id": sid, "expiry": exp,
+                              "master_symbol": (row.get("SEM_TRADING_SYMBOL") or "").strip(),
+                              "custom_symbol": (row.get("SEM_CUSTOM_SYMBOL") or "").strip(),
+                              "lot_units": (row.get("SEM_LOT_UNITS") or "").strip()})
+        elif inst == "OPTFUT" and exp >= today:
+            opts[hit].add(exp)
+    out = {}
+    for sym, rows in futs.items():
+        if not rows:
+            continue
+        rows.sort(key=lambda r: r["expiry"])
+        front = rows[0]
+        out[sym] = {"id": front["id"], "seg": "MCX_COMM", "inst": "FUTCOM",
+                    "expiry": front["expiry"], "master_symbol": front["master_symbol"],
+                    "custom_symbol": front["custom_symbol"],
+                    "lot_units": front["lot_units"],
+                    "next": [{"id": r["id"], "expiry": r["expiry"],
+                              "master_symbol": r["master_symbol"]} for r in rows[1:3]],
+                    "option_expiries": sorted(opts[sym])[:4]}
+    return out
 
 
 def reconcile(id_map: dict, master: dict, wanted: list = None) -> dict:
@@ -412,7 +472,8 @@ def _tier1_fo_symbols(fo_path=None) -> set:
 
 
 def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
-                      tiers_path=None, journal_path=None) -> dict:
+                      tiers_path=None, journal_path=None,
+                      commodity_symbols=None) -> dict:
     """The VM desk's quote ids (decision #83): darlings are non-F&O names
     outside SECURITY_ID_MAP, so their ids come from Dhan's PUBLIC scrip
     master — exact name match only, EQ series preferred, anything
@@ -434,8 +495,19 @@ def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
                         "series": eq[0]["series"]}
         else:
             unresolved[sym] = f"{len(cands)} candidate(s) in the master"
+    # V1.3: the MCX commodity block rides in the SAME artifact under its own
+    # key — `ids` stays NSE-equity-only, so nothing that quotes a darling by
+    # `ids[sym]` can ever be handed a futures contract by mistake.
+    commodities = lookup_commodities(list(commodity_symbols
+                                          if commodity_symbols is not None
+                                          else COMMODITY_SYMBOLS), master)
+    commodity_unresolved = {s: "no live MCX FUTCOM contract in the master"
+                            for s in (commodity_symbols if commodity_symbols is not None
+                                      else COMMODITY_SYMBOLS) if s not in commodities}
     out = {"built_at": _now_iso(), "count": len(ids),
-           "ids": ids, "unresolved": unresolved}
+           "ids": ids, "unresolved": unresolved,
+           "commodities": commodities,
+           "commodity_unresolved": commodity_unresolved}
     p = Path(out_path) if out_path else DARLING_IDS_PATH
     try:
         p.parent.mkdir(parents=True, exist_ok=True)

@@ -80,31 +80,30 @@ def test_primary_helpers_delegate_to_the_live_functions(conn):
 
 # ------------------------------------------------------------- independent judgement
 
-def test_approved_for_10l_but_refused_for_2l_on_margin_is_logged_per_account(conn):
-    # 10 lots x Rs.20k margin = Rs.2L needed; the 2L pool can afford at most 9
-    # by margin and only 2 by the Rs.10k hard cap on a Rs.5k/lot max loss
+def test_the_2l_account_sizes_on_its_own_equity_and_logs_each_refusal(conn):
+    """Decision #106: 2% of Rs.2L = Rs.4,000 risk capacity, judged on the
+    2L account's OWN equity and cash — never capped by the primary's lots."""
+    # Rs.5k/lot max loss > Rs.4k capacity -> the 1-lot floor, said aloud
     p = _proposal(lots=10)
     assert pm.request_entry(conn, "sp0001", pm.required_margin_for(p))["approved"]
     out = pm.evaluate_shadow_accounts("sp0001", p, conn=conn)
     v = out["PAPER_2L"]
-    assert v["status"] == "approved" and v["lots"] == 2 and v["margin_rs"] == 40000.0
-    # a second, bigger trade: 2L cash is now 1.6L, this one needs 8 lots of 30k
+    assert v["status"] == "approved" and v["lots"] == 1 and v["margin_rs"] == 20000.0
+    # by_risk = 4000 // 1000 = 4, by_margin = 180000 // 30000 = 6 -> 4 lots (primary had 8)
     p2 = _proposal(lots=8, margin=30000.0, max_loss=1000.0)
     p2["short_id"] = "sp0002"
     assert pm.request_entry(conn, "sp0002", pm.required_margin_for(p2))["approved"]   # 10L fine
     out2 = pm.evaluate_shadow_accounts("sp0002", p2, conn=conn)
-    # by_risk = 200000*10%/1000 = 20, by_cap = 10, by_margin = 160000//30000 = 5 -> 5 lots, 150k margin ok
-    assert out2["PAPER_2L"]["status"] == "approved" and out2["PAPER_2L"]["lots"] == 5
-    # third: Rs.10k liquid left — sizing refuses a 25k/lot structure by name
-    # (the same order as strategy.size_lots: cash is checked per lot first)
-    p3 = _proposal(lots=1, margin=25000.0, max_loss=1000.0)
+    assert out2["PAPER_2L"]["status"] == "approved" and out2["PAPER_2L"]["lots"] == 4
+    # Rs.60k liquid left — a Rs.70k/lot structure cannot be margined at all
+    p3 = _proposal(lots=1, margin=70000.0, max_loss=1000.0)
     p3["short_id"] = "sp0003"
     out3 = pm.evaluate_shadow_accounts("sp0003", p3, conn=conn)
     assert out3["PAPER_2L"]["status"] == "rejected"
-    assert "sizing refused: SPAN margin Rs.25,000/lot exceeds liquid cash Rs.10,000" == out3["PAPER_2L"]["reason"]
+    assert "sizing refused: SPAN margin Rs.70,000/lot exceeds liquid cash Rs.60,000" == out3["PAPER_2L"]["reason"]
     # and the gate itself refuses margin the cash cannot cover — in the
     # SHADOW events only, never the primary's account_events
-    v = pm.paper_request_entry(conn, pm.ACCOUNT_PAPER_2L, "sp0004", 10000.01)
+    v = pm.paper_request_entry(conn, pm.ACCOUNT_PAPER_2L, "sp0004", 60000.01)
     assert not v["approved"] and "margin exhaustion" in v["reason"]
     ev = conn.execute("SELECT account_id, event_type, journal_ref FROM paper_account_events "
                       "WHERE event_type IN ('margin_exhaustion', 'sizing_refused') ORDER BY rowid").fetchall()
@@ -114,13 +113,14 @@ def test_approved_for_10l_but_refused_for_2l_on_margin_is_logged_per_account(con
     assert pm.paper_account_summary(conn, pm.ACCOUNT_PAPER_2L)["rejections"] == 2
 
 
-def test_sizing_never_exceeds_the_primary_lots_and_names_each_refusal(conn):
+def test_sizing_is_independent_of_the_primary_and_names_each_refusal(conn):
     s = _spread(lots=1, max_loss=500.0, margin=1000.0)
-    assert pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, s, primary_lots=1)["lots"] == 1
-    assert pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, s, primary_lots=3)["lots"] == 3
+    # 4000 // 500 = 8 lots whatever the primary chose
+    assert pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, s, primary_lots=1)["lots"] == 8
+    assert pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, s, primary_lots=3)["lots"] == 8
     big = _spread(lots=1, max_loss=12000.0, margin=1000.0)
     r = pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, big, primary_lots=1)
-    assert r["lots"] == 0 and "hard per-trade risk cap" in r["reason"]
+    assert r["lots"] == 1 and r["floor_applied"] and "1-lot floor" in r["reason"]
     thin = _spread(lots=1, max_loss=9000.0, margin=250000.0)
     r = pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, thin, primary_lots=1)
     assert r["lots"] == 0 and "exceeds liquid cash" in r["reason"]
@@ -142,8 +142,8 @@ def test_release_entry_settles_the_shadow_with_pnl_scaled_by_lot_ratio(conn, mon
     p = _proposal(lots=4, margin=20000.0, max_loss=2500.0)
     pm.request_entry(conn, "sp0001", pm.required_margin_for(p))
     out = pm.evaluate_shadow_accounts("sp0001", p, conn=conn)
-    assert out["PAPER_2L"]["lots"] == 4                       # cap 10k/2.5k = 4, cash fine
-    # shrink the shadow to 2 lots to prove the ratio (hand-edit the lock, test only)
+    assert out["PAPER_2L"]["lots"] == 1                       # 2% of 2L = 4k // 2.5k = 1 (#106)
+    # set the shadow to 2 lots to prove the ratio (hand-edit the lock, test only)
     conn.execute("UPDATE paper_margin_locks SET lots = 2 WHERE journal_ref = 'sp0001'")
     conn.commit()
     res = pm.release_entry("sp0001", 8000.0, conn=conn)       # primary made Rs.8,000 on 4 lots
@@ -233,13 +233,13 @@ def test_decide_pending_issues_one_ticket_per_accepting_account(monkeypatch):
     assert verdict["status"] == "approved"
     row = written["rows"][0]
     acc = row["accounts"]["PAPER_2L"]
-    assert acc["status"] == "approved" and acc["lots"] == 2          # 10k cap / 5k max loss
+    assert acc["status"] == "approved" and acc["lots"] == 1          # 4k capacity / 5k max loss -> 1-lot floor (#106)
     assert acc["ticket_id"] and acc["venue_status"] == oms.FILLED
-    assert row["execution"]["accounts"]["PAPER_2L"]["lots"] == 2
+    assert row["execution"]["accounts"]["PAPER_2L"]["lots"] == 1
     assert c.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 2
-    assert c.execute("SELECT lots FROM trade_tickets WHERE account_id='PAPER_2L'").fetchone()[0] == 2
+    assert c.execute("SELECT lots FROM trade_tickets WHERE account_id='PAPER_2L'").fetchone()[0] == 1
     assert c.execute("SELECT lots FROM trade_tickets WHERE account_id='PAPER_10L'").fetchone()[0] == 3
-    assert pm.paper_locked_margin(c, pm.ACCOUNT_PAPER_2L) == 40000.0
+    assert pm.paper_locked_margin(c, pm.ACCOUNT_PAPER_2L) == 20000.0     # 1 lot x Rs.20k
     assert c.execute("SELECT COUNT(*) FROM margin_locks WHERE released_at IS NULL").fetchone()[0] == 1
     # the primary ticket alone stamps the journal legs
     assert row["spread"]["ticket_id"] == row["execution"]["ticket_id"]

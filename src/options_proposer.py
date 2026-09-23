@@ -35,7 +35,8 @@ from datetime import date, timedelta
 
 from src import journal
 from src import portfolio as pf
-from src.config import MAX_RISK_PER_TRADE_RS, OPTIONS_RISK_PER_TRADE_PCT
+from src.position_sizing import fractional_lots
+from src.config import ACCOUNT_RISK_PER_TRADE_PCT
 from src.dhan_client import get_expiry_list, get_india_vix, get_option_chain
 from src.strategy import StrategyConstructor, reward_risk_gate
 from src.suggestions import analyze
@@ -423,12 +424,13 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                    vix: float = None, expiry: str = None, chain: dict = None,
                    book: dict = None, prices: dict = None,
                    risk_pct: float = None,
+                   account_equity: float = None,
                    short_strike_otm_pct: float = None,
                    advisory: dict = None, today: date = None,
                    horizon: str = None, macro_score: float = None) -> dict:
     """The full pipeline, every input injectable for offline tests.
 
-    `risk_pct` overrides OPTIONS_RISK_PER_TRADE_PCT (e.g. vol_bridge may
+    `risk_pct` overrides ACCOUNT_RISK_PER_TRADE_PCT (e.g. vol_bridge may
     scale it down 30 % under an Expansion regime).  `short_strike_otm_pct`
     overrides SHORT_STRIKE_OTM_PCT for the iron condor's put short strike
     (vol_bridge widen_wings mode widens it to buffer tail risk).  Both fall
@@ -436,7 +438,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
 
     Returns {"proposal": dict-or-None, "reason": str, "view": str-or-None,
     "vix": float-or-None} — `reason` always explains a None proposal."""
-    _risk_pct = risk_pct if risk_pct is not None else OPTIONS_RISK_PER_TRADE_PCT
+    _risk_pct = risk_pct if risk_pct is not None else ACCOUNT_RISK_PER_TRADE_PCT
     _otm_pct = (short_strike_otm_pct if short_strike_otm_pct is not None
                 else SHORT_STRIKE_OTM_PCT)
     if analysis is None:
@@ -603,7 +605,16 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         book = pf.load()
     if prices is None:
         prices = {}
-    lots = sc.size_lots(spread, book, prices, risk_pct=_risk_pct)
+    # V1.1 (decision #106): fixed-fractional risk on the PRIMARY account's
+    # own equity — one door, `position_sizing.fractional_lots`; the shadow
+    # accounts run the same formula on THEIR equity in
+    # portfolio_manager.evaluate_shadow_accounts. `account_equity` is the
+    # injectable seam; live it is the paper account's equity.
+    equity = account_equity if account_equity is not None else _primary_equity(book, prices)
+    sizing = fractional_lots(equity, spread["max_loss"], _risk_pct,
+                             margin_per_lot=spread["margin"]["total_margin"],
+                             available_cash=book["cash"])
+    lots = sizing["lots"]
     if lots <= 0:
         # `rejected_spread` (2026-08-07) is ADDITIVE OBSERVABILITY: the
         # structure the engine built and then refused. Nothing reads it on
@@ -613,19 +624,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         # is unanswerable.
         return {"proposal": None, "view": view, "vix": vix,
                 "rejected_spread": spread, "expiry": expiry,
-                "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot doesn't fit "
-                           f"the {_risk_pct:g}% options risk "
-                           f"budget (or SPAN margin exceeds cash)")}
-    # Owner hard cap (decision #84): max_loss × lots may never exceed
-    # MAX_RISK_PER_TRADE_RS, whatever the percentage budget allowed.
-    if spread["max_loss"] > 0:
-        lots = min(lots, int(MAX_RISK_PER_TRADE_RS // spread["max_loss"]))
-    if lots <= 0:
-        return {"proposal": None, "view": view, "vix": vix,
-                "rejected_spread": spread, "expiry": expiry,
-                "reason": (f"max loss Rs.{spread['max_loss']:,.0f}/lot exceeds "
-                           f"the Rs.{MAX_RISK_PER_TRADE_RS:,.0f} hard "
-                           f"per-trade risk cap")}
+                "reason": f"sizing refused: {sizing['reason']}"}
     # Adaptive sizing feedback (Directive 2, decision #81): the real
     # resolved record may shrink (floor 1 lot) or veto this archetype.
     # Fails open inside the module; a crashed layer changes nothing.
@@ -653,9 +652,29 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         "view": view,
         "vix": vix,
         "lots": lots,
+        # decision #106: how this ticket was sized, on the record.
+        "sizing": dict(sizing, account="PAPER_10L", lots_final=lots),
     }
     return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
             "horizon": horizon}
+
+
+def _primary_equity(book: dict, prices: dict) -> float:
+    """The primary paper account's total equity for sizing (decision #106).
+    Live: `portfolio_manager` (starting capital + realized P&L). Under
+    pytest, or if the ledger cannot be read, the legacy paper book's
+    total value — a sizing input is never guessed at zero."""
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from src import brain_map, portfolio_manager as pm
+            conn = brain_map.connect()
+            try:
+                return float(pm.equity(conn))
+            finally:
+                conn.close()
+        except Exception:
+            pass
+    return float(pf.total_value(book, prices or {}))
 
 
 def to_journal_entry(proposal: dict, decision: str, why: str) -> dict:

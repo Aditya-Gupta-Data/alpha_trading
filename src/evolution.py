@@ -88,10 +88,10 @@ EVOLVABLE_PARAMETERS = {
         "bounds": (12.0, 24.0), "type": float, "file": "src/strategy.py",
         "doc": "India VIX level above which range-bound structures are blocked",
     },
-    "options_risk_per_trade_pct": {
-        "module": "src.options_proposer", "attr": "OPTIONS_RISK_PER_TRADE_PCT",
-        "bounds": (2.0, 20.0), "type": float, "file": "config.json",
-        "doc": "percent of the book a single spread's max loss may consume",
+    "risk_per_trade_pct": {
+        "module": "src.options_proposer", "attr": "ACCOUNT_RISK_PER_TRADE_PCT",
+        "bounds": (1.0, 5.0), "type": float, "file": "config.json",
+        "doc": "percent of the account's equity one trade's max loss may risk (decision #106)",
     },
     "short_strike_otm_pct": {
         "module": "src.options_proposer", "attr": "SHORT_STRIKE_OTM_PCT",

@@ -47,8 +47,9 @@ Inspect the account from the project folder:
 from datetime import datetime, timedelta, timezone
 
 from src import brain_map
-from src.config import (MAX_RISK_PER_TRADE_RS, OPTIONS_RISK_PER_TRADE_PCT,
+from src.config import (ACCOUNT_RISK_PER_TRADE_PCT,
                         PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_STARTING_CAPITAL_RS)
+from src.position_sizing import fractional_lots
 from src.portfolio import span_stress_factor
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -853,41 +854,22 @@ def paper_daily_breaker_status(conn, account: str, today: str = None) -> dict:
     return check_daily_breaker(paper_equity(conn, account) - pnl_today, pnl_today)
 
 
-def size_for_account(conn, account: str, spread: dict, primary_lots: int,
+def size_for_account(conn, account: str, spread: dict, primary_lots: int = None,
                      risk_pct: float = None) -> dict:
-    """Lots the shadow account would take of THIS structure: the
-    strategy.size_lots formula on the account's own equity and liquid cash,
-    the decision #84 hard rupee cap, then capped at the primary's lots.
-    Returns {lots, by_risk, by_margin, by_cap, reason}; lots 0 = refused."""
-    risk_pct = OPTIONS_RISK_PER_TRADE_PCT if risk_pct is None else float(risk_pct)
+    """Lots THIS account would take of the structure (decision #106):
+    `position_sizing.fractional_lots` on the account's OWN equity and
+    liquid cash — independent of the primary (`primary_lots` is accepted
+    for the old call shape and ignored: a Rs.2L account is not capped by
+    what a Rs.10L account chose, it is sized by what Rs.2L can carry).
+    Returns the fractional_lots dict (+ account); lots 0 = refused."""
+    risk_pct = ACCOUNT_RISK_PER_TRADE_PCT if risk_pct is None else float(risk_pct)
     max_loss = float(spread.get("max_loss") or 0)
     per_lot = float((spread.get("margin") or {}).get("total_margin") or 0)
-    if max_loss <= 0:
-        return {"lots": 0, "by_risk": 0, "by_margin": 0, "by_cap": 0,
-                "reason": "unmeasurable max loss"}
-    eq = paper_equity(conn, account)
-    cash = paper_available_cash(conn, account)
-    by_risk = int((eq * risk_pct / 100) // max_loss)
-    by_margin = int(cash // per_lot) if per_lot > 0 else by_risk
-    by_cap = int(MAX_RISK_PER_TRADE_RS // max_loss)
-    lots = max(0, min(by_risk, by_margin, by_cap, int(primary_lots or 0)))
-    if lots <= 0:
-        if by_cap <= 0:
-            why = (f"max loss Rs.{max_loss:,.0f}/lot exceeds the "
-                   f"Rs.{MAX_RISK_PER_TRADE_RS:,.0f} hard per-trade risk cap")
-        elif by_risk <= 0:
-            why = (f"max loss Rs.{max_loss:,.0f}/lot doesn't fit the {risk_pct:g}% "
-                   f"options risk budget of Rs.{eq * risk_pct / 100:,.0f} on "
-                   f"Rs.{eq:,.0f} equity")
-        elif by_margin <= 0:
-            why = (f"SPAN margin Rs.{per_lot:,.0f}/lot exceeds liquid cash "
-                   f"Rs.{cash:,.0f}")
-        else:
-            why = "primary trade carries zero lots"
-        return {"lots": 0, "by_risk": by_risk, "by_margin": by_margin,
-                "by_cap": by_cap, "reason": why}
-    return {"lots": lots, "by_risk": by_risk, "by_margin": by_margin,
-            "by_cap": by_cap, "reason": "sized"}
+    sized = fractional_lots(paper_equity(conn, account), max_loss, risk_pct,
+                            margin_per_lot=per_lot if per_lot > 0 else None,
+                            available_cash=paper_available_cash(conn, account))
+    sized["account"] = account
+    return sized
 
 
 def paper_request_entry(conn, account: str, journal_ref: str, required_margin: float,

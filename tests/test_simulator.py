@@ -45,14 +45,7 @@ from src import simulator as sim
 # these tests exercise is the REPLAY PIPELINE, not the cap (whose own
 # binding behaviour is tested where it lives).
 
-@pytest.fixture(autouse=True)
-def _wide_risk_cap():
-    original = op.MAX_RISK_PER_TRADE_RS
-    op.MAX_RISK_PER_TRADE_RS = 1_000_000.0
-    try:
-        yield
-    finally:
-        op.MAX_RISK_PER_TRADE_RS = original
+# (decision #106: the Rs.10k cap is gone — no cap-widening fixture is needed)
 
 
 # decision #98 (2026-09-16): the live reward-to-risk floor (0.35 for a

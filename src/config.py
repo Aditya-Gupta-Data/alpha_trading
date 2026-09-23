@@ -171,11 +171,19 @@ def gcloud_env(env=None, executable=None) -> dict:
 # copy must never start resizing trades on its own.
 ADAPTIVE_SIZING_ENABLED = bool(_CONFIG.get("adaptive_sizing_enabled", False))
 
-# Autonomous-run constraints (owner final override 2026-07-21, decision
-# #84): a HARD rupee ceiling on the risk any single trade may carry —
-# equity: the entry-to-stop risk budget; options: max_loss × lots.
-# Applied AFTER percentage sizing, regardless of stop distance.
-MAX_RISK_PER_TRADE_RS = float(_CONFIG.get("max_risk_per_trade_rs", 10000.0))
+# V1.1 DYNAMIC POSITION SIZING (decision #106, 2026-09-23, architect
+# directive). The static Rs.10,000 per-trade cap of decision #84
+# (`max_risk_per_trade_rs`) is GONE — a stale config.json still carrying
+# that key is ignored. The risk one trade may carry is a FRACTION of the
+# specific account's total equity, evaluated per account
+# (`position_sizing.fractional_lots`): PAPER_10L and PAPER_2L size the same
+# structure on their own equity and come out with different lot counts.
+# Config `risk_per_trade_pct`; code default 2.0 (architect's 2–5% band, the
+# conservative end). Options: lots = max(1, floor(equity×pct/100 ÷
+# max_loss_per_lot)), then the account's own margin wall. The equity desk
+# keeps its own `equity_desk_risk_per_trade_pct` of DESK capital (no rupee
+# cap any more either).
+ACCOUNT_RISK_PER_TRADE_PCT = float(_CONFIG.get("risk_per_trade_pct", 2.0))
 # Treasury rupee-granularity (pool-scale aware since the 2L clean sheet).
 TREASURY_ROUND_RS = float(_CONFIG.get("treasury_round_rs", 5000.0))
 # Directive 4 (#84): the daily Discord message budget. Code default OFF

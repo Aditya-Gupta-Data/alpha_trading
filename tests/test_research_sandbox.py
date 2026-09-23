@@ -456,8 +456,8 @@ def test_the_metals_ids_are_verified_and_steel_is_absent_on_purpose():
     assert "STEEL" not in raw
     assert "STEELREBAR" in raw["_verified_metals"]
     from src.ingestion.cross_asset import COMMODITY_KEYS
-    assert set(COMMODITY_KEYS) == {"CRUDE", "GOLD_INDIA", "COPPER",
-                                   "ALUMINIUM", "ZINC"}
+    assert set(COMMODITY_KEYS) == {"CRUDE", "GOLD_INDIA", "SILVER", "COPPER",
+                                   "ALUMINIUM", "ZINC"}          # SILVER: V1.3 (#106)
 
 
 # ------------------------- deep history / steel proxy / elections (08-16)

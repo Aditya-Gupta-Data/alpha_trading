@@ -33,14 +33,7 @@ import src.plan_tracker as plan_tracker
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _wide_risk_cap():
-    original = op.MAX_RISK_PER_TRADE_RS
-    op.MAX_RISK_PER_TRADE_RS = 1_000_000.0
-    try:
-        yield
-    finally:
-        op.MAX_RISK_PER_TRADE_RS = original
+# (decision #106: the Rs.10k cap is gone — no cap-widening fixture is needed)
 
 
 def make_analysis(uptrend=True, fresh_cross=False, rsi=50.0, price=25000.0):
@@ -231,13 +224,18 @@ def test_sizing_uses_options_risk_budget():
     p = r["proposal"]
     assert p is not None
     assert p["lots"] == 1 and p["spread"]["lots"] == 1
-    assert p["spread"]["max_loss"] <= 100_000 * op.OPTIONS_RISK_PER_TRADE_PCT / 100
+    # decision #106: 2% of a Rs.1L book = Rs.2,000 capacity; one lot of this
+    # condor risks more, so the 1-lot floor applied — and the row SAYS so.
+    assert p["sizing"]["risk_pct"] == op.ACCOUNT_RISK_PER_TRADE_PCT
+    assert p["sizing"]["equity"] == 100_000.0 and p["sizing"]["account"] == "PAPER_10L"
+    assert p["sizing"]["floor_applied"] is (p["spread"]["max_loss"] > 100_000 * op.ACCOUNT_RISK_PER_TRADE_PCT / 100)
 
 
 def test_unaffordable_spread_returns_reason_not_crash():
     tiny_book = {"cash": 5_000.0, "holdings": {}}
     r = build(make_analysis(uptrend=True, rsi=55), vix=13.0, book=tiny_book)
-    assert r["proposal"] is None and "risk budget" in r["reason"]
+    assert r["proposal"] is None and r["reason"].startswith("sizing refused")
+    assert "exceeds liquid cash" in r["reason"]
 
 
 # ----------------------------------------------------- journal contract

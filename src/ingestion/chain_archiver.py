@@ -176,6 +176,42 @@ def tier1_extension(fo_path=None, ids_path=None) -> dict:
     return {"names": out, "skipped": skipped}
 
 
+# COMMODITY EXTENSION (V1.3, decision #106, 2026-09-23). MCX GOLD / SILVER /
+# CRUDEOIL option chains, addressed by the front-month futures id the scrip
+# master resolved into `darling_ids.json["commodities"]` (never hand-typed).
+# Read-only capture so the Proving Court can start accumulating a real MCX
+# surface; NO proposer, tracker or venue path touches a commodity. Slugs are
+# `mcx_<symbol>` so the lake keeps commodities apart from NSE names. Segment
+# "MCX_COMM" goes straight to the by-id expiry/chain calls; if Dhan declines
+# the segment the name lands in `empty` BY NAME — never a synthetic chain.
+COMMODITY_MAX_EXPIRIES = 2
+
+
+def commodity_extension(ids_path=None) -> dict:
+    """{display: {"slug", "security_id", "segment", "symbol", "expiry"}} plus
+    a "skipped" list. Pure file read; missing block = empty, named."""
+    try:
+        data = json.loads(Path(ids_path or IDS_PATH).read_text()) or {}
+    except (OSError, ValueError) as e:
+        return {"names": {}, "skipped": [("*", f"darling_ids unavailable: {type(e).__name__}")]}
+    block = data.get("commodities") or {}
+    out, skipped = {}, []
+    if not block:
+        skipped.append(("*", "no commodities block in darling_ids (rebuild on the Mac)"))
+    for sym, meta in sorted(block.items()):
+        sid = (meta or {}).get("id")
+        if not sid:
+            skipped.append((sym, "no_scrip_master_id")); continue
+        if (meta or {}).get("seg") not in (None, "MCX_COMM"):
+            skipped.append((sym, f"unexpected segment {meta.get('seg')}")); continue
+        out[f"{sym} (MCX)"] = {"slug": f"mcx_{extension_slug(sym)}", "security_id": str(sid),
+                               "segment": "MCX_COMM", "symbol": str(sym).upper(),
+                               "expiry": (meta or {}).get("expiry")}
+    for sym, why in (data.get("commodity_unresolved") or {}).items():
+        skipped.append((sym, why))
+    return {"names": out, "skipped": skipped}
+
+
 def _is_weekday(day: date) -> bool:
     return day.weekday() < 5
 
@@ -331,6 +367,40 @@ def run(today: date = None, lake_root=None, force: bool = False,
                   f"{', '.join(summary['extension']['empty'])})")
     elif ext["skipped"]:
         print(f"(chain archiver: tier-1 extension skipped — {ext['skipped'][0][1]})")
+
+    # ---- commodity extension (V1.3, decision #106): MCX by front-month id
+    com = commodity_extension(ext_seams.get("ids_path"))
+    summary["commodities"] = {"captured": {}, "empty": [], "skipped": com["skipped"]}
+    if com["names"]:
+        from src import dhan_client as _dc
+        by_id_expiry = ext_seams.get("expiry_by_id_fn") or _dc.get_expiry_list_by_id
+        by_id_chain = ext_seams.get("chain_by_id_fn") or _dc.get_option_chain_by_id
+        by_id_spot = ext_seams.get("spot_by_id_fn") or _dc.get_live_price_by_id
+        vix_fn = fetchers.get("vix_fn")
+        for name, meta in com["names"].items():
+            sleep_fn(UNDERLYING_PAUSE_SECONDS)
+            sid, seg = meta["security_id"], meta["segment"]
+            rows = capture_underlying(
+                name, meta["slug"], today,
+                expiry_fn=lambda _u, _sid=sid, _seg=seg: by_id_expiry(_sid, _seg),
+                chain_fn=lambda _u, e, _sid=sid, _seg=seg: by_id_chain(_sid, e, _seg),
+                spot_fn=lambda _u, _sid=sid, _seg=seg: by_id_spot(_sid, _seg),
+                vix_fn=vix_fn, sleep_fn=sleep_fn,
+                max_expiries=COMMODITY_MAX_EXPIRIES)
+            path = lake.write_partition(f"chains/{meta['slug']}", today.isoformat(),
+                                        rows, root=lake_root) if rows else None
+            if rows and path:
+                summary["commodities"]["captured"][name] = len(rows)
+            else:
+                summary["commodities"]["captured"][name] = 0
+                summary["commodities"]["empty"].append(name)
+        print(f"(chain archiver: MCX commodities — "
+              f"{sum(1 for v in summary['commodities']['captured'].values() if v)}/"
+              f"{len(com['names'])} captured"
+              + (f", empty: {', '.join(summary['commodities']['empty'])}"
+                 if summary["commodities"]["empty"] else "") + ")")
+    elif com["skipped"]:
+        print(f"(chain archiver: MCX commodities skipped — {com['skipped'][0][1]})")
 
     if summary["empty"]:
         summary["skipped"] = (

@@ -97,7 +97,7 @@ DEFAULT_LOOKBACK_DAYS = 7      # short: this runs daily and is idempotent
 # a construction-rebar contract that does not track the flat/HRC steel driving
 # TATASTEEL or JSWSTEEL input costs. A wrong proxy is worse than an absent one
 # (#78 — a guessed id silently prices the wrong instrument).
-COMMODITY_KEYS = ("CRUDE", "GOLD_INDIA", "COPPER", "ALUMINIUM", "ZINC")
+COMMODITY_KEYS = ("CRUDE", "GOLD_INDIA", "SILVER", "COPPER", "ALUMINIUM", "ZINC")
 
 
 def _load_json(path, default=None):

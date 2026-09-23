@@ -205,10 +205,10 @@ def compute_regime_overrides(
     """
     if base_risk_pct is None:
         try:
-            from src.config import OPTIONS_RISK_PER_TRADE_PCT
-            base_risk_pct = OPTIONS_RISK_PER_TRADE_PCT
+            from src.config import ACCOUNT_RISK_PER_TRADE_PCT
+            base_risk_pct = ACCOUNT_RISK_PER_TRADE_PCT
         except Exception:
-            base_risk_pct = 10.0
+            base_risk_pct = 2.0
 
     owns_conn = conn is None
     if owns_conn:

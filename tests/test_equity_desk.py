@@ -31,7 +31,6 @@ IST = timezone(timedelta(hours=5, minutes=30))
 desk.EQUITY_DESK_ENABLED = True
 desk.EQUITY_DESK_RISK_PER_TRADE_PCT = 1.0
 desk.EQUITY_DESK_MAX_NOTIONAL_PCT = 15.0
-desk.MAX_RISK_PER_TRADE_RS = 10000.0
 ft.EQUITY_DESK_CAPITAL_RS = 300000.0
 
 
@@ -103,18 +102,17 @@ def test_sizing_risk_budget_notional_cap_and_refusals():
     assert desk.size_entry(500000.0, 499000.0, 300000.0)["qty"] == 0
 
 
-def test_hard_rupee_risk_cap_binds_above_percentage_sizing():
-    """Decision #84: whatever the % sizing allows, no single trade may
-    risk more than MAX_RISK_PER_TRADE_RS rupees entry-to-stop."""
-    # 50% risk_pct of 3L = 1.5L budget — the Rs.10k cap must bind: risk
-    # per share 100 -> 100 shares, never 1500.
-    s = desk.size_entry(1000.0, 900.0, 300000.0, risk_pct=50.0)
-    assert s["qty"] * 100.0 <= 10000.0 + 1e-9
-    assert s["qty"] == 100 or s["notional"] <= 45000.0   # notional cap may
-    # bind first (15% of 3L = 45k -> 45 shares); either way risk <= 10k.
-    risk = s["qty"] * 100.0
-    assert risk <= 10000.0
-
+def test_no_rupee_cap_only_fractional_risk_and_the_notional_ceiling_bind():
+    """Decision #106: the #84 Rs.10k rupee cap is gone. Risk is a fraction
+    of desk capital; the notional ceiling is the only other wall."""
+    # 5% of 3L = Rs.15,000 budget, risk/share 100 -> 150 shares by risk;
+    # the notional ceiling (15% of 3L = 45k -> 45 shares at Rs.1000) binds.
+    s = desk.size_entry(1000.0, 900.0, 300000.0, risk_pct=5.0)
+    assert s["qty"] == 45 and s["notional"] == 45000.0
+    # a wide stop: 15,000/300 = 50 shares by risk, 45 by notional -> 45
+    # shares risking Rs.13,500 — above the old Rs.10k cap, no cap any more
+    s = desk.size_entry(1000.0, 700.0, 300000.0, risk_pct=5.0)
+    assert s["qty"] == 45 and s["qty"] * 300.0 == 13500.0 > 10000.0
 
 def test_fund_entry_locks_firm_cash_and_respects_kill_switch():
     conn = _firm_conn()

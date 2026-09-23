@@ -58,8 +58,7 @@ from pathlib import Path
 
 from src import portfolio_manager as pm
 from src.config import (EQUITY_DESK_ENABLED, EQUITY_DESK_MAX_NOTIONAL_PCT,
-                        EQUITY_DESK_RISK_PER_TRADE_PCT,
-                        MAX_RISK_PER_TRADE_RS)
+                        EQUITY_DESK_RISK_PER_TRADE_PCT)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 ROOT = Path(__file__).resolve().parent.parent
@@ -145,9 +144,9 @@ def size_entry(entry_price: float, stop: float, desk_capital: float,
         return {"qty": 0, "notional": 0.0, "reason": "non-positive risk"}
     if risk_pct is None:
         risk_pct = EQUITY_DESK_RISK_PER_TRADE_PCT
-    # Owner hard cap (decision #84): no single trade may risk more than
-    # MAX_RISK_PER_TRADE_RS, whatever the percentage sizing says.
-    risk_budget = min(desk_capital * risk_pct / 100.0, MAX_RISK_PER_TRADE_RS)
+    # decision #106: fractional risk of DESK capital, no rupee cap (the
+    # #84 Rs.10k ceiling is gone); the notional ceiling below still binds.
+    risk_budget = desk_capital * risk_pct / 100.0
     qty = int(risk_budget // risk_per_share)
     cap = desk_capital * EQUITY_DESK_MAX_NOTIONAL_PCT / 100.0
     qty = min(qty, int(cap // float(entry_price)))

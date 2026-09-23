@@ -228,8 +228,7 @@ def test_pre_expiry_exit_fires_two_days_before_expiry():
 
 
 def test_loss_is_clamped_to_defined_risk_max():
-    # No premium stop exists (#103 vetoed by #104); this July fixture also
-    # predates the thesis stop's effective date, so the crash rides to the
+    # No mid-trade stop exists (decision #105): the crash rides to the
     # pre-expiry exit and the CLAMP is what this test is about.
     with tempfile.TemporaryDirectory() as tmp:
         resolved, fj, settled, _ = run_spread_tracker(

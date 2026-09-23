@@ -197,20 +197,10 @@ PAPER_VENUE_ENABLED = bool(_CONFIG.get("paper_venue_enabled", False))
 # in config.json switches it off; the starting pool is a config value so
 # the proof can be re-run at another scale by a numbered decision.
 PAPER_2L_ACCOUNT_ENABLED = bool(_CONFIG.get("paper_2l_account_enabled", True))
-# V1.2 SMART EXITS — THESIS INVALIDATION (decision #104, 2026-09-23). The
-# architect VETOED the #103 premium-drawdown stop (a 50% P&L stop on a
-# defined-risk spread is a whipsaw machine, and its first run settled four
-# trades retroactively — ledger Issue 31). An options spread now leaves
-# only when the UNDERLYING breaks the structure the trade was built on:
-#   directional (bull/bear)  close beyond entry_spot -/+ ATR_MULT x ATR(N)
-#   neutral (condor/fly)     close beyond a SHORT strike (the range broke)
-# ONE predicate, `plan_tracker.thesis_invalidated`, used by both EOD
-# resolvers and the live bridge. STRICTLY FORWARD-LOOKING: only bars on or
-# after THESIS_STOP_EFFECTIVE_DATE are judged, so a rule that did not exist
-# on a bar can never settle a trade on that bar (Issue 31 ruling 1).
-# ATR_MULT 0 disables the directional leg; the short-strike leg has no knob.
-THESIS_STOP_ATR_MULT = float(_CONFIG.get("thesis_stop_atr_mult", 2.0))
-THESIS_STOP_ATR_N = int(_CONFIG.get("thesis_stop_atr_n", 14))
-THESIS_STOP_EFFECTIVE_DATE = str(_CONFIG.get("thesis_stop_effective_date",
-                                             "2026-09-23"))
+# NO MID-TRADE STOP ON A DEFINED-RISK SPREAD (decision #105, 2026-09-23,
+# architect mandate; #103 reversed "like it was never introduced", the #104
+# thesis stop withdrawn the same day). The structure IS the stop: max loss is
+# capped by construction and the Rs.10k per-trade cap bounds it further. A
+# spread is held to the 65% profit take or the pre-expiry exit. There is no
+# premium-drawdown knob and no underlying-break knob; do not add one here.
 PAPER_2L_STARTING_CAPITAL_RS = float(_CONFIG.get("paper_2l_starting_capital_rs", 200000.0))

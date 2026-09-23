@@ -247,15 +247,18 @@ def _open_spreads(entries=None) -> list:
             if e.get("decision") == "approved" and pt._spread_trackable(e)]
 
 
-def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
+def evaluate_position(entry: dict, spot: float, today: date = None,
+                      atr: float = None) -> dict:
     """One open spread against one live spot: the tracker's exact exit
     arithmetic (modeled mark, no-arbitrage clamp, 65% profit take,
     pre-expiry rule) evaluated NOW instead of at the daily close.
 
     Returns {"short_id", "ticker", "strategy", "signal", "live_pnl_rs",
     "capture_pct", "days_left"} where signal is "profit_take" /
-    "stop_loss" (#103) / "pre_expiry_exit" / "hold". Purely advisory —
-    nothing is mutated."""
+    "thesis_break" (#104) / "pre_expiry_exit" / "hold". Purely advisory —
+    nothing is mutated. `atr` (the underlying's ATR) arms the directional
+    thesis stop; without it only a neutral structure's short-strike breach
+    can signal — a guess never signals."""
     spread = entry["spread"]
     today = today or date.today()
     expiry = date.fromisoformat(spread["expiry"])
@@ -279,10 +282,11 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
     if (max_profit_ps > 0
             and profit_ps >= pt.OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
         signal = "profit_take"
-    elif pt.spread_stop_hit(profit_ps, max_loss_ps):
-        # Decision #103: the SAME predicate the EOD resolver uses. Advisory
+    elif pt.thesis_invalidated(spread, float(spot), atr,
+                               day=today.isoformat()):
+        # Decision #104: the SAME predicate the EOD resolver uses. Advisory
         # here (a 🛑 card); the settlement is the tracker's, at the close.
-        signal = "stop_loss"
+        signal = "thesis_break"
     elif days_left <= pt._forced_exit_days(entry.get("ticker")):
         # Stock options leave before expiry WEEK (physical settlement);
         # index options keep the 2-day rule. Same one predicate as the
@@ -460,7 +464,7 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                     f"{sig['capture_pct']:.0f}%).")
             continue
         if notify_fn:
-            emoji = {"profit_take": "🎯", "stop_loss": "🛑"}.get(sig["signal"], "⏳")
+            emoji = {"profit_take": "🎯", "thesis_break": "🛑"}.get(sig["signal"], "⏳")
             fallback = ""
             if squared is not None:
                 fallback = (f" (intraday fill declined: "

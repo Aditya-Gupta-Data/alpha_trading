@@ -565,7 +565,7 @@ def collect_risk(journal_path=None) -> dict:
 
         todays_exits = [
             e for e in entries
-            if (e.get("outcome") or {}).get("exit_date") == today
+            if eod_summary.settled_today(e, today)   # cash-flow date (Issue 31)
             and e.get("decision") == "approved"
         ]
         open_spreads = eod_summary._open_approved_spreads(entries)
@@ -732,10 +732,10 @@ def _risk_field(risk: dict) -> dict:
     total_open = risk["open_spreads"] + risk["open_equities"]
 
     if risk["resolved"]:
-        booked = (f"Booked today: **Rs.{sign}{pnl:,.0f}** from "
-                  f"{risk['resolved']} position(s) that closed.")
+        booked = (f"Settled today: **Rs.{sign}{pnl:,.0f}** from "
+                  f"{risk['resolved']} position(s) whose cash settled today.")
     else:
-        booked = ("Nothing closed today, so there is no profit or loss to "
+        booked = ("Nothing settled today, so there is no profit or loss to "
                   "book yet.")
     value = (f"{booked}\n"
              f"Still open: **{total_open}** position(s) "

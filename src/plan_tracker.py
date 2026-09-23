@@ -40,7 +40,7 @@ is never scanned (the trade happened near that day's close; its intraday low
 usually predates the entry).
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from src import analyst
 from src import brain_map
@@ -126,16 +126,73 @@ OPTION_PROFIT_TAKE_FRACTION = 0.65
 PRE_EXPIRY_EXIT_DAYS = 2
 
 
-def spread_stop_hit(profit_ps: float, max_loss_ps: float, fraction: float = None) -> bool:
-    """THE ONE STOP PREDICATE (decision #103): True when the modeled loss per
-    share has reached `fraction` of the structure's defined max loss. Used
-    by both EOD resolvers and the live bridge so the daily settlement and
-    the intraday signal can never disagree. fraction <= 0 = no stop."""
-    if fraction is None:
-        from src.config import OPTION_STOP_LOSS_FRACTION as fraction
-    if not fraction or fraction <= 0 or max_loss_ps <= 0:
+def _spread_direction(spread: dict) -> str:
+    """'bullish' / 'bearish' / 'neutral' — from the proposer's own tag,
+    else from the structure's name; a neutral name wins over a stale tag."""
+    name = str(spread.get("strategy") or "").lower()
+    if any(k in name for k in ("condor", "strangle", "straddle", "butterfly", "fly")):
+        return "neutral"
+    d = str(spread.get("direction") or "").lower()
+    if d in ("bullish", "bearish", "neutral"):
+        return d
+    if "bear" in name or "put_spread" in name and "bull" not in name:
+        return "bearish"
+    return "bullish"
+
+
+def structural_stop(spread: dict, atr: float | None,
+                    atr_mult: float = None) -> dict | None:
+    """The level(s) whose breach means the trade's THESIS is gone (decision
+    #104). Directional: entry_spot -/+ mult x ATR of the underlying, ONE
+    fixed level anchored at entry (a ratchet would cut winners — the
+    2026-08-05 anti-drift lock stands). Neutral: the SHORT strikes — a
+    condor's thesis is "the range holds", and it is falsified the day the
+    underlying closes outside it. None = unmeasurable (no ATR yet, no
+    entry spot, no short strikes): the trade HOLDS; a guess never exits."""
+    if atr_mult is None:
+        from src.config import THESIS_STOP_ATR_MULT as atr_mult
+    direction = _spread_direction(spread)
+    if direction == "neutral":
+        shorts = [float(l["strike"]) for l in spread.get("legs") or []
+                  if str(l.get("side") or "").upper() == "SELL" and l.get("strike") is not None]
+        if not shorts:
+            return None
+        return {"kind": "short_strikes", "lower": min(shorts), "upper": max(shorts)}
+    if not atr_mult or atr_mult <= 0 or atr is None or atr <= 0:
+        return None
+    spot = spread.get("entry_spot")
+    if spot is None:
+        return None
+    level = (float(spot) - atr_mult * atr if direction == "bullish"
+             else float(spot) + atr_mult * atr)
+    return {"kind": "atr_from_entry", "level": round(level, 2),
+            "direction": direction, "atr": round(float(atr), 4)}
+
+
+def thesis_invalidated(spread: dict, close: float, atr: float | None,
+                       day: str = None, atr_mult: float = None) -> bool:
+    """THE ONE EXIT PREDICATE (decision #104): True when `close` of the
+    UNDERLYING sits beyond `structural_stop`. Both EOD resolvers and the
+    live bridge call this, so the settlement and the intraday advisory can
+    never disagree. FORWARD-LOOKING GUARD: with `day` given, a bar before
+    THESIS_STOP_EFFECTIVE_DATE is never judged (Issue 31 ruling 1)."""
+    if day is not None:
+        from src.config import THESIS_STOP_EFFECTIVE_DATE
+        if day < THESIS_STOP_EFFECTIVE_DATE:
+            return False
+    stop = structural_stop(spread, atr, atr_mult)
+    if stop is None:
         return False
-    return profit_ps <= -float(fraction) * float(max_loss_ps)
+    c = float(close)
+    if stop["kind"] == "short_strikes":
+        return c < stop["lower"] or c > stop["upper"]
+    return c < stop["level"] if stop["direction"] == "bullish" else c > stop["level"]
+
+
+# The bar window the sweep fetches BEFORE the entry date so ATR(N) is
+# measurable from the first post-entry bar. Every resolver skips bars on or
+# before the entry day, so the extra history changes no other trigger.
+THESIS_ATR_LOOKBACK_DAYS = 45
 
 
 def _forced_exit_days(underlying: str) -> int:
@@ -200,12 +257,12 @@ def _resolve_spread(entry: dict, bars: list):
     once an exit trigger fires, else None while the spread is live.
     Triggers, checked on each daily close after the entry day:
       profit_take       modeled profit >= 65% of the structure's max profit
-      stop_loss         modeled loss >= OPTION_STOP_LOSS_FRACTION of max loss
-                        (decision #103; 0 = off, the pre-#103 resolver)
+      thesis_break      the UNDERLYING closed beyond the structural stop
+                        (decision #104; forward-looking from the effective
+                        date; replaces the vetoed #103 premium stop)
       pre_expiry_exit   PRE_EXPIRY_EXIT_DAYS or fewer days to expiry
-    Defined-risk structures never NEED a stop — max loss is capped by
-    construction and realized, at worst, at the pre-expiry exit — the stop
-    is the architect's choice to cut a loser before it rides to the cap."""
+    Defined-risk structures never NEED a P&L stop — max loss is capped by
+    construction — so the only loss exit is the thesis itself failing."""
     spread = entry["spread"]
     expiry = date.fromisoformat(spread["expiry"])
     entry_day = date.fromisoformat(entry["date"])
@@ -214,8 +271,9 @@ def _resolve_spread(entry: dict, bars: list):
     lot = int(spread["lot_size"])
     max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
     max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+    from src.config import THESIS_STOP_ATR_N
 
-    for day, _low, _high, close in bars:
+    for idx, (day, _low, _high, close) in enumerate(bars):
         if day <= entry["date"]:
             continue  # same convention as equity: never scan the entry day
         d = date.fromisoformat(day)
@@ -229,8 +287,9 @@ def _resolve_spread(entry: dict, bars: list):
         m_now = m_entry + profit_ps
         if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
             return "profit_take", m_now, frac_left, day
-        if spread_stop_hit(profit_ps, max_loss_ps):
-            return "stop_loss", m_now, frac_left, day
+        if thesis_invalidated(spread, close, atr_from_bars(bars[:idx + 1], THESIS_STOP_ATR_N),
+                              day=day):
+            return "thesis_break", m_now, frac_left, day
         # PHYSICAL SETTLEMENT (2026-08-05): a STOCK option leaves before
         # expiry WEEK, not two days out. An ITM short leg held to expiry
         # is a delivery obligation on the full notional — not the spread's
@@ -284,8 +343,8 @@ def _resolve_spread_trailed(entry: dict, bars: list):
             return "trail_hit", m_now, frac_left, day
         if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
             return "profit_take", m_now, frac_left, day
-        if spread_stop_hit(profit_ps, max_loss_ps):
-            return "stop_loss", m_now, frac_left, day
+        if thesis_invalidated(spread, c, atr_from_bars(seen, trail["atr_n"]), day=day):
+            return "thesis_break", m_now, frac_left, day
         if (expiry - date.fromisoformat(day)).days <= _forced_exit_days(entry.get("ticker")):
             return "pre_expiry_exit", m_now, frac_left, day
         extreme = c if extreme is None else (max(extreme, c) if bullish
@@ -433,7 +492,7 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict,
 
 # ------------------------------------------------- the OMS exit (decision #103)
 #
-# An exit the tracker decided (profit_take / stop_loss / pre_expiry_exit /
+# An exit the tracker decided (profit_take / thesis_break / pre_expiry_exit /
 # trail_hit, or the intraday square-off) becomes an EXIT Order Ticket —
 # every leg flipped, worked as one atomic basket — that the PAPER venue
 # fills at the leg's exit limit worsened by tier slippage. The venue's
@@ -665,11 +724,12 @@ def _spread_verdict(entry: dict, resolution: str, pnl_net: float, capture_pct: f
         return (f"{'WIN' if pnl_net > 0 else 'LOSS' if pnl_net < 0 else 'flat'} — "
                 f"ATR trail on the underlying ratcheted us out at "
                 f"{capture_pct:.0f}% of max profit")
-    if resolution == "stop_loss":
-        from src.config import OPTION_STOP_LOSS_FRACTION as _f
-        return (f"LOSS — stop hit at {_f * 100:.0f}% of the defined max loss "
-                f"(decision #103), net Rs.{pnl_net:+,.2f}" if approved else
-                f"GOOD SKIP — it would have hit the {_f * 100:.0f}% stop")
+    if resolution == "thesis_break":
+        tag = "WIN" if pnl_net > 0 else "LOSS" if pnl_net < 0 else "flat"
+        return (f"{tag} — THESIS BROKEN: the underlying closed through the "
+                f"structural stop (decision #104), net Rs.{pnl_net:+,.2f}"
+                if approved else
+                "GOOD SKIP — the underlying broke the structure it was built on")
     if pnl_net > 0:
         return ("WIN — closed ahead at the pre-expiry exit" if approved
                 else "MISSED GAIN — it closed ahead without you")
@@ -1181,6 +1241,7 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
 
         entry["outcome"] = {
             "checked": date.today().isoformat(),
+            "settled_at": datetime.now().isoformat(timespec="seconds"),  # wall clock (Issue 31)
             "resolution": resolution,
             "price": exit_price,
             "exit_date": exit_day,
@@ -1257,7 +1318,12 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         # A dead feed must not kill the sweep: the expiry backstop below is
         # exactly for the days the feed is dead (Issues 26/28).
         try:
-            bars = _daily_bars(entry["ticker"], entry["date"])
+            # #104: bars start THESIS_ATR_LOOKBACK_DAYS before entry so the
+            # ATR is measurable on the first post-entry bar; every resolver
+            # skips bars on/before the entry day.
+            since = (date.fromisoformat(entry["date"])
+                     - timedelta(days=THESIS_ATR_LOOKBACK_DAYS)).isoformat()
+            bars = _daily_bars(entry["ticker"], since)
         except Exception as e:
             print(f"Plan tracker: price feed error for {entry['ticker']} spread ({e}).")
             bars = []
@@ -1329,6 +1395,7 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
 
         entry["outcome"] = {
             "checked": date.today().isoformat(),
+            "settled_at": datetime.now().isoformat(timespec="seconds"),  # wall clock (Issue 31)
             "resolution": resolution,
             "price": round(m_exit, 2),          # basket mark per share at exit
             "exit_date": exit_day,

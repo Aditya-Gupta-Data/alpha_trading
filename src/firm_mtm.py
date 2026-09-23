@@ -161,6 +161,22 @@ def compute(conn=None, entries=None, marks=None, ledger_path=None,
 MAX_UNMARKED_NAMES = 15
 
 
+def render_net_equity_line(m: dict = None, **kwargs) -> str:
+    """Net Equity = realized account equity + unrealized MTM, both parts
+    shown (architect directive 2026-09-23, Issue 31 ruling 2)."""
+    try:
+        if m is None:
+            m = compute(**kwargs)
+        unreal = (m["options_unrealized"] or 0.0) + (m["equity_unrealized"] or 0.0)
+        cover = (f"marked {m['marked']} of {m['open']}" if m.get("open")
+                 else "no open positions")
+        return (f"🏦 Net Equity Rs.{m['mtm']:,.0f} = realized equity "
+                f"Rs.{m['equity_realized']:,.0f} + unrealized MTM "
+                f"{unreal:+,.0f} ({cover})")
+    except Exception as exc:
+        return f"🏦 Net Equity unavailable ({exc})"
+
+
 def render_line(m: dict = None, **kwargs) -> str:
     """The one prominent line both digests carry."""
     try:
@@ -183,6 +199,7 @@ def render_line(m: dict = None, **kwargs) -> str:
             parts.append(f"Absolute return {pct} ({day} — CAGR unlocks "
                          f"at day {CAGR_MIN_DAYS}; annualizing a "
                          f"days-old number would be noise)")
+        parts.insert(1, render_net_equity_line(m))
         if m["unmarked"]:
             # Owner directive 2026-09-21: "x of y" without the names is not
             # acceptable — a partial MTM must say WHICH positions it left
@@ -198,7 +215,7 @@ def render_line(m: dict = None, **kwargs) -> str:
                 shown += f" …+{len(names) - MAX_UNMARKED_NAMES} more"
             cover = (f" — MTM partial, marked {m['marked']} of {m['open']}"
                      if m.get("open") else " — MTM partial")
-            parts.insert(1, f"⚠️ Unmarked: {shown}{cover} (no live quote)")
+            parts.insert(2, f"⚠️ Unmarked: {shown}{cover} (no live quote)")
         return "\n".join(parts)
     except Exception as exc:
         return f"💹 Firm MTM unavailable ({exc})"

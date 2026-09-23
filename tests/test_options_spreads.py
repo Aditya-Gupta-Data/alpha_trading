@@ -227,11 +227,10 @@ def test_pre_expiry_exit_fires_two_days_before_expiry():
         assert o["exit_date"] == "2026-07-24"      # expiry 26th - 2 days, strictly
 
 
-def test_loss_is_clamped_to_defined_risk_max(monkeypatch):
-    # decision #103 added a per-trade stop; this test is about the CLAMP at
-    # the pre-expiry exit, so it pins the stop off (test_option_stop_loss
-    # covers the same crash with the stop on).
-    monkeypatch.setattr("src.config.OPTION_STOP_LOSS_FRACTION", 0.0)
+def test_loss_is_clamped_to_defined_risk_max():
+    # No premium stop exists (#103 vetoed by #104); this July fixture also
+    # predates the thesis stop's effective date, so the crash rides to the
+    # pre-expiry exit and the CLAMP is what this test is about.
     with tempfile.TemporaryDirectory() as tmp:
         resolved, fj, settled, _ = run_spread_tracker(
             tmp, [make_open_spread()], CRASH_BARS)

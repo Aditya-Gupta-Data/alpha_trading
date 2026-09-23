@@ -88,7 +88,9 @@ def test_render_line_states_the_edge_and_partial_marks():
         assert "CAGR unlocks at day 30" in line and "(day 1" in line
         # honest partial — and it NAMES the blind position (09-21 directive)
         assert "⚠️ Unmarked: TCS" in line and "marked 0 of 1" in line
-        assert line.split("\n")[1].startswith("⚠️ Unmarked")   # right under the headline
+        lines = line.split("\n")
+        assert lines[1].startswith("🏦 Net Equity Rs.200,000 = realized equity Rs.200,000 + unrealized MTM +0")
+        assert lines[2].startswith("⚠️ Unmarked")   # right under net equity
         conn.close()
     # Past the floor the line carries BOTH numbers.
     with tempfile.TemporaryDirectory() as tmp:

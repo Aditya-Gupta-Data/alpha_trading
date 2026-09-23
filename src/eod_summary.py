@@ -11,7 +11,7 @@ Data sources (both local, no network other than the final Discord POST):
   data/brain_map.db    — today's outcomes rows (win/loss count)
 
 Computes:
-  * Daily MTM P&L       — sum of pnl_rs for exits with today's exit_date
+  * Daily MTM P&L       — sum of pnl_rs for exits SETTLED today (settled_at)
   * Active positions    — approved entries with no outcome (spreads + equities)
   * Net delta exposure  — strategy-level directional bias across open spreads
   * Win/loss count      — from brain_map outcomes (cross-check vs journal)
@@ -48,6 +48,20 @@ _ATM_DELTA = 0.5   # ATM-option delta approximation
 
 def _today() -> str:
     return date.today().isoformat()
+
+
+def settled_today(entry: dict, today: str) -> bool:
+    """THE ONE 'closed today' rule (Issue 31 ruling 2, 2026-09-23): an exit
+    counts on the day its CASH SETTLED (`outcome.settled_at`, wall clock),
+    not on the bar date it was priced at. Rows written before 09-23 carry
+    no `settled_at`; for those the bar date is the only record."""
+    o = entry.get("outcome") or {}
+    if not o:
+        return False
+    settled = o.get("settled_at") or o.get("settled_on")
+    if settled:
+        return str(settled)[:10] == today
+    return o.get("exit_date") == today
 
 
 def _read_journal(path=None) -> list:
@@ -308,8 +322,7 @@ def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None,
     # Today's exits from the journal (approved entries that resolved today).
     todays_exits = [
         e for e in entries
-        if (e.get("outcome") or {}).get("exit_date") == today
-        and e.get("decision") == "approved"
+        if settled_today(e, today) and e.get("decision") == "approved"
     ]
 
     open_spreads   = _open_approved_spreads(entries)

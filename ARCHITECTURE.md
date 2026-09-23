@@ -449,6 +449,14 @@ protective-leg-first). It changes how a paper fill is *modeled*, nothing else;
 locks, and the entry halts. **Manager (exit side):** `src/plan_tracker.py` —
 THE one settlement path (no other code closes a trade).
 
+**Standing rule — position size is a FRACTION of the account (decision #106,
+2026-09-23).** No rupee cap exists any more. `position_sizing.fractional_lots`
+sizes every options ticket at `max(1, floor(equity × risk_per_trade_pct ÷
+max_loss_per_lot))` on the SPECIFIC account's equity, bounded by that
+account's margin; PAPER_10L and PAPER_2L are judged independently and come
+out with different lot counts. The equity desk risks its own percentage of
+desk capital. `config.json: risk_per_trade_pct` (2.0).
+
 **Standing rule — defined-risk spreads carry NO mid-trade stop (decision #105,
 2026-09-23, architect mandate).** A vertical / condor's max loss is capped by
 its structure and bounded again by the ₹10k per-trade cap; that cap IS the

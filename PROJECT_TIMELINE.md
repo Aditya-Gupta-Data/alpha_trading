@@ -235,6 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-23 · 3 commits · 17 files touched
+
+- `98b7878` docs: decision #104 (thesis-invalidation exits, forward-looking; settled_at cards; Net Equity) + #94 recon engine built — MODULES rows, HANDOVER 09-23
+- `2360a67` fix(recon): load .env via dhan_client before reading DHAN_CLIENT_ID
+- `65a68bc` feat(v1.2): thesis-invalidation exits replace the vetoed 50% premium stop (decision #104, forward-looking from 2026-09-23); cards key on settled_at + Net Equity line; read-only recon engine (decision #94)
+
+
 ### 2026-09-21 · 5 commits · 13 files touched
 
 - `ddcb1a5` docs: HANDOVER 09-21 night + ledger Issue 31 (retroactive #103 stop-outs invisible on the cards) + MODULES rows for the embed fitter and named unmarked positions

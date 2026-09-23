@@ -1685,3 +1685,27 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   bars from its own effective date? (2) should the cards key "closed today"
   on settlement time rather than `exit_date`? Until (2) is answered, any
   future backdated resolution is invisible on Discord the same way.
+
+### Issue 31 — RULING + REVERSAL (2026-09-23, architect mandate, decision #105)
+
+- **Ruling:** "we already have a hard ₹10k risk cap per trade — that is the
+  maximum loss; reverse the 50% stop completely like it was never introduced,
+  and reverse any trades that were cut due to this flawed rule."
+- **Code (VM at `d6fd519`, deployed 09-23):** `OPTION_STOP_LOSS_FRACTION`,
+  `spread_stop_hit` gone; the #104 thesis stop built earlier the same day is
+  withdrawn too (also a mid-trade stop). Resolvers are back to
+  profit_take → pre_expiry_exit. Cards now count "closed today" by
+  `outcome.settled_at` (cash settlement), and print Net Equity.
+- **A fifth trade was cut before the reversal landed:** `2ff3443a` NIFTY BANK
+  bear_put_spread, stop_loss at the 09-22 close, −₹5,058.40, EXIT ticket
+  `tkt:78cbd9bd1e3c5e`. Total cut by the rule: **−₹36,545.09** across five
+  trades (the four in the table above + this one).
+- **Restore tool:** `scripts/restore_issue31_trades.py`. Dry run on the VM
+  09-23 ~12:0x IST verified all five refs (resolution `stop_loss`, lock
+  released, lock pnl == journal pnl): realized ₹52,206.54 → ₹88,751.63 after
+  restore. (₹89,430.22 was the pre-#103 figure; the ₹678.59 gap is the two
+  legitimate ICICIBANK pre-expiry exits of 09-22, +3,468.34 / −4,146.93, which
+  are NOT part of this reversal.)
+- **Execution status: see HANDOVER 09-23 — the agent's session could not run
+  the mutating step; the owner runs it by hand.** Until it runs, the five
+  trades are still closed in the journal and the DB.

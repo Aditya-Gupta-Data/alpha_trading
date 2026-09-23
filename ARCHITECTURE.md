@@ -449,6 +449,15 @@ protective-leg-first). It changes how a paper fill is *modeled*, nothing else;
 locks, and the entry halts. **Manager (exit side):** `src/plan_tracker.py` —
 THE one settlement path (no other code closes a trade).
 
+**Standing rule — defined-risk spreads carry NO mid-trade stop (decision #105,
+2026-09-23, architect mandate).** A vertical / condor's max loss is capped by
+its structure and bounded again by the ₹10k per-trade cap; that cap IS the
+stop. A spread is held to the 65% profit take or the pre-expiry exit (index:
+2 days; stock: expiry week) — never cut on premium drawdown (#103, reversed
+the same week, after it settled five trades retroactively — ledger Issue 31)
+and never on an underlying-break rule (#104, withdrawn the same day).
+`tests/test_no_spread_stop.py` fails the build if either predicate returns.
+
 **What it does (plain English):** stands between a proposal and the book. On the
 way IN: `exposure_gate` (#68) blocks a duplicate (one spread per
 underlying+direction), then the margin gate checks the capital pool can afford

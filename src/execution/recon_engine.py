@@ -66,6 +66,8 @@ def _muzzled() -> bool:
 
 def _headers() -> dict | None:
     from src import token_provider
+    from src import dhan_client                    # its import loads .env
+    del dhan_client
     token = token_provider.get_token()
     cid = os.environ.get("DHAN_CLIENT_ID")
     if not token or not cid:

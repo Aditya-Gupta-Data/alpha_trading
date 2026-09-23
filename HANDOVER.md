@@ -42,6 +42,54 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-23 (22:50) — #109 ENTRY FILTERS WITHDRAWN; ASYMMETRIC PROFIT RATCHET LIVE FOR DIRECTIONAL SPREADS (decision #110); DEPLOYED
+
+**Withdrawn (architect, one day after #109):** the vol-rank gate and the
+book-wide correlation guard. `hv_rank` stays on every proposal as a
+diagnostic; the ToD / Mansfield-RS court hypotheses stay queued (tests, not
+filters). Config keys `vol_rank_gate_enabled` / `vol_rank_min_neutral` /
+`max_open_per_direction` are gone. Entries are not filtered.
+
+**Profit ratchet (`src/profit_ratchet.py`).** A bull call / bear put no
+longer takes profit at 65%. Capture (modeled profit ÷ max profit) is
+watched; the ladder arms at a PEAK of 40% (lock = breakeven) and steps the
+locked floor 60→30, 80→50, 90→70 behind the peak; the lock only rises
+(persisted floor). `ratchet_hit` when capture falls strictly below the lock:
+EOD in `_resolve_spread` (stamps `entry["ratchet"]`), intraday in
+`live_bridge` (new rungs persisted via `pt.note_ratchet`, daemon only) with
+the square-off re-verified on REAL chain quotes (`above_lock_on_real_quotes`
+= refused, EOD owns it) through the same OMS EXIT path. Unarmed or fully
+captured → pre-expiry exit. Neutral structures keep the 65% take; the
+court's `_resolve_spread_trailed` shadow grader is untouched; max loss is
+still the structure (#105). `ratchet_effective_date` = 2026-09-24: bars
+before it feed the peak but can never fire the exit.
+
+**Pre-deploy dry run on the VM open book (22:46 IST):** nothing settles
+retroactively. RELIANCE `db775082` peak 51% → armed, lock 0 (breakeven);
+NIFTY BANK `2ff3443a` peak 45% → armed, lock 0; NIFTY 50 `c176faeb` and FIN
+SERVICE `ad334308` unarmed (peaks −4 / −5%); the two condors untouched. So
+from tomorrow: a close that drops RELIANCE or `2ff3443a` below breakeven
+exits at that close; a rise to 60% steps their lock to 30.
+
+**DEPLOYED.** VM at `775c382`, `alpha-trading` restarted 22:4x IST; 96/96
+scoped on the VM; Mac suite **2,356 passed / 1 failed** (the known
+`test_darling_shadow`), 54 s. Config: `ratchet_enabled`, `ratchet_ladder`,
+`ratchet_effective_date`.
+
+**Test-hygiene note (pre-existing, not fixed):** some test file leaves a
+`FakeJournal` on `plan_tracker.journal`; the ratchet tests pin the real
+module explicitly. Worth a sweep on a quiet day.
+
+**What the next person should do first.**
+1. Thu 09-24 15:35 tracker: expect `ratchet` blocks on every directional
+   journal row; no `profit_take` on a directional spread ever again unless
+   `ratchet_enabled` is false.
+2. First `ratchet_hit` (EOD or intraday 🔒 card): the outcome carries
+   `resolution = ratchet_hit`, the verdict names peak/lock, and the EXIT
+   ticket is in `trade_tickets`.
+3. Watch a directional spread run PAST 65% and stay open — that is the
+   feature, not a missed exit.
+
 ## 2026-09-23 (22:30) — VOL-RANK GATE + CORRELATION GUARD LIVE, ToD / Mansfield-RS QUEUED IN THE COURT (decision #109); DEPLOYED
 
 **Live filters.** (1) `src/vol_rank.py` HV Rank = (rv_now − min) / (max − min)

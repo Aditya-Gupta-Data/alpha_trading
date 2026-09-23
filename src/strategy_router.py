@@ -174,6 +174,40 @@ def build_exit_ticket(entry: dict, leg_limits: dict, resolution: str,
             "note": f"EXIT {resolution}"[:200], "legs": legs}
 
 
+def build_equity_exit_ticket(entry: dict, qty: int, limit_price: float,
+                             resolution: str, source: str = "equity_desk",
+                             issued_at: str = None, account_id: str = None) -> dict:
+    """The EXIT Order Ticket for a funded long darling (decision #107): one
+    SELL leg of `qty` shares at `limit_price` (the desk's exit quote).
+    `lot_size` carries the share count and `lots` is 1 — the OMS schema is
+    lot-shaped and an equity line is one lot of qty shares. Pure; no I/O."""
+    issued_at = issued_at or datetime.now(IST).isoformat(timespec="seconds")
+    account_id = account_id or oms.PRIMARY_ACCOUNT
+    ref = (entry.get("funding") or {}).get("lock_ref") or f"eqd:{entry.get('id')}"
+    tid = oms.ticket_id_for(ref, entry["ticker"], "equity_long", issued_at,
+                           account_id=account_id, kind=oms.EXIT)
+    qty = int(qty)
+    leg = {"leg_id": f"{tid}:0", "leg_index": 0, "side": "SELL",
+           "option_type": None, "strike": None, "expiry": None,
+           "qty_target": qty, "limit_price": float(limit_price),
+           "fill_basis": "exit_limit", "correlation_id": oms.correlation_id_for(tid, 0)}
+    return {"ticket_id": tid, "journal_ref": ref, "underlying": entry["ticker"],
+            "strategy": "equity_long", "direction": "bullish",
+            "lots": 1, "lot_size": qty, "reward_risk": None,
+            "account_id": account_id, "kind": oms.EXIT,
+            "source": source, "issued_at": issued_at,
+            "note": f"EXIT {resolution}"[:200], "legs": [leg]}
+
+
+def issue_equity_exit(conn, entry: dict, qty: int, limit_price: float,
+                      resolution: str, **kw) -> dict:
+    """Persist the equity EXIT ticket (leg PENDING). The desk's one write
+    door into the OMS on the way out (decision #107)."""
+    ticket = build_equity_exit_ticket(entry, qty, limit_price, resolution, **kw)
+    res = oms.issue_ticket(conn, ticket)
+    return {**res, "ticket": ticket}
+
+
 def issue_exit(conn, entry: dict, leg_limits: dict, resolution: str, **kw) -> dict:
     """Persist an EXIT ticket (every leg PENDING). The tracker's one write
     door into the OMS on the way OUT (decision #103)."""

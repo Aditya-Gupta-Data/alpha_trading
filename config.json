@@ -50,5 +50,9 @@
   "text_intelligence_model": "claude-opus-4-8",
   "text_intelligence_daily_call_cap": 200,
   "rss_model": "claude-haiku-4-5",
-  "paper_venue_enabled": true
+  "paper_venue_enabled": true,
+  "equity_trail_enabled": true,
+  "equity_trail_atr_mult": 3.0,
+  "equity_trail_atr_n": 14,
+  "macro_expiry_warn_days": 7
 }

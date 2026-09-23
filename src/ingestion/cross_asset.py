@@ -136,6 +136,61 @@ def load_instruments(securities_path=None, global_path=None) -> dict:
     return out
 
 
+def expiry_report(today: date = None, warn_days: int = None, securities_path=None,
+                  global_path=None, ids_path=None, ledger_path=None) -> dict:
+    """THE MACRO EXPIRY GUARD (decision #107, 2026-09-23). Every dated id
+    the desk's macro pipelines depend on — `macro_securities.json` +
+    `global_indices.json` (the cross-asset tap) and the MCX front months in
+    `darling_ids.json["commodities"]` (the chain archiver) — judged against
+    today: `expired` (today > expiry), `expiring` (within `warn_days`), plus
+    `api_errors`: today's CA-410 / CA-404 rows from the tap's own ledger,
+    the upstream saying "dead contract" even when the date looked fine.
+    Born of the CRUDE id that sat expired for five weeks (08-19 → 09-23)
+    with nothing louder than a log line."""
+    from src.config import MACRO_EXPIRY_WARN_DAYS
+    today = today or date.today()
+    warn_days = MACRO_EXPIRY_WARN_DAYS if warn_days is None else int(warn_days)
+    rows = []
+    for name, e in load_instruments(securities_path, global_path).items():
+        rows.append({"name": name, "source": "macro_securities", "id": e.get("id"),
+                     "symbol": e.get("_symbol"), "expiry": (e.get("_expiry") or None)})
+    ids_p = Path(ids_path) if ids_path else ROOT / "data" / "darling_ids.json"
+    for sym, meta in (_load_json(ids_p).get("commodities") or {}).items():
+        rows.append({"name": f"{sym} (MCX front month)", "source": "darling_ids",
+                     "id": (meta or {}).get("id"), "symbol": (meta or {}).get("master_symbol"),
+                     "expiry": (meta or {}).get("expiry")})
+    expired, expiring = [], []
+    for r in rows:
+        if not r["expiry"]:
+            continue
+        try:
+            exp = date.fromisoformat(str(r["expiry"])[:10])
+        except ValueError:
+            continue
+        days = (exp - today).days
+        r = dict(r, expiry=exp.isoformat(), days=days)
+        if days < 0:
+            expired.append(r)
+        elif days <= warn_days:
+            expiring.append(r)
+    api_errors = []
+    p = Path(ledger_path) if ledger_path else LEDGER_PATH
+    try:
+        for ln in p.read_text().splitlines():
+            try:
+                row = json.loads(ln)
+            except ValueError:
+                continue
+            if str(row.get("ts") or row.get("when") or "")[:10] == today.isoformat() \
+                    and row.get("code") in ("CA-410", "CA-404"):
+                api_errors.append({"name": row.get("name"), "code": row.get("code"),
+                                   "detail": str(row.get("detail") or "")[:120]})
+    except OSError:
+        pass
+    return {"as_of": today.isoformat(), "checked": len(rows), "expired": expired,
+            "expiring": expiring, "api_errors": api_errors}
+
+
 def stale_instruments(instruments: dict, today: date = None) -> list:
     """Names whose futures contract has already expired.
 

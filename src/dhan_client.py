@@ -421,6 +421,17 @@ def get_ohlc_since(ticker: str, start_iso: str) -> list:
     return _fetch_daily(instr, start_iso, date.today().isoformat())
 
 
+def get_ohlc_since_by_id(security_id, start_iso: str, segment: str = "NSE_EQ",
+                         instrument: str = "EQUITY") -> list:
+    """Daily OHLC from `start_iso` for an instrument addressed by its
+    scrip-master id (V1.2 equity trail: darlings live in darling_ids.json,
+    not SECURITY_ID_MAP). Same same-day short-circuit as get_ohlc_since."""
+    if security_id in (None, "") or start_iso >= date.today().isoformat():
+        return []
+    return _fetch_daily({"id": str(security_id), "seg": segment, "inst": instrument},
+                        start_iso, date.today().isoformat())
+
+
 def get_daily_closes(ticker: str, days: int = 400) -> list:
     """Closing prices oldest first — the indicator engine (SMA/RSI) input."""
     return [b["close"] for b in get_daily_ohlc(ticker, days=days)]

@@ -266,6 +266,10 @@ def categorize_failure(reason: str, exit_price: float, entry: dict,
                 "Target hit: the block-VWAP floor defense held")
     if reason == "time_stop":
         return "Time stop: thesis never resolved either way"
+    if reason == "trail_hit":
+        return ("ATR trail hit: the ratchet locked the move in"
+                if exit_price > (action.get("entry_price") or 0) else
+                "ATR trail hit: gave back the move before the hard stop")
     # stop_loss taxonomies, most specific first
     if stop and exit_price <= stop * (1 - GAP_SHOCK_PCT / 100):
         return "Gap-down shock: price gapped through the stop"
@@ -280,11 +284,19 @@ def categorize_failure(reason: str, exit_price: float, entry: dict,
 
 
 def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
-                       now=None, sector_fn=None) -> list:
-    """Resolve open shadows against live prices: stop_loss / target /
-    time_stop. Every exit logs kya_sikha_autopsy — an automatic,
+                       now=None, sector_fn=None, trail_fn=None) -> list:
+    """Resolve open shadows against live prices: stop_loss / trail_hit /
+    target / time_stop. Every exit logs kya_sikha_autopsy — an automatic,
     rule-based categorization of WHY the thesis resolved the way it did
-    (especially the failures; the failure rows are the point)."""
+    (especially the failures; the failure rows are the point).
+
+    V1.2 (decision #107): a DESK-FUNDED position rides the ATR trail
+    (`equity_trail.trail_for_position`) instead of the static target —
+    price below the trail = `trail_hit`. The hard stop and the time stop
+    still apply. When the trail cannot be measured (no id, no bars, too
+    few bars) the static target stays the exit, named on the row. Unfunded
+    telemetry shadows keep the original rules. `trail_fn(entry, price)` is
+    the injectable seam; None = the live door."""
     if quote_fn is None:
         from src.dhan_client import get_live_price as quote_fn
     if vix_fn is None:
@@ -314,10 +326,23 @@ def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
             price = None
         if price is None:
             continue
-        reason = None
+        reason, trail = None, None
+        funded = bool((entry.get("funding") or {}).get("funded"))
+        if funded:
+            try:
+                fn = trail_fn
+                if fn is None:
+                    from src import equity_trail
+                    fn = equity_trail.trail_for_position
+                trail = fn(entry, price)
+            except Exception as exc:
+                trail = {"armed": False, "reason": f"trail error: {exc}"}
+        armed = bool(trail and trail.get("armed"))
         if price <= stop:
             reason = "stop_loss"
-        elif price >= target:
+        elif armed and price < float(trail["trail"]):
+            reason = "trail_hit"
+        elif not armed and price >= target:
             reason = "target"
         else:
             try:
@@ -351,6 +376,12 @@ def track_open_shadows(quote_fn=None, vix_fn=None, universe=None, path=None,
             "mode": entry.get("mode", MODE),
             "capital_allocated": 0, "ticker": ticker,
             "exit_price": price, "reason": reason,
+            # decision #107: the trail the desk was riding at exit (None for
+            # telemetry shadows); `armed` False names why the static target
+            # was the rule instead.
+            "trail": ({k: trail.get(k) for k in ("armed", "trail", "extreme", "atr",
+                                                  "atr_mult", "bars_since_entry", "reason")}
+                      if trail else None),
             "kya_sikha_autopsy": {          # what we LEARNED
                 "category": categorize_failure(
                     reason, price, entry, sector_at_exit.get("bullish")),

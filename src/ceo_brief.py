@@ -936,6 +936,38 @@ def _court_field(c: dict) -> dict:
     return {"name": name, "value": "\n".join(lines)[:1024], "inline": False}
 
 
+# ------------------------------------------------------ macro expiry guard
+# Decision #107 (2026-09-23): the CRUDE futures id sat expired for five weeks
+# and nothing louder than a log line said so. The brief now carries a RED
+# line for every dated macro / commodity id that has expired (or a ⚠️ for
+# one about to), read from `cross_asset.expiry_report`. Injected by main()
+# like every other live read; None = no field.
+def collect_macro_expiry(**kw) -> dict:
+    from src.ingestion.cross_asset import expiry_report
+    return expiry_report(**kw)
+
+
+def _macro_expiry_field(rep: dict) -> dict | None:
+    if not rep:
+        return None
+    lines = []
+    for r in rep.get("expired") or []:
+        lines.append(f"🔴 MACRO EXPIRED: {r['name']}"
+                     + (f" ({r['symbol']})" if r.get("symbol") else "")
+                     + f" — id {r.get('id')} expired {r['expiry']} ({-r['days']}d ago); "
+                     f"roll the id ({r['source']})")
+    for r in rep.get("expiring") or []:
+        lines.append(f"⚠️ MACRO EXPIRING: {r['name']}"
+                     + (f" ({r['symbol']})" if r.get("symbol") else "")
+                     + f" — id {r.get('id')} expires {r['expiry']} (in {r['days']}d)")
+    for r in rep.get("api_errors") or []:
+        lines.append(f"🔴 MACRO API {r['code']}: {r['name']} — {r['detail']}")
+    if not lines:
+        return None
+    return {"name": "🧭 Macro instrument expiry", "value": "\n".join(lines),
+            "inline": False}
+
+
 def build_brief_card(logs_dir: Path = LOGS_DIR,
                      state_path: Path = STATE_PATH,
                      deploy_log_path: Path = DEPLOY_LOG_PATH,
@@ -945,7 +977,8 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
                      halt_lines_fn=None,
                      macro_sentence_fn=None,
                      miner_fn=None,
-                     court_fn=None) -> dict:
+                     court_fn=None,
+                     macro_expiry_fn=None) -> dict:
     """The whole brief as ONE notifier payload (event="ceo_brief").
 
     Every seam is a parameter so the entire card is assertable offline. Each
@@ -1002,6 +1035,18 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
         c = court_fn() if court_fn else None
         if c is not None:
             fields.append(_court_field(c))
+    except Exception:
+        pass
+
+    # Decision #107: expired / expiring macro & commodity ids — a RED line,
+    # near the top, because a dead id is a silent data hole.
+    try:
+        rep = macro_expiry_fn() if macro_expiry_fn else None
+        field = _macro_expiry_field(rep) if rep else None
+        if field:
+            fields.insert(1, field)
+            if rep.get("expired") or rep.get("api_errors"):
+                description = "🔴 Attention — a macro instrument id has expired; see below."
     except Exception:
         pass
 
@@ -1078,7 +1123,8 @@ def main(argv=None) -> int:
     kw = {"halt_lines_fn": pm.halt_banner_lines,
          "macro_sentence_fn": ceo_language.macro_regime_sentence,
          "miner_fn": collect_miner,
-         "court_fn": collect_court}
+         "court_fn": collect_court,
+         "macro_expiry_fn": collect_macro_expiry}
     payload = build_brief_card(**kw) if dry else send_brief(**kw)
     print(_render_text(payload), flush=True)
     if dry:

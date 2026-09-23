@@ -221,6 +221,46 @@ def fund_entry(entry: dict, conn=None) -> dict:
         return {"funded": False, "reason": f"desk unavailable ({exc})"}
 
 
+def _execute_equity_exit(entry: dict, exit_event: dict, conn=None, venue_mod=None,
+                         today=None) -> dict:
+    """Issue + fill the desk's EXIT ticket for one funded position (decision
+    #107): one SELL leg at the exit quote, filled by the paper venue at tier
+    slippage. Returns {mode, ticket_id, status, fill_price, venue_slippage_rs,
+    error}; mode "model" when the venue is off or nothing could be issued —
+    the settlement then uses the modeled exit exactly as before."""
+    from src.config import PAPER_VENUE_ENABLED
+    record = {"mode": "model", "ticket_id": None, "status": None,
+              "fill_price": None, "venue_slippage_rs": None, "error": None}
+    qty = int((entry.get("funding") or {}).get("qty") or 0)
+    price = exit_event.get("exit_price")
+    if not PAPER_VENUE_ENABLED or qty <= 0 or price is None:
+        return record
+    try:
+        from src import oms, strategy_router
+        venue = venue_mod
+        if venue is None:
+            from src.execution import paper_venue as venue
+        conn, owns = _connect(conn)
+        try:
+            issued = strategy_router.issue_equity_exit(
+                conn, entry, qty, float(price), str(exit_event.get("reason") or "exit"),
+                source=f"equity_desk.{exit_event.get('reason') or 'exit'}")
+            tid = issued["ticket_id"]
+            venue.sweep(conn, today=today, stamp=False)
+            view = oms.ticket_view(conn, tid) or {}
+            record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"))
+            if view.get("status") == oms.FILLED and view.get("legs"):
+                fill = float(view["legs"][0]["avg_fill_price"])
+                record["fill_price"] = fill
+                record["venue_slippage_rs"] = round((float(price) - fill) * qty, 2)
+        finally:
+            if owns:
+                conn.close()
+    except Exception as exc:
+        record["error"] = f"{type(exc).__name__}: {exc}"
+    return record
+
+
 def settle_exit(entry: dict, exit_event: dict, conn=None):
     """Net delivery P&L (both-side frictions) settles into the FIRM
     account; the lock releases; the desk's realized view moves with the
@@ -232,6 +272,13 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
     if (not funding.get("funded") or not qty
             or price_in is None or price_out is None):
         return None
+    # decision #107: when the paper venue FILLED the exit ticket, its
+    # slipped fill IS the exit price and the exit-side ladder is not
+    # charged a second time; the venue's cost is itemised on the result.
+    execution = exit_event.get("execution") or {}
+    venue_fill = execution.get("fill_price") if execution.get("mode") == "paper_venue" else None
+    if venue_fill is not None:
+        price_out = float(venue_fill)
     gross = (float(price_out) - float(price_in)) * int(qty)
     # Gap 4 (2026-08-17): the desk settled at frictionless fills — a paper
     # illusion on anything thinner than a tier-1 name. Both sides now pay
@@ -239,8 +286,9 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
     # Fail-open to zero, never a crash — but zero is what it was before.
     try:
         from src.liquidity_slippage import slippage_rs
-        slip = (slippage_rs(price_in, qty, exit_event.get("ticker") or entry.get("ticker"))
-                + slippage_rs(price_out, qty, exit_event.get("ticker") or entry.get("ticker")))
+        slip = slippage_rs(price_in, qty, exit_event.get("ticker") or entry.get("ticker"))
+        if venue_fill is None:
+            slip += slippage_rs(price_out, qty, exit_event.get("ticker") or entry.get("ticker"))
     except Exception:
         slip = 0.0
     pnl_net = round(gross - delivery_frictions("BUY", price_in, qty)
@@ -254,6 +302,8 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
         return {"ticker": exit_event.get("ticker"), "lock_ref": ref,
                 "qty": int(qty), "pnl_net": pnl_net, "slippage_rs": round(slip, 2),
                 "reason": exit_event.get("reason"),
+                "execution": execution or None,
+                "venue_slippage_rs": execution.get("venue_slippage_rs"),
                 "equity": result.get("equity"),
                 "halted": result.get("halted")}
     finally:
@@ -398,6 +448,9 @@ def run_darling_live_cycle(tiers_path=None, levels_path=None, path=None,
             if not host or not (host.get("funding") or {}).get("funded"):
                 continue
             try:
+                # decision #107: the exit goes through the OMS first (EXIT
+                # ticket, venue fill); the settlement books the venue's fill.
+                x = dict(x, execution=_execute_equity_exit(host, x, conn=conn))
                 s = settle_exit(host, x, conn=conn)
             except Exception as exc:
                 print(f"  (darling settlement failed for "

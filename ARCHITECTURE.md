@@ -449,6 +449,14 @@ protective-leg-first). It changes how a paper fill is *modeled*, nothing else;
 locks, and the entry halts. **Manager (exit side):** `src/plan_tracker.py` —
 THE one settlement path (no other code closes a trade).
 
+**Standing rule — the equity desk exits on an ATR TRAIL, not a static target
+(decision #107, 2026-09-23).** A funded darling's exit level is `highest high
+since entry − 3 × ATR(14)`, floored at the plan's hard stop, a one-way
+ratchet (`src/equity_trail.py`, the tracker's own ratchet primitives). Price
+below the trail = an OMS EXIT ticket, venue-filled, settled at the fill. The
+hard stop and the time stop still apply; a trail that cannot be measured
+leaves the static target in force, named on the row.
+
 **Standing rule — position size is a FRACTION of the account (decision #106,
 2026-09-23).** No rupee cap exists any more. `position_sizing.fractional_lots`
 sizes every options ticket at `max(1, floor(equity × risk_per_trade_pct ÷

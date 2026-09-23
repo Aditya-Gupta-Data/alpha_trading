@@ -207,10 +207,16 @@ def test_the_oms_places_nothing_and_is_on_no_live_path():
     # options_proposer.decide_pending (approved ENTRIES, flag-gated).
     # decision #103: the ONE live caller of the EXIT door is plan_tracker
     # (_execute_paper_exit, inside its own settlement, flag-gated). The
-    # market loop, the live bridge and the equity desk touch neither.
-    for live in ("src/market_loop.py", "src/live_bridge.py", "src/equity_desk.py"):
+    # market loop and the live bridge touch neither.
+    # decision #107: the equity desk is the ONE live caller of the EQUITY
+    # exit door (_execute_equity_exit, inside its own settlement, flag-gated).
+    for live in ("src/market_loop.py", "src/live_bridge.py"):
         assert "strategy_router.issue" not in (ROOT / live).read_text(), live
         assert "oms.issue_ticket" not in (ROOT / live).read_text(), live
+    eqd = (ROOT / "src/equity_desk.py").read_text()
+    assert eqd.count("strategy_router.issue_equity_exit(") == 1
+    assert "strategy_router.issue(" not in eqd and "oms.issue_ticket" not in eqd
+    assert "PAPER_VENUE_ENABLED" in eqd
     pt = (ROOT / "src/plan_tracker.py").read_text()
     assert "strategy_router.issue(" not in pt and "oms.issue_ticket" not in pt
     assert pt.count("strategy_router.issue_exit(") == 1

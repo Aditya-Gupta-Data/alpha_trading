@@ -108,6 +108,20 @@ EQUITY_DESK_RISK_PER_TRADE_PCT = float(
     _CONFIG.get("equity_desk_risk_per_trade_pct", 1.0))
 EQUITY_DESK_MAX_NOTIONAL_PCT = float(
     _CONFIG.get("equity_desk_max_notional_pct", 15.0))
+# V1.2 SMART EXITS for the EQUITY DESK (decision #107, 2026-09-23): a funded
+# long darling no longer exits at a static target; it rides an ATR trail —
+# trail = highest_high_since_entry − ATR_MULT × ATR(ATR_N) on the
+# underlying's DAILY bars, a one-way ratchet that only ever rises (floor =
+# the plan's hard stop). Close/quote below the trail = exit through the OMS.
+# The hard stop and the time stop still apply. `equity_trail_enabled: false`
+# restores the static target; no bars (no id, feed down) = static target
+# for that position, never a guess.
+EQUITY_TRAIL_ENABLED = bool(_CONFIG.get("equity_trail_enabled", True))
+EQUITY_TRAIL_ATR_MULT = float(_CONFIG.get("equity_trail_atr_mult", 3.0))
+EQUITY_TRAIL_ATR_N = int(_CONFIG.get("equity_trail_atr_n", 14))
+# Macro expiry guard (decision #107): the CEO brief flags any macro /
+# commodity contract id that has expired or expires within this many days.
+MACRO_EXPIRY_WARN_DAYS = int(_CONFIG.get("macro_expiry_warn_days", 7))
 
 # Firm treasury (owner Directive 1, 2026-07-20): dynamic capital routing
 # between the desks. Optional keys; code default DISABLED — a stale config

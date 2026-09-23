@@ -42,6 +42,61 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-23 (later) — #103 REVERSED, #104 WITHDRAWN (decision #105): no mid-trade stop on a spread; DEPLOYED. ⚠️ THE 5-TRADE RESTORE IS WRITTEN AND DRY-RUN BUT NOT YET EXECUTED — owner runs one command
+
+**Architect mandate.** "The ₹10k per-trade cap is the maximum loss; reverse
+the 50% stop completely like it was never introduced, and reverse any trades
+it cut." So: `OPTION_STOP_LOSS_FRACTION` / `spread_stop_hit` are gone AND the
+#104 thesis stop built earlier today is withdrawn (it was a second mid-trade
+stop by another name). Resolvers and `live_bridge` are back to
+profit_take → pre_expiry_exit, byte-for-byte the pre-#103 triggers.
+`tests/test_no_spread_stop.py` fails the build if any stop predicate or knob
+returns. What STAYS: exits through the OMS, `outcome.settled_at` +
+`eod_summary.settled_today` (cards count "closed today" by cash settlement),
+the 🏦 Net Equity line, the #94 recon engine. ARCHITECTURE Dept 3 now carries
+the standing rule.
+
+**DEPLOYED.** VM at `bef66bc`, `alpha-trading` restarted; scoped tests green
+on the VM venv; Mac suite 2,307 passed / 1 failed (the known
+`test_darling_shadow`).
+
+**⚠️ NOT YET DONE — the restore (owner action, one command).** Five trades
+were cut by the rule, not four: the 09-21 four (TCS `f8356c9c`, NIFTY BANK
+`bd73554d`, HDFCBANK `efe1681e`, NIFTY MID SELECT `54365ef1`) plus NIFTY BANK
+`2ff3443a`, stopped at the 09-22 close for −₹5,058.40 before the reversal
+landed. Total −₹36,545.09. `scripts/restore_issue31_trades.py` re-opens all
+five (journal outcome → None, archived to `data/issue31_voided_outcomes.jsonl`;
+lock re-locked; `realized_pnl` and paper cash un-booked; `issue31_restore`
+account_events; DB/journal/portfolio backed up first). Its `--dry-run` on the
+VM verified every guard: realized ₹52,206.54 → ₹88,751.63 (₹89,430.22 was
+pre-#103; the ₹678.59 gap is the two legitimate ICICIBANK pre-expiry exits of
+09-22, not part of the reversal). **The agent's session was not permitted to
+run the mutating step on the VM.** Run it from the Mac, ideally OUTSIDE
+09:10–15:30 IST so the running scheduler cannot write the journal mid-rewrite:
+
+```bash
+gcloud compute ssh adigupta1998@alpha-trading-vm --project=project-37632031-10d0-47dd-b6f --zone=us-central1-a --command "cd ~/alpha_trading && venv/bin/python scripts/restore_issue31_trades.py"
+```
+
+Expected output ends with `journal: 5 of 5 restored refs now OPEN`. After it
+runs: `venv/bin/python -m src.portfolio_manager` should show
+`realized_pnl` 88751.63 (+ anything settled since) and 5 more open locks.
+NOT restored on purpose: the five FILLED EXIT tickets (append-only OMS
+ledger) and the five `outcomes` rows (`record_outcome` upserts by
+journal_ref — the real resolution overwrites each when it comes; until then
+`sleep_phase` / learning still see five fabricated losses).
+
+**What the next person should do first.**
+1. Confirm the restore ran (5 `issue31_restore` rows in `account_events`).
+   If not, run the command above.
+2. First EOD after the restore: the five re-opened spreads are walked from
+   their entry date with the pre-#103 resolver — any that hit 65% profit take
+   or the pre-expiry window on a past bar settles honestly at that bar
+   (exit_date past, settled_at today; the cards count it today). Three of
+   them expire 2026-09-29 (index pre-expiry window opens 09-27).
+3. Everything from the 09-23 morning block still applies (recon scheduling
+   decision, `missed_exit` rows, equity desk cash −₹21,381).
+
 ## 2026-09-23 — V1.2 SMART EXITS (decision #104) + READ-ONLY RECON ENGINE (#94 built) — DEPLOYED
 
 **Rulings applied (Issue 31).** The architect vetoed the #103 50% premium

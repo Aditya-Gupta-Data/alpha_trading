@@ -42,6 +42,61 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-23 (night, last) — V1.2 EQUITY ATR TRAIL + MACRO EXPIRY GUARD (decision #107); DEPLOYED — the guard's first run found three more dead ids
+
+**Equity desk exits.** A funded darling no longer exits at its static
+target: `src/equity_trail.py` computes `trail = highest high since entry −
+3 × ATR(14)` on the darling's DAILY bars (Dhan historical BY SCRIP ID,
+`get_ohlc_since_by_id`, 45 days of pre-entry history, cached one fetch per
+position per day), floored at the plan's hard stop, walked forward through
+the tracker's own `atr_from_bars` / `atr_trailing_stop` so it can only rise;
+the live quote joins as today's provisional high. Price strictly below the
+trail = `trail_hit` in `equity_shadow_proposer.track_open_shadows`; hard
+stop and time stop unchanged; a trail that cannot arm (no id / no bars /
+< 15 bars) leaves the static target in force and says why on
+`exit.trail.reason`; unfunded telemetry shadows untouched. The exit is an
+OMS EXIT ticket (`strategy_router.issue_equity_exit`, one SELL leg,
+`journal_ref` = the `eqd:` lock) issued + venue-filled in
+`equity_desk._execute_equity_exit`; `settle_exit` books the venue fill
+(`venue_slippage_rs`, no double slippage). Preview on the VM 22:08 IST —
+all four funded darlings HOLD: DABUR trail 374.42 (= stop, 3 bars) vs
+387.4; LTF 295.42 vs 310.0; MOTHERSON 152.75 vs 164.4; PANAMAPET **468.16
+vs 480.7** (28 bars — the ratchet already sits ₹71 above its 396.67 hard
+stop). First live `trail_hit` will be whichever of these gives back 3 ATR.
+
+**Macro expiry guard.** `cross_asset.expiry_report` judges every dated id
+(`macro_securities.json`, `global_indices.json`, `darling_ids.json`
+commodities) + today's CA-410/CA-404 ledger rows; the CEO brief carries it as
+field 2 (`🔴 MACRO EXPIRED … roll the id` / `⚠️ MACRO EXPIRING (in Nd)` /
+`🔴 MACRO API …`) and turns its headline red on an expired id. **Its first
+live run (22:08 IST) found COPPER / ALUMINIUM / ZINC all expired since
+2026-08-31 — 23 blind days on the metals tap, on top of CRUDE's five
+weeks.** Rolled to the Sep contracts (571298 / 571297 / 571303, exp
+2026-09-30) from the verified 09-23 master (`f7d3aff`). The guard now shows
+those three as ⚠️ EXPIRING (7d) — **they roll AGAIN on 09-30**; the
+`🔴 MACRO API CA-410` lines still on tonight's read are the 19:40 tap run
+from before the roll and clear at tomorrow's run.
+
+**DEPLOYED.** VM at `f7d3aff`, `alpha-trading` restarted 22:0x IST; 127/127
+scoped on the VM; Mac suite **2,328 passed / 1 failed** (the known
+`test_darling_shadow`), 54 s. Config: `equity_trail_enabled` (true),
+`equity_trail_atr_mult` (3.0), `equity_trail_atr_n` (14),
+`macro_expiry_warn_days` (7).
+
+**What the next person should do first.**
+1. Thu 09-24 16:30 brief: field 2 should read three ⚠️ EXPIRING lines and no
+   🔴 (the CA-410 rows roll off). If a 🔴 MACRO API line persists, the
+   rolled id is wrong — re-verify.
+2. **Before 09-30:** roll COPPER / ALUMINIUM / ZINC to the Oct contracts
+   (`scrip_master.lookup_commodities` on a fresh master → edit
+   `config/macro_securities.json`, `_next` already lists the ids). A
+   standing fix worth a decision: let the tap read its ids from
+   `darling_ids.json["commodities"]` (auto-rolled weekly) instead of the
+   hand-edited file.
+3. First `trail_hit` exit: the equity ledger row carries `trail`, the
+   settlement carries `execution.ticket_id` + `venue_slippage_rs`, and
+   `trade_tickets` holds a `kind = EXIT`, `strategy = equity_long` row.
+
 ## 2026-09-23 (late) — V1.1 FRACTIONAL SIZING + V1.3 MCX PIPELINES (decision #106); DEPLOYED
 
 **Sizing.** The Rs.10k per-trade cap (#84) is gone from every path. One door,

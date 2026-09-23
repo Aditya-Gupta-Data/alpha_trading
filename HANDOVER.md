@@ -42,6 +42,49 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-23 (22:30) — VOL-RANK GATE + CORRELATION GUARD LIVE, ToD / Mansfield-RS QUEUED IN THE COURT (decision #109); DEPLOYED
+
+**Live filters.** (1) `src/vol_rank.py` HV Rank = (rv_now − min) / (max − min)
+× 100 over the 252-session range of rolling 14-session realized vol; a
+NEUTRAL read is refused `VOL_RANK_GATE` below `vol_rank_min_neutral` (50),
+before the chain call; directional never gated; no history = abstention.
+(2) `exposure_gate`: max `max_open_per_direction` (2) open directional
+spreads per thesis across the book → `CORRELATION_GUARD_HIT`; neutral
+exempt. **State at deploy (22:29 IST):** open spreads bearish 4 / neutral 2
+→ **new bear puts are BLOCKED until the book thins to 1**, bullish open. HV
+rank today: NIFTY 50 12 · BANK 12 · FIN SERVICE 19 · MID SELECT 20 (rv
+8–13% vs yearly ranges topping at 32–45%) → **iron condors are refused on
+every index right now**; the percentiles sit 30–50, i.e. the range-based
+rank is the stricter of the two readings because one spring spike sets the
+max. That is the architect's stated intent ("if vol is low, reject") — if
+condors stay dark for weeks, the knob is `vol_rank_min_neutral`.
+
+**Court queue.** `src/validation/hypotheses/` — A `tod_entry_window`
+(10:00–14:30 IST vs all-day, per-trade Sharpe, options journal) and B
+`mansfield_rs` (MRS > 0 vs unfiltered, max drawdown of cumulative R, equity
+ledger). Registered as CANDIDATEs (kind `hypothesis`), scored nightly as the
+21:00 court's last stage (`summary["hypotheses"]`, `oos_stats`). First
+scoring on the VM: A `insufficient_n` (in-window n=14 Sharpe 0.71 vs all-day
+n=38 Sharpe 0.44 — a lean, not evidence); B **`supports` on the historical
+record (RS-filtered n=52 maxDD 5.34R vs unfiltered n=85 maxDD 9.71R)** —
+this is IN-SAMPLE over the ledger the hypothesis was written against; the
+court's aging + out-of-sample windows decide promotion, not this line.
+Nothing live imports the queue (test-enforced).
+
+**DEPLOYED.** VM at `38dad4d`, `alpha-trading` restarted 22:2x IST; 59/59
+scoped on the VM; Mac suite **2,353 passed / 1 failed** (the known
+`test_darling_shadow`), 53 s. Config keys: `vol_rank_gate_enabled`,
+`vol_rank_min_neutral`, `max_open_per_direction`.
+
+**What the next person should do first.**
+1. Thu 09-24 session: expect `CORRELATION_GUARD_HIT` refusals on bearish
+   reads and `VOL_RANK_GATE` refusals on neutral reads in the proposal
+   ledger / `logs/exposure_blocks.jsonl` — both are the filters working.
+   A day with zero proposals is now a plausible, correct outcome.
+2. 21:00 court log: `hypotheses` stage present on `data/proving_court.json`.
+3. Decide (architect): keep the range-based HV *rank* as the gate, or gate
+   on the HV *percentile* (both are journaled on `proposal["vol_rank"]`).
+
 ## 2026-09-23 (final) — G3 archetype audit (decision #108): the playbook already had all three; regime read now journaled
 
 **Audit before code (RULE 4).** Bull call, bear put, iron condor and iron

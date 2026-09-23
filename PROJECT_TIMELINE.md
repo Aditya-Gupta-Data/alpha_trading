@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-23 · 15 commits · 48 files touched
+### 2026-09-23 · 17 commits · 59 files touched
 
+- `da54895` docs: HANDOVER 09-23 22:30 — decision #109 deployed; live guard state, HV ranks, first hypothesis scoring
+- `38dad4d` feat(risk): volatility-edge gate (HV rank ≥ 50 for short-vega structures) + correlation guard (max 2 open directional spreads per thesis, CORRELATION_GUARD_HIT); Proving Court hypothesis queue: ToD entry window + Mansfield RS, scored nightly, never live (decision #109)
 - `eed66ee` audit(G3, decision #108): three archetypes already present — regime_read journaled on every proposal; end-to-end archetype tests per regime (read → structure → R:R floor → V1.1 sizing → OMS ticket → no stop)
 - `b7244e6` docs: HANDOVER 09-23 night — decision #107 deployed, metals ids rolled, trail preview
 - `f7d3aff` fix(cross_asset): roll COPPER/ALUMINIUM/ZINC front-month ids (all expired 2026-08-31 — caught by the #107 expiry guard's first live run); verified against the 09-23 scrip master

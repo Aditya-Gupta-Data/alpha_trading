@@ -42,6 +42,51 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-23 (late) — V1.1 FRACTIONAL SIZING + V1.3 MCX PIPELINES (decision #106); DEPLOYED
+
+**Sizing.** The Rs.10k per-trade cap (#84) is gone from every path. One door,
+`src/position_sizing.fractional_lots`: `lots = max(1, floor(equity ×
+risk_per_trade_pct/100 ÷ max_loss_per_lot))`, then the account's own margin
+wall (may be 0 — the floor never breaches margin). `config.json:
+risk_per_trade_pct = 2.0`. Each account on its OWN equity: PAPER_10L via
+`pm.equity`, PAPER_2L via its paper equity, and the 2L is no longer capped at
+the primary's lots. `proposal.sizing` (journaled) carries `floor_applied`.
+Equity desk: its 5% of desk capital, no rupee cap. `vol_bridge` scales from
+the new base; the evolution parameter is now `risk_per_trade_pct` (1–5).
+Live table at deploy (10L equity ₹10,88,752 → capacity ₹21,775; 2L ₹4,000):
+max loss ₹3,566/lot → 10L 6 lots / 2L 1; ₹5,000 → 4 / 1 (floor); ₹8,000 →
+2 / 1 (floor); ₹12,000 → 1 / 1 (floor). **The 10L now risks up to ~₹21.8k
+per trade where it risked ₹10k before** — that is the directive, stated
+plainly.
+
+**MCX (read-only).** `scrip_master.lookup_commodities` resolves GOLD / SILVER
+/ CRUDEOIL to the front-month FUTCOM id from the public master (built on the
+Mac 20:5x IST, 159 equity ids + 3 commodities, shipped by `mac_auto_sync`);
+`chain_archiver.commodity_extension` captures 2 expiries per name by id on
+segment `MCX_COMM` into `chains/mcx_gold` / `mcx_silver` / `mcx_crudeoil`.
+**Probed live on the VM 21:0x IST: Dhan answered expiry lists, chains (GOLD
+174 strikes, SILVER 176, CRUDEOIL 207) and spot for all three on MCX_COMM by
+the futures id** — the first real MCX capture lands at tomorrow's 15:40 run.
+`cross_asset` follows SILVER; its CRUDE id had EXPIRED on 08-19 (five blind
+weeks — rolled to 569900). NO commodity trading path exists: proposer,
+tracker, venue, exposure gate untouched.
+
+**DEPLOYED.** VM at `ac69d48`, `alpha-trading` restarted 21:0x IST; scoped
+tests on the VM 119/120 (the 1: `test_underlyings_are_paced_apart` reads the
+real `darling_ids.json`, which now carries the commodity block — test seam
+fixed in the next commit). Mac suite before the darling_ids rebuild: 2,315
+passed / 1 failed (the known `test_darling_shadow`).
+
+**What the next person should do first.**
+1. Thu 09-24 09:15: the first proposal's journal row carries `sizing`
+   (equity, risk_pct 2.0, lots, floor_applied) and `accounts.PAPER_2L` sized
+   on ₹2L — expect 2L lots ≤ 10L lots with `floor_applied` often true.
+2. Thu 15:40 archiver log: "MCX commodities — 3/3 captured"; `ls
+   data/lake/chains/ | grep mcx`.
+3. MCX ids roll (GOLD 10-05 next): `build_darling_ids` re-resolves the front
+   month weekly; an MCX name going empty in the archiver = check its
+   `expiry` in `darling_ids.json["commodities"]` first.
+
 ## 2026-09-23 (night) — RESTORE EXECUTED by the owner 20:31 IST, verified
 
 Owner ran `scripts/restore_issue31_trades.py` on the VM at 20:31 IST.

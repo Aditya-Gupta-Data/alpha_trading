@@ -137,6 +137,7 @@ def test_underlyings_are_paced_apart():
         # the tier-1 extension (#100) adds one pause per extension name;
         # this test measures the CORE drip, so point the extension at nothing
         f["fo_path"] = Path(tmp) / "no_fo.json"
+        f["ids_path"] = Path(tmp) / "no_ids.json"      # and the MCX extension (#106)
         ca.run(today=date(2026, 7, 10), lake_root=tmp, **f)
         pauses = [s for s in calls["sleeps"] if s == ca.UNDERLYING_PAUSE_SECONDS]
         assert len(pauses) == len(ca.UNDERLYINGS) - 1

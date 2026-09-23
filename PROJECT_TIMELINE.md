@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-23 · 17 commits · 59 files touched
+### 2026-09-23 · 19 commits · 63 files touched
 
+- `7efca03` docs: HANDOVER 09-23 22:50 — decision #110 deployed (ratchet live, #109 filters withdrawn), open-book dry run
+- `775c382` feat(exits): asymmetric profit ratchet for directional spreads replaces the static 65% take (arm 40→lock 0, 60→30, 80→50, 90→70; ratchet_hit through the OMS, intraday re-verified on real quotes, forward-looking from 2026-09-24); #109 entry filters withdrawn (vol gate, correlation guard); neutral structures keep the static take (decision #110)
 - `da54895` docs: HANDOVER 09-23 22:30 — decision #109 deployed; live guard state, HV ranks, first hypothesis scoring
 - `38dad4d` feat(risk): volatility-edge gate (HV rank ≥ 50 for short-vega structures) + correlation guard (max 2 open directional spreads per thesis, CORRELATION_GUARD_HIT); Proving Court hypothesis queue: ToD entry window + Mansfield RS, scored nightly, never live (decision #109)
 - `eed66ee` audit(G3, decision #108): three archetypes already present — regime_read journaled on every proposal; end-to-end archetype tests per regime (read → structure → R:R floor → V1.1 sizing → OMS ticket → no stop)

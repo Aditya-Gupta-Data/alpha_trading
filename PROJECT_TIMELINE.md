@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-23 · 11 commits · 41 files touched
+### 2026-09-23 · 14 commits · 47 files touched
 
+- `b7244e6` docs: HANDOVER 09-23 night — decision #107 deployed, metals ids rolled, trail preview
+- `f7d3aff` fix(cross_asset): roll COPPER/ALUMINIUM/ZINC front-month ids (all expired 2026-08-31 — caught by the #107 expiry guard's first live run); verified against the 09-23 scrip master
+- `82d1460` feat(v1.2): equity-desk ATR trailing stops (one-way ratchet, floor = hard stop) replace the static target; equity EXIT tickets through the OMS, settled at the venue fill; macro instrument expiry guard on the CEO brief (decision #107)
 - `5e2e74b` docs: HANDOVER 09-23 late — decision #106 deployed (fractional sizing, MCX pipelines); test: archiver pacing test points the MCX seam at nothing
 - `ac69d48` docs: decision #106 (fractional sizing per account, MCX pipelines), ARCHITECTURE Dept 3 sizing rule, MODULES rows
 - `d62b762` feat(v1.1+v1.3): fixed-fractional position sizing per account replaces the Rs.10k cap (decision #106); MCX commodity data pipelines (GOLD/SILVER/CRUDEOIL) — scrip master, darling_ids commodities block, chain archiver MCX extension, cross_asset SILVER + rolled CRUDE id

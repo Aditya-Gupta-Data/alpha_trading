@@ -194,10 +194,17 @@ def _resolve_spread(entry: dict, bars: list):
     """(resolution, exit_mark_per_share, frac_left_at_exit, exit_date)
     once an exit trigger fires, else None while the spread is live.
     Triggers, checked on each daily close after the entry day:
-      profit_take       modeled profit >= 65% of the structure's max profit
+      profit_take       NEUTRAL structures only: modeled profit >= 65% of
+                        max profit (theta harvest, unchanged)
+      ratchet_hit       DIRECTIONAL structures (decision #110): capture fell
+                        below the profit ratchet's locked level (armed at 40%
+                        of max profit → breakeven; 60→30, 80→50, 90→70);
+                        only on bars on/after RATCHET_EFFECTIVE_DATE
       pre_expiry_exit   PRE_EXPIRY_EXIT_DAYS or fewer days to expiry
     There is NO mid-trade stop (decision #105): a defined-risk structure's
-    max loss is capped by construction, so it is held to target or expiry."""
+    max loss is capped by construction. The walk stamps `entry["ratchet"]`
+    (peak / lock / armed) for directional spreads so the live bridge and the
+    journal share one state."""
     spread = entry["spread"]
     expiry = date.fromisoformat(spread["expiry"])
     entry_day = date.fromisoformat(entry["date"])
@@ -206,6 +213,12 @@ def _resolve_spread(entry: dict, bars: list):
     lot = int(spread["lot_size"])
     max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
     max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+    from src import profit_ratchet as pr
+    from src.config import RATCHET_EFFECTIVE_DATE, RATCHET_ENABLED
+    ratcheted = RATCHET_ENABLED and pr.is_directional(spread) and max_profit_ps > 0
+    rstate = dict(entry.get("ratchet") or {})
+    peak = rstate.get("peak_capture_pct")
+    lock = rstate.get("locked_pct")
 
     for day, _low, _high, close in bars:
         if day <= entry["date"]:
@@ -219,7 +232,16 @@ def _resolve_spread(entry: dict, bars: list):
         # max_profit — the linear time-value model must not either.
         profit_ps = max(-max_loss_ps, min(m_now - m_entry, max_profit_ps))
         m_now = m_entry + profit_ps
-        if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
+        if ratcheted:
+            capture = profit_ps / max_profit_ps * 100.0
+            peak = capture if peak is None else max(float(peak), capture)
+            st = pr.state(peak, lock)
+            lock = st["locked_pct"]
+            entry["ratchet"] = dict(st, as_of=day)
+            if day >= RATCHET_EFFECTIVE_DATE and pr.ratchet_hit(capture, lock):
+                entry["ratchet"]["hit_capture_pct"] = round(capture, 2)
+                return "ratchet_hit", m_now, frac_left, day
+        elif max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
             return "profit_take", m_now, frac_left, day
         # PHYSICAL SETTLEMENT (2026-08-05): a STOCK option leaves before
         # expiry WEEK, not two days out. An ITM short leg held to expiry
@@ -499,9 +521,37 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
     return record
 
 
+def note_ratchet(short_id: str, peak_capture_pct: float, locked_pct: float) -> bool:
+    """Persist a ratchet rung crossing seen intraday (decision #110): the
+    live bridge saw the modeled capture reach a new arm level, so the peak
+    and the lock survive the day even if the close gives it back. Only ever
+    RAISES the stored values; race-safe via journal.update_entry. Never
+    raises; False when nothing was written."""
+    try:
+        def _mutate(entry):
+            if entry.get("outcome") is not None or not entry.get("spread"):
+                return False
+            cur = dict(entry.get("ratchet") or {})
+            new_peak = max(float(peak_capture_pct), float(cur.get("peak_capture_pct") or -1e9))
+            new_lock = (max(float(locked_pct), float(cur["locked_pct"]))
+                        if cur.get("locked_pct") is not None else float(locked_pct))
+            if cur.get("locked_pct") is not None and new_lock <= float(cur["locked_pct"]) \
+                    and new_peak <= float(cur.get("peak_capture_pct") or -1e9):
+                return False
+            entry["ratchet"] = dict(cur, peak_capture_pct=round(new_peak, 2),
+                                    locked_pct=new_lock, armed=True,
+                                    as_of=date.today().isoformat(), source="live_bridge")
+            return True
+        return bool(journal.update_entry(short_id, _mutate))
+    except Exception as exc:
+        print(f"  (ratchet note skipped for {short_id}: {exc})")
+        return False
+
+
 def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
                                  model_capture_pct: float = None,
-                                 today: date = None) -> dict:
+                                 today: date = None, resolution: str = "profit_take",
+                                 locked_pct: float = None) -> dict:
     """Decision #69 (owner, 2026-07-14): square off ONE approved open
     spread the moment its profit-take fires intraday — priced on REAL
     option-chain quotes, never the linear model. The live loop calls this
@@ -543,11 +593,20 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
             m_entry = _spread_entry_mark(spread)
             profit_ps = max(-max_loss_ps, min(m_exit - m_entry, max_profit_ps))
             # The real-quote verification gate.
-            if not (max_profit_ps > 0 and profit_ps
-                    >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
+            real_capture = (profit_ps / max_profit_ps * 100) if max_profit_ps else 0.0
+            if resolution == "ratchet_hit":
+                # decision #110: the ratchet fired because the MODELED capture
+                # fell under the lock; on REAL quotes it must still be under
+                # the lock, or the EOD path keeps owning it.
+                from src import profit_ratchet as pr
+                if locked_pct is None or not pr.ratchet_hit(real_capture, locked_pct):
+                    result["status"] = "above_lock_on_real_quotes"
+                    result["real_capture_pct"] = round(real_capture, 2)
+                    return False
+            elif not (max_profit_ps > 0 and profit_ps
+                      >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
                 result["status"] = "below_threshold_on_real_quotes"
-                result["real_capture_pct"] = round(
-                    profit_ps / max_profit_ps * 100, 2) if max_profit_ps else 0.0
+                result["real_capture_pct"] = round(real_capture, 2)
                 return False
 
             m_exit = m_entry + profit_ps          # clamped basket exit mark
@@ -556,7 +615,7 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
                 spread, leg_quotes)
             # Decision #103: the square-off is an EXIT ticket the paper
             # venue fills at the REAL quotes (+ tier slippage).
-            execution = _execute_paper_exit(entry, leg_quotes, "profit_take", today=today)
+            execution = _execute_paper_exit(entry, leg_quotes, resolution, today=today)
             if execution.get("venue_slippage_ps") is not None:
                 frictions, slippage = _spread_exit_costs_quoted(
                     spread, leg_quotes, exit_slipped=True)
@@ -573,7 +632,7 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
 
             entry["outcome"] = {
                 "checked": today.isoformat(),
-                "resolution": "profit_take",
+                "resolution": resolution,
                 "price": round(m_exit, 2),
                 "exit_date": today.isoformat(),
                 "pct": round(capture_pct, 2),
@@ -594,7 +653,7 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
                    if execution.get("mode") == "paper_venue" or execution.get("error") else {}),
                 "hypothetical": False,
                 "position_closed": True,
-                "verdict": _spread_verdict(entry, "profit_take", pnl_net,
+                "verdict": _spread_verdict(entry, resolution, pnl_net,
                                            capture_pct),
             }
             result.update(status="squared_off", pnl_rs=pnl_net,
@@ -645,6 +704,15 @@ def _spread_verdict(entry: dict, resolution: str, pnl_net: float, capture_pct: f
                     "(conservative, wall clock; review this row by hand)")
         return (f"EXPIRY BACKSTOP — settled at intrinsic value on the last close "
                 f"before expiry (wall clock), net Rs.{pnl_net:+,.2f}")
+    if resolution == "ratchet_hit":
+        rs = entry.get("ratchet") or {}
+        return ((f"WIN — profit ratchet took {capture_pct:.0f}% of max profit "
+                 f"(peak {rs.get('peak_capture_pct')}%, lock {rs.get('locked_pct')}%; "
+                 f"decision #110)" if pnl_net > 0 else
+                 f"flat — profit ratchet closed at breakeven lock "
+                 f"(peak {rs.get('peak_capture_pct')}%; decision #110)")
+                if approved else
+                f"MISSED GAIN — the ratchet would have banked {capture_pct:.0f}% without you")
     if resolution == "profit_take":
         return (f"WIN — auto-exit at {capture_pct:.0f}% of max profit (gamma discipline)"
                 if approved else
@@ -1085,6 +1153,7 @@ def _spread_outcome_line(entry: dict) -> str:
     o = entry["outcome"]
     s = entry["spread"]
     label = {"profit_take": "PROFIT TAKE (65% of max)",
+             "ratchet_hit": "PROFIT RATCHET HIT (locked gain banked, #110)",
              "pre_expiry_exit": "PRE-EXPIRY EXIT (2-day gamma rule)",
              "trail_hit": "ATR TRAIL HIT (underlying ratchet)",
              EXPIRY_BACKSTOP_RESOLUTION: "EXPIRY BACKSTOP (wall-clock settlement)",

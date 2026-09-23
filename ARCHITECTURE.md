@@ -449,6 +449,14 @@ protective-leg-first). It changes how a paper fill is *modeled*, nothing else;
 locks, and the entry halts. **Manager (exit side):** `src/plan_tracker.py` —
 THE one settlement path (no other code closes a trade).
 
+**Standing rule — directional options spreads exit on a PROFIT RATCHET, not a
+static take (decision #110, 2026-09-24).** A bull call / bear put arms at 40%
+of max profit (lock = breakeven) and steps the locked floor 60→30, 80→50,
+90→70 behind its peak capture; capture below the lock = `ratchet_hit`
+through the OMS. Neutral structures keep the 65% static take (theta, not
+tails). Entries are NOT filtered on volatility rank or on how many
+same-direction spreads the book holds — the #109 gates were withdrawn.
+
 **Standing rule — the equity desk exits on an ATR TRAIL, not a static target
 (decision #107, 2026-09-23).** A funded darling's exit level is `highest high
 since entry − 3 × ATR(14)`, floored at the plan's hard stop, a one-way

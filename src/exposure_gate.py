@@ -109,28 +109,8 @@ def gate_entry(proposal: dict, entries: list = None,
 
         conflicts = conflicting_positions(ticker, direction, entries, today)
         if not conflicts:
-            # CORRELATION GUARD (decision #109): a book of three bear puts on
-            # three indices is ONE bet on the market falling. At most
-            # MAX_OPEN_PER_DIRECTION open directional spreads per thesis
-            # across every underlying; neutral (delta-flat) structures are
-            # capped by the vol gate and margin instead, not here.
-            if direction in ("bullish", "bearish"):
-                from src.config import MAX_OPEN_PER_DIRECTION as cap
-                from src import positions
-                same = [p for p in positions.active_positions(entries, today)
-                        if p.get("kind") == "spread" and direction_of(p) == direction]
-                if cap > 0 and len(same) >= cap:
-                    ids = [str(p.get("trade_id") or "?") for p in same]
-                    _log_block(ticker, direction, spread.get("strategy"),
-                               ids, proposal.get("view"), today=today,
-                               notify_fn=notify_fn, conflicts=same)
-                    _record_opportunity_cost(ticker, direction, same, today=today,
-                                             record_fn=record_fn)
-                    return False, (
-                        f"CORRELATION_GUARD_HIT: {len(same)} open {direction} "
-                        f"position(s) across the book already "
-                        f"(`{'`, `'.join(ids)}`) — max {cap} per directional "
-                        f"thesis (decision #109)")
+            # (The #109 book-wide correlation cap lived here for one day and
+            # was withdrawn by #110: entries are not throttled by thesis.)
             return True, "allowed"
 
         ids = [str(p.get("trade_id") or "?") for p in conflicts]

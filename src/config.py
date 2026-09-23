@@ -119,19 +119,23 @@ EQUITY_DESK_MAX_NOTIONAL_PCT = float(
 EQUITY_TRAIL_ENABLED = bool(_CONFIG.get("equity_trail_enabled", True))
 EQUITY_TRAIL_ATR_MULT = float(_CONFIG.get("equity_trail_atr_mult", 3.0))
 EQUITY_TRAIL_ATR_N = int(_CONFIG.get("equity_trail_atr_n", 14))
-# VOLATILITY EDGE (decision #109, 2026-09-23): a short-vega structure (iron
-# condor / butterfly) is only proposed when the underlying's 14-session
-# realized volatility ranks high against its own 252-session range
-# (`vol_rank.hv_rank`, 0-100). Below the floor the neutral proposal is
-# REFUSED (VOL_RANK_GATE); missing history = named abstention, not a block.
-VOL_RANK_GATE_ENABLED = bool(_CONFIG.get("vol_rank_gate_enabled", True))
-VOL_RANK_MIN_NEUTRAL = float(_CONFIG.get("vol_rank_min_neutral", 50.0))
+# Realized-vol rank is a DIAGNOSTIC on every proposal (`vol_rank.hv_rank`).
+# The #109 entry gate on it and the #109 correlation guard were WITHDRAWN
+# the next day (decision #110: "over-filtering entries to avoid the −100
+# trades also filters out the +100 trades") — there is no vol gate and no
+# per-direction cap; edge is taken at the EXIT (the profit ratchet below).
 VOL_RANK_WINDOW = int(_CONFIG.get("vol_rank_window", 14))
 VOL_RANK_LOOKBACK = int(_CONFIG.get("vol_rank_lookback", 252))
-# CORRELATION GUARD (decision #109): at most this many OPEN directional
-# spreads per thesis (bullish / bearish) across the whole book; the third
-# is refused CORRELATION_GUARD_HIT by the exposure gate.
-MAX_OPEN_PER_DIRECTION = int(_CONFIG.get("max_open_per_direction", 2))
+# ASYMMETRIC PROFIT RATCHET (decision #110): directional spreads (bull call
+# / bear put) drop the static 65% profit take; the ladder [(arm_at %, lock
+# %)] arms at 40% of max profit (lock breakeven) and steps 60→30, 80→50,
+# 90→70; capture below the lock = `ratchet_hit` exit through the OMS.
+# Neutral structures keep the static take. Bars before the effective date
+# feed the peak but can never fire the exit (Issue 31 rule).
+RATCHET_ENABLED = bool(_CONFIG.get("ratchet_enabled", True))
+RATCHET_LADDER = tuple(tuple(r) for r in _CONFIG.get(
+    "ratchet_ladder", [[40, 0], [60, 30], [80, 50], [90, 70]]))
+RATCHET_EFFECTIVE_DATE = str(_CONFIG.get("ratchet_effective_date", "2026-09-24"))
 # Macro expiry guard (decision #107): the CEO brief flags any macro /
 # commodity contract id that has expired or expires within this many days.
 MACRO_EXPIRY_WARN_DAYS = int(_CONFIG.get("macro_expiry_warn_days", 7))

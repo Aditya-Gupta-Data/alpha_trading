@@ -159,6 +159,9 @@ def test_live_cycle_default_stays_readonly_advisory(tmp_path, monkeypatch):
 
 
 def test_live_cycle_squares_off_when_armed(tmp_path, monkeypatch):
+    # decision #110: this fixture is a bear put; the square-off SEAM is what
+    # this test covers, so the ratchet is pinned off to keep the 65% trigger
+    monkeypatch.setattr("src.config.RATCHET_ENABLED", False)
     entries = [_spread_entry()]
     _sandbox(tmp_path, monkeypatch, entries)
     notes = []
@@ -180,6 +183,9 @@ def test_live_cycle_squares_off_when_armed(tmp_path, monkeypatch):
 
 
 def test_square_off_falls_back_to_advisory_without_quotes(tmp_path, monkeypatch):
+    # decision #110: this fixture is a bear put; the square-off SEAM is what
+    # this test covers, so the ratchet is pinned off to keep the 65% trigger
+    monkeypatch.setattr("src.config.RATCHET_ENABLED", False)
     entries = [_spread_entry()]
     _sandbox(tmp_path, monkeypatch, entries)
     notes = []

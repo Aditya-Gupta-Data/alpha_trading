@@ -277,7 +277,28 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
     # exceed its own max profit / max loss, so neither may the model.
     profit_ps = max(-max_loss_ps, min(m_now - m_entry, max_profit_ps))
 
-    if (max_profit_ps > 0
+    capture = (profit_ps / max_profit_ps * 100) if max_profit_ps > 0 else 0.0
+    ratchet = None
+    from src import profit_ratchet as pr
+    from src.config import RATCHET_ENABLED
+    if RATCHET_ENABLED and pr.is_directional(spread) and max_profit_ps > 0:
+        # decision #110: directional spreads ride the profit ratchet — the
+        # persisted peak (EOD walk / intraday rung notes) plus the live mark.
+        prior = entry.get("ratchet") or {}
+        peak = max(float(prior.get("peak_capture_pct") or -1e9), capture)
+        ratchet = pr.state(peak, prior.get("locked_pct"))
+        ratchet["capture_pct"] = round(capture, 2)
+        ratchet["new_rung"] = (ratchet["locked_pct"] is not None
+                               and (prior.get("locked_pct") is None
+                                    or float(ratchet["locked_pct"]) > float(prior["locked_pct"])))
+    if ratchet is not None:
+        if pr.ratchet_hit(capture, ratchet["locked_pct"]):
+            signal = "ratchet_hit"
+        elif days_left <= pt._forced_exit_days(entry.get("ticker")):
+            signal = "pre_expiry_exit"
+        else:
+            signal = "hold"
+    elif (max_profit_ps > 0
             and profit_ps >= pt.OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
         signal = "profit_take"
     elif days_left <= pt._forced_exit_days(entry.get("ticker")):
@@ -288,11 +309,11 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
         signal = "pre_expiry_exit"
     else:
         signal = "hold"
-    capture = (profit_ps / max_profit_ps * 100) if max_profit_ps > 0 else 0.0
     return {"short_id": entry.get("short_id"), "ticker": entry["ticker"],
             "strategy": spread.get("strategy"), "signal": signal,
             "live_pnl_rs": round(profit_ps * qty, 2),
-            "capture_pct": round(capture, 2), "days_left": days_left}
+            "capture_pct": round(capture, 2), "days_left": days_left,
+            "ratchet": ratchet}
 
 
 def evaluate_open_positions(spot_by_ticker: dict, entries=None,
@@ -368,7 +389,9 @@ def intraday_square_off(sig: dict, entries=None, quotes_fn=_leg_quotes_for,
             return {"status": "no_chain_quotes", "short_id": sig["short_id"]}
         return pt.resolve_intraday_profit_take(
             sig["short_id"], quotes,
-            model_capture_pct=sig.get("capture_pct"), today=today)
+            model_capture_pct=sig.get("capture_pct"), today=today,
+            resolution=sig.get("signal") or "profit_take",
+            locked_pct=(sig.get("ratchet") or {}).get("locked_pct"))
     except Exception as exc:
         return {"status": "error", "short_id": sig.get("short_id"),
                 "reason": str(exc)}
@@ -427,6 +450,19 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
         market_snapshot.write(spots, marks, now=now)
 
     fired = []
+    # decision #110: a directional spread that crossed a NEW ratchet rung
+    # intraday has its peak/lock persisted (rare: at most one write per
+    # rung per trade), so the lock survives a give-back into the close.
+    # Only with a square_off_fn armed (the production daemon) — offline
+    # callers stay read-only.
+    if square_off_fn is not None:
+        for sig in marks:
+            r = sig.get("ratchet") or {}
+            if r.get("new_rung"):
+                try:
+                    pt.note_ratchet(sig["short_id"], r["peak_capture_pct"], r["locked_pct"])
+                except Exception:
+                    pass
     for sig in marks:
         if sig["signal"] == "hold" or not registry.fresh(sig):
             continue
@@ -438,7 +474,7 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
         # advisory (#41). Every non-squared status falls back to the
         # advisory + the EOD path untouched.
         squared = None
-        if square_off_fn is not None and sig["signal"] == "profit_take":
+        if square_off_fn is not None and sig["signal"] in ("profit_take", "ratchet_hit"):
             try:
                 squared = square_off_fn(sig)
             except Exception:
@@ -450,14 +486,14 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                     f"✅ **SQUARED OFF intraday — {sig['ticker']} "
                     f"{(sig['strategy'] or 'spread').replace('_', ' ')}** "
                     f"(`{sig['short_id']}`)\n"
-                    f"profit take filled at {squared['capture_pct']:.0f}% "
+                    f"{sig['signal'].replace('_', ' ')} filled at {squared['capture_pct']:.0f}% "
                     f"of max profit on REAL chain quotes — P&L "
                     f"Rs.{squared['pnl_rs']:,.2f} net (booked now, "
                     "decision #69; model had said "
                     f"{sig['capture_pct']:.0f}%).")
             continue
         if notify_fn:
-            emoji = {"profit_take": "🎯"}.get(sig["signal"], "⏳")
+            emoji = {"profit_take": "🎯", "ratchet_hit": "🔒"}.get(sig["signal"], "⏳")
             fallback = ""
             if squared is not None:
                 fallback = (f" (intraday fill declined: "

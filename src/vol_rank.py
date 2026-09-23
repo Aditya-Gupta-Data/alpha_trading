@@ -9,10 +9,9 @@ close history already carries:
     rank   = (rv_now − min(rv over LOOKBACK)) / (max − min) × 100     (HV Rank)
     pctile = share of the LOOKBACK rolling rvs at or below rv_now × 100 (HV %ile)
 
-Both are reported; the gate reads `rank`. A short-vega structure sold when
-rank is low is selling premium that has nowhere to fall — that is the whole
-point of the filter. Pure; no I/O. Not enough history = None everywhere,
-never a guessed rank.
+Both are reported on every proposal as a DIAGNOSTIC. The #109 entry gate on
+this number was withdrawn by decision #110 (entries are not filtered on it).
+Pure; no I/O. Not enough history = None everywhere, never a guessed rank.
 """
 from __future__ import annotations
 
@@ -60,15 +59,3 @@ def hv_rank(closes: list, window: int = 14, lookback: int = 252) -> dict:
                 "rank": round(100.0 * (cur - lo) / (hi - lo), 1) if hi > lo else 50.0})
     out["available"] = len(series) >= max(20, lookback // 4)
     return out
-
-
-def neutral_allowed(vr: dict, floor: float) -> tuple:
-    """(allowed, note). Unavailable = allowed with the abstention named."""
-    if not vr or not vr.get("available"):
-        return True, "vol rank unavailable (history too short) — gate abstained"
-    if float(vr["rank"]) >= float(floor):
-        return True, f"HV rank {vr['rank']:.0f} ≥ {floor:g}"
-    return False, (f"VOL_RANK_GATE: HV rank {vr['rank']:.0f} < {floor:g} "
-                   f"(14d realized vol {vr['current']:.1%} vs 252d range "
-                   f"{vr['low']:.1%}–{vr['high']:.1%}) — short-vega structure "
-                   f"refused in low volatility (decision #109)")

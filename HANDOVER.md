@@ -42,7 +42,24 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-09-23 (later) — #103 REVERSED, #104 WITHDRAWN (decision #105): no mid-trade stop on a spread; DEPLOYED. ⚠️ THE 5-TRADE RESTORE IS WRITTEN AND DRY-RUN BUT NOT YET EXECUTED — owner runs one command
+## 2026-09-23 (night) — RESTORE EXECUTED by the owner 20:31 IST, verified
+
+Owner ran `scripts/restore_issue31_trades.py` on the VM at 20:31 IST.
+Verified read-only afterwards: all five locks `released_at = NULL`,
+`account_state.realized_pnl` 52,206.54 → **88,751.63**, equity ₹10,88,751.63,
+drawdown 0.65%, open locks 15 → 20, 5 `issue31_restore` account_events,
+5 rows in `data/issue31_voided_outcomes.jsonl`, journal 64 lines before and
+after (no concurrent write lost), backups `*.bak-issue31-20260923-203107`.
+The five spreads are OPEN again with the pre-#103 resolver. Previewed what
+the next tracker run (Thu 09-24 15:35) will do with them: TCS `f8356c9c`,
+NIFTY BANK `bd73554d`, NIFTY BANK `2ff3443a` → still live; HDFCBANK
+`efe1681e` → `pre_expiry_exit` on the 09-22 bar (stock option, expiry-week
+rule — legitimate); NIFTY MID SELECT `54365ef1` → **`profit_take` on the
+09-21 bar** — the condor reached 65% of max profit the very day the stop
+had booked it as a −₹7,962 loss. Both will carry `settled_at` = 09-24 and
+count on Thursday's cards. The section below is the pre-restore record.
+
+## 2026-09-23 (later) — #103 REVERSED, #104 WITHDRAWN (decision #105): no mid-trade stop on a spread; DEPLOYED. Restore tool written and dry-run — EXECUTED 20:31 IST, see the block above
 
 **Architect mandate.** "The ₹10k per-trade cap is the maximum loss; reverse
 the 50% stop completely like it was never introduced, and reverse any trades

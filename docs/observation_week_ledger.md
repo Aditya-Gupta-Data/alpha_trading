@@ -1709,3 +1709,18 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Execution status: see HANDOVER 09-23 — the agent's session could not run
   the mutating step; the owner runs it by hand.** Until it runs, the five
   trades are still closed in the journal and the DB.
+
+### Issue 31 — RESTORE EXECUTED (2026-09-23 20:31 IST, owner-run; CLOSED)
+
+- `scripts/restore_issue31_trades.py` run by the owner from the Mac. Verified
+  on the VM afterwards (read-only): five locks re-locked (`released_at`
+  NULL), realized 52,206.54 → 88,751.63, equity ₹10,88,751.63, open locks
+  15 → 20, five `issue31_restore` account_events, five voided outcomes
+  archived, journal line count unchanged (64), backups
+  `data/*.bak-issue31-20260923-203107`.
+- Preview of the next tracker run over the five: HDFCBANK `efe1681e` settles
+  `pre_expiry_exit` (09-22 bar, expiry-week rule); NIFTY MID SELECT
+  `54365ef1` settles `profit_take` (09-21 bar) — a WIN on the day the stop
+  had booked it as −₹7,962. The other three stay open.
+- Still not touched: five FILLED EXIT tickets in `trade_tickets`; five
+  `outcomes` rows (overwritten by the real resolution on upsert).

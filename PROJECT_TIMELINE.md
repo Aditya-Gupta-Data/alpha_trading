@@ -235,8 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-23 · 3 commits · 17 files touched
+### 2026-09-23 · 7 commits · 22 files touched
 
+- `e896e94` docs: HANDOVER 09-23 (later) — #105 deployed, restore tool dry-run verified, owner runs the mutating step
+- `bef66bc` docs: decision #105 (no mid-trade spread stop, #103 reversed, #104 withdrawn, restore tool), ARCHITECTURE Dept 3 standing rule, MODULES rows, ledger Issue 31 ruling
+- `d6fd519` revert(#103→#105): no mid-trade stop on a defined-risk spread — premium stop reversed, the #104 thesis stop withdrawn; spreads held to target or expiry; scripts/restore_issue31_trades.py (MANUAL OFFLINE TOOL) re-opens the trades the stop cut
+- `9ef6011` docs: DECISIONS — #104 row in newest-first order
 - `98b7878` docs: decision #104 (thesis-invalidation exits, forward-looking; settled_at cards; Net Equity) + #94 recon engine built — MODULES rows, HANDOVER 09-23
 - `2360a67` fix(recon): load .env via dhan_client before reading DHAN_CLIENT_ID
 - `65a68bc` feat(v1.2): thesis-invalidation exits replace the vetoed 50% premium stop (decision #104, forward-looking from 2026-09-23); cards key on settled_at + Net Equity line; read-only recon engine (decision #94)

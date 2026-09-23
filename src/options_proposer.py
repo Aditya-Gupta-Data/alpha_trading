@@ -489,6 +489,25 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                     "reason": "war playbook — short-premium (iron condor) disabled in "
                               f"crisis regime ({advisory.get('crisis_reason', '')})"}
 
+    # VOLATILITY EDGE (decision #109): a neutral (short-vega) read is only
+    # built when realized vol ranks high against its own year. Judged
+    # BEFORE the chain call — a refused condor costs no Dhan budget. The
+    # rank rides on every proposal (directional too) for the record.
+    vol_rank = None
+    try:
+        from src.config import (VOL_RANK_GATE_ENABLED, VOL_RANK_LOOKBACK,
+                                VOL_RANK_MIN_NEUTRAL, VOL_RANK_WINDOW)
+        from src.vol_rank import hv_rank, neutral_allowed
+        vol_rank = hv_rank(analysis.get("closes"), VOL_RANK_WINDOW, VOL_RANK_LOOKBACK)
+        if view == "neutral" and VOL_RANK_GATE_ENABLED:
+            ok, note = neutral_allowed(vol_rank, VOL_RANK_MIN_NEUTRAL)
+            vol_rank = dict(vol_rank, gate=note)
+            if not ok:
+                return {"proposal": None, "view": view, "vix": vix,
+                        "vol_rank": vol_rank, "reason": note}
+    except Exception as exc:                     # a broken gauge never blocks
+        vol_rank = {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+
     horizon = horizon or horizon_for(analysis, macro_score=macro_score)
     if expiry is None:
         expiry = pick_expiry(get_expiry_list(underlying), underlying=underlying,
@@ -680,6 +699,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         "sizing": dict(sizing, account="PAPER_10L", lots_final=lots),
         # G3 audit (2026-09-23): the regime inputs that chose this archetype.
         "regime_read": regime_read(analysis, vix),
+        # decision #109: the realized-vol rank the proposal was judged on.
+        "vol_rank": vol_rank,
     }
     return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
             "horizon": horizon}

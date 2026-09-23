@@ -409,6 +409,13 @@ def run(today: date = None, conn=None, fo: dict = None, bars_fn=None,
             summary["fdr"] = audit_placebos(conn)
         except Exception as e:
             _skip(summary, "audit_placebos", f"{type(e).__name__}: {e}")
+        # decision #109: the queued hypotheses (ToD window, Mansfield RS) —
+        # scored nightly on the desk's own record, never on a live path.
+        try:
+            from src.validation import hypotheses as hyp
+            summary["hypotheses"] = hyp.run_nightly(conn, today)
+        except Exception as e:
+            _skip(summary, "hypotheses", f"{type(e).__name__}: {e}")
     finally:
         if own is not None:
             own.close()

@@ -83,3 +83,29 @@ weak repeating signal. Define continuation as confirmation, prove it in the
 simulator against #72, ceiling it with #71 — then, maybe, wire it. Today's
 builds (#71 guardrail + #72 measurement) are exactly the substrate this
 experiment needs.
+
+
+## H-ToD — Time-of-day entry window (queued 2026-09-23, decision #109)
+
+**Claim.** Options entries made strictly between 10:00 and 14:30 IST have a
+higher per-trade Sharpe (mean R / stdev R) than all-day entries.
+**Cohorts.** `in_window` = resolved approved spreads whose journal
+`created_at` falls in the window; `all_day` = every resolved approved spread.
+**Source.** The options journal's own out-of-sample record.
+**Verdict rule.** `insufficient_n` below 20 per cohort; else `supports` if
+Sharpe(in_window) > Sharpe(all_day), `contradicts` otherwise. Scored nightly
+by `src/validation/hypotheses/tod_entry_window.py` inside the 21:00 court.
+**Status.** CANDIDATE → TRIAL by the court's aging rule. NOT a live filter.
+
+## H-RS — Mansfield relative strength filter (queued 2026-09-23, decision #109)
+
+**Claim.** Equity-desk entries whose Mansfield RS vs NIFTY is positive at
+entry (`MRS = (close/NIFTY ÷ SMA252(close/NIFTY) − 1) × 100 > 0`) have a
+lower max drawdown of the cumulative-R path than unfiltered entries.
+**Cohorts.** `rs_filtered` (MRS > 0 on the entry date) vs `unfiltered`
+(every resolved equity-ledger trade); names without bars are `unscored`.
+**Source.** The equity ledger's exits (autopsy `r_multiple`), darling bars by
+scrip id, NIFTY closes from the bars cache.
+**Verdict rule.** `insufficient_n` below 20 per cohort; else `supports` if
+maxDD(rs_filtered) < maxDD(unfiltered). `src/validation/hypotheses/mansfield_rs.py`.
+**Status.** CANDIDATE → TRIAL by the court's aging rule. NOT a live filter.

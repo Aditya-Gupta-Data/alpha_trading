@@ -119,6 +119,19 @@ EQUITY_DESK_MAX_NOTIONAL_PCT = float(
 EQUITY_TRAIL_ENABLED = bool(_CONFIG.get("equity_trail_enabled", True))
 EQUITY_TRAIL_ATR_MULT = float(_CONFIG.get("equity_trail_atr_mult", 3.0))
 EQUITY_TRAIL_ATR_N = int(_CONFIG.get("equity_trail_atr_n", 14))
+# VOLATILITY EDGE (decision #109, 2026-09-23): a short-vega structure (iron
+# condor / butterfly) is only proposed when the underlying's 14-session
+# realized volatility ranks high against its own 252-session range
+# (`vol_rank.hv_rank`, 0-100). Below the floor the neutral proposal is
+# REFUSED (VOL_RANK_GATE); missing history = named abstention, not a block.
+VOL_RANK_GATE_ENABLED = bool(_CONFIG.get("vol_rank_gate_enabled", True))
+VOL_RANK_MIN_NEUTRAL = float(_CONFIG.get("vol_rank_min_neutral", 50.0))
+VOL_RANK_WINDOW = int(_CONFIG.get("vol_rank_window", 14))
+VOL_RANK_LOOKBACK = int(_CONFIG.get("vol_rank_lookback", 252))
+# CORRELATION GUARD (decision #109): at most this many OPEN directional
+# spreads per thesis (bullish / bearish) across the whole book; the third
+# is refused CORRELATION_GUARD_HIT by the exposure gate.
+MAX_OPEN_PER_DIRECTION = int(_CONFIG.get("max_open_per_direction", 2))
 # Macro expiry guard (decision #107): the CEO brief flags any macro /
 # commodity contract id that has expired or expires within this many days.
 MACRO_EXPIRY_WARN_DAYS = int(_CONFIG.get("macro_expiry_warn_days", 7))

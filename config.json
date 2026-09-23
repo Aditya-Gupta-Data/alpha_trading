@@ -54,5 +54,8 @@
   "equity_trail_enabled": true,
   "equity_trail_atr_mult": 3.0,
   "equity_trail_atr_n": 14,
-  "macro_expiry_warn_days": 7
+  "macro_expiry_warn_days": 7,
+  "vol_rank_gate_enabled": true,
+  "vol_rank_min_neutral": 50.0,
+  "max_open_per_direction": 2
 }

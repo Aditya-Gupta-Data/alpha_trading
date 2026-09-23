@@ -66,6 +66,9 @@ def analyze(ticker: str):
                                   if fast else None),
         "sma_slow_distance_pct": (round((spot / slow - 1) * 100, 4)
                                   if slow else None),
+        # decision #109 (2026-09-23): the close history rides along so the
+        # proposer's volatility-rank gate needs no second Dhan call.
+        "closes": [float(x) for x in prices[-300:]],
     }
 
 

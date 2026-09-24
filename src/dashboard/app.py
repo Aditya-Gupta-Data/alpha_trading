@@ -99,7 +99,7 @@ with tab_l:
                        "MTM ₹": r["mtm_rs"], "Capture %": r["capture_pct"],
                        "Ratchet peak %": r["ratchet_peak_pct"], "Ratchet lock %": r["ratchet_lock_pct"],
                        "Exit rule": r["ratchet"], "Sizing note": r["sizing"] or ""}
-                      for r in rows], use_container_width=True, hide_index=True)
+                      for r in rows], width="stretch", hide_index=True)
     else:
         st.info("no open positions in the journal / equity ledger")
     st.caption("Directional spreads ride the asymmetric profit ratchet (decision #110): armed at 40% of max "
@@ -112,7 +112,7 @@ with tab_l:
         st.dataframe([{"Settled": o["settled"], "Symbol": o["symbol"], "Strategy": o["strategy"],
                        "Resolution": o["resolution"], "P&L ₹": o["pnl_rs"], "R": o["r_multiple"],
                        "OMS ticket": o["ticket"] or "—"} for o in outs],
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
 
 # ------------------------------------------------------------- recon
 with tab_r:
@@ -139,17 +139,17 @@ with tab_r:
             c3.metric("Collateral", rs(f.get("collateral")))
         if R.get("mismatches"):
             st.error("Mismatches")
-            st.dataframe(R["mismatches"], use_container_width=True, hide_index=True)
+            st.dataframe(R["mismatches"], width="stretch", hide_index=True)
         if R.get("errors"):
             st.warning("\n".join(str(e) for e in R["errors"]))
         with st.expander(f"Paper-only rows ({len(R.get('paper_only') or [])}) — expected absent at the broker while Rule 7 holds"):
             st.dataframe([{"Account": p.get("account"), "Ref": p.get("ref"), "Underlying": p.get("underlying") or "—",
                            "Margin ₹": p.get("margin_rs"), "Source": p.get("source")}
-                          for p in R.get("paper_only") or []], use_container_width=True, hide_index=True)
+                          for p in R.get("paper_only") or []], width="stretch", hide_index=True)
         hist = d.recon_history()
         if len(hist) > 1:
             st.subheader("Recon history")
-            st.dataframe(hist, use_container_width=True, hide_index=True)
+            st.dataframe(hist, width="stretch", hide_index=True)
     st.caption("The recon engine GETs /positions, /holdings and /fundlimit only; a build-time test fails if any "
                "write verb or order path appears in it. A failed read is 'unknown', never parity.")
 
@@ -158,7 +158,7 @@ with tab_a:
     st.subheader("Autonomous event log — account + shadow-account events, newest first")
     ev = d.audit_events()
     st.dataframe([{"When": e.get("ts"), "Account": e.get("account"), "Event": e.get("event_type"),
-                   "Detail": e.get("detail")} for e in ev], use_container_width=True, hide_index=True, height=560)
+                   "Detail": e.get("detail")} for e in ev], width="stretch", hide_index=True, height=560)
     st.caption("Entries lock margin, releases settle P&L, halts latch on drawdown, treasury rotations move "
                "the equity budget, sizing refusals name their reason. Ratchet arm/step events live on the "
                "journal rows (Live Book tab); exits are OMS tickets (Recent settlements).")

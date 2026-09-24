@@ -8,16 +8,18 @@ set -euo pipefail
 APP="/opt/alpha_trading"
 ENVF="/etc/alpha-dashboard.env"
 cd "$APP" && git pull -q --ff-only
-# 1. runtimes: Node 22 (AppStream module) + nginx; SELinux lets nginx dial local ports
+# 1. runtimes: Node 22 (AppStream module) + nginx; SELinux lets nginx dial local ports.
+#    NO npm on this box: the desk bundle is BUILT ON THE MAC and shipped by
+#    scripts/dashboard_box/ship_ui.sh (a vite build thrashes a 1 GB box — seen twice).
 sudo dnf -q -y module enable nodejs:22 >/dev/null 2>&1 || true
 sudo dnf -q -y --setopt=install_weak_deps=False install nodejs nginx >/dev/null
 sudo setsebool -P httpd_can_network_connect 1
 # 2. python side: the bridge shares the showcase venv
 venv/bin/pip install -q --no-cache-dir -r requirements-dashboard.txt
-# 3. build the desk (production SSR bundle -> frontend/.output)
-# NITRO_PRESET=node-server: Lovable's config defaults to a Cloudflare worker bundle,
-# which `node` cannot run; the node-server preset emits .output/server/index.mjs.
-( cd frontend && npm ci --no-audit --no-fund && NITRO_PRESET=node-server npm run build )
+# 3. the shipped bundle must already be here
+if [ ! -f frontend/.output/server/index.mjs ]; then
+  echo "frontend/.output missing — run  bash scripts/dashboard_box/ship_ui.sh  from the Mac first"; exit 1
+fi
 sudo restorecon -R "$APP/frontend" >/dev/null 2>&1 || true
 # 4. services
 sudo tee /etc/systemd/system/alpha-api-bridge.service >/dev/null <<UNIT

@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-24 · 13 commits · 117 files touched
+### 2026-09-24 · 15 commits · 117 files touched
 
+- `e2b74e5` docs: HANDOVER 09-24 17:20 — desk data-parity audit (md5 + field-level), timezone bug fixed at the bridge, no-store, source-side curve/equity observation
+- `9c88070` fix(desk parity audit): bridge stamps +05:30 on the VM's naive IST timestamps (browser-local parsing shifted times for non-IST viewers), Cache-Control: no-store on every payload, tz-aware freshness; live-book shows 'entered' as a date; tests
 - `ad9ae27` docs: HANDOVER 09-24 evening — React desk live on the Oracle box behind one tunnel (decision #113), box lessons, update procedure
 - `725d0f2` fix(dashboard_box): call pip via venv/bin/python -m pip (venv relocated /home→/opt, stale shebang)
 - `ef9b6d6` fix(dashboard_box): build the desk on the Mac and ship the Node bundle (ship_ui.sh); the box never runs npm (a vite build thrashes the 1 GB Oracle VM)

@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-24 · 6 commits · 17 files touched
+### 2026-09-24 · 7 commits · 17 files touched
 
+- `874a368` feat(dashboard_box): Cloudflare quick tunnel service (OCI kept dropping inbound 8501); HANDOVER — public URL + how to re-read it
 - `4b53248` docs: HANDOVER 09-24 afternoon — always-on dashboard on the Oracle box (decision #112): service up, mirror push verified, OCI ingress pending
 - `26967de` fix(dashboard_box): app under /opt and env file in /etc — SELinux (Enforcing) blocks systemd exec/env reads from /home on Oracle Linux
 - `c1fd535` fix(dashboard_box): create swap BEFORE dnf (dnf thrashed the 498 MB Oracle box), no-cache pip; docs for decision #112

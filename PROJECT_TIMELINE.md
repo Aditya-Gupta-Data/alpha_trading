@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-24 · 1 commits · 11 files touched
+
+- `561ce76` feat(showcase): read-only Streamlit dashboard — treasury (both accounts), live book with profit-ratchet peak/lock, broker recon banner, event audit log; pure tested data layer (mode=ro, locked-DB safe), VM mirror pull script, optional dependency (decision #111)
+
+
 ### 2026-09-23 · 19 commits · 63 files touched
 
 - `7efca03` docs: HANDOVER 09-23 22:50 — decision #110 deployed (ratchet live, #109 filters withdrawn), open-book dry run

@@ -42,6 +42,60 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-24 (17:20) — DATA PARITY AUDIT of the desk pipeline: VM → mirror → bridge → public API; one real bug found and fixed (timezones)
+
+**Method.** Fresh push at 17:14:59 IST; md5 of the five files on the trading
+VM vs the box mirror — all five identical. Raw values read straight from
+`brain_map.db` / `journal.jsonl` / `market_snapshot.json` / `recon.jsonl` on
+the VM (SQL + json, `repr` floats), then the public API through the tunnel
+with the key, compared field by field in Python with exact equality.
+
+**Results — identical.** PAPER_10L realized 85280.33 · equity 1085280.33 ·
+peak 1095901.49 · locked 1060580.86 · 23 locks · available 24699.47 (= eq −
+locked) · drawdown 0.9692 (recomputed). PAPER_2L realized 0.0 · locked
+198769.0 · 7 locks. Trade `db775082` (RELIANCE bear put): MTM 18640.54,
+capture 60.72, ratchet peak 60.72 / lock 30.0 armed — equals the VM journal's
+`ratchet` block and the engine snapshot's mark. Recon: PARITY 09-23 11:43:41,
+0 broker positions, 15 book rows. Equity curve: 67 points, last
+2026-09-24T09:21:59 = 1085294.82 — equals the DB row.
+
+**Precision.** Floats go DB → Python float → JSON (`repr`, shortest
+round-trip) → JS double: no loss (values are ≤ 9 significant digits). The
+read layer's `round(…, 2/4)` touches values the engine already stored at 2 dp
+(verified equal); `drawdown_pct` is derived (4 dp) and matches `pm`'s own.
+Only DISPLAY rounds: rupees to whole rupees (`maximumFractionDigits: 0`),
+percentages to 2 dp — `formatPct(60.72)` shows exactly 60.72.
+
+**Timezones — the bug.** The VM stores NAIVE local timestamps and its clock
+is IST (`2026-09-24T09:21:59`). The UI did `new Date(naive)` → a browser
+parses that as ITS OWN local time, then formats in IST — correct only for a
+viewer in India; anyone else saw every time shifted by their offset (a UTC
+viewer: +5h30). Fixed at the bridge: naive datetimes are stamped `+05:30`
+(equity curve `ts`, audit `ts`, outcomes `settled`, recon `ts`); dates and
+tz-aware strings untouched; `freshness` is now tz-aware IST from the file
+mtimes (the mirror preserves the VM's mtimes, so "as of" = last write on the
+VM, not push time). `live-book` showed `entered` (a session DATE) through the
+datetime formatter as "05:30 IST" — now `formatIstDate`. Numbers untouched.
+
+**Cache.** The bridge opens the files on every request (no module state; a
+test writes a new recon row between two calls and the second call sees it).
+Added `Cache-Control: no-store` on every payload; Cloudflare reports
+`cf-cache-status: DYNAMIC` (not cached); nginx has no proxy cache; TanStack
+Query refetches every 60 s. The only staleness is the 15-minute mirror
+cadence itself, shown honestly by `freshness`.
+
+**One source-side observation (not a dashboard bug).** The equity curve's
+last point (09:21:59, ₹10,85,294.82) is ₹14.49 above the current account
+equity (₹10,85,280.33) — something moved `realized_pnl` after the last
+`equity_curve` row was appended (every `release_margin` appends one; a path
+that adjusts realized without a curve point exists). Worth a look in
+`portfolio_manager`; the desk shows both numbers as stored.
+
+**Deployed.** Bridge `9c88070` on the box (restarted), desk bundle
+re-shipped; public payloads re-verified: every timestamp now carries
+`+05:30`, header `cache-control: no-store`, values unchanged. Suite 2,368
+passed / 1 failed (known).
+
 ## 2026-09-24 (evening) — THE REACT DESK IS LIVE ON THE ORACLE BOX BEHIND ONE TUNNEL (decision #113); Supabase gone, read-only bridge serving it
 
 **What is live (verified from the Mac 16:5x IST).** One public origin,

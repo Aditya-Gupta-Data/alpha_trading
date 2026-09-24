@@ -45,7 +45,7 @@ def test_shapes_match_the_ui_contract(client):
     h = {"X-Access-Key": "s3cret"}
     t = client.get("/api/treasury", headers=h).json()
     assert t["PAPER_10L"]["equity"] == 1_000_000.0 and t["PAPER_10L"]["rejections"] == 0
-    assert "drawdown_pct" in t["PAPER_10L"] and "cagr_pct" not in t["PAPER_10L"]
+    assert "drawdown_pct" in t["PAPER_10L"] and "cagr_pct" in t["PAPER_10L"]   # CAGR re-introduced (decision #114)
     ot = client.get("/api/open-trades", headers=h).json()
     assert ot[0]["strategy"] == "Bear Put" and ot[0]["ratchet_lock_pct"] == 0.0
     r = client.get("/api/recon/latest", headers=h).json()

@@ -111,3 +111,20 @@ def test_the_dashboard_writes_nothing_and_imports_no_execution_path():
                 r"paper_venue", r"strategy_router", r"oms\.", r"dhan_client", r"fire_broadcast"):
         assert not re.search(pat, src), pat
     assert "mode=ro" in Path(d.__file__).read_text()
+
+
+def test_cagr_is_annualised_from_the_run_epoch_and_none_under_a_day(tmp_path):
+    assert d.cagr(1_000_000, 1_085_280.33, 64) == round(((1.08528033) ** (365 / 64) - 1) * 100, 2)
+    assert d.cagr(1_000_000, 1_085_280.33, 0.5) is None and d.cagr(0, 1, 10) is None
+    from src import brain_map, portfolio_manager as pm
+    p = tmp_path / "bm.db"
+    conn = brain_map.connect(str(p)); pm.get_account(conn); pm.get_paper_account(conn, "PAPER_2L")
+    conn.execute("UPDATE account_state SET realized_pnl = 100000 WHERE id = 1")
+    conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES (?, 'clean_sheet', 'epoch')",
+                 ((d.datetime.now(d.IST) - d.timedelta(days=73)).replace(tzinfo=None).isoformat(timespec="seconds"),))
+    conn.commit(); conn.close()
+    T = d.treasury(p)
+    a = T["PAPER_10L"]
+    assert 72.9 <= a["days_elapsed"] <= 73.1 and a["abs_return_pct"] == 10.0
+    assert a["cagr_pct"] == d.cagr(1_000_000, 1_100_000, a["days_elapsed"]) and a["cagr_pct"] > 10.0
+    assert T["PAPER_2L"]["cagr_pct"] is None                      # born seconds ago: under a day

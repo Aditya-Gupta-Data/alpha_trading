@@ -38,6 +38,12 @@ export interface AccountTreasury {
   peak_equity: number;
   /** Peak-to-now drawdown, percent (0 = at the peak). */
   drawdown_pct: number;
+  /** Days since the account's measurement epoch (clean-sheet reset / birth). */
+  days_elapsed: number | null;
+  /** Equity vs starting capital, percent. */
+  abs_return_pct: number | null;
+  /** Annualised compound growth ((equity/start)^(365/days) − 1) × 100; null under one day. */
+  cagr_pct: number | null;
   locked_margin: number;
   open_locks: number;
   available_cash: number;
@@ -173,6 +179,9 @@ const MOCK_TREASURY: Treasury = {
     equity: PAPER_10L_EQUITY,
     peak_equity: PEAK_10L,
     drawdown_pct: Number((((PEAK_10L - PAPER_10L_EQUITY) / PEAK_10L) * 100).toFixed(2)),
+    days_elapsed: 64,
+    abs_return_pct: 8.54,
+    cagr_pct: Number(((Math.pow(PAPER_10L_EQUITY / 1_000_000, 365 / 64) - 1) * 100).toFixed(2)),
     locked_margin: 412_500,
     open_locks: 6,
     available_cash: 672_900,
@@ -184,6 +193,9 @@ const MOCK_TREASURY: Treasury = {
     equity: 203_150,
     peak_equity: 208_600,
     drawdown_pct: 2.61,
+    days_elapsed: 5,
+    abs_return_pct: 1.58,
+    cagr_pct: null,
     locked_margin: 96_800,
     open_locks: 3,
     available_cash: 106_350,

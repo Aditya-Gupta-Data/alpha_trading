@@ -69,6 +69,41 @@ def _jsonl(path) -> list:
 
 
 # ------------------------------------------------------------- treasury
+def cagr(start_capital: float, equity: float, days: float) -> float | None:
+    """Annualised compound growth, percent: ((equity / start) ** (365 / days) − 1) × 100.
+    None when fewer than one full day has elapsed or the inputs are not positive —
+    annualising a few hours is noise, not a rate."""
+    try:
+        if days is None or days < 1 or start_capital <= 0 or equity <= 0:
+            return None
+        return round(((float(equity) / float(start_capital)) ** (365.0 / float(days)) - 1.0) * 100.0, 2)
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _days_since(iso_ts: str | None, now: datetime = None) -> float | None:
+    if not iso_ts:
+        return None
+    try:
+        t = datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    now = now or datetime.now(IST)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=IST)                    # the VM writes naive IST
+    return round((now - t).total_seconds() / 86400.0, 2)
+
+
+def _run_epoch(conn) -> str | None:
+    """The measurement epoch the firm MTM line also uses: the latest
+    clean-sheet reset, else the account's birth."""
+    row = _q(conn, "SELECT ts FROM account_events WHERE event_type = 'clean_sheet' ORDER BY ts DESC LIMIT 1")
+    if isinstance(row, list) and row:
+        return row[0]["ts"]
+    row = _q(conn, "SELECT created_at FROM account_state WHERE id = 1")
+    return row[0]["created_at"] if isinstance(row, list) and row else None
+
+
 def treasury(db_path=None) -> dict:
     """{'PAPER_10L': {...}, 'PAPER_2L': {...}, 'error'?} — equity, realized,
     drawdown, locks per account, straight from the account tables."""
@@ -87,13 +122,18 @@ def treasury(db_path=None) -> dict:
                              "WHERE released_at IS NULL")
             m = locks[0] if isinstance(locks, list) and locks else {"m": 0, "n": 0}
             peak = max(float(a["peak_equity"] or eq), eq)
+            days = _days_since(_run_epoch(conn))
             out["PAPER_10L"] = {"account_id": "PAPER_10L", "starting_capital": a["starting_capital"],
                                 "realized_pnl": round(a["realized_pnl"], 2), "equity": round(eq, 2),
                                 "peak_equity": peak,
                                 "drawdown_pct": round((peak - eq) / peak * 100, 4) if peak else 0.0,
                                 "locked_margin": round(float(m["m"]), 2), "open_locks": int(m["n"]),
-                                "available_cash": round(eq - float(m["m"]), 2)}
-        pa = _q(conn, "SELECT account_id, starting_capital, realized_pnl, peak_equity FROM paper_accounts")
+                                "available_cash": round(eq - float(m["m"]), 2),
+                                # compounding (decision #114): annualised from the run epoch
+                                "days_elapsed": days,
+                                "abs_return_pct": round((eq / a["starting_capital"] - 1) * 100, 2) if a["starting_capital"] else None,
+                                "cagr_pct": cagr(a["starting_capital"], eq, days)}
+        pa = _q(conn, "SELECT account_id, starting_capital, realized_pnl, peak_equity, created_at FROM paper_accounts")
         if isinstance(pa, list):
             for a in pa:
                 acct = a["account_id"]
@@ -104,13 +144,17 @@ def treasury(db_path=None) -> dict:
                 rej = _q(conn, "SELECT COUNT(*) AS n FROM paper_account_events WHERE account_id = ? AND "
                                "event_type IN ('margin_exhaustion','sizing_refused')", (acct,))
                 peak = max(float(a["peak_equity"] or eq), eq)
+                days = _days_since(a.get("created_at"))
                 out[acct] = {"account_id": acct, "starting_capital": a["starting_capital"],
                              "realized_pnl": round(a["realized_pnl"], 2), "equity": round(eq, 2),
                              "peak_equity": peak,
                              "drawdown_pct": round((peak - eq) / peak * 100, 4) if peak else 0.0,
                              "locked_margin": round(float(m["m"]), 2), "open_locks": int(m["n"]),
                              "available_cash": round(eq - float(m["m"]), 2),
-                             "rejections": int(rej[0]["n"]) if isinstance(rej, list) and rej else None}
+                             "rejections": int(rej[0]["n"]) if isinstance(rej, list) and rej else None,
+                             "days_elapsed": days,
+                             "abs_return_pct": round((eq / a["starting_capital"] - 1) * 100, 2) if a["starting_capital"] else None,
+                             "cagr_pct": cagr(a["starting_capital"], eq, days)}
         curve = _q(conn, "SELECT ts, equity, drawdown_pct FROM equity_curve ORDER BY ts DESC LIMIT 200")
         out["equity_curve"] = list(reversed(curve)) if isinstance(curve, list) else []
     finally:

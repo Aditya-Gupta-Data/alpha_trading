@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/desk/PageHeader";
 import { StatusPill } from "@/components/desk/StatusPill";
 import { latestReconQuery, treasuryQuery } from "@/lib/desk-queries";
 import {
+  EM_DASH,
   formatIstDateTime,
   formatIstDayMonth,
   formatNumber,
@@ -148,7 +149,43 @@ function OverviewPage() {
               <AccountCard account={treasury.data.PAPER_2L} />
             </div>
 
-            <Panel title="Equity curve (PAPER_10L, every settlement)">
+            <Panel title="Compounding — PAPER_10L">
+              {(() => {
+                const a = treasury.data.PAPER_10L;
+                const cagrTone = a.cagr_pct === null ? "" : a.cagr_pct >= 0 ? "text-pnl-up" : "text-pnl-down";
+                return (
+                  <div className="mb-5 grid grid-cols-2 gap-6 sm:grid-cols-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground">CAGR (annualised)</p>
+                      <p className={`num text-2xl font-semibold ${cagrTone}`}>{formatPct(a.cagr_pct)}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {a.days_elapsed === null
+                          ? "epoch unknown"
+                          : a.days_elapsed < 30
+                            ? `from only ${a.days_elapsed.toFixed(0)} days — noisy`
+                            : `from ${a.days_elapsed.toFixed(0)} days of live trading`}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Return since start</p>
+                      <p className={`num text-2xl font-semibold ${(a.abs_return_pct ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}>
+                        {formatPct(a.abs_return_pct)}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">on {formatRupees(a.starting_capital)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Days compounding</p>
+                      <p className="num text-2xl font-semibold">{a.days_elapsed === null ? EM_DASH : a.days_elapsed.toFixed(0)}</p>
+                      <p className="text-[11px] text-muted-foreground">since the clean-sheet epoch</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Formula</p>
+                      <p className="num text-sm font-semibold">(E/E₀)^(365/d) − 1</p>
+                      <p className="text-[11px] text-muted-foreground">realized equity, no unrealized marks</p>
+                    </div>
+                  </div>
+                );
+              })()}
               {curve.length === 0 ? (
                 <EmptyState label="No history yet" />
               ) : (

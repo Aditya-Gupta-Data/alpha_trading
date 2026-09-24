@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-24 · 15 commits · 117 files touched
+### 2026-09-24 · 17 commits · 118 files touched
 
+- `43dea96` docs: HANDOVER 09-24 18:55 — CAGR on the desk (decision #114), first Proving Court readout of ToD + Mansfield RS (docs/hypotheses.md table)
+- `1aaea54` feat(desk): CAGR re-introduced — data.treasury computes days_elapsed / abs_return_pct / cagr_pct from the run epoch ((E/E0)^(365/d) − 1, null under a day); Compounding strip above the equity curve in the desk UI (decision #114)
 - `e2b74e5` docs: HANDOVER 09-24 17:20 — desk data-parity audit (md5 + field-level), timezone bug fixed at the bridge, no-store, source-side curve/equity observation
 - `9c88070` fix(desk parity audit): bridge stamps +05:30 on the VM's naive IST timestamps (browser-local parsing shifted times for non-IST viewers), Cache-Control: no-store on every payload, tz-aware freshness; live-book shows 'entered' as a date; tests
 - `ad9ae27` docs: HANDOVER 09-24 evening — React desk live on the Oracle box behind one tunnel (decision #113), box lessons, update procedure

@@ -328,6 +328,11 @@ CRON_TZ=Asia/Kolkata
 #     ledger; the Mac's launchd sync agent (scripts/mac_auto_sync.sh) pulls
 #     the file down so the owner reads it locally each morning.
 35 16 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.reporting.markdown_ledger >> "$REPO_ROOT/logs/markdown_ledger.log" 2>&1
+# 33. Showcase mirror publish (every 15 min 09:00-16:45 IST Mon-Fri + 21:05
+#     nightly, decision #112): rsync-pushes the five ledger files the always-on
+#     dashboard box (Oracle free VM) reads. Read-only here; key-only ssh.
+*/15 9-16 * * 1-5 cd "$REPO_ROOT" && bash scripts/publish_dashboard_mirror.sh >> "$REPO_ROOT/logs/dashboard_mirror.log" 2>&1
+5 21 * * * cd "$REPO_ROOT" && bash scripts/publish_dashboard_mirror.sh >> "$REPO_ROOT/logs/dashboard_mirror.log" 2>&1
 
 # 21. Firm treasury rotation (Mon-Fri 19:56 IST, decision #83) — re-routes
 #     the equity desk's budget AFTER the Mac's ~19:20 artifact ship (fresh

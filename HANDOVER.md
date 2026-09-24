@@ -42,6 +42,43 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-24 (morning) — THE STREAMLIT SHOWCASE DASHBOARD (decision #111); Mac-side, read-only, off-cron
+
+**What it is.** `src/dashboard/app.py` (UI) over `src/dashboard/data.py`
+(pure, tested readers): four tabs — Treasury (Net Equity / Realized /
+Active Drawdown / locks / cash for PAPER_10L and PAPER_2L, equity curve),
+Live Book & Ratchets (every open spread + funded darling with strategy
+label, accounts, max loss, engine-snapshot MTM, capture, ratchet peak /
+lock), Compliance & Recon (latest `logs/recon.jsonl` as a green PARITY / red
+MISMATCH / amber UNKNOWN banner, broker funds, mismatch + paper-only rows,
+history), Event Audit Log (`account_events` + `paper_account_events`
+merged, newest first). SQLite is opened `mode=ro` with a 5 s busy timeout;
+a locked or absent DB is an error row, never a crash. The page never
+quotes the broker and never writes. `streamlit` is an OPTIONAL dependency
+(`requirements-dashboard.txt`); the VM does not install it; the tests need
+it not.
+
+**Verified rendering (10:0x IST, Mac, against a fresh VM mirror):** all four
+tabs render with the live numbers (10L ₹10.85L equity / 22 locks / 0.97%
+DD; 2L ₹2L / 7 locks / 7 refusals; 10 open positions; recon PARITY as of
+09-23 11:43 with ₹1,411 broker funds; audit log populated), no server or
+console errors.
+
+**How to run (copy-paste):**
+```bash
+python3 -m pip install -r requirements-dashboard.txt
+bash scripts/pull_dashboard_data.sh
+ALPHA_DATA_DIR=data/vm_mirror streamlit run src/dashboard/app.py
+```
+Without `ALPHA_DATA_DIR` it reads this checkout's own `data/` + `logs/`
+(the Mac's copies are STALE — the engine lives on the VM). The mirror dir
+`data/vm_mirror/` is git-ignored. `.claude/launch.json` has a `dashboard`
+entry for the desktop preview.
+
+**Not deployed anywhere** — nothing to deploy: the VM is unchanged at
+`775c382`. Mac suite **2,362 passed / 1 failed** (the known
+`test_darling_shadow`), 54 s.
+
 ## 2026-09-23 (22:50) — #109 ENTRY FILTERS WITHDRAWN; ASYMMETRIC PROFIT RATCHET LIVE FOR DIRECTIONAL SPREADS (decision #110); DEPLOYED
 
 **Withdrawn (architect, one day after #109):** the vol-rank gate and the

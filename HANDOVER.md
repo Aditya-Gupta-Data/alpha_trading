@@ -63,6 +63,18 @@ exec/env reads from /home; that cost the first two attempts), env in
 :8501, firewalld 8501 open, cron 03:05 `git pull` of code. The page gates
 on the access key and auto-refreshes every 5 min.
 
+**15:1x IST — REACHABLE via a Cloudflare quick tunnel.** The owner fixed
+the security list twice; a tcpdump on the box still saw no inbound 8501
+packets (OCI drops them before the VNIC — an NSG or a second list). So the
+box now publishes itself OUTBOUND like the trading VM does: systemd
+`cloudflared-dashboard` (`cloudflared tunnel --url http://127.0.0.1:8501`,
+Requires=alpha-dashboard, enabled at boot). Verified from the Mac: HTTPS 200
+in 0.9 s, key gate renders. **URL today:**
+`https://paxil-karen-continuously-orleans.trycloudflare.com` — it ROTATES
+when the tunnel service restarts (box reboot). Read the current one:
+`ssh -i ~/.ssh/id_ed25519 opc@80.225.235.164 "sudo journalctl -u cloudflared-dashboard --no-pager | grep -o 'https://[a-z0-9.-]*trycloudflare.com' | tail -1"`.
+The direct `:8501` path stays configured for whenever OCI is sorted.
+
 **State at 14:35 IST.** Service `active`, `curl 127.0.0.1:8501` → 200,
 RSS ~70 MB idle, 474 MB available. **From outside, `http://80.225.235.164:8501`
 times out** — the box's own firewall is open and it listens on 0.0.0.0, so

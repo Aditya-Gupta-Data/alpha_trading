@@ -47,4 +47,26 @@ WantedBy=multi-user.target
 UNIT
 sudo restorecon -R "$APP"
 sudo systemctl daemon-reload && sudo systemctl enable --now alpha-dashboard
+# Cloudflare quick tunnel (decision #112 addendum): OCI's security list / NSG
+# kept dropping inbound 8501 on 2026-09-24, so the box publishes itself
+# outbound instead — no inbound port needed, HTTPS, key-gated by the app.
+# The trycloudflare URL rotates when this service restarts (boot); read it:
+#   sudo journalctl -u cloudflared-dashboard --no-pager | grep -o 'https://[a-z0-9.-]*trycloudflare.com' | tail -1
+if ! command -v cloudflared >/dev/null; then
+  curl -fsSL -o /tmp/cf.rpm https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-x86_64.rpm
+  sudo rpm -i /tmp/cf.rpm >/dev/null 2>&1 || sudo rpm -U /tmp/cf.rpm
+fi
+sudo tee /etc/systemd/system/cloudflared-dashboard.service >/dev/null <<UNIT
+[Unit]
+Description=Cloudflare quick tunnel -> alpha dashboard :8501
+After=network-online.target alpha-dashboard.service
+Requires=alpha-dashboard.service
+[Service]
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8501
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload && sudo systemctl enable --now cloudflared-dashboard
 sleep 8 && systemctl is-active alpha-dashboard && echo "dashboard up on :8501 (open 8501/tcp in the OCI security list too)"

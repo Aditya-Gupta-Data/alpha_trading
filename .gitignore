@@ -60,6 +60,6 @@ docs/LIVE_TRADE_BOOK.md.tmp
 docs/LIVE_TRADE_BOOK.md.pulling
 data/vm_mirror/
 
-# Lovable UI drop (2026-09-24, alphatarding101.zip) — never committed to main (branch rule)
-frontend/
+# frontend/ (the React desk, decision #113) IS tracked: a one-time Lovable drop with
+# Supabase removed and no secrets; its own .gitignore keeps node_modules/.output out.
 alphatarding101.zip

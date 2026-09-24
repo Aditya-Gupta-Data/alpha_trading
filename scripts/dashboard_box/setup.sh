@@ -20,7 +20,7 @@ sudo dnf -q -y --setopt=install_weak_deps=False install python3.11 python3.11-pi
 [ -d "$APP" ] || { sudo git clone -q "$REPO" "$APP" && sudo chown -R "$USER:$USER" "$APP"; }
 cd "$APP" && git pull -q --ff-only
 [ -d venv ] || python3.11 -m venv venv
-venv/bin/pip install -q --no-cache-dir --upgrade pip && venv/bin/pip install -q --no-cache-dir -r requirements-dashboard.txt
+venv/bin/python -m pip install -q --no-cache-dir --upgrade pip && venv/bin/python -m pip install -q --no-cache-dir -r requirements-dashboard.txt
 mkdir -p data/vm_mirror
 ENVF="/etc/alpha-dashboard.env"   # root-owned, in /etc — systemd cannot read an EnvironmentFile under /home with SELinux enforcing
 if [ ! -f "$ENVF" ]; then

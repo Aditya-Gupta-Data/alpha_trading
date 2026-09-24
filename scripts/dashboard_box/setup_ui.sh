@@ -15,7 +15,8 @@ sudo dnf -q -y module enable nodejs:22 >/dev/null 2>&1 || true
 sudo dnf -q -y --setopt=install_weak_deps=False install nodejs nginx >/dev/null
 sudo setsebool -P httpd_can_network_connect 1
 # 2. python side: the bridge shares the showcase venv
-venv/bin/pip install -q --no-cache-dir -r requirements-dashboard.txt
+# python -m pip: the venv was created under /home and moved to /opt, so venv/bin/pip has a stale shebang
+venv/bin/python -m pip install -q --no-cache-dir -r requirements-dashboard.txt
 # 3. the shipped bundle must already be here
 if [ ! -f frontend/.output/server/index.mjs ]; then
   echo "frontend/.output missing — run  bash scripts/dashboard_box/ship_ui.sh  from the Mac first"; exit 1

@@ -109,3 +109,23 @@ scrip id, NIFTY closes from the bars cache.
 **Verdict rule.** `insufficient_n` below 20 per cohort; else `supports` if
 maxDD(rs_filtered) < maxDD(unfiltered). `src/validation/hypotheses/mansfield_rs.py`.
 **Status.** CANDIDATE → TRIAL by the court's aging rule. NOT a live filter.
+
+
+### Court readout — 2026-09-24 18:47 IST (manual `run_nightly` on the VM, decision #114)
+
+| Hypothesis | Cohort | n | mean R | win rate | per-trade Sharpe | max DD (R) | Verdict |
+|---|---|---|---|---|---|---|---|
+| A ToD 10:00–14:30 | in_window | 14 | +0.844 | 71.4% | 0.709 | 2.51 | **insufficient_n** (14 < 20) |
+| A ToD | all_day | 38 | +0.502 | 63.2% | 0.438 | 5.61 | (7 entries unstamped) |
+| B Mansfield RS > 0 | rs_filtered | 54 | +0.186 | 44.4% | 0.167 | 6.48 | **supports** (both n ≥ 20) |
+| B Mansfield RS | unfiltered | 89 | +0.066 | 44.9% | 0.061 | 11.63 | (13 unscored: no bars) |
+
+Reading: A leans the right way (Sharpe 0.71 vs 0.44, DD 2.5R vs 5.6R) but is
+14 trades — not evidence. B clears the n floor and halves the drawdown
+(6.48R vs 11.63R) with ~3× the Sharpe — but this is the first scoring, on the
+same ledger the hypothesis was written against (in-sample), the filtered
+cohort is a SUBSET of the unfiltered one (a subset with fewer trades
+mechanically has a smaller cumulative drawdown), and the win rate is
+unchanged (44.4% vs 44.9%): the improvement is in the size of the losers,
+not their frequency. Neither is promoted: the court's own rule is the
+out-of-sample window + placebo FDR, not a first in-sample lean.

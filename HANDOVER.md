@@ -42,6 +42,35 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-24 (18:55) — CAGR back on the desk (decision #114) + first manual Proving Court readout of the two queued hypotheses
+
+**CAGR.** `dashboard.data.treasury` now carries `days_elapsed`,
+`abs_return_pct`, `cagr_pct` per account: `((equity / start) ^ (365 / days)
+− 1) × 100`, `days` from the run epoch (the latest `clean_sheet` event,
+else the account's birth — the same epoch `firm_mtm` uses), `None` under one
+day; REALIZED equity only (no unrealized marks). Today: PAPER_10L
+₹10,85,280.33 on ₹10L after 65.18 days → **abs +8.53%, CAGR 58.14%**;
+PAPER_2L 3.3 days old, 0.0%. The desk's Overview has a "Compounding —
+PAPER_10L" strip directly above the equity curve: CAGR (with "from N days of
+live trading" / "noisy" under 30 days), return since start, days
+compounding, and the formula. Deployed: bundle shipped 18:51, bridge
+`1aaea54` restarted, public `/api/treasury` returns `cagr_pct: 58.14`.
+Note the honest caveat printed on the strip: 58% annualised from 65 days is
+a rate, not a forecast — `firm_mtm`'s own line said 70.2% yesterday off MTM
+equity; this one uses realized equity, hence lower.
+
+**Court readout (manual `hypotheses.run_nightly` on the VM 18:47 IST).**
+A `tod_entry_window`: in-window n=14 Sharpe 0.709 / DD 2.51R vs all-day n=38
+Sharpe 0.438 / DD 5.61R → **insufficient_n** (needs 20 in-window). B
+`mansfield_rs`: RS-filtered n=54 Sharpe 0.167 / DD 6.48R vs unfiltered n=89
+Sharpe 0.061 / DD 11.63R → **supports** on the record. Both CANDIDATE
+(registered 09-23; the court ages them to TRIAL at 7 days = 09-30). Verdict
+on promotion: NO for both — A is 14 trades; B is in-sample, a subset (fewer
+trades ⇒ mechanically smaller cumulative DD) with an unchanged win rate.
+Full table in `docs/hypotheses.md`. Nothing live changed.
+
+**Suite** 2,369 passed / 1 failed (known).
+
 ## 2026-09-24 (17:20) — DATA PARITY AUDIT of the desk pipeline: VM → mirror → bridge → public API; one real bug found and fixed (timezones)
 
 **Method.** Fresh push at 17:14:59 IST; md5 of the five files on the trading

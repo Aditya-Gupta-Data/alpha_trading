@@ -68,3 +68,28 @@ def test_bridge_is_get_only_and_imports_no_execution_path():
     routes = sorted(r.path for r in api_bridge.app.routes if r.path.startswith("/api"))
     assert routes == ["/api/audit", "/api/freshness", "/api/health", "/api/open-trades",
                       "/api/recent-outcomes", "/api/recon/history", "/api/recon/latest", "/api/treasury"]
+
+
+def test_naive_ist_timestamps_are_stamped_and_dates_untouched(client):
+    assert api_bridge._ist("2026-09-24T09:21:59") == "2026-09-24T09:21:59+05:30"
+    assert api_bridge._ist("2026-09-23T21:57") == "2026-09-23T21:57+05:30"
+    assert api_bridge._ist("2026-09-24") == "2026-09-24"                       # a session date
+    assert api_bridge._ist("2026-09-24T15:29:11+05:30") == "2026-09-24T15:29:11+05:30"
+    assert api_bridge._ist(None) is None
+    h = {"X-Access-Key": "s3cret"}
+    r = client.get("/api/recon/latest", headers=h).json()
+    assert r["ts"] == "2026-09-23T11:43:41+05:30"
+    fr = client.get("/api/freshness", headers=h).json()
+    assert fr["journal"].endswith("+05:30")
+
+
+def test_every_response_is_no_store_and_read_fresh_per_request(client, tmp_path, monkeypatch):
+    h = {"X-Access-Key": "s3cret"}
+    r1 = client.get("/api/recon/latest", headers=h)
+    assert r1.headers["cache-control"] == "no-store"
+    # the mirror file changes between two requests -> the second sees it
+    Path(d.RECON_PATH).write_text(Path(d.RECON_PATH).read_text() + json.dumps(
+        {"ts": "2026-09-24T17:20:00", "verdict": "mismatch", "broker_positions": 1, "book_rows": 15,
+         "mismatches": [{"detail": "x"}]}) + "\n")
+    r2 = client.get("/api/recon/latest", headers=h).json()
+    assert r2["verdict"] == "MISMATCH" and r2["ts"].endswith("+05:30")

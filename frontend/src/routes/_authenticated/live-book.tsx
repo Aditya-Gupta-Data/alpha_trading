@@ -165,7 +165,7 @@ function LiveBookPage() {
                         {formatNumber(trade.lots)}
                       </td>
                       <td className="num px-2 py-2 text-xs text-muted-foreground">
-                        {formatIstDateTime(trade.entered)}
+                        {formatIstDate(trade.entered)}
                       </td>
                       <td className="num px-2 py-2 text-xs text-muted-foreground">
                         {trade.expiry === "—" ? EM_DASH : formatIstDate(trade.expiry)}
@@ -217,7 +217,7 @@ function LiveBookPage() {
                       ["Capture", formatPct(trade.capture_pct, 1)],
                       ["Max loss", formatRupees(trade.max_loss_rs)],
                       ["Expiry", trade.expiry === "—" ? EM_DASH : formatIstDate(trade.expiry)],
-                      ["Entered", formatIstDateTime(trade.entered)],
+                      ["Entered", formatIstDate(trade.entered)],
                       ["Ratchet", `${trade.ratchet} · ${ratchetLine(trade)}`],
                     ].map(([label, value]) => (
                       <div key={label}>

@@ -19,11 +19,25 @@ from __future__ import annotations
 
 import hmac
 import os
+import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.dashboard import data as d
+
+# The VM writes NAIVE local timestamps and its clock is IST ("2026-09-24T09:21:59").
+# A browser parses a naive ISO string as ITS OWN local time, so a viewer outside
+# India would see every time shifted (parity audit, 2026-09-24). The bridge
+# therefore stamps +05:30 onto naive datetimes; dates and tz-aware strings pass
+# through untouched. Numbers are never touched here.
+_NAIVE_DT = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$")
+
+
+def _ist(ts):
+    if isinstance(ts, str) and _NAIVE_DT.match(ts):
+        return ts.replace(" ", "T") + "+05:30"
+    return ts
 
 app = FastAPI(title="Alpha Desk read-only bridge", docs_url=None, redoc_url=None)
 app.add_middleware(
@@ -32,6 +46,15 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["X-Access-Key"],
 )
+
+
+@app.middleware("http")
+async def _no_store(request: Request, call_next):
+    """Every payload is read fresh from the mirror on each request; tell the
+    browser (and any proxy) never to cache it."""
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _check_key(request: Request) -> None:
@@ -45,7 +68,7 @@ def _check_key(request: Request) -> None:
 
 def _recon_row(r: dict) -> dict:
     """The UI's ReconRow: upper-case verdict, mismatches as strings."""
-    return {"ts": r.get("ts"), "verdict": str(r.get("verdict") or "unknown").upper(),
+    return {"ts": _ist(r.get("ts")), "verdict": str(r.get("verdict") or "unknown").upper(),
             "broker_positions": int(r.get("broker_positions") or 0),
             "book_rows": int(r.get("book_rows") or 0),
             "mismatches": [str(m.get("detail") or m.get("kind") or m) if isinstance(m, dict) else str(m)
@@ -61,6 +84,8 @@ def treasury(request: Request):
     for acct in ("PAPER_10L", "PAPER_2L"):
         if acct in t and t[acct].get("rejections") is None:
             t[acct]["rejections"] = 0
+    for p in t.get("equity_curve") or []:
+        p["ts"] = _ist(p.get("ts"))
     return t
 
 
@@ -73,7 +98,7 @@ def open_trades(request: Request):
 @app.get("/api/recent-outcomes")
 def recent_outcomes(request: Request):
     _check_key(request)
-    return d.recent_outcomes()
+    return [dict(o, settled=_ist(o.get("settled"))) for o in d.recent_outcomes()]
 
 
 @app.get("/api/recon/latest")
@@ -95,7 +120,7 @@ def recon_history(request: Request):
 @app.get("/api/audit")
 def audit(request: Request):
     _check_key(request)
-    return d.audit_events()
+    return [dict(e, ts=_ist(e.get("ts"))) for e in d.audit_events()]
 
 
 @app.get("/api/freshness")

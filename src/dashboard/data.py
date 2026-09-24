@@ -14,8 +14,10 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 ROOT = Path(__file__).resolve().parents[2]
 # ALPHA_DATA_DIR points the whole page at a mirror of the VM's files (see
@@ -226,7 +228,7 @@ def freshness() -> dict:
     for name, p in (("brain_map.db", DB_PATH), ("journal", JOURNAL_PATH),
                     ("market_snapshot", SNAPSHOT_PATH), ("recon", RECON_PATH)):
         try:
-            out[name] = datetime.fromtimestamp(Path(p).stat().st_mtime).isoformat(timespec="minutes")
+            out[name] = datetime.fromtimestamp(Path(p).stat().st_mtime, tz=IST).isoformat(timespec="minutes")
         except OSError:
             out[name] = None
     return out

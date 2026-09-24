@@ -235,8 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-24 · 1 commits · 11 files touched
+### 2026-09-24 · 6 commits · 17 files touched
 
+- `4b53248` docs: HANDOVER 09-24 afternoon — always-on dashboard on the Oracle box (decision #112): service up, mirror push verified, OCI ingress pending
+- `26967de` fix(dashboard_box): app under /opt and env file in /etc — SELinux (Enforcing) blocks systemd exec/env reads from /home on Oracle Linux
+- `c1fd535` fix(dashboard_box): create swap BEFORE dnf (dnf thrashed the 498 MB Oracle box), no-cache pip; docs for decision #112
+- `19444ba` feat(showcase): always-on dashboard box — access-key gate + 5-min auto-refresh fragment; trading VM rsync-pushes the ledger mirror (cron #33, key-only ssh); Oracle-Linux setup script with systemd service (decision #112)
+- `fc05a81` chore(dashboard): use width='stretch' (Streamlit ≥1.50) — silences the use_container_width deprecation notices
 - `561ce76` feat(showcase): read-only Streamlit dashboard — treasury (both accounts), live book with profit-ratchet peak/lock, broker recon banner, event audit log; pure tested data layer (mode=ro, locked-DB safe), VM mirror pull script, optional dependency (decision #111)
 
 

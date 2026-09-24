@@ -42,6 +42,50 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-24 (evening) — THE REACT DESK IS LIVE ON THE ORACLE BOX BEHIND ONE TUNNEL (decision #113); Supabase gone, read-only bridge serving it
+
+**What is live (verified from the Mac 16:5x IST).** One public origin,
+`https://bureau-theatre-managed-sociology.trycloudflare.com` (rotates on a
+tunnel restart — re-read with the journalctl one-liner in the #112 block):
+`/` → the React desk (access-key gate, then Overview / Live Book / Outcomes /
+Recon / Audit), `/api/*` → the FastAPI bridge (`/api/treasury` 401 without
+the key, live numbers with it; `/api/freshness` shows the mirror as of
+15:29 IST), `/streamlit/` → the Streamlit showcase. Box services, all
+`active` + enabled at boot: `alpha-api-bridge` (:8600), `alpha-desk-ui`
+(:3000, Node 22 running the shipped bundle), `alpha-dashboard` (:8501,
+`baseUrlPath=streamlit`), `nginx` (:8080 front door), `cloudflared-dashboard`
+(→ :8080). Same access key as the Streamlit page (`/etc/alpha-dashboard.env`).
+
+**What changed in the code.** `frontend/` is now TRACKED on `main`: Supabase
+auth / roles / drizzle / `.env` / reset-password deleted; gate =
+`src/hooks/useAccessKey.ts` (text input → localStorage → `X-Access-Key`;
+401 clears it); `cagr_pct` / `return_pct` / `nifty_return_pct` removed
+(Overview shows drawdown + the equity curve). `src/dashboard/api_bridge.py`
+= 7 GET routes + health over `dashboard.data`, key-checked, CORS; 4 tests.
+Deploy = `scripts/dashboard_box/ship_ui.sh` (build on the Mac with
+`NITRO_PRESET=node-server`, rsync `.output/`) + `setup_ui.sh` on the box
+(Node + nginx + units; NO npm on the box). Mac suite 2,366 passed / 1 failed
+(known). Trading VM untouched (`775c382` + cron #33).
+
+**Two more box lessons today.** (1) A vite/npm build on the 1 GB Oracle VM
+thrashed it to an SSH banner timeout for ~30 min (load 80) — the owner
+rebooted from the console mid-setup; builds now happen on the Mac only.
+(2) The venv was created under `/home` and moved to `/opt` for SELinux, so
+`venv/bin/pip`'s shebang is stale — scripts call `venv/bin/python -m pip`.
+Also: `free` on this box reports 498 MB after a reboot and 946 MB later
+(memory ballooning) — plan for 500.
+
+**Updating the desk later.** From the Mac: `bash scripts/dashboard_box/ship_ui.sh`
+(builds, ships, restarts `alpha-desk-ui`). Bridge/python changes: the box's
+03:05 `git pull` + `sudo systemctl restart alpha-api-bridge`.
+
+**What the next person should do first.**
+1. Open the URL, enter the key on the desk gate, check the five pages show
+   the same numbers as `/streamlit/`.
+2. If the URL has rotated, read it from the box (journalctl one-liner).
+3. Consider a named Cloudflare tunnel (needs a domain) so the URL stops
+   rotating — same open item as the trading VM's tunnel.
+
 ## 2026-09-24 (afternoon) — ALWAYS-ON DASHBOARD ON THE OWNER'S ORACLE FREE VM (decision #112); service UP, external reachability pending an OCI rule check
 
 **Where it runs.** Oracle Cloud always-free VM `doonavm` (ap-mumbai-1,

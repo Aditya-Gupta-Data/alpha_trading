@@ -188,3 +188,15 @@ tail -20 logs/edge_miner.log
 A healthy day: 🟢 session-open card at 09:15 and 🔴 close card at 15:30 (both from
 the VM), the 20:30 ops health card, and — whenever the Mac was on that day — an
 edge-miner line in its log around login/21:00.
+
+
+## Job 33 — Showcase mirror publish (added 2026-09-24, decision #112)
+
+`*/15 9-16 * * 1-5` and `5 21 * * *` → `bash scripts/publish_dashboard_mirror.sh`
+(log `logs/dashboard_mirror.log`). Rsync-pushes the five ledger files the
+always-on dashboard reads (`brain_map.db`, `journal.jsonl`,
+`equity_shadow_journal.jsonl`, `market_snapshot.json`, `recon.jsonl`) to the
+Oracle free VM (`~/.dashboard_target`, key `~/.ssh/dashboard_push`). Read-only
+on the engine; a missing target is a named no-op; a failed push is one log
+line, never an alert. The dashboard box itself runs the `alpha-dashboard`
+systemd service (Streamlit on :8501) and a 03:05 `git pull` of code only.

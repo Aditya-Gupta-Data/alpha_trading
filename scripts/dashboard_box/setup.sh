@@ -9,16 +9,18 @@
 set -euo pipefail
 REPO="${REPO:-https://github.com/Aditya-Gupta-Data/alpha_trading}"
 APP="$HOME/alpha_trading"
-sudo dnf -q -y install python3.11 python3.11-pip git rsync >/dev/null
 # swap: Streamlit + pandas on a small box
 if ! swapon --show | grep -q swapfile; then
   sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
   grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
 fi
+# dnf AFTER swap, on purpose: on a 498 MB box dnf's metadata refresh alone
+# can take 300-400 MB and thrash the machine to a halt (2026-09-24, seen live).
+sudo dnf -q -y --setopt=install_weak_deps=False install python3.11 python3.11-pip git rsync >/dev/null
 [ -d "$APP" ] || git clone -q "$REPO" "$APP"
 cd "$APP" && git pull -q --ff-only
 [ -d venv ] || python3.11 -m venv venv
-venv/bin/pip install -q --upgrade pip && venv/bin/pip install -q -r requirements-dashboard.txt
+venv/bin/pip install -q --no-cache-dir --upgrade pip && venv/bin/pip install -q --no-cache-dir -r requirements-dashboard.txt
 mkdir -p data/vm_mirror
 ENVF="$HOME/.dashboard.env"
 if [ ! -f "$ENVF" ]; then

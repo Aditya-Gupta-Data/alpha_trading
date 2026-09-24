@@ -42,6 +42,52 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-24 (afternoon) — ALWAYS-ON DASHBOARD ON THE OWNER'S ORACLE FREE VM (decision #112); service UP, external reachability pending an OCI rule check
+
+**Where it runs.** Oracle Cloud always-free VM `doonavm` (ap-mumbai-1,
+`80.225.235.164`, user `opc`, Oracle Linux 9, 1 OCPU, 946 MB + 2.5 GB
+swap). The owner's Donna Telegram listener on that box was stopped and
+disabled at the owner's word. The GCP dashboard VM / firewall rule / bucket
+created earlier that hour were deleted (≈ ₹0). Nothing about the trading
+VM's engine changed.
+
+**How it flows.** Trading VM cron #33 (`*/15 9-16 Mon-Fri` + `21:05`)
+runs `scripts/publish_dashboard_mirror.sh`: rsync over a dedicated key
+(`~/.ssh/dashboard_push`, target in `~/.dashboard_target` =
+`opc@80.225.235.164:/opt/alpha_trading/data/vm_mirror`) of the five ledger
+files, `--delay-updates`. Verified 14:33 IST: 5 files landed. The box: repo
+at `/opt/alpha_trading` (NOT /home — SELinux Enforcing refuses systemd
+exec/env reads from /home; that cost the first two attempts), env in
+`/etc/alpha-dashboard.env` (`DASHBOARD_KEY`, `ALPHA_DATA_DIR`), systemd
+`alpha-dashboard` (Restart=always, enabled at boot) serving Streamlit on
+:8501, firewalld 8501 open, cron 03:05 `git pull` of code. The page gates
+on the access key and auto-refreshes every 5 min.
+
+**State at 14:35 IST.** Service `active`, `curl 127.0.0.1:8501` → 200,
+RSS ~70 MB idle, 474 MB available. **From outside, `http://80.225.235.164:8501`
+times out** — the box's own firewall is open and it listens on 0.0.0.0, so
+the OCI security-list ingress rule the owner added is on a list the subnet
+does not use (or an NSG on the VNIC is in the way). Owner to check: VCN
+`vcn-20260807-1532` → Subnets → the instance's subnet → its Security List(s)
+must carry `TCP 8501 from 0.0.0.0/0`; and the instance's VNIC → Network
+Security Groups (none, or one that allows 8501).
+
+**Lesson (first attempt hung the box for 20 min).** On a ~500 MB-visible
+Oracle box, `dnf` before swap thrashed it into an SSH banner timeout; the
+owner rebooted from the console; `setup.sh` now creates swap FIRST and pips
+with `--no-cache-dir`.
+
+**Mac suite** unchanged: 2,362 passed / 1 failed (known). VM unchanged at
+`775c382` + cron #33.
+
+**What the next person should do first.**
+1. Confirm `curl -s -o /dev/null -w '%{http_code}' http://80.225.235.164:8501/`
+   returns 200 after the security-list fix; then open it, enter the key.
+2. Thu 15:35 push: `logs/dashboard_mirror.log` on the trading VM shows
+   `5 file(s) ->`; the page's "as of" line moves.
+3. If the box ever swaps hard, `sudo systemctl restart alpha-dashboard`
+   is safe — it holds no state.
+
 ## 2026-09-24 (morning) — THE STREAMLIT SHOWCASE DASHBOARD (decision #111); Mac-side, read-only, off-cron
 
 **What it is.** `src/dashboard/app.py` (UI) over `src/dashboard/data.py`

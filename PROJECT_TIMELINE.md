@@ -235,8 +235,14 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-24 · 7 commits · 17 files touched
+### 2026-09-24 · 13 commits · 117 files touched
 
+- `ad9ae27` docs: HANDOVER 09-24 evening — React desk live on the Oracle box behind one tunnel (decision #113), box lessons, update procedure
+- `725d0f2` fix(dashboard_box): call pip via venv/bin/python -m pip (venv relocated /home→/opt, stale shebang)
+- `ef9b6d6` fix(dashboard_box): build the desk on the Mac and ship the Node bundle (ship_ui.sh); the box never runs npm (a vite build thrashes the 1 GB Oracle VM)
+- `28ba452` docs: decision #113 (React desk adopted, cloud auth stripped, read-only bridge, one-origin deploy) + MODULES rows
+- `aff3f20` feat(desk): React desk UI (Lovable drop, Supabase removed → shared access-key gate in localStorage, CAGR/return/Nifty metrics removed) + FastAPI read-only bridge (7 GET routes, X-Access-Key, CORS) + Oracle box deploy (nginx front door, node-server build, systemd units) — decision #113
+- `c23b6ab` chore: git-ignore the Lovable frontend drop (frontend/, alphatarding101.zip)
 - `874a368` feat(dashboard_box): Cloudflare quick tunnel service (OCI kept dropping inbound 8501); HANDOVER — public URL + how to re-read it
 - `4b53248` docs: HANDOVER 09-24 afternoon — always-on dashboard on the Oracle box (decision #112): service up, mirror push verified, OCI ingress pending
 - `26967de` fix(dashboard_box): app under /opt and env file in /etc — SELinux (Enforcing) blocks systemd exec/env reads from /home on Oracle Linux

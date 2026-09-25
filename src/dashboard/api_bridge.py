@@ -84,6 +84,8 @@ def treasury(request: Request):
     for acct in ("PAPER_10L", "PAPER_2L", "PAPER_2L_ROT"):
         if acct in t and t[acct].get("rejections") is None:
             t[acct]["rejections"] = 0
+        if acct in t:
+            t[acct]["base_ts"] = _ist(t[acct].get("base_ts"))
     for p in t.get("equity_curve") or []:
         p["ts"] = _ist(p.get("ts"))
     return t

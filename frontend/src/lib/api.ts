@@ -52,6 +52,17 @@ export interface AccountTreasury {
   open_locks: number;
   available_cash: number;
   rejections?: number;
+  /** PAPER_10L only (decision #116): equity at the ₹10L base the curve and CAGR start from. */
+  base_equity?: number;
+  base_ts?: string | null;
+  /** Mark-to-market of open positions from the engine's snapshot; null = nothing priced. */
+  unrealized_pnl: number | null;
+  /** Realized equity + unrealized; null when nothing is priced. */
+  net_equity: number | null;
+  marked_positions: number;
+  open_positions: number;
+  /** When the engine published the marks (IST, tz-aware). */
+  marks_as_of: string | null;
 }
 
 export interface EquityPoint {
@@ -67,6 +78,8 @@ export interface Treasury {
   /** The capital-rotation A/B arm (decision #115); absent until its first signal. */
   PAPER_2L_ROT?: AccountTreasury & { rejections: number };
   equity_curve: EquityPoint[];
+  /** The curve starts here (decision #116); earlier history is capital moves, not trading. */
+  curve_epoch?: string;
 }
 
 export interface OpenTrade {
@@ -191,6 +204,11 @@ const MOCK_TREASURY: Treasury = {
     locked_margin: 412_500,
     open_locks: 6,
     available_cash: 672_900,
+    unrealized_pnl: 21_450,
+    net_equity: PAPER_10L_EQUITY + 21_450,
+    marked_positions: 5,
+    open_positions: 6,
+    marks_as_of: NOW.toISOString(),
   },
   PAPER_2L: {
     account_id: "PAPER_2L",
@@ -205,6 +223,11 @@ const MOCK_TREASURY: Treasury = {
     locked_margin: 96_800,
     open_locks: 3,
     available_cash: 106_350,
+    unrealized_pnl: -1_820,
+    net_equity: 203_150 - 1_820,
+    marked_positions: 3,
+    open_positions: 3,
+    marks_as_of: NOW.toISOString(),
     rejections: 4,
   },
   equity_curve: EQUITY_CURVE,

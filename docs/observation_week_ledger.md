@@ -1752,3 +1752,25 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   by ROW, not by time (seven 07-15 settlements get as much width as a
   two-week gap); the two pre-Issue-16 points (07-10, 07-15) were stamped in
   UTC and are labelled IST, so they read 5h30 early.
+
+## Issue 33 — auto-approve has been PAUSED since 2026-09-23 by the human-pulse tripwire; 15 proposals sit in `pending_approval` holding ₹6.1L of PAPER_10L margin and all of PAPER_2L's (found 2026-09-25 while adding unrealized P&L to the desk; NOT fixed — owner action)
+
+- **Observed (verified 2026-09-25 ~11:50 IST, VM + mirror):** on the VM
+  `PAPER_AUTO_APPROVE=1` is set, and `human_pulse.auto_approve_tripped()`
+  returns **True** (`DEFAULT_UNSUPERVISED_TRADING_DAYS = 3`). Every proposal
+  since 09-23 09:17 journaled as `pending_approval`: 15 entries (ICICIBANK ×4,
+  NIFTY BANK ×4, NIFTY MID SELECT ×3, TCS ×3, HDFCBANK, INFY). Each still
+  holds its PAPER_10L `margin_locks` row (locked at proposal time by
+  `gate_headless_entry`) — ₹6.1L of the ₹10.71L locked; PAPER_10L liquid cash
+  ₹13,460. PAPER_2L's 7 locks are ALL on these pending refs (₹1,98,769), so
+  its 10 refusals are margin exhaustion caused by trades that never entered.
+- **Consequence:** no new trade has entered since 09-22; the 09-23→ entries'
+  outcomes are tracked hypothetically only; margin that should be free is
+  frozen; the PAPER_2L / PAPER_2L_ROT A/B (#115) cannot produce data while
+  2L's whole pool is held by pending entries.
+- **By design, partly:** the tripwire (Phase 3 §6.6) is meant to stop
+  unattended autonomy; any human approve/reject re-arms it. **Not by
+  design, as far as found:** a pending entry holding margin indefinitely —
+  nothing expires or releases a stale pending lock. Owner ruling needed.
+- **Not verified:** whether the 🛑 "BRAIN UNSUPERVISED" card reached Discord
+  (it fires once per pause episode).

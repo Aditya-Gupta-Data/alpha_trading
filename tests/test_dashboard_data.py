@@ -128,3 +128,48 @@ def test_cagr_is_annualised_from_the_run_epoch_and_none_under_a_day(tmp_path):
     assert 72.9 <= a["days_elapsed"] <= 73.1 and a["abs_return_pct"] == 10.0
     assert a["cagr_pct"] == d.cagr(1_000_000, 1_100_000, a["days_elapsed"]) and a["cagr_pct"] > 10.0
     assert T["PAPER_2L"]["cagr_pct"] is None                      # born seconds ago: under a day
+
+
+def test_the_curve_and_cagr_start_at_the_10l_base_in_true_time_order(tmp_path):
+    """Decision #116: the 07-21 reset to Rs.2L and the 08-07 Rs.8L top-up are
+    capital moves — the curve view and the compounding start at the base."""
+    p = _db(tmp_path)
+    conn = sqlite3.connect(p)
+    rows = [("2026-07-15T10:00:00", 1_047_617.31), ("2026-07-23T11:15:10", 205_538.96),
+            ("2026-08-07T16:41:19", 1_039_423.99), ("2026-08-11T11:25:49", 1_033_825.75),
+            ("2026-09-25T09:21:18", 1_084_859.92)]
+    conn.executemany("INSERT INTO equity_curve (ts, equity, peak_equity, drawdown_pct) VALUES (?, ?, ?, 0)",
+                     [(t, e, e) for t, e in rows])
+    conn.execute("UPDATE account_state SET realized_pnl = 84859.92 WHERE id = 1")
+    conn.commit(); conn.close()
+    T = d.treasury(p)
+    assert T["curve_epoch"] == "2026-08-07"
+    assert [c["ts"] for c in T["equity_curve"]] == [r[0] for r in rows[2:]]   # nothing before the base
+    a = T["PAPER_10L"]
+    assert a["base_equity"] == 1_039_423.99 and a["base_ts"] == "2026-08-07T16:41:19"
+    assert a["abs_return_pct"] == round((1_084_859.92 / 1_039_423.99 - 1) * 100, 2)      # 4.37, not 8.49
+    assert a["cagr_pct"] == d.cagr(1_039_423.99, 1_084_859.92, a["days_elapsed"])
+
+
+def test_unrealized_pnl_and_true_net_equity_come_from_the_engine_snapshot(tmp_path):
+    p = _db(tmp_path)                                    # 10L + 2L both hold ab12cd34 (2L: 1 of 2 lots)
+    conn = d.connect_ro(p)
+    rows = [{"id": "ab12cd34", "mtm_rs": 3000.0}, {"id": "eqd:x", "mtm_rs": None}]
+    snap = {"as_of": "2026-09-25T11:29:38+05:30",
+            "marks": [{"short_id": "ab12cd34", "live_pnl_rs": 3000.0}]}
+    u = d.unrealized_by_account(conn, snap, rows)
+    conn.close()
+    assert u["PAPER_10L"] == {"unrealized_pnl": 3000.0, "marked_positions": 1, "open_positions": 2}
+    assert u["PAPER_2L"] == {"unrealized_pnl": 1500.0, "marked_positions": 1, "open_positions": 1}  # x 1/2 lots
+    a = d._with_mtm({"equity": 1_000_000.0}, u["PAPER_10L"], snap["as_of"])
+    assert a["net_equity"] == 1_003_000.0 and a["marks_as_of"] == snap["as_of"]
+
+
+def test_nothing_priced_is_none_never_a_guessed_zero(tmp_path):
+    p = _db(tmp_path)
+    conn = d.connect_ro(p)
+    u = d.unrealized_by_account(conn, {"marks": []}, [{"id": "ab12cd34", "mtm_rs": None}])
+    conn.close()
+    assert u["PAPER_10L"]["unrealized_pnl"] is None and u["PAPER_2L"]["unrealized_pnl"] is None
+    a = d._with_mtm({"equity": 200_000.0}, u["PAPER_2L"], None)
+    assert a["net_equity"] is None and a["open_positions"] == 1

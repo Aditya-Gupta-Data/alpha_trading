@@ -42,6 +42,33 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-25 (midday) — THE DESK WAS SHOWING SAMPLE DATA (fixed, Issue 32); curve from the ₹10L base + unrealized P&L (decision #116); ⚠️ AUTO-APPROVE PAUSED SINCE 09-23 (Issue 33, owner action)
+
+**Read this first — Issue 33.** The human-pulse tripwire paused
+auto-approve on 09-23 (no human approve/reject for 3 trading days). 15
+proposals are `pending_approval`, holding ₹6.1L of PAPER_10L margin and all
+₹1.99L of PAPER_2L's. No new trade has entered since 09-22. The owner
+clears it by approving or rejecting ANY pending entry (`/pending` in
+Discord, or `python3 -m src.options_proposer --review-pending` on the VM).
+Open question for a ruling: pending entries hold margin forever — nothing
+expires them.
+
+**Issue 32 (fixed 11:22 IST).** The React desk had rendered its built-in
+sample treasury since launch (mock was opt-out; `ship_ui.sh` never set the
+flag). Mock is now opt-in; re-shipped; browser-verified the desk calls the
+bridge. The 09-24 parity audit had checked the API, not the rendered page.
+
+**#116 (built, tested; UI shipped, bridge + Streamlit need the box's git
+pull).** Curve and CAGR start at the 2026-08-07 ₹10L base (₹10,39,423.99):
+return 4.37% / CAGR 37.7% on 09-25 (was 8.5% / ~58% under #114). X axis on
+real time. Cards: True Net Equity / Unrealized (green-red, "priced on X of
+Y", snapshot time) / Realized — both the React desk and Streamlit. On the
+mirror at 11:29 the desk reads unrealized +₹47,717.86 on 6 of 9 positions
+(the 3 equity-desk longs have no snapshot mark; Discord's direct-fetch rung
+prices them, so its figure can differ).
+
+**Suite** 2,385 passed / 1 failed (known `test_darling_shadow`).
+
 ## 2026-09-25 — CAPITAL ROTATION (eviction protocol) BUILT on a third account `PAPER_2L_ROT` (decision #115) — committed, NOT deployed
 
 **What was asked vs what was built.** The directive put eviction on

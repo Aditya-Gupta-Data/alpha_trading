@@ -18,6 +18,7 @@ import { StatusPill } from "@/components/desk/StatusPill";
 import { latestReconQuery, treasuryQuery } from "@/lib/desk-queries";
 import {
   EM_DASH,
+  formatIstDate,
   formatIstDateTime,
   formatIstDayMonth,
   formatNumber,
@@ -62,19 +63,41 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
 }
 
 function AccountCard({ account }: { account: AccountTreasury }) {
-  const up = account.realized_pnl >= 0;
+  const realizedUp = account.realized_pnl >= 0;
+  const unreal = account.unrealized_pnl;
+  // an older bridge (before #116) sends no MTM fields: treat as unpriced
+  const priced = typeof unreal === "number";
+  const headline = priced && typeof account.net_equity === "number" ? account.net_equity : account.equity;
+  const hasCoverage = typeof account.open_positions === "number";
   return (
     <Panel>
       <p className="text-sm text-muted-foreground">{account.account_id}</p>
-      <p className="num mt-1 text-3xl font-semibold">{formatRupees(account.equity)}</p>
+      <p className="num mt-1 text-3xl font-semibold">{formatRupees(headline)}</p>
       <p className="text-xs text-muted-foreground">
-        Money in account (started with {formatRupees(account.starting_capital)})
+        {priced
+          ? "True net equity — realized + open positions at the engine's last marks"
+          : "Realized equity — no open position has a live mark"}
       </p>
-      <div className="mt-5 grid grid-cols-2 gap-6">
+      <div className="mt-5 grid grid-cols-2 gap-6 sm:grid-cols-3">
         <div>
-          <p className="text-xs text-muted-foreground">{up ? "Profit so far" : "Loss so far"}</p>
-          <p className={`num text-lg font-semibold ${up ? "text-pnl-up" : "text-pnl-down"}`}>
+          <p className="text-xs text-muted-foreground">Unrealized P&amp;L</p>
+          <p className={`num text-lg font-semibold ${!priced ? "" : (unreal ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}>
+            {priced ? formatRupeesSigned(unreal) : EM_DASH}
+          </p>
+          {hasCoverage && (
+            <p className="text-[11px] text-muted-foreground">
+              priced on {account.marked_positions} of {account.open_positions} open
+              {account.marks_as_of ? ` · ${formatIstDateTime(account.marks_as_of)}` : ""}
+            </p>
+          )}
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Realized P&amp;L</p>
+          <p className={`num text-lg font-semibold ${realizedUp ? "text-pnl-up" : "text-pnl-down"}`}>
             {formatRupeesSigned(account.realized_pnl)}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            realized equity {formatRupees(account.equity)}
           </p>
         </div>
         <div>
@@ -82,11 +105,13 @@ function AccountCard({ account }: { account: AccountTreasury }) {
           <p className={`num text-lg font-semibold ${account.drawdown_pct > 0 ? "text-pnl-down" : ""}`}>
             {formatPct(account.drawdown_pct)}
           </p>
+          <p className="text-[11px] text-muted-foreground">realized, from the peak</p>
         </div>
       </div>
       <details className="mt-5 text-xs">
         <summary className="cursor-pointer text-muted-foreground">More details</summary>
         <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
+          <Metric label="Started with" value={formatRupees(account.starting_capital)} />
           <Metric label="Locked margin" value={formatRupees(account.locked_margin)} />
           <Metric label="Open locks" value={formatNumber(account.open_locks)} />
           <Metric label="Available cash" value={formatRupees(account.available_cash)} />
@@ -121,7 +146,11 @@ function ReconBanner({ recon, isPending }: { recon: ReconRow | null | undefined;
 function OverviewPage() {
   const treasury = useQuery(treasuryQuery);
   const recon = useQuery(latestReconQuery);
-  const curve = treasury.data?.equity_curve ?? [];
+  // X axis on real time (decision #116): each point carries its epoch ms so
+  // a two-week gap is wider than seven settlements in one morning.
+  const curve = (treasury.data?.equity_curve ?? [])
+    .map((p) => ({ ...p, t: Date.parse(p.ts) }))
+    .filter((p) => !Number.isNaN(p.t));
 
   return (
     <>
@@ -168,16 +197,18 @@ function OverviewPage() {
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-muted-foreground">Return since start</p>
+                      <p className="text-xs text-muted-foreground">Return since the ₹10L base</p>
                       <p className={`num text-2xl font-semibold ${(a.abs_return_pct ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}>
                         {formatPct(a.abs_return_pct)}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">on {formatRupees(a.starting_capital)}</p>
+                      <p className="text-[11px] text-muted-foreground">on the {formatRupees(a.base_equity ?? a.starting_capital)} base</p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Days compounding</p>
                       <p className="num text-2xl font-semibold">{a.days_elapsed === null ? EM_DASH : a.days_elapsed.toFixed(0)}</p>
-                      <p className="text-[11px] text-muted-foreground">since the clean-sheet epoch</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        since {a.base_ts ? formatIstDate(a.base_ts) : "the ₹10L base"}
+                      </p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Formula</p>
@@ -195,8 +226,11 @@ function OverviewPage() {
                     <ComposedChart data={curve} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
                       <CartesianGrid stroke="var(--color-border)" vertical={false} />
                       <XAxis
-                        dataKey="ts"
-                        tickFormatter={(value: string) => formatIstDayMonth(value)}
+                        dataKey="t"
+                        type="number"
+                        scale="time"
+                        domain={["dataMin", "dataMax"]}
+                        tickFormatter={(value: number) => formatIstDayMonth(new Date(value).toISOString())}
                         tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
                         stroke="var(--color-border)"
                         minTickGap={64}
@@ -215,7 +249,7 @@ function OverviewPage() {
                           borderRadius: 4,
                           fontSize: 12,
                         }}
-                        labelFormatter={(value) => formatIstDateTime(String(value))}
+                        labelFormatter={(value) => formatIstDateTime(new Date(Number(value)).toISOString())}
                         formatter={(value: number, name) =>
                           name === "Drawdown" ? [formatPct(value), name] : [formatRupees(value), name]
                         }

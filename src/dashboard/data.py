@@ -30,6 +30,13 @@ JOURNAL_PATH = Path(os.environ.get("ALPHA_JOURNAL_PATH") or _DATA / "journal.jso
 EQUITY_LEDGER_PATH = Path(os.environ.get("ALPHA_EQUITY_LEDGER") or _LOGS / "equity_shadow_journal.jsonl")
 SNAPSHOT_PATH = _DATA / "market_snapshot.json"
 RECON_PATH = _LOGS / "recon.jsonl"
+# THE ₹10L BASE (decision #116, owner 2026-09-25): the primary's curve and its
+# compounding figures start here. Before it the pool was reset to ₹2L
+# (07-21 clean sheet) and topped up by ₹8L (08-07 16:41 injection) — capital
+# moves, not trading, which drew a fake crash and a fake jump on the curve and
+# inflated the CAGR. The raw history stays in `equity_curve`; only the view
+# starts here.
+CURVE_EPOCH = "2026-08-07"
 STRATEGY_LABELS = {"bear_put_spread": "Bear Put", "bull_call_spread": "Bull Call",
                    "iron_condor": "Iron Condor", "iron_butterfly": "Iron Butterfly",
                    "equity_long": "Equity Long"}
@@ -104,6 +111,52 @@ def _run_epoch(conn) -> str | None:
     return row[0]["created_at"] if isinstance(row, list) and row else None
 
 
+def unrealized_by_account(conn, snapshot: dict = None, rows: list = None) -> dict:
+    """{account: {unrealized_pnl, marked_positions, open_positions}} from the
+    ENGINE'S published marks (`market_snapshot.json` — the same marks the
+    Discord card's ladder reads first). Never a fresh quote. The primary sums
+    the marked open positions; a shadow account scales each mark by its own
+    lots / the primary's lots (the #102 settlement ratio). A position with no
+    mark is COUNTED but not priced — `unrealized_pnl` is None when nothing
+    is priced, never a guessed zero."""
+    snap = _snapshot() if snapshot is None else snapshot
+    marks = {m.get("short_id"): m for m in (snap or {}).get("marks") or [] if isinstance(m, dict)}
+    rows = open_trades(snapshot_marks=marks) if rows is None else rows
+    priced = [float(r["mtm_rs"]) for r in rows if r.get("mtm_rs") is not None]
+    out = {"PAPER_10L": {"unrealized_pnl": round(sum(priced), 2) if priced else None,
+                         "marked_positions": len(priced), "open_positions": len(rows)}}
+    locks = _q(conn, "SELECT account_id, journal_ref, lots, primary_lots FROM paper_margin_locks "
+                     "WHERE released_at IS NULL")
+    for l in (locks if isinstance(locks, list) else []):
+        a = out.setdefault(l["account_id"], {"unrealized_pnl": None, "marked_positions": 0,
+                                            "open_positions": 0})
+        a["open_positions"] += 1
+        m = marks.get(l["journal_ref"]) or {}
+        if m.get("live_pnl_rs") is None or not l["primary_lots"]:
+            continue
+        pnl = float(m["live_pnl_rs"]) * float(l["lots"]) / float(l["primary_lots"])
+        a["unrealized_pnl"] = round((a["unrealized_pnl"] or 0.0) + pnl, 2)
+        a["marked_positions"] += 1
+    return out
+
+
+def _snapshot() -> dict:
+    try:
+        snap = json.loads(SNAPSHOT_PATH.read_text())
+        return snap if isinstance(snap, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _with_mtm(acct: dict, u: dict | None, as_of) -> dict:
+    """True Net Equity = realized equity + unrealized (None when unpriced)."""
+    u = u or {"unrealized_pnl": None, "marked_positions": 0, "open_positions": 0}
+    acct.update(u, marks_as_of=as_of,
+                net_equity=(round(acct["equity"] + u["unrealized_pnl"], 2)
+                            if u["unrealized_pnl"] is not None else None))
+    return acct
+
+
 def treasury(db_path=None) -> dict:
     """{'PAPER_10L': {...}, 'PAPER_2L': {...}, 'error'?} — equity, realized,
     drawdown, locks per account, straight from the account tables."""
@@ -122,17 +175,24 @@ def treasury(db_path=None) -> dict:
                              "WHERE released_at IS NULL")
             m = locks[0] if isinstance(locks, list) and locks else {"m": 0, "n": 0}
             peak = max(float(a["peak_equity"] or eq), eq)
-            days = _days_since(_run_epoch(conn))
+            base = _q(conn, "SELECT ts, equity FROM equity_curve WHERE ts >= ? ORDER BY ts, rowid LIMIT 1",
+                      (CURVE_EPOCH,))
+            base = base[0] if isinstance(base, list) and base else None
+            base_eq = float(base["equity"]) if base else float(a["starting_capital"])
+            days = _days_since(base["ts"] if base else _run_epoch(conn))
             out["PAPER_10L"] = {"account_id": "PAPER_10L", "starting_capital": a["starting_capital"],
                                 "realized_pnl": round(a["realized_pnl"], 2), "equity": round(eq, 2),
                                 "peak_equity": peak,
                                 "drawdown_pct": round((peak - eq) / peak * 100, 4) if peak else 0.0,
                                 "locked_margin": round(float(m["m"]), 2), "open_locks": int(m["n"]),
                                 "available_cash": round(eq - float(m["m"]), 2),
-                                # compounding (decision #114): annualised from the run epoch
+                                # compounding (#114, re-based by #116): from the ₹10L
+                                # base = the first curve point on/after CURVE_EPOCH
+                                "base_equity": round(base_eq, 2),
+                                "base_ts": base["ts"] if base else None,
                                 "days_elapsed": days,
-                                "abs_return_pct": round((eq / a["starting_capital"] - 1) * 100, 2) if a["starting_capital"] else None,
-                                "cagr_pct": cagr(a["starting_capital"], eq, days)}
+                                "abs_return_pct": round((eq / base_eq - 1) * 100, 2) if base_eq else None,
+                                "cagr_pct": cagr(base_eq, eq, days)}
         pa = _q(conn, "SELECT account_id, starting_capital, realized_pnl, peak_equity, created_at FROM paper_accounts")
         if isinstance(pa, list):
             for a in pa:
@@ -155,8 +215,18 @@ def treasury(db_path=None) -> dict:
                              "days_elapsed": days,
                              "abs_return_pct": round((eq / a["starting_capital"] - 1) * 100, 2) if a["starting_capital"] else None,
                              "cagr_pct": cagr(a["starting_capital"], eq, days)}
-        curve = _q(conn, "SELECT ts, equity, drawdown_pct FROM equity_curve ORDER BY ts DESC LIMIT 200")
-        out["equity_curve"] = list(reversed(curve)) if isinstance(curve, list) else []
+        curve = _q(conn, "SELECT ts, equity, drawdown_pct FROM equity_curve WHERE ts >= ? "
+                         "ORDER BY ts, rowid", (CURVE_EPOCH,))
+        out["equity_curve"] = curve if isinstance(curve, list) else []
+        out["curve_epoch"] = CURVE_EPOCH
+        # unrealized P&L + True Net Equity per account (engine snapshot marks)
+        try:
+            snap = _snapshot()
+            u = unrealized_by_account(conn, snap)
+        except Exception:
+            snap, u = {}, {}
+        for acct in [k for k in out if k.startswith("PAPER_")]:
+            _with_mtm(out[acct], u.get(acct), snap.get("as_of"))
     finally:
         conn.close()
     return out

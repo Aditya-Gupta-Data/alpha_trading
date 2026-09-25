@@ -98,17 +98,33 @@ def _body():
               if not a:
                   st.info("no rows for this account yet")
                   continue
-              c1, c2, c3, c4, c5 = st.columns(5)
-              c1.metric("Net Equity (realized)", rs(a["equity"]), f"{a['equity'] - a['starting_capital']:+,.0f} vs base")
-              c2.metric("Realized P&L", rs(a["realized_pnl"]))
-              c3.metric("Active Drawdown", pct(a["drawdown_pct"]), f"peak {rs(a['peak_equity'])}", delta_color="inverse")
-              c4.metric("Margin locked", rs(a["locked_margin"]), f"{a['open_locks']} open lock(s)")
-              c5.metric("Liquid cash", rs(a["available_cash"]),
+              u = a.get("unrealized_pnl")
+              cover = f"priced on {a.get('marked_positions', 0)} of {a.get('open_positions', 0)} open"
+              c1, c2, c3 = st.columns(3)
+              c1.metric("True Net Equity", rs(a["net_equity"]) if a.get("net_equity") is not None else "—",
+                        "realized + unrealized" if u is not None else "no live marks", delta_color="off")
+              # delta carries the sign so Streamlit colours it green / red
+              c2.metric("Unrealized P&L", f"{u:+,.0f}" if u is not None else "—",
+                        (f"{u:+,.0f} · {cover}" if u is not None else cover),
+                        delta_color="normal" if u is not None else "off")
+              c3.metric("Realized P&L", rs(a["realized_pnl"]), f"realized equity {rs(a['equity'])}",
+                        delta_color="off")
+              c4, c5, c6 = st.columns(3)
+              c4.metric("Active Drawdown", pct(a["drawdown_pct"]), f"peak {rs(a['peak_equity'])}", delta_color="inverse")
+              c5.metric("Margin locked", rs(a["locked_margin"]), f"{a['open_locks']} open lock(s)")
+              c6.metric("Liquid cash", rs(a["available_cash"]),
                         (f"{a['rejections']} refusal(s)" if a.get("rejections") is not None else None))
+              if a.get("marks_as_of"):
+                  st.caption(f"Marks: the engine's snapshot as of {a['marks_as_of']} — never a fresh quote.")
           curve = T.get("equity_curve") or []
           if curve:
-              st.subheader("Equity curve (primary, last 200 settlements)")
-              st.line_chart({"equity": [c["equity"] for c in curve]}, height=220)
+              import pandas as pd
+              st.subheader(f"Equity curve — PAPER_10L, realized, from the ₹10L base ({T.get('curve_epoch', '')})")
+              df = pd.DataFrame({"time": pd.to_datetime([c["ts"] for c in curve]),
+                                 "equity": [c["equity"] for c in curve]}).set_index("time")
+              st.line_chart(df, height=220)   # datetime index = true time spacing
+              st.caption("Before 7 Aug the pool was reset to ₹2L (21 Jul) and topped up by ₹8L (7 Aug) — "
+                         "capital moves, not trading, so the view starts at the base (decision #116).")
           st.caption("Sizing is fixed-fractional per account (decision #106): the same structure is sized on "
                      "each account's own equity, so the ₹2L book refuses what the ₹10L book takes.")
 

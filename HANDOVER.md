@@ -42,6 +42,23 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-25 (afternoon) — full-history curve with capital-move markers (decision #117, supersedes #116's truncation); tunnel no longer rotates on Streamlit restarts
+
+**Live after this block's deploy:** the desk + Streamlit curve shows ALL
+history from 07-10 on a true time axis, with dashed markers "Reset → ₹2L"
+(07-21 14:32) and "+₹8L" (08-07 16:41) read from `account_events`; a dated
+event list sits under the React chart. Return / CAGR still from the 08-07
+₹10L base (4.37% / 37.7% on 09-25). Unrealized P&L / True Net Equity as in
+#116. No July timezone shift — the "5h30" note in Issue 32 was wrong
+(corrected in the ledger). `cloudflared-dashboard` now `Wants=nginx` (box +
+`setup_ui.sh`), so restarting Streamlit / the 03:05 nightly refresh no
+longer changes the public link (a box REBOOT or tunnel restart still does).
+
+**Still open:** Issue 33 (auto-approve paused since 09-23 — owner approves or
+rejects anything); #115 capital rotation not yet pulled on the trading VM.
+
+**Suite** 2,386 passed / 1 failed (known `test_darling_shadow`).
+
 ## 2026-09-25 (midday) — THE DESK WAS SHOWING SAMPLE DATA (fixed, Issue 32); curve from the ₹10L base + unrealized P&L (decision #116); ⚠️ AUTO-APPROVE PAUSED SINCE 09-23 (Issue 33, owner action)
 
 **Read this first — Issue 33.** The human-pulse tripwire paused

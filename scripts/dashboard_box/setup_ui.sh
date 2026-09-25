@@ -60,6 +60,12 @@ sudo sed -i 's#--server.baseUrlPath streamlit --server.baseUrlPath streamlit#--s
 sudo cp "$APP/scripts/dashboard_box/nginx-desk.conf" /etc/nginx/conf.d/desk.conf
 sudo nginx -t
 sudo sed -i 's#--url http://127.0.0.1:8501#--url http://127.0.0.1:8080#' /etc/systemd/system/cloudflared-dashboard.service
+# The tunnel fronts nginx now, not Streamlit: bind it to nginx. With
+# Requires=alpha-dashboard, every Streamlit restart (incl. the 03:05 nightly
+# code refresh) restarted the tunnel and ROTATED the public URL (2026-09-25).
+sudo sed -i -e 's#^After=network-online.target alpha-dashboard.service#After=network-online.target nginx.service#' \
+            -e 's#^Requires=alpha-dashboard.service#Wants=nginx.service#' \
+            -e 's#alpha dashboard :8501#nginx :8080 (desk + bridge + streamlit)#' /etc/systemd/system/cloudflared-dashboard.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now nginx alpha-api-bridge alpha-desk-ui
 sudo systemctl restart alpha-dashboard nginx alpha-api-bridge alpha-desk-ui cloudflared-dashboard

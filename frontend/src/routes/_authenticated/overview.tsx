@@ -4,6 +4,7 @@ import {
   CartesianGrid,
   Legend,
   Line,
+  ReferenceLine,
   ComposedChart,
   ResponsiveContainer,
   Tooltip,
@@ -151,6 +152,11 @@ function OverviewPage() {
   const curve = (treasury.data?.equity_curve ?? [])
     .map((p) => ({ ...p, t: Date.parse(p.ts) }))
     .filter((p) => !Number.isNaN(p.t));
+  // Pool moves (decision #117): a reset or an injection moves equity with no
+  // trade behind it — drawn as a labelled dashed line, never smoothed away.
+  const events = (treasury.data?.capital_events ?? [])
+    .map((e) => ({ ...e, t: Date.parse(e.ts) }))
+    .filter((e) => !Number.isNaN(e.t));
 
   return (
     <>
@@ -255,8 +261,22 @@ function OverviewPage() {
                         }
                       />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
+                      {events.map((e, i) => (
+                        <ReferenceLine
+                          key={`${e.kind}-${e.t}`}
+                          x={e.t}
+                          stroke={e.kind === "capital_injection" ? "var(--color-chart-2)" : "var(--color-muted-foreground)"}
+                          strokeDasharray="4 3"
+                          label={{
+                            value: e.short ?? e.label,
+                            position: i % 2 === 0 ? "insideTopRight" : "insideBottomLeft",
+                            fontSize: 10,
+                            fill: "var(--color-foreground)",
+                          }}
+                        />
+                      ))}
                       <Line
-                        type="monotone"
+                        type="linear"
                         dataKey="equity"
                         name="Equity"
                         stroke="var(--color-chart-1)"
@@ -266,6 +286,25 @@ function OverviewPage() {
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
+              )}
+              {events.length > 0 && (
+                <ul className="mt-3 space-y-1 text-xs">
+                  {events.map((e) => (
+                    <li key={`${e.kind}-${e.t}`} className="flex gap-2">
+                      <span className="num shrink-0 text-muted-foreground">{formatIstDate(e.ts)}</span>
+                      <span>
+                        <span className="font-semibold">{e.short ?? e.label}</span> — {e.label}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {curve.length > 0 && (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Realized equity, full history, on a true time axis. Dashed lines are capital moves, not
+                  trading. Return and CAGR above are measured from the ₹10L base
+                  {treasury.data.PAPER_10L.base_ts ? ` (${formatIstDate(treasury.data.PAPER_10L.base_ts)})` : ""}.
+                </p>
               )}
             </Panel>
 

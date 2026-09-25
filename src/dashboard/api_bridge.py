@@ -88,6 +88,8 @@ def treasury(request: Request):
             t[acct]["base_ts"] = _ist(t[acct].get("base_ts"))
     for p in t.get("equity_curve") or []:
         p["ts"] = _ist(p.get("ts"))
+    for e in t.get("capital_events") or []:
+        e["ts"] = _ist(e.get("ts"))
     return t
 
 

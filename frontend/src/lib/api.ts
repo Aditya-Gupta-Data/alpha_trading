@@ -78,8 +78,19 @@ export interface Treasury {
   /** The capital-rotation A/B arm (decision #115); absent until its first signal. */
   PAPER_2L_ROT?: AccountTreasury & { rejections: number };
   equity_curve: EquityPoint[];
-  /** The curve starts here (decision #116); earlier history is capital moves, not trading. */
-  curve_epoch?: string;
+  /** Compounding (return / CAGR) is measured from this date — the ₹10L base (#116). */
+  base_epoch?: string;
+  /** Pool moves drawn as chart markers (#117): resets and injections, oldest first. */
+  capital_events?: CapitalEvent[];
+}
+
+export interface CapitalEvent {
+  ts: string;
+  kind: "clean_sheet" | "capital_injection";
+  label: string;
+  /** Tag drawn on the chart line (fits a phone): "+₹8L", "Reset → ₹2L". */
+  short?: string;
+  detail: string;
 }
 
 export interface OpenTrade {
@@ -231,6 +242,11 @@ const MOCK_TREASURY: Treasury = {
     rejections: 4,
   },
   equity_curve: EQUITY_CURVE,
+  base_epoch: "2026-08-07",
+  capital_events: [
+    { ts: EQUITY_CURVE[20]?.ts ?? NOW.toISOString(), kind: "clean_sheet", label: "Pool reset ₹10L → ₹2L", short: "Reset → ₹2L", detail: "mock" },
+    { ts: EQUITY_CURVE[30]?.ts ?? NOW.toISOString(), kind: "capital_injection", label: "₹8L capital injection", short: "+₹8L", detail: "mock" },
+  ],
 };
 
 const MOCK_OPEN_TRADES: OpenTrade[] = [

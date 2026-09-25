@@ -1774,3 +1774,11 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   nothing expires or releases a stale pending lock. Owner ruling needed.
 - **Not verified:** whether the 🛑 "BRAIN UNSUPERVISED" card reached Discord
   (it fires once per pause episode).
+
+- **Issue 32 correction (2026-09-25, later the same day):** the "two
+  pre-Issue-16 points (07-10, 07-15) were stamped in UTC and read 5h30 early"
+  line above was an INFERENCE, not a verified fact, and it is WRONG. Verified
+  on the VM: `timedatectl` = Asia/Kolkata, and the July rows line up with IST
+  market hours (margin locks at 09:30 / 11:30 / 13:30 IST on 07-10; settlements
+  at 05:4x IST, the same slot as every later month). No shift is applied
+  (decision #117).

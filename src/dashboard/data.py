@@ -30,13 +30,13 @@ JOURNAL_PATH = Path(os.environ.get("ALPHA_JOURNAL_PATH") or _DATA / "journal.jso
 EQUITY_LEDGER_PATH = Path(os.environ.get("ALPHA_EQUITY_LEDGER") or _LOGS / "equity_shadow_journal.jsonl")
 SNAPSHOT_PATH = _DATA / "market_snapshot.json"
 RECON_PATH = _LOGS / "recon.jsonl"
-# THE ₹10L BASE (decision #116, owner 2026-09-25): the primary's curve and its
-# compounding figures start here. Before it the pool was reset to ₹2L
-# (07-21 clean sheet) and topped up by ₹8L (08-07 16:41 injection) — capital
-# moves, not trading, which drew a fake crash and a fake jump on the curve and
-# inflated the CAGR. The raw history stays in `equity_curve`; only the view
-# starts here.
+# THE ₹10L BASE (decisions #116/#117, owner 2026-09-25): the primary's
+# COMPOUNDING figures (return, CAGR) start here. Before it the pool was reset
+# to ₹2L (07-21 clean sheet) and topped up by ₹8L (08-07 16:41 injection) —
+# capital moves, not trading. The CURVE shows the full history (#117) with
+# those moves drawn as labelled markers (`capital_events`).
 CURVE_EPOCH = "2026-08-07"
+CAPITAL_EVENT_TYPES = ("clean_sheet", "capital_injection")
 STRATEGY_LABELS = {"bear_put_spread": "Bear Put", "bull_call_spread": "Bull Call",
                    "iron_condor": "Iron Condor", "iron_butterfly": "Iron Butterfly",
                    "equity_long": "Equity Long"}
@@ -109,6 +109,37 @@ def _run_epoch(conn) -> str | None:
         return row[0]["ts"]
     row = _q(conn, "SELECT created_at FROM account_state WHERE id = 1")
     return row[0]["created_at"] if isinstance(row, list) and row else None
+
+
+def _lakh(rs: float) -> str:
+    v = rs / 100_000
+    return f"₹{v:g}L" if abs(v - round(v)) < 1e-9 else f"₹{v:.2f}L"
+
+
+def capital_events(conn) -> list:
+    """[{ts, kind, label, detail}] — the pool moves on the primary's
+    `account_events` trail (a reset or an injection moves equity without a
+    trade), oldest first, for the chart's markers. Labels are read from the
+    event itself; an amount that cannot be parsed is left out, not guessed."""
+    import re
+    rows = _q(conn, "SELECT ts, event_type, detail FROM account_events WHERE event_type IN (?, ?) "
+                    "ORDER BY ts, rowid", CAPITAL_EVENT_TYPES)
+    out = []
+    for r in (rows if isinstance(rows, list) else []):
+        detail = str(r.get("detail") or "")
+        if r["event_type"] == "capital_injection":
+            m = re.match(r"\s*Rs\.(-?[\d,]+(?:\.\d+)?)", detail)
+            amt = float(m.group(1).replace(",", "")) if m else None
+            label = ("capital injection" if amt is None else
+                     f"{_lakh(abs(amt))} capital {'injection' if amt >= 0 else 'withdrawal'}")
+            short = ("Capital" if amt is None else f"{'+' if amt >= 0 else '−'}{_lakh(abs(amt))}")
+        else:
+            m = re.search(r"(\d+(?:\.\d+)?)L\s*->\s*(\d+(?:\.\d+)?)L", detail)
+            label = (f"Pool reset ₹{m.group(1)}L → ₹{m.group(2)}L" if m else "Pool reset (clean sheet)")
+            short = f"Reset → ₹{m.group(2)}L" if m else "Reset"
+        out.append({"ts": r["ts"], "kind": r["event_type"], "label": label, "short": short,
+                    "detail": detail[:240]})
+    return out
 
 
 def unrealized_by_account(conn, snapshot: dict = None, rows: list = None) -> dict:
@@ -215,10 +246,10 @@ def treasury(db_path=None) -> dict:
                              "days_elapsed": days,
                              "abs_return_pct": round((eq / a["starting_capital"] - 1) * 100, 2) if a["starting_capital"] else None,
                              "cagr_pct": cagr(a["starting_capital"], eq, days)}
-        curve = _q(conn, "SELECT ts, equity, drawdown_pct FROM equity_curve WHERE ts >= ? "
-                         "ORDER BY ts, rowid", (CURVE_EPOCH,))
+        curve = _q(conn, "SELECT ts, equity, drawdown_pct FROM equity_curve ORDER BY ts, rowid")
         out["equity_curve"] = curve if isinstance(curve, list) else []
-        out["curve_epoch"] = CURVE_EPOCH
+        out["base_epoch"] = CURVE_EPOCH
+        out["capital_events"] = capital_events(conn)
         # unrealized P&L + True Net Equity per account (engine snapshot marks)
         try:
             snap = _snapshot()

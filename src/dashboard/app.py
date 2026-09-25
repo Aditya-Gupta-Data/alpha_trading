@@ -118,13 +118,30 @@ def _body():
                   st.caption(f"Marks: the engine's snapshot as of {a['marks_as_of']} — never a fresh quote.")
           curve = T.get("equity_curve") or []
           if curve:
+              import altair as alt
               import pandas as pd
-              st.subheader(f"Equity curve — PAPER_10L, realized, from the ₹10L base ({T.get('curve_epoch', '')})")
+              st.subheader("Equity curve — PAPER_10L, realized, full history")
               df = pd.DataFrame({"time": pd.to_datetime([c["ts"] for c in curve]),
-                                 "equity": [c["equity"] for c in curve]}).set_index("time")
-              st.line_chart(df, height=220)   # datetime index = true time spacing
-              st.caption("Before 7 Aug the pool was reset to ₹2L (21 Jul) and topped up by ₹8L (7 Aug) — "
-                         "capital moves, not trading, so the view starts at the base (decision #116).")
+                                 "equity": [c["equity"] for c in curve]})
+              line = alt.Chart(df).mark_line().encode(       # temporal axis = true time spacing
+                  x=alt.X("time:T", title=None), y=alt.Y("equity:Q", title="₹", scale=alt.Scale(zero=False)),
+                  tooltip=[alt.Tooltip("time:T", format="%d %b %Y %H:%M"), alt.Tooltip("equity:Q", format=",.0f")])
+              layers = [line]
+              ev = T.get("capital_events") or []
+              if ev:
+                  lo, hi = float(df["equity"].min()), float(df["equity"].max())
+                  edf = pd.DataFrame({"time": pd.to_datetime([e["ts"] for e in ev]),
+                                      "label": [f"{e['label']} ({pd.to_datetime(e['ts']):%d %b})" for e in ev],
+                                      # staggered heights so neighbouring labels never overlap
+                                      "y": [lo + (hi - lo) * (0.72 - 0.22 * (i % 3)) for i in range(len(ev))]})
+                  layers += [alt.Chart(edf).mark_rule(strokeDash=[4, 3], color="#22a06b").encode(
+                                 x="time:T", tooltip=["label:N"]),
+                             alt.Chart(edf).mark_text(align="left", dx=5, fontSize=11, color="#9aa4b2").encode(
+                                 x="time:T", y="y:Q", text="label:N")]
+              st.altair_chart(alt.layer(*layers).properties(height=260), use_container_width=True)
+              st.caption("Dashed lines are capital moves (decision #117) — the 21 Jul reset to ₹2L and the "
+                         "7 Aug ₹8L injection moved equity with no trade behind them. Return and CAGR are "
+                         f"measured from the ₹10L base ({T.get('base_epoch', '')}, decision #116).")
           st.caption("Sizing is fixed-fractional per account (decision #106): the same structure is sized on "
                      "each account's own equity, so the ₹2L book refuses what the ₹10L book takes.")
 

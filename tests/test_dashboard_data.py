@@ -130,25 +130,45 @@ def test_cagr_is_annualised_from_the_run_epoch_and_none_under_a_day(tmp_path):
     assert T["PAPER_2L"]["cagr_pct"] is None                      # born seconds ago: under a day
 
 
-def test_the_curve_and_cagr_start_at_the_10l_base_in_true_time_order(tmp_path):
-    """Decision #116: the 07-21 reset to Rs.2L and the 08-07 Rs.8L top-up are
-    capital moves — the curve view and the compounding start at the base."""
+def test_full_curve_with_capital_markers_and_cagr_from_the_10l_base(tmp_path):
+    """#117: the curve keeps the whole history in time order and the pool
+    moves come back as labelled markers; #116: return / CAGR from the base."""
     p = _db(tmp_path)
     conn = sqlite3.connect(p)
     rows = [("2026-07-15T10:00:00", 1_047_617.31), ("2026-07-23T11:15:10", 205_538.96),
             ("2026-08-07T16:41:19", 1_039_423.99), ("2026-08-11T11:25:49", 1_033_825.75),
             ("2026-09-25T09:21:18", 1_084_859.92)]
     conn.executemany("INSERT INTO equity_curve (ts, equity, peak_equity, drawdown_pct) VALUES (?, ?, ?, 0)",
-                     [(t, e, e) for t, e in rows])
+                     [(t, e, e) for t, e in reversed(rows)])            # inserted out of order
+    conn.executemany("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)", [
+        ("2026-08-07T16:41:19", "capital_injection",
+         "Rs.800,000.00 (200,000.00 -> 1,000,000.00 base; equity 239,423.99 -> 1,039,423.99)"),
+        ("2026-07-21T14:32:30", "clean_sheet", "decision #84: pool reset 10L->2L for the autonomous run")])
     conn.execute("UPDATE account_state SET realized_pnl = 84859.92 WHERE id = 1")
     conn.commit(); conn.close()
     T = d.treasury(p)
-    assert T["curve_epoch"] == "2026-08-07"
-    assert [c["ts"] for c in T["equity_curve"]] == [r[0] for r in rows[2:]]   # nothing before the base
+    assert [c["ts"] for c in T["equity_curve"]] == [r[0] for r in rows]     # full history, time-ordered
+    assert [(e["ts"], e["label"]) for e in T["capital_events"]] == [
+        ("2026-07-21T14:32:30", "Pool reset ₹10L → ₹2L"),
+        ("2026-08-07T16:41:19", "₹8L capital injection")]
+    assert [e["short"] for e in T["capital_events"]] == ["Reset → ₹2L", "+₹8L"]    # the chart's tags
+    assert T["base_epoch"] == "2026-08-07"
     a = T["PAPER_10L"]
     assert a["base_equity"] == 1_039_423.99 and a["base_ts"] == "2026-08-07T16:41:19"
     assert a["abs_return_pct"] == round((1_084_859.92 / 1_039_423.99 - 1) * 100, 2)      # 4.37, not 8.49
     assert a["cagr_pct"] == d.cagr(1_039_423.99, 1_084_859.92, a["days_elapsed"])
+
+
+def test_capital_event_labels_never_guess_an_amount(tmp_path):
+    p = _db(tmp_path)
+    conn = sqlite3.connect(p)
+    conn.executemany("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)", [
+        ("2026-09-01T10:00:00", "capital_injection", "Rs.-250,000.00 (withdrawal)"),
+        ("2026-09-02T10:00:00", "capital_injection", "no amount here"),
+        ("2026-09-03T10:00:00", "clean_sheet", "fresh start")])
+    conn.commit(); conn.close()
+    assert [e["label"] for e in d.treasury(p)["capital_events"]] == [
+        "₹2.50L capital withdrawal", "capital injection", "Pool reset (clean sheet)"]
 
 
 def test_unrealized_pnl_and_true_net_equity_come_from_the_engine_snapshot(tmp_path):

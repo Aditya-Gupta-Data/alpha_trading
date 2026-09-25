@@ -1804,3 +1804,18 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Fix status:** the code fix (active lock honoured before re-sizing) is in
   commit c79c4c9 (#115), pushed, NOT yet pulled on the VM. The 7 journal
   verdicts are NOT repaired — a one-off repair needs an owner go-ahead.
+
+## Issue 35 — the Oracle dashboard box swap-thrashed twice on 2026-09-25: the `dnf-makecache` timer (FIXED)
+
+- **Observed (verified from the box's journal after the persistent journal
+  was turned on):** 15:20 sshd "MaxStartups throttling" (the box accepting
+  TCP but not completing logins); the VM's mirror push failed every 15 min
+  from 15:00 to 16:45 (last OK 14:45); 16:49:29 the kernel OOM killer killed
+  `dnf` (task_memcg `dnf-makecache.service`, anon-rss 336 MB, total-vm 3.1 GB)
+  on a 498 MB box. The same symptom froze the box at ~11:56 (owner console
+  reboot, back 12:18) — no journal survived that boot, so its cause is
+  inferred, not verified.
+- **Fix (12:3x and 18:3x IST):** `dnf-makecache.timer` disabled; PCP
+  collectors disabled (~58 MB); persistent journal on; all three written into
+  `scripts/dashboard_box/setup.sh`. Mirror pushed by hand 18:29 (OK). Package
+  metadata now refreshes only when someone runs dnf by hand (swap first).

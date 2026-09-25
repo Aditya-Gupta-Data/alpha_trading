@@ -14,6 +14,14 @@ if ! swapon --show | grep -q swapfile; then
   sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
   grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
 fi
+# Background memory hogs OFF (2026-09-25): the dnf-makecache TIMER re-ran
+# dnf's metadata refresh on its own (~336 MB anon) and swap-thrashed the box
+# twice in one day (11:56 freeze → console reboot; 15:00–16:49 until the
+# OOM killer took dnf); PCP's collectors held ~58 MB doing nothing for us.
+# Persistent journal ON so the next incident leaves evidence.
+sudo systemctl disable --now dnf-makecache.timer >/dev/null 2>&1 || true
+sudo systemctl disable --now pmie_farm pmlogger_farm pmie pmlogger pmcd pmproxy >/dev/null 2>&1 || true
+sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal && sudo systemctl restart systemd-journald
 # dnf AFTER swap, on purpose: on a 498 MB box dnf's metadata refresh alone
 # can take 300-400 MB and thrash the machine to a halt (2026-09-24, seen live).
 sudo dnf -q -y --setopt=install_weak_deps=False install python3.11 python3.11-pip git rsync >/dev/null

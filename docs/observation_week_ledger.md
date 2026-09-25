@@ -1782,3 +1782,25 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   market hours (margin locks at 09:30 / 11:30 / 13:30 IST on 07-10; settlements
   at 05:4x IST, the same slot as every later month). No shift is applied
   (decision #117).
+
+## Issue 34 — the 09-25 owner approval of 14 stale pendings stamped PAPER_2L "rejected" on 7 trades PAPER_2L actually holds (the #102 re-judge bug, fixed in #115 but not yet on the VM; NOT repaired)
+
+- **Context (verified 2026-09-25 12:04–12:07 IST, VM):** auto-approve had been
+  paused since 09-23 (Issue 33). The owner approved `5268120c` via `/pending`
+  at 12:04 (pulse re-armed), then, asked about the 14 remaining stale
+  pendings, chose "approve all 14" in chat; the agent ran
+  `decide_pending(..., approve=True, human=True)` for each with a `why` naming
+  the stale entry premiums. All 14 → `approved`; 0 pending left; 16 PAPER_10L
+  entry tickets issued today. PAPER_10L liquid cash is unchanged (₹13,460):
+  approval converts pending locks to open trades, it frees nothing.
+- **The defect:** `evaluate_shadow_accounts` re-sized PAPER_2L on liquid cash
+  that already excluded each entry's own lock (₹1,231 liquid) → every 2L
+  verdict became `rejected: sizing refused`, although 7 of these refs
+  (5954b6c0, 749f6b80, b31cb65e, ba41496d, bf9068f3, dad0e035, fed6ad2e) have
+  ACTIVE `paper_margin_locks` rows (₹1,98,769). No 2L entry ticket was issued;
+  at exit `_execute_paper_exit` will issue no 2L exit ticket (verdict not
+  approved), but `release_shadow_locks` WILL settle the 2L locks with scaled
+  P&L — so 2L equity moves for trades its journal verdict says it refused.
+- **Fix status:** the code fix (active lock honoured before re-sizing) is in
+  commit c79c4c9 (#115), pushed, NOT yet pulled on the VM. The 7 journal
+  verdicts are NOT repaired — a one-off repair needs an owner go-ahead.

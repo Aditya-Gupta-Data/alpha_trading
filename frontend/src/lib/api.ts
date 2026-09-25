@@ -6,7 +6,7 @@
  *
  * When the real backend is ready:
  *   1. Set VITE_API_BASE_URL in the environment (empty placeholder for now).
- *   2. Set USE_MOCK to false (or set VITE_USE_MOCK=false).
+ *   2. Mock data is opt-in: VITE_USE_MOCK=true (local design work only).
  *   3. Replace ONLY the body of each function below with the matching
  *      fetch(`${API_BASE_URL}/api/...`) call. Each function is one swappable
  *      unit — signatures and return shapes must stay identical.
@@ -19,7 +19,11 @@
 // bridge, so no host name is ever baked into the build).
 export const API_BASE_URL: string = import.meta.env["VITE_API_BASE_URL"] ?? "";
 
-export const USE_MOCK: boolean = import.meta.env["VITE_USE_MOCK"] !== "false";
+// Mock data is OPT-IN (VITE_USE_MOCK=true, local design work only). It was
+// opt-out until 2026-09-25, and the shipped desk showed the sample curve
+// (Rs.10,49,780 on 2025-10-02) instead of the ledger for a day: a build that
+// forgets a flag must fall back to REAL data, never to invented numbers.
+export const USE_MOCK: boolean = import.meta.env["VITE_USE_MOCK"] === "true";
 
 /* ------------------------------------------------------------------ types */
 

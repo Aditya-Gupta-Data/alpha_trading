@@ -1724,3 +1724,31 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   had booked it as −₹7,962. The other three stay open.
 - Still not touched: five FILLED EXIT tickets in `trade_tickets`; five
   `outcomes` rows (overwritten by the real resolution on upsert).
+
+## Issue 32 — the React desk showed SAMPLE data, not the ledger, from its 09-24 launch until 2026-09-25 11:22 IST (found by the owner on mobile: "why are we starting at 10,49,000, are the dates real"; FIXED)
+
+- **Observed (verified 2026-09-25):** `frontend/src/lib/api.ts` had
+  `USE_MOCK = VITE_USE_MOCK !== "false"` (mock ON unless the build said
+  otherwise) and `scripts/dashboard_box/ship_ui.sh` never set the flag. The
+  shipped bundle therefore rendered the built-in sample treasury: its curve
+  starts at ₹10,49,780 on 2025-10-02 (seeded random walk, 60 points 8,700
+  minutes apart, anchored to end at ₹10,85,400) — a date before the system
+  existed. The box's nginx log held 9 `GET /api/treasury` requests in total,
+  all from command-line curls; the browser desk had never called the bridge.
+- **Why it was missed:** the 09-24 parity audit verified the BRIDGE payloads
+  field by field (they were and are correct) — not the rendered UI. The
+  sample numbers were close enough to the real ones (₹10.85L equity, 8.5%)
+  to pass a glance.
+- **Fix:** mock is now opt-in (`VITE_USE_MOCK === "true"`); a build that
+  forgets a flag falls back to real data. Re-shipped 11:22 IST; verified in
+  a browser that the desk now issues `/api/freshness`, `/api/treasury`,
+  `/api/open-trades`, `/api/recon/latest` (401 on a deliberately wrong key,
+  which cleared the key and returned to the gate). The real curve with the
+  real key was NOT viewed by the agent (credential entry is the owner's).
+- **Still true of the REAL curve (not fixed, owner to decide):** it is the
+  raw `equity_curve` table from 2026-07-10 — it includes the 07-21 clean
+  sheet to ₹2L (drop to ₹2.05L on 07-23) and the 08-07 ₹8L injection (jump
+  to ₹10.39L), which are pool changes, not trading; the X axis spaces points
+  by ROW, not by time (seven 07-15 settlements get as much width as a
+  two-week gap); the two pre-Issue-16 points (07-10, 07-15) were stamped in
+  UTC and are labelled IST, so they read 5h30 early.

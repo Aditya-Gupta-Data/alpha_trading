@@ -456,7 +456,8 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict,
 # (there is no price to fill against).
 
 def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
-                        conn=None, venue_mod=None, today: date = None) -> dict:
+                        conn=None, venue_mod=None, today: date = None,
+                        accounts: list = None) -> dict:
     """Issue + fill the exit ticket(s) — the primary's, and one per shadow
     paper account holding this entry (#102). Returns {mode, ticket_id,
     status, exit_mark, venue_slippage_ps, fills, accounts, error}.
@@ -464,7 +465,13 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
     the exit limits (always adverse: Σ |fill − limit|); None unless every
     leg of the primary ticket FILLED. The caller keeps its own (clamped)
     exit mark and books this in place of the exit-side slippage ladder —
-    so the no-arbitrage clamp still holds and the venue's cost is a COST."""
+    so the no-arbitrage clamp still holds and the venue's cost is a COST.
+
+    `accounts` (decision #115): [(account_id, lots)] to exit INSTEAD of the
+    primary + shadows — a capital-rotation eviction closes one shadow
+    account's position alone; the first account is the one reported on.
+    On the normal path a shadow account whose lock is already released
+    (evicted) gets no second exit ticket."""
     from src.config import PAPER_VENUE_ENABLED
     record = {"mode": "model", "ticket_id": None, "status": None, "exit_mark": None,
               "venue_slippage_ps": None, "fills": {}, "accounts": {}, "error": None}
@@ -479,11 +486,17 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
         if own:
             conn = _brain_connect()
         try:
-            tickets = [(oms.PRIMARY_ACCOUNT, None)]
-            for acct, v in (entry.get("accounts") or {}).items():
-                if (v or {}).get("status") == "approved" and v.get("ticket_id") \
-                        and int(v.get("lots") or 0) > 0:
-                    tickets.append((acct, int(v["lots"])))
+            if accounts:
+                tickets = [(a, int(l)) for a, l in accounts]
+            else:
+                from src import portfolio_manager as _pm
+                tickets = [(oms.PRIMARY_ACCOUNT, None)]
+                for acct, v in (entry.get("accounts") or {}).items():
+                    if (v or {}).get("status") == "approved" and v.get("ticket_id") \
+                            and int(v.get("lots") or 0) > 0 \
+                            and not _pm.paper_lock_released(conn, acct, entry.get("short_id")):
+                        tickets.append((acct, int(v["lots"])))
+            lead = tickets[0][0]
             tids = {}
             for acct, lots in tickets:
                 issued = strategy_router.issue_exit(conn, entry, leg_limits, resolution,
@@ -491,7 +504,7 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
                                                     account_id=acct, lots=lots)
                 tids[acct] = issued["ticket_id"]
             venue.sweep(conn, today=today, stamp=False)
-            tid = tids[oms.PRIMARY_ACCOUNT]
+            tid = tids[lead]
             view = oms.ticket_view(conn, tid) or {}
             record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"))
             if view.get("status") == oms.FILLED:
@@ -509,7 +522,7 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
                 record["exit_mark"] = round(mark, 4)
                 record["venue_slippage_ps"] = slip          # full precision; rounded in rupees
             for acct, stid in tids.items():
-                if acct != oms.PRIMARY_ACCOUNT:
+                if acct != lead:
                     sv = oms.ticket_view(conn, stid) or {}
                     record["accounts"][acct] = {"ticket_id": stid, "status": sv.get("status"),
                                                 "lots": sv.get("lots")}
@@ -519,6 +532,167 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
     except Exception as e:
         record["error"] = f"{type(e).__name__}: {e}"
     return record
+
+
+# ------------------------------------------------- capital rotation (decision #115)
+#
+# The PAPER_2L_ROT account's eviction protocol. portfolio_manager DECIDES
+# (evaluate_eviction: the lowest remaining reward:risk, the 1.5x rule) and
+# prices nothing; this module owns the prices and the exit, because it is
+# the one settlement path. Two calls:
+#   rotation_marks     rr_left for each open trade, on the tracker's own
+#                      modeled mark at the live spot (the same arithmetic
+#                      as live_bridge.evaluate_position). No spot = no mark.
+#   evict_for_rotation closes ONE account's slice of one trade on REAL chain
+#                      quotes (re-verifying it is still weak enough), as an
+#                      OMS EXIT ticket for THAT account only; settles only
+#                      that account's lock. The primary and every other
+#                      account keep the trade, untouched.
+
+def _rotation_spot(ticker: str):
+    """The live spot: the engine's fresh snapshot first (no Dhan call),
+    else one quote. None when neither answers — never a guess."""
+    try:
+        from src import market_snapshot
+        snap = market_snapshot.read(max_age_seconds=market_snapshot.DEFAULT_MAX_AGE_SECONDS)
+        spot = market_snapshot.spot_for(snap, ticker)
+        if spot is not None:
+            return spot
+    except Exception:
+        pass
+    try:
+        from src.dhan_client import get_live_price
+        return get_live_price(ticker)
+    except Exception:
+        return None
+
+
+def _profit_ps_now(spread: dict, entry_date: str, spot: float, today: date) -> float:
+    expiry = date.fromisoformat(spread["expiry"])
+    total_days = max(1, (expiry - date.fromisoformat(entry_date)).days)
+    frac_left = max(0.0, (expiry - today).days / total_days)
+    lot = int(spread["lot_size"])
+    max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+    max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+    m_now = _spread_mark(spread, float(spot), frac_left)
+    return max(-max_loss_ps, min(m_now - _spread_entry_mark(spread), max_profit_ps))
+
+
+def rotation_marks(refs, entries=None, spot_fn=None, today: date = None) -> dict:
+    """{journal_ref: rr_left} for the open trades in `refs` that can be
+    marked now; a ref with no spot, no spread or already resolved is left
+    out (not a candidate). Never raises."""
+    from src import portfolio_manager as pm
+    today = today or date.today()
+    spot_fn = spot_fn or _rotation_spot
+    out = {}
+    try:
+        rows = {e.get("short_id"): e for e in (entries if entries is not None
+                                                else journal.read_all())}
+    except Exception:
+        return out
+    spots = {}
+    for ref in refs or []:
+        e = rows.get(ref)
+        if not e or not _spread_trackable(e):
+            continue
+        try:
+            t = e["ticker"]
+            if t not in spots:
+                spots[t] = spot_fn(t)
+            if spots[t] is None:
+                continue
+            rr = pm.reward_risk_left(e["spread"],
+                                     _profit_ps_now(e["spread"], e["date"], spots[t], today))
+            if rr is not None:
+                out[ref] = rr
+        except Exception:
+            continue
+    return out
+
+
+def evict_for_rotation(conn, account: str, journal_ref: str, lots: int,
+                       max_rr_left: float = None, reason: str = "",
+                       quotes_fn=None, entries=None, venue_mod=None,
+                       today: date = None) -> dict:
+    """Close `account`'s `lots` of `journal_ref` NOW (decision #115).
+    Returns {status, ...}: "evicted" (with pnl_rs, capture_pct, rr_left,
+    ticket_id) or a named refusal that leaves the trade open everywhere —
+    "not_rotation_account", "not_open", "no_chain_quotes",
+    "stronger_on_real_quotes", "exit_not_filled". Never raises."""
+    from src import portfolio_manager as pm
+    today = today or date.today()
+    res = {"status": "error", "journal_ref": journal_ref, "account": account}
+    try:
+        if account not in pm.ROTATION_ACCOUNTS:
+            return dict(res, status="not_rotation_account")
+        rows = entries if entries is not None else journal.read_all()
+        entry = next((e for e in rows if e.get("short_id") == journal_ref), None)
+        if entry is None or not _spread_trackable(entry):
+            return dict(res, status="not_open")
+        if quotes_fn is None:
+            from src.live_bridge import _leg_quotes_for as quotes_fn
+        quotes = quotes_fn(entry)
+        if not quotes:
+            return dict(res, status="no_chain_quotes")
+        spread = entry["spread"]
+        try:
+            m_exit = sum((1.0 if l["side"].upper() == "BUY" else -1.0)
+                         * float(quotes[(float(l["strike"]), l["option_type"].upper())])
+                         for l in spread["legs"])
+        except (KeyError, TypeError, ValueError):
+            return dict(res, status="no_chain_quotes")
+        lot = int(spread["lot_size"])
+        max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+        max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+        profit_ps = max(-max_loss_ps, min(m_exit - _spread_entry_mark(spread), max_profit_ps))
+        rr_real = pm.reward_risk_left(spread, profit_ps)
+        res["rr_left"] = None if rr_real in (None, float("inf")) else round(rr_real, 4)
+        if rr_real is None or (max_rr_left is not None and rr_real > max_rr_left):
+            return dict(res, status="stronger_on_real_quotes")
+        lots = int(lots)
+        qty = lot * lots
+        mine = dict(spread, lots=lots)
+        execution = _execute_paper_exit(entry, quotes, "capital_rotation_eviction",
+                                        conn=conn, venue_mod=venue_mod, today=today,
+                                        accounts=[(account, lots)])
+        if execution.get("mode") == "paper_venue" and execution.get("status") != "FILLED":
+            try:
+                from src import oms
+                oms.cancel_ticket(conn, execution["ticket_id"], "rotation exit not filled")
+            except Exception:
+                pass
+            return dict(res, status="exit_not_filled", ticket_id=execution.get("ticket_id"))
+        slipped = execution.get("venue_slippage_ps") is not None
+        frictions, slippage = _spread_exit_costs_quoted(mine, quotes, exit_slipped=slipped)
+        if slipped:
+            slippage += float(execution["venue_slippage_ps"]) * qty
+        pnl_net = round(profit_ps * qty - frictions - slippage, 2)
+        capture = (profit_ps / max_profit_ps * 100) if max_profit_ps > 0 else 0.0
+        settled = pm.paper_release_margin(conn, account, journal_ref, pnl_net)
+        if not settled.get("released"):
+            return dict(res, status="not_open", reason=settled.get("reason"))
+        stamp = {"status": "evicted", "evicted_on": today.isoformat(), "pnl_rs": pnl_net,
+                 "capture_pct": round(capture, 2), "exit_ticket_id": execution.get("ticket_id"),
+                 "reason": reason}
+
+        def _mutate(e):
+            acc = e.get("accounts")
+            if not isinstance(acc, dict) or not isinstance(acc.get(account), dict):
+                return False
+            acc[account].update(stamp)
+            return True
+        try:
+            journal.update_entry(journal_ref, _mutate)
+        except Exception as exc:
+            # the lock table is the truth (paper_lock_released guards the
+            # later exit); a lost stamp is cosmetic, said aloud
+            print(f"  (rotation stamp skipped for {journal_ref}: {exc})")
+        return dict(res, status="evicted", pnl_rs=pnl_net, capture_pct=round(capture, 2),
+                    frictions_rs=round(frictions, 2), slippage_rs=round(slippage, 2),
+                    ticket_id=execution.get("ticket_id"), execution_mode=execution.get("mode"))
+    except Exception as exc:
+        return dict(res, reason=f"{type(exc).__name__}: {exc}")
 
 
 def note_ratchet(short_id: str, peak_capture_pct: float, locked_pct: float) -> bool:

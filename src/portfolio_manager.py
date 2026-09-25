@@ -48,6 +48,7 @@ from datetime import datetime, timedelta, timezone
 
 from src import brain_map
 from src.config import (ACCOUNT_RISK_PER_TRADE_PCT,
+                        CAPITAL_ROTATION_ENABLED, CAPITAL_ROTATION_RR_MULTIPLE,
                         PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_STARTING_CAPITAL_RS)
 from src.position_sizing import fractional_lots
 from src.portfolio import span_stress_factor
@@ -683,12 +684,19 @@ def account_summary(conn) -> dict:
 
 ACCOUNT_PAPER_10L = "PAPER_10L"     # the primary: account_state id=1 & co.
 ACCOUNT_PAPER_2L = "PAPER_2L"       # the Rs.2L stress-test shadow
+ACCOUNT_PAPER_2L_ROT = "PAPER_2L_ROT"   # the Rs.2L capital-rotation A/B arm (#115)
 
 # account_id -> starting capital. The primary's pool is whatever the live
 # `account_state` row says (STARTING_CAPITAL only seeds an empty DB).
 PAPER_ACCOUNTS = {
     ACCOUNT_PAPER_2L: float(PAPER_2L_STARTING_CAPITAL_RS),
+    ACCOUNT_PAPER_2L_ROT: float(PAPER_2L_STARTING_CAPITAL_RS),
 }
+# The accounts allowed to evict (decision #115). PAPER_10L and PAPER_2L are
+# NOT here and never may be: they stay first-come-first-served.
+ROTATION_ACCOUNTS = frozenset({ACCOUNT_PAPER_2L_ROT})
+ROTATION_EVICTION_EVENT = "CAPITAL_ROTATION_EVICTION"
+ROTATION_DECLINED_EVENT = "capital_rotation_declined"
 
 _ACCOUNTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_accounts (
@@ -733,8 +741,16 @@ def shadow_accounts_enabled() -> bool:
     return bool(PAPER_2L_ACCOUNT_ENABLED)
 
 
+def rotation_enabled() -> bool:
+    """The #115 rotation arm: its own switch AND the 2L experiment's."""
+    return shadow_accounts_enabled() and bool(CAPITAL_ROTATION_ENABLED)
+
+
 def shadow_account_ids() -> tuple:
-    return tuple(PAPER_ACCOUNTS) if shadow_accounts_enabled() else ()
+    if not shadow_accounts_enabled():
+        return ()
+    return tuple(a for a in PAPER_ACCOUNTS
+                 if a not in ROTATION_ACCOUNTS or rotation_enabled())
 
 
 def ensure_accounts_schema(conn) -> None:
@@ -974,8 +990,177 @@ def paper_account_summary(conn, account: str) -> dict:
     }
 
 
+# --- CAPITAL ROTATION: the eviction protocol (decision #115) -------------
+# PAPER_2L_ROT only. When that account cannot margin a new signal, it may
+# close its WEAKEST open trade to fund it. "Weakest" = the lowest REMAINING
+# reward:risk at current prices, per share:
+#
+#     reward_left = max_profit - profit_now     (what the trade can still make)
+#     risk_left   = max_loss   + profit_now     (what it can still lose)
+#     rr_left     = reward_left / risk_left
+#
+# A spread at 80% of max profit has little left to earn for a lot left to
+# give back (rr_left low -> evicted first); one sitting at max loss has
+# nothing left to lose (rr_left infinite -> never evicted; closing it would
+# only book the loss). The new trade's reward:risk is its build ratio
+# (max_profit / max_loss: at entry nothing is spent yet). Evict only when
+#
+#     rr_new >= CAPITAL_ROTATION_RR_MULTIPLE (1.5) x rr_left(weakest)
+#
+# AND the weakest trade's released margin actually lets one lot of the new
+# trade fit. At most ONE eviction per signal. A trade with no current mark
+# is never a candidate (abstention, never a guessed price). This module
+# prices nothing: marks come from `marks_fn`, the exit from `evict_fn` —
+# both plan_tracker (the one settlement path) by default.
+
+def reward_risk_left(spread: dict, profit_ps: float):
+    """rr_left per the block above, from the modeled/quoted P&L per share
+    (already clamped to [-max_loss, +max_profit]). None when the structure
+    has no measurable bounds; float('inf') when nothing is left to lose."""
+    lot = int(spread.get("lot_size") or 0)
+    if lot <= 0:
+        return None
+    max_profit_ps = float(spread.get("max_profit") or 0) / lot
+    max_loss_ps = float(spread.get("max_loss") or 0) / lot
+    if max_profit_ps <= 0 or max_loss_ps <= 0:
+        return None
+    p = max(-max_loss_ps, min(float(profit_ps), max_profit_ps))
+    reward, risk = max_profit_ps - p, max_loss_ps + p
+    if risk <= 1e-9:
+        return float("inf")
+    return max(0.0, reward) / risk
+
+
+def proposal_reward_risk(spread: dict):
+    """The new trade's reward:risk = max_profit / max_loss; None if unmeasurable."""
+    return reward_risk_left(spread, 0.0)
+
+
+def evaluate_eviction(conn, account: str, new_spread: dict, marks: dict,
+                      need_rs: float, multiple: float = None) -> dict:
+    """PURE verdict (no writes): should `account` evict one open trade to
+    fund `new_spread`? `marks` = {journal_ref: rr_left} for the account's
+    open trades (missing / None = no mark = not a candidate); `need_rs` =
+    the margin one lot of the new trade needs. Returns {evict, reason,
+    new_rr, threshold_rr, weakest: {journal_ref, rr_left, lots, margin_rs}}."""
+    multiple = CAPITAL_ROTATION_RR_MULTIPLE if multiple is None else float(multiple)
+    out = {"evict": False, "reason": "", "new_rr": None, "threshold_rr": None,
+           "weakest": None, "multiple": multiple}
+    if account not in ROTATION_ACCOUNTS:
+        out["reason"] = f"{account} is first-come-first-served (no rotation)"
+        return out
+    new_rr = proposal_reward_risk(new_spread)
+    out["new_rr"] = None if new_rr is None else round(new_rr, 4)
+    if new_rr is None:
+        out["reason"] = "new trade's reward:risk is unmeasurable"
+        return out
+    ensure_accounts_schema(conn)
+    rows = conn.execute("SELECT journal_ref, margin_rs, lots, locked_at FROM paper_margin_locks "
+                        "WHERE account_id = ? AND released_at IS NULL ORDER BY locked_at, rowid",
+                        (account,)).fetchall()
+    cands = []
+    for ref, margin, lots, locked_at in (tuple(r) for r in rows):
+        rr = (marks or {}).get(ref)
+        if rr is None:
+            continue
+        cands.append({"journal_ref": ref, "rr_left": float(rr), "lots": int(lots),
+                      "margin_rs": float(margin), "locked_at": locked_at})
+    if not cands:
+        out["reason"] = (f"no open trade has a current mark ({len(rows)} open)" if rows
+                         else "no open trades to evict")
+        return out
+    weakest = min(cands, key=lambda c: c["rr_left"])     # ties: oldest first (stable sort)
+    out["weakest"] = {k: weakest[k] for k in ("journal_ref", "rr_left", "lots", "margin_rs")}
+    threshold = multiple * weakest["rr_left"]
+    out["threshold_rr"] = round(threshold, 4) if threshold != float("inf") else None
+    if new_rr < threshold:
+        out["reason"] = (f"new reward:risk {new_rr:.2f} < {multiple:g}x the weakest "
+                         f"{weakest['journal_ref']}'s {weakest['rr_left']:.2f} left")
+        return out
+    freed = paper_available_cash(conn, account) + weakest["margin_rs"]
+    if freed < float(need_rs):
+        out["reason"] = (f"evicting {weakest['journal_ref']} frees Rs.{freed:,.0f}, one lot "
+                         f"needs Rs.{float(need_rs):,.0f}")
+        return out
+    out["evict"] = True
+    out["reason"] = (f"new reward:risk {new_rr:.2f} >= {multiple:g}x "
+                     f"{weakest['journal_ref']}'s {weakest['rr_left']:.2f} left")
+    return out
+
+
+def _default_marks_fn(refs):
+    from src import plan_tracker
+    return plan_tracker.rotation_marks(refs)
+
+
+def _default_evict_fn(conn, account, journal_ref, lots, max_rr_left, reason):
+    from src import plan_tracker
+    return plan_tracker.evict_for_rotation(conn, account, journal_ref, lots,
+                                           max_rr_left=max_rr_left, reason=reason)
+
+
+def _try_rotation(conn, account: str, journal_ref: str, spread: dict, vix,
+                  marks_fn=None, evict_fn=None) -> dict:
+    """Judge and (if approved) execute ONE eviction for `journal_ref`.
+    Every outcome is a named row in the account's own events. Returns the
+    evaluate_eviction verdict plus {evicted: bool, exit: {...}}."""
+    need = required_margin_for({"spread": dict(spread, lots=1), "vix": vix})
+    refs = [r[0] for r in conn.execute(
+        "SELECT journal_ref FROM paper_margin_locks WHERE account_id = ? AND "
+        "released_at IS NULL", (account,)).fetchall()]
+    marks = (marks_fn or _default_marks_fn)(refs) if refs else {}
+    verdict = evaluate_eviction(conn, account, spread, marks, need)
+    verdict["evicted"] = False
+    if not verdict["evict"]:
+        paper_log_event(conn, account, ROTATION_DECLINED_EVENT, journal_ref,
+                        f"no eviction for {journal_ref}: {verdict['reason']}")
+        return verdict
+    w = verdict["weakest"]
+    # The exit re-verifies on REAL quotes: a trade the model called weak but
+    # the chain says is not (rr_left above new_rr / multiple) stays open.
+    max_rr_left = verdict["new_rr"] / verdict["multiple"] if verdict["multiple"] else None
+    ex = (evict_fn or _default_evict_fn)(conn, account, w["journal_ref"], w["lots"],
+                                          max_rr_left, verdict["reason"])
+    verdict["exit"] = ex
+    if (ex or {}).get("status") != "evicted":
+        paper_log_event(conn, account, ROTATION_DECLINED_EVENT, journal_ref,
+                        f"eviction of {w['journal_ref']} for {journal_ref} not executed: "
+                        f"{(ex or {}).get('status')} {(ex or {}).get('reason') or ''}".strip())
+        return verdict
+    verdict["evicted"] = True
+    import json as _json
+    paper_log_event(conn, account, ROTATION_EVICTION_EVENT, w["journal_ref"], _json.dumps({
+        "evicted": w["journal_ref"], "funded": journal_ref,
+        "evicted_rr_left_model": round(w["rr_left"], 4),   # finite: it passed the threshold
+        "evicted_rr_left_real": ex.get("rr_left"),
+        "new_rr": verdict["new_rr"], "multiple": verdict["multiple"],
+        "evicted_lots": w["lots"], "margin_freed_rs": w["margin_rs"],
+        "pnl_rs": ex.get("pnl_rs"), "capture_pct": ex.get("capture_pct"),
+        "exit_ticket_id": ex.get("ticket_id")}, sort_keys=True))
+    return verdict
+
+
+def _active_shadow_lock(conn, account: str, journal_ref: str):
+    row = conn.execute("SELECT margin_rs, lots FROM paper_margin_locks WHERE account_id = ? "
+                       "AND journal_ref = ? AND released_at IS NULL",
+                       (account, journal_ref)).fetchone()
+    return None if row is None else (float(row[0]), int(row[1]))
+
+
+def paper_lock_released(conn, account: str, journal_ref: str) -> bool:
+    """True only when this account HELD `journal_ref` and has already let it
+    go (e.g. a #115 eviction) — the exit path must not close it twice."""
+    try:
+        row = conn.execute("SELECT released_at FROM paper_margin_locks WHERE account_id = ? "
+                           "AND journal_ref = ?", (account, journal_ref)).fetchone()
+    except Exception:
+        return False
+    return row is not None and row[0] is not None
+
+
 def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
-                             risk_pct: float = None) -> dict:
+                             risk_pct: float = None, marks_fn=None,
+                             evict_fn=None) -> dict:
     """Judge one PRIMARY-APPROVED proposal against every shadow account,
     independently: size on the account's own capital, then its own gate.
     Returns {account_id: {status, lots, margin_rs, reason}} -- `status` is
@@ -994,21 +1179,61 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
         primary_lots = int(spread.get("lots", proposal.get("lots", 1)) or 0)
         for account in shadow_account_ids():
             try:
+                get_paper_account(conn, account)
+                # Already holding this entry (the proposal-time verdict, now
+                # re-judged at approval): keep it. Judged BEFORE sizing — the
+                # entry's own lock is already out of the liquid cash, so a
+                # re-size would refuse a trade the account holds (and the
+                # rotation arm would evict a second trade to fund it twice).
+                held = _active_shadow_lock(conn, account, journal_ref)
+                if held is not None:
+                    out[account] = {"status": "approved", "lots": held[1], "margin_rs": held[0],
+                                    "reason": "margin already locked for this entry"}
+                    continue
+                vix = proposal.get("vix")
+                rotation = None
                 sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
+                if (sized["lots"] <= 0 and account in ROTATION_ACCOUNTS
+                        and sized.get("by_margin") == 0 and not paper_trading_halted(conn, account)
+                        and not paper_daily_breaker_status(conn, account)["halted"]):
+                    # #115: the margin wall, not a halt or an unmeasurable
+                    # loss, is the one refusal an eviction may answer.
+                    rotation = _try_rotation(conn, account, journal_ref, spread, vix,
+                                             marks_fn=marks_fn, evict_fn=evict_fn)
+                    if rotation.get("evicted"):
+                        sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
                 if sized["lots"] <= 0:
                     paper_log_event(conn, account, "sizing_refused", journal_ref,
                                     f"entry {journal_ref} refused ({sized['reason']})")
                     out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
                                     "reason": f"sizing refused: {sized['reason']}"}
+                    if rotation is not None:
+                        out[account]["rotation"] = _rotation_stamp(rotation)
                     continue
                 required = required_margin_for(
-                    {"spread": dict(spread, lots=sized["lots"]), "vix": proposal.get("vix")})
+                    {"spread": dict(spread, lots=sized["lots"]), "vix": vix})
+                if (account in ROTATION_ACCOUNTS and rotation is None
+                        and required > paper_available_cash(conn, account)
+                        and not paper_trading_halted(conn, account)
+                        and not paper_daily_breaker_status(conn, account)["halted"]):
+                    # the VIX-stressed ask can exceed the sizer's per-lot
+                    # margin: same rule, judged on the real ask, then the
+                    # same sizing as PAPER_2L on the freed cash — the arms
+                    # differ ONLY by the eviction.
+                    rotation = _try_rotation(conn, account, journal_ref, spread, vix,
+                                             marks_fn=marks_fn, evict_fn=evict_fn)
+                    if rotation.get("evicted"):
+                        sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
+                        required = required_margin_for(
+                            {"spread": dict(spread, lots=max(1, sized["lots"])), "vix": vix})
                 verdict = paper_request_entry(conn, account, journal_ref, required,
                                               lots=sized["lots"], primary_lots=primary_lots)
                 out[account] = {"status": "approved" if verdict["approved"] else "rejected",
                                 "lots": sized["lots"] if verdict["approved"] else 0,
                                 "margin_rs": required if verdict["approved"] else None,
                                 "reason": verdict["reason"]}
+                if rotation is not None:
+                    out[account]["rotation"] = _rotation_stamp(rotation)
             except Exception as e:
                 out[account] = {"status": "error", "lots": 0, "margin_rs": None,
                                 "reason": f"shadow account unavailable ({e})"}
@@ -1022,6 +1247,18 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                 conn.close()
             except Exception:
                 pass
+
+
+def _rotation_stamp(rotation: dict) -> dict:
+    """The compact #115 record stamped on the NEW trade's journal verdict."""
+    w = rotation.get("weakest") or {}
+    ex = rotation.get("exit") or {}
+    return {"evicted": w.get("journal_ref") if rotation.get("evicted") else None,
+            "considered": w.get("journal_ref"),
+            "rr_left": (None if w.get("rr_left") in (None, float("inf"))
+                        else round(float(w["rr_left"]), 4)),
+            "new_rr": rotation.get("new_rr"), "multiple": rotation.get("multiple"),
+            "pnl_rs": ex.get("pnl_rs"), "reason": rotation.get("reason")}
 
 
 def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0) -> dict:

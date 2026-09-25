@@ -42,6 +42,50 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-25 — CAPITAL ROTATION (eviction protocol) BUILT on a third account `PAPER_2L_ROT` (decision #115) — committed, NOT deployed
+
+**What was asked vs what was built.** The directive put eviction on
+`PAPER_2L`. Pushback: that breaks #102 (2L settles only off the primary's
+exit; it is the real-money proof gate) and #105 (no mid-trade exit on a
+spread), and 10L-vs-2L confounds pool size with policy. **Owner ruled:
+separate arm, weakest = reward:risk LEFT now.** So: `PAPER_10L` and
+`PAPER_2L` are unchanged and first-come-first-served; `PAPER_2L_ROT`
+(₹2L, same sizing, same signals) is the only account that can evict.
+
+**The rule.** `rr_left = (max_profit − profit_now) / (max_loss + profit_now)`
+per share on the tracker's modeled mark at the live spot; the new trade's
+`rr = max_profit / max_loss`. Evict the lowest-`rr_left` trade iff
+`rr_new ≥ 1.5 × rr_left` and its freed margin fits one lot. Re-verified on
+real chain quotes before exiting; one eviction per signal; exit = an OMS
+EXIT ticket for `PAPER_2L_ROT` only (paper venue fill), settled into that
+account alone. Audit: `CAPITAL_ROTATION_EVICTION` / `capital_rotation_declined`
+rows in `paper_account_events` — already visible in the Streamlit + React
+audit logs (they read that table). Full detail in DECISIONS #115.
+
+**Bug fixed in passing (affects live PAPER_2L once deployed).**
+`evaluate_shadow_accounts` re-judges at approval; it re-sized on cash that
+already excluded the entry's own lock, so it could stamp `rejected` on a
+trade 2L actually holds (lock stays, no 2L entry ticket issued). Now an
+active lock is returned as approved first. Not verified against the VM
+journal — worth checking whether any 2L row carries `rejected` alongside
+an open `paper_margin_locks` row.
+
+**Suite** 2,382 passed / 1 failed (known `test_darling_shadow`). New:
+`tests/test_capital_rotation.py` (13). Frontend `tsc --noEmit` clean.
+
+**Not done / next.**
+1. **Deploy is the owner's call** — VM pull + restart the proposer/tracker
+   services; `ship_ui.sh` for the React desk's third account card.
+2. **ROT starts EMPTY** at its first signal while PAPER_2L holds 7 trades
+   and ₹1,98,769 locked; it will not hit the margin wall (so will not
+   rotate) for a while. Compare the arms from ROT's birth date, or rule on
+   cloning 2L's open locks into ROT (a one-off, numbered decision).
+3. An eviction at proposal time is not undone if a human later rejects the
+   new trade (moot while `PAPER_AUTO_APPROVE=1`).
+4. `DECISIONS.md` has no row for **#114** (CAGR) although commit `1aaea54`
+   and yesterday's block cite it — the owner/that session should add it;
+   not reconstructed here (RULE 3).
+
 ## 2026-09-24 (18:55) — CAGR back on the desk (decision #114) + first manual Proving Court readout of the two queued hypotheses
 
 **CAGR.** `dashboard.data.treasury` now carries `days_elapsed`,

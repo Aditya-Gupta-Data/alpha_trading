@@ -91,7 +91,8 @@ def _body():
           st.error(f"Treasury unavailable: {T['error']}")
       else:
           for acct, title in (("PAPER_10L", "Primary account — ₹10L paper pool"),
-                              ("PAPER_2L", "Shadow account — ₹2L stress test (sized independently)")):
+                              ("PAPER_2L", "Shadow account — ₹2L stress test (sized independently)"),
+                              ("PAPER_2L_ROT", "Rotation arm — ₹2L with capital rotation / eviction (#115)")):
               a = T.get(acct)
               st.subheader(title)
               if not a:

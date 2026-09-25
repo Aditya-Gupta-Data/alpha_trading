@@ -243,3 +243,14 @@ PAPER_2L_ACCOUNT_ENABLED = bool(_CONFIG.get("paper_2l_account_enabled", True))
 # spread is held to the 65% profit take or the pre-expiry exit. There is no
 # premium-drawdown knob and no underlying-break knob; do not add one here.
 PAPER_2L_STARTING_CAPITAL_RS = float(_CONFIG.get("paper_2l_starting_capital_rs", 200000.0))
+# CAPITAL ROTATION — the EVICTION PROTOCOL A/B arm (decision #115,
+# 2026-09-25, owner ruling). A THIRD paper account, PAPER_2L_ROT, with the
+# same Rs.2L pool and the same sizing as PAPER_2L; the ONE difference: when
+# it cannot margin a new signal it may evict its weakest open trade (lowest
+# REMAINING reward:risk at current prices) if the new trade's reward:risk
+# is at least CAPITAL_ROTATION_RR_MULTIPLE x that. PAPER_10L and PAPER_2L
+# stay strictly first-come-first-served and keep #105 (no mid-trade exit);
+# the 2L proof account is not touched. Rides the 2L switch: with
+# `paper_2l_account_enabled` off, the rotation arm is off too.
+CAPITAL_ROTATION_ENABLED = bool(_CONFIG.get("capital_rotation_enabled", True))
+CAPITAL_ROTATION_RR_MULTIPLE = float(_CONFIG.get("capital_rotation_rr_multiple", 1.5))

@@ -20,6 +20,13 @@ from src.strategy import StrategyConstructor
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _two_accounts_only(monkeypatch):
+    """These tests pin the #102 two-account contract; the #115 rotation arm
+    (a third account) has its own file, test_capital_rotation.py."""
+    monkeypatch.setattr(pm, "CAPITAL_ROTATION_ENABLED", False)
+
+
 @pytest.fixture
 def conn():
     c = brain_map.connect(":memory:")

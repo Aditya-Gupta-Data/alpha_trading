@@ -147,6 +147,7 @@ function OverviewPage() {
             <div className="grid gap-6 lg:grid-cols-2">
               <AccountCard account={treasury.data.PAPER_10L} />
               <AccountCard account={treasury.data.PAPER_2L} />
+              {treasury.data.PAPER_2L_ROT && <AccountCard account={treasury.data.PAPER_2L_ROT} />}
             </div>
 
             <Panel title="Compounding — PAPER_10L">

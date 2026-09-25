@@ -60,6 +60,8 @@ export interface EquityPoint {
 export interface Treasury {
   PAPER_10L: AccountTreasury;
   PAPER_2L: AccountTreasury & { rejections: number };
+  /** The capital-rotation A/B arm (decision #115); absent until its first signal. */
+  PAPER_2L_ROT?: AccountTreasury & { rejections: number };
   equity_curve: EquityPoint[];
 }
 

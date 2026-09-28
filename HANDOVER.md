@@ -50,7 +50,14 @@ restarts a dropped tunnel (journal "Tunnel not found" or 2 failed probes,
 5-min cooldown). VM: `publish_dashboard_mirror.sh` reads that file after each
 push → `src.dashboard_link` remembers it in `data/dashboard_url.txt` and
 fires a 🔗 card on change (budgeted, not spool-only). Cron #34 recon 15:42
-Mon-Fri. Deploy status is in the block below this line once done.
+Mon-Fri. **DEPLOYED 22:38–22:40 IST, both machines at `e81b309`:** box timer
+active, `tunnel_url.txt` written (644), first probe OK; VM cron re-applied
+(35 lines, recon at 15:42 present); a real push read the URL back, remembered
+it and SENT the 🔗 card (budget 4→5, not queued); a second push was silent.
+NOT exercised live: the watchdog's restart path (forcing it would rotate the
+owner's fresh link) — its detection is the same journal grep that found the
+weekend outage. First scheduled recon: Tue 09-29 15:42. Suite 2,391 / 1
+known.
 
 ## 2026-09-28 (22:30) — TRADING VM DEPLOYED to 0b6934f (24 commits: #115 capital rotation, #116/#117 desk, the #102 re-judge fix); Issue 34 REPAIRED; fresh recon PARITY; mirror pushed
 

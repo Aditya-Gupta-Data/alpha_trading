@@ -42,6 +42,41 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-28 (22:30) — TRADING VM DEPLOYED to 0b6934f (24 commits: #115 capital rotation, #116/#117 desk, the #102 re-judge fix); Issue 34 REPAIRED; fresh recon PARITY; mirror pushed
+
+**VM.** `git pull` to `1087c82` then `0b6934f`, `alpha-trading` +
+`alpha-discord-bot` restarted, `/api/health` 200,
+`shadow_account_ids()` → `('PAPER_2L', 'PAPER_2L_ROT')`. **PAPER_2L_ROT has
+no row yet** — it is created on its first signal (Tuesday 09-29 session at
+the earliest); it starts empty (owner chose no cloning), so it will not hit
+its margin wall — and will not rotate — for a while.
+
+**Issue 34 repaired** (ledger has the detail): the 7 PAPER_2L verdicts now
+match the lock table; 2 of them had already settled 09-25 with P&L correctly
+in 2L. Tool `scripts/repair_issue34_2l_verdicts.py`; backup taken. Known,
+deliberate gap: no 2L OMS tickets exist for those 7 (append-only ledger).
+
+**Recon** 22:26:17 PARITY — broker reachable, 0 positions / 0 holdings, 26
+paper rows, 0 mismatches, funds available ₹1,411.18. Still a manual-only
+tool (decision #94); scheduling it remains an owner decision.
+
+**Dashboard box.** Mirror pushed 22:26:22. The quick tunnel had been DEAD
+since Fri 09-25 13:43 ("Tunnel not found" loop — Cloudflare dropped it ~85
+min after the reboot; box and services were fine throughout) — the owner's
+link was broken all weekend. Restarted 22:27; current link
+`https://amanda-vegetarian-badge-carriers.trycloudflare.com` (third drop in
+four days: a named tunnel on an owned domain is the real fix; an auto-restart
+watchdog is the interim — owner to decide).
+
+**Auto-approve:** re-armed 09-25 (owner approved the 14 stale pendings; 10L
+liquid stayed ~₹13k because approval converts pending locks to open trades).
+Tripwire reads `False` tonight. It pauses again after 3 trading days with no
+human approve/reject — a standing owner decision whether to lengthen it.
+
+**Next:** watch Tuesday's session for the first PAPER_2L_ROT row and any
+`capital_rotation_declined` events; Stage B at 46/60, ~2 sessions behind the
+10-13 target (bar held, #86).
+
 ## 2026-09-25 (afternoon) — full-history curve with capital-move markers (decision #117, supersedes #116's truncation); tunnel no longer rotates on Streamlit restarts
 
 **Live after this block's deploy:** the desk + Streamlit curve shows ALL

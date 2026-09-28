@@ -1819,3 +1819,19 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   collectors disabled (~58 MB); persistent journal on; all three written into
   `scripts/dashboard_box/setup.sh`. Mirror pushed by hand 18:29 (OK). Package
   metadata now refreshes only when someone runs dnf by hand (swap first).
+
+- **Issue 34 — FIXED 2026-09-28 22:26 IST (VM at 0b6934f).** By the time the
+  repair ran, 2 of the 7 (749f6b80, bf9068f3 — both ICICIBANK) had already
+  SETTLED on 09-25 15:28 via `ratchet_hit`, P&L ₹3,338.60 + ₹3,357.58 booked
+  to PAPER_2L through `release_shadow_locks` (2L realized_pnl = ₹6,696.18,
+  matches) — exactly the "2L equity moves for trades its verdict says it
+  refused" case. `scripts/repair_issue34_2l_verdicts.py --yes` (dry-run
+  first, output identical to the plan) set all 7 verdicts to `approved` at the
+  lock's own lots/margin, archived the wrong verdict under `repaired_from`,
+  wrote 7 `issue34_repair` rows to `paper_account_events`, backup
+  `data/journal.jsonl.bak-issue34-20260928-222611`. Second plan = 0 remaining;
+  9/9 PAPER_2L-held rows now read `approved`. NOT repaired, by design: no
+  PAPER_2L entry ticket exists for the 7 and no 2L exit ticket for the 2
+  settled (append-only OMS; recon shows them as "underlying n/a" for that
+  reason). Recon run 22:26:17 → PARITY (broker reachable, 0 positions,
+  0 holdings, 26 paper rows, 0 mismatches); mirror pushed 22:26:22.

@@ -42,6 +42,16 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-28 (23:xx) — decision #118: tunnel watchdog on the box + link-change Discord card from the VM + recon on weekday cron 15:42
+
+**Built + tested (scoped 86 green).** Box: `tunnel_watchdog.sh` → timer
+every 2 min, persists the URL to `/opt/alpha_trading/data/tunnel_url.txt`,
+restarts a dropped tunnel (journal "Tunnel not found" or 2 failed probes,
+5-min cooldown). VM: `publish_dashboard_mirror.sh` reads that file after each
+push → `src.dashboard_link` remembers it in `data/dashboard_url.txt` and
+fires a 🔗 card on change (budgeted, not spool-only). Cron #34 recon 15:42
+Mon-Fri. Deploy status is in the block below this line once done.
+
 ## 2026-09-28 (22:30) — TRADING VM DEPLOYED to 0b6934f (24 commits: #115 capital rotation, #116/#117 desk, the #102 re-judge fix); Issue 34 REPAIRED; fresh recon PARITY; mirror pushed
 
 **VM.** `git pull` to `1087c82` then `0b6934f`, `alpha-trading` +

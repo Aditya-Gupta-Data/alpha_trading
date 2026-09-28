@@ -66,7 +66,30 @@ sudo sed -i 's#--url http://127.0.0.1:8501#--url http://127.0.0.1:8080#' /etc/sy
 sudo sed -i -e 's#^After=network-online.target alpha-dashboard.service#After=network-online.target nginx.service#' \
             -e 's#^Requires=alpha-dashboard.service#Wants=nginx.service#' \
             -e 's#alpha dashboard :8501#nginx :8080 (desk + bridge + streamlit)#' /etc/systemd/system/cloudflared-dashboard.service
+# Tunnel watchdog (decision #118): every 2 min, persist the public URL to
+# /opt/alpha_trading/data/tunnel_url.txt and restart a dropped tunnel.
+sudo install -m 755 "$APP/scripts/dashboard_box/tunnel_watchdog.sh" /usr/local/bin/alpha-tunnel-watchdog
+sudo restorecon /usr/local/bin/alpha-tunnel-watchdog 2>/dev/null || true
+sudo tee /etc/systemd/system/alpha-tunnel-watchdog.service >/dev/null <<'UNIT'
+[Unit]
+Description=Alpha desk tunnel watchdog (persist URL, restart a dropped quick tunnel)
+After=cloudflared-dashboard.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/alpha-tunnel-watchdog
+UNIT
+sudo tee /etc/systemd/system/alpha-tunnel-watchdog.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Run the alpha desk tunnel watchdog every 2 minutes
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=20s
+[Install]
+WantedBy=timers.target
+UNIT
 sudo systemctl daemon-reload
+sudo systemctl enable --now alpha-tunnel-watchdog.timer
 sudo systemctl enable --now nginx alpha-api-bridge alpha-desk-ui
 sudo systemctl restart alpha-dashboard nginx alpha-api-bridge alpha-desk-ui cloudflared-dashboard
 sleep 10

@@ -20,3 +20,12 @@ if rsync -az --timeout=60 --delay-updates -e "ssh -i $KEY -o BatchMode=yes -o Co
 else
   echo "[publish] $(date '+%F %T') PUSH FAILED -> $TARGET"
 fi
+# Decision #118: the box's tunnel watchdog keeps the CURRENT public URL in a
+# one-line file; read it back and let src.dashboard_link remember it and fire
+# one 🔗 card when it changed. Fail-open: no file / no ssh = nothing announced.
+URL_FILE="${DASHBOARD_URL_FILE:-/opt/alpha_trading/data/tunnel_url.txt}"
+PY="${PYTHON_BIN:-$HERE/venv/bin/python}"; [ -x "$PY" ] || PY=python3
+BOX_URL="$(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 "${TARGET%%:*}" "cat $URL_FILE" 2>/dev/null | head -1)"
+if [ -n "$BOX_URL" ]; then
+  ( cd "$HERE" && "$PY" -m src.dashboard_link --url "$BOX_URL" ) 2>&1 | sed 's/^/[link] /'
+fi

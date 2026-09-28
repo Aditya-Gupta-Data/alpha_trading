@@ -1,5 +1,7 @@
-# MANUAL OFFLINE TOOL — not on any cron line (decision #94: read-only sync;
-# scheduling it is a separate owner decision). Run by hand:
+# ON CRON since 2026-09-28 (decision #118): weekdays 15:42 IST on the VM
+# (scripts/setup_cron.sh #34), after the session and before the 15:45 mirror
+# push, so the desk's Compliance tab is never older than a day. Still
+# read-only (decision #94). Also fine by hand:
 #   python3 -m src.execution.recon_engine            # live, read-only
 #   python3 -m src.execution.recon_engine --dry-run  # book side only, no broker call
 """

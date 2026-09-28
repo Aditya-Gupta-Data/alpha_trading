@@ -466,6 +466,14 @@ CRON_TZ=Asia/Kolkata
 #     double-run. 19:50 shares the minute with firm_treasury (#21, Mon-Fri)
 #     deliberately: neither touches the Dhan token, so no contention.
 50 19 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.analysis.macro_nightly >> "$REPO_ROOT/logs/macro_nightly.log" 2>&1
+
+# 34. Broker reconciliation (Mon-Fri 15:42 IST, decision #118): the READ-ONLY
+#     recon engine (#94) — GET positions/holdings/funds vs the paper book,
+#     verdict appended to logs/recon.jsonl, 🔴 card only on a mismatch. After
+#     the 15:40 chain archive's Dhan calls, before the 15:45 mirror push so
+#     the desk's Compliance tab is fresh every trading day (it had sat stale
+#     for five days as a manual-only tool).
+42 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.execution.recon_engine >> "$REPO_ROOT/logs/recon_engine.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

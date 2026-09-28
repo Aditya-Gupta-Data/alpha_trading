@@ -292,6 +292,7 @@ def _build_embed(payload: dict) -> dict:
         "portfolio_report": f"🗂️ Portfolio Report Card — {payload.get('time', today)}",
         "ceo_brief":        f"🧭 Daily CEO Brief — {today}",
         "macro_heartbeat":  f"🫀 Macro Nightly Heartbeat — {today}",
+        "dashboard_link":   f"🔗 Dashboard Link Changed — {today}",
     }
     title = titles.get(event, f"📌 {event.title()} — {ticker}")
 
@@ -397,7 +398,7 @@ def _build_embed(payload: dict) -> dict:
 BUDGET_STATE_PATH = ROOT / "logs" / ".discord_budget.json"
 DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
 BUDGET_ALWAYS = {"system_crash"}
-BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest",
+BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest", "dashboard_link",
                     "performance", "weekly_digest", "macro_heartbeat"}
 BUDGET_DROP = {"portfolio_report"}
 

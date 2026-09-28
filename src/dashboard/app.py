@@ -127,6 +127,31 @@ def _body():
                   x=alt.X("time:T", title=None), y=alt.Y("equity:Q", title="₹", scale=alt.Scale(zero=False)),
                   tooltip=[alt.Tooltip("time:T", format="%d %b %Y %H:%M"), alt.Tooltip("equity:Q", format=",.0f")])
               layers = [line]
+              # decision #119: optional passive lines, off by default
+              B = T.get("benchmarks") or {}
+              if B.get("series"):
+                  k1, k2, k3 = st.columns(3)
+                  picks = {"nifty50": k1.checkbox("Nifty 50", value=False, help=B["sources"].get("nifty50")),
+                           "gold": k2.checkbox("Gold (GOLDBEES)", value=False, help=B["sources"].get("gold")),
+                           "fd_7pct": k3.checkbox("FD 7% p.a.", value=False, help=B["sources"].get("fd_7pct"))}
+                  colours = {"nifty50": "#e0a13a", "gold": "#c9b037", "fd_7pct": "#7f8fa6"}
+                  labels = {"nifty50": "Nifty 50", "gold": "Gold (GOLDBEES)", "fd_7pct": "FD 7%"}
+                  for key, on in picks.items():
+                      pts = B["series"].get(key) or []
+                      if not on:
+                          continue
+                      if not pts:
+                          st.caption(f"{labels[key]}: {B.get('notes', {}).get(key, 'no data')}")
+                          continue
+                      bdf = pd.DataFrame({"time": pd.to_datetime([p["ts"] for p in pts]),
+                                          "value": [p["value"] for p in pts], "line": labels[key]})
+                      layers.append(alt.Chart(bdf).mark_line(strokeDash=[5, 3], color=colours[key]).encode(
+                          x="time:T", y="value:Q",
+                          tooltip=["line:N", alt.Tooltip("time:T", format="%d %b %Y"),
+                                   alt.Tooltip("value:Q", format=",.0f")]))
+                  st.caption(f"Benchmarks start at ₹{B.get('base', 0):,.0f} (contributed capital) on "
+                             f"{B.get('epoch', '')}; index / ETF closes from the local lakes, FD synthetic — "
+                             "no quote is fetched for this page.")
               ev = T.get("capital_events") or []
               if ev:
                   lo, hi = float(df["equity"].min()), float(df["equity"].max())

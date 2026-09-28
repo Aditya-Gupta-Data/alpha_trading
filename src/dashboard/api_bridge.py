@@ -90,6 +90,9 @@ def treasury(request: Request):
         p["ts"] = _ist(p.get("ts"))
     for e in t.get("capital_events") or []:
         e["ts"] = _ist(e.get("ts"))
+    for pts in ((t.get("benchmarks") or {}).get("series") or {}).values():
+        for p in pts:
+            p["ts"] = _ist(p.get("ts"))
     return t
 
 

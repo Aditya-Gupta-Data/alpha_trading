@@ -12,7 +12,7 @@ ZONE="us-central1-a"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$HERE/data/vm_mirror"
 mkdir -p "$DEST"
-for f in data/brain_map.db data/journal.jsonl logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl; do
+for f in data/brain_map.db data/journal.jsonl logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl data/dashboard_benchmarks.json; do
   base="$(basename "$f")"
   if gcloud compute scp "${VM}:~/alpha_trading/${f}" "${DEST}/${base}.tmp" \
         --project="${PROJECT}" --zone="${ZONE}" --quiet 2>/dev/null; then

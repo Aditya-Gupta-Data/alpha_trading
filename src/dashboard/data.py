@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -29,6 +29,7 @@ DB_PATH = Path(os.environ.get("ALPHA_DB_PATH") or _DATA / "brain_map.db")
 JOURNAL_PATH = Path(os.environ.get("ALPHA_JOURNAL_PATH") or _DATA / "journal.jsonl")
 EQUITY_LEDGER_PATH = Path(os.environ.get("ALPHA_EQUITY_LEDGER") or _LOGS / "equity_shadow_journal.jsonl")
 SNAPSHOT_PATH = _DATA / "market_snapshot.json"
+BENCHMARKS_PATH = _DATA / "dashboard_benchmarks.json"
 RECON_PATH = _LOGS / "recon.jsonl"
 # THE ₹10L BASE (decisions #116/#117, owner 2026-09-25): the primary's
 # COMPOUNDING figures (return, CAGR) start here. Before it the pool was reset
@@ -109,6 +110,20 @@ def _run_epoch(conn) -> str | None:
         return row[0]["ts"]
     row = _q(conn, "SELECT created_at FROM account_state WHERE id = 1")
     return row[0]["created_at"] if isinstance(row, list) and row else None
+
+
+def benchmarks(base_rs: float, path=None, until: date = None) -> dict:
+    """The Compounding chart's optional lines (decision #119) from
+    `dashboard_benchmarks.json` (built on the VM, mirrored here) — Nifty 50
+    and GOLDBEES rebased to `base_rs` at the epoch, plus a 7% daily-
+    compounded FD. Missing file = FD only + a note per empty line."""
+    from src.dashboard import benchmarks as bm
+    raw = None
+    try:
+        raw = json.loads(Path(path or BENCHMARKS_PATH).read_text())
+    except (OSError, ValueError):
+        raw = None
+    return bm.normalize(raw, base_rs, until or datetime.now(IST).date())
 
 
 def _lakh(rs: float) -> str:
@@ -206,11 +221,20 @@ def treasury(db_path=None) -> dict:
                              "WHERE released_at IS NULL")
             m = locks[0] if isinstance(locks, list) and locks else {"m": 0, "n": 0}
             peak = max(float(a["peak_equity"] or eq), eq)
-            base = _q(conn, "SELECT ts, equity FROM equity_curve WHERE ts >= ? ORDER BY ts, rowid LIMIT 1",
-                      (CURVE_EPOCH,))
-            base = base[0] if isinstance(base, list) and base else None
-            base_eq = float(base["equity"]) if base else float(a["starting_capital"])
-            days = _days_since(base["ts"] if base else _run_epoch(conn))
+            # decision #119: E0 = CONTRIBUTED capital (₹2L reset + ₹8L top-up =
+            # account_state.starting_capital, which inject_capital moves and
+            # nothing else does) — NOT the post-injection equity, which would
+            # bury the ₹2L era's trading profit inside the principal. Days run
+            # from the last capital move on/after the epoch.
+            inj = _q(conn, "SELECT ts FROM account_events WHERE event_type = 'capital_injection' "
+                           "AND ts >= ? ORDER BY ts DESC LIMIT 1", (CURVE_EPOCH,))
+            base_ts = (inj[0]["ts"] if isinstance(inj, list) and inj else None)
+            if base_ts is None:
+                first = _q(conn, "SELECT ts FROM equity_curve WHERE ts >= ? ORDER BY ts, rowid LIMIT 1",
+                           (CURVE_EPOCH,))
+                base_ts = first[0]["ts"] if isinstance(first, list) and first else None
+            base_eq = float(a["starting_capital"])
+            days = _days_since(base_ts or _run_epoch(conn))
             out["PAPER_10L"] = {"account_id": "PAPER_10L", "starting_capital": a["starting_capital"],
                                 "realized_pnl": round(a["realized_pnl"], 2), "equity": round(eq, 2),
                                 "peak_equity": peak,
@@ -220,7 +244,7 @@ def treasury(db_path=None) -> dict:
                                 # compounding (#114, re-based by #116): from the ₹10L
                                 # base = the first curve point on/after CURVE_EPOCH
                                 "base_equity": round(base_eq, 2),
-                                "base_ts": base["ts"] if base else None,
+                                "base_ts": base_ts,
                                 "days_elapsed": days,
                                 "abs_return_pct": round((eq / base_eq - 1) * 100, 2) if base_eq else None,
                                 "cagr_pct": cagr(base_eq, eq, days)}
@@ -250,6 +274,13 @@ def treasury(db_path=None) -> dict:
         out["equity_curve"] = curve if isinstance(curve, list) else []
         out["base_epoch"] = CURVE_EPOCH
         out["capital_events"] = capital_events(conn)
+        # decision #119: passive-alternative lines, rebased to the contributed
+        # capital on the epoch; read from the mirrored file, never a quote.
+        try:
+            base_rs = float(out["PAPER_10L"]["starting_capital"]) if "PAPER_10L" in out else 1_000_000.0
+            out["benchmarks"] = benchmarks(base_rs)
+        except Exception as exc:
+            out["benchmarks"] = {"error": str(exc)}
         # unrealized P&L + True Net Equity per account (engine snapshot marks)
         try:
             snap = _snapshot()

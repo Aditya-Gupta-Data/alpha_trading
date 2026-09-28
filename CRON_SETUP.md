@@ -196,7 +196,8 @@ edge-miner line in its log around login/21:00.
 `*/15 9-16 * * 1-5` and `5 21 * * *` → `bash scripts/publish_dashboard_mirror.sh`
 (log `logs/dashboard_mirror.log`). Rsync-pushes the five ledger files the
 always-on dashboard reads (`brain_map.db`, `journal.jsonl`,
-`equity_shadow_journal.jsonl`, `market_snapshot.json`, `recon.jsonl`) to the
+`equity_shadow_journal.jsonl`, `market_snapshot.json`, `recon.jsonl`, plus
+`dashboard_benchmarks.json`, which the script rebuilds from the lakes first — #119) to the
 Oracle free VM (`~/.dashboard_target`, key `~/.ssh/dashboard_push`). Read-only
 on the engine; a missing target is a named no-op; a failed push is one log
 line, never an alert. The dashboard box itself runs the `alpha-dashboard`

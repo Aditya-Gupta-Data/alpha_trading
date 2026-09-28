@@ -42,6 +42,23 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-28 (late) — decision #119: compounding base = contributed ₹10,00,000; optional Nifty 50 / Gold / FD 7% benchmark lines on the Compounding chart
+
+**Base.** `base_equity` is now `starting_capital` (₹10L contributed), days
+from the 08-07 injection. Tonight: realized equity ₹11,27,100.62 → return
+**12.71%** (was 8.44% on the ₹10,39,424 base), CAGR annualised from 52 days
+(noisy, as the strip says).
+
+**Benchmarks.** `src/dashboard/benchmarks.py` builds
+`data/dashboard_benchmarks.json` on the VM inside the mirror push (NIFTY 50
+index close from the macro lake; GOLDBEES ETF close from the bhavcopy lake;
+no network); `data.py` rebases both to ₹10L on the epoch and synthesises the
+7% daily-compounded FD; both UIs show them as dashed lines behind toggles,
+OFF by default. On 09-28: Nifty 50 ≈ ₹9,27,100 (index −7.3% since 07-Aug),
+Gold ≈ ₹9,81,900, FD ≈ ₹10,10,000 vs the desk's ₹11,27,100.
+
+Deploy status is in the block below this line once done.
+
 ## 2026-09-28 (23:xx) — decision #118: tunnel watchdog on the box + link-change Discord card from the VM + recon on weekday cron 15:42
 
 **Built + tested (scoped 86 green).** Box: `tunnel_watchdog.sh` → timer

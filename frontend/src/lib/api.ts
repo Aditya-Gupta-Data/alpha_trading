@@ -82,6 +82,23 @@ export interface Treasury {
   base_epoch?: string;
   /** Pool moves drawn as chart markers (#117): resets and injections, oldest first. */
   capital_events?: CapitalEvent[];
+  /** Optional passive-alternative lines for the Compounding chart (#119). */
+  benchmarks?: Benchmarks;
+}
+
+export type BenchmarkKey = "nifty50" | "gold" | "fd_7pct";
+
+export interface Benchmarks {
+  /** Contributed capital every line starts from on the epoch. */
+  base: number;
+  epoch: string;
+  as_of: string | null;
+  sources: Record<BenchmarkKey, string>;
+  /** Rupee value of ₹base invested on the epoch, per session close. */
+  series: Record<BenchmarkKey, { ts: string; value: number }[]>;
+  /** Why a line is empty, keyed by line. */
+  notes: Partial<Record<BenchmarkKey, string>>;
+  error?: string;
 }
 
 export interface CapitalEvent {
@@ -243,6 +260,18 @@ const MOCK_TREASURY: Treasury = {
   },
   equity_curve: EQUITY_CURVE,
   base_epoch: "2026-08-07",
+  benchmarks: {
+    base: 1_000_000,
+    epoch: "2026-08-07",
+    as_of: NOW.toISOString(),
+    sources: { nifty50: "mock", gold: "mock", fd_7pct: "mock" },
+    series: {
+      nifty50: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({ ts: p.ts, value: 1_000_000 * (1 - i * 0.0025) })),
+      gold: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({ ts: p.ts, value: 1_000_000 * (1 + i * 0.001) })),
+      fd_7pct: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({ ts: p.ts, value: 1_000_000 * (1 + i * 0.0002) })),
+    },
+    notes: {},
+  },
   capital_events: [
     { ts: EQUITY_CURVE[20]?.ts ?? NOW.toISOString(), kind: "clean_sheet", label: "Pool reset ₹10L → ₹2L", short: "Reset → ₹2L", detail: "mock" },
     { ts: EQUITY_CURVE[30]?.ts ?? NOW.toISOString(), kind: "capital_injection", label: "₹8L capital injection", short: "+₹8L", detail: "mock" },

@@ -154,9 +154,14 @@ def test_full_curve_with_capital_markers_and_cagr_from_the_10l_base(tmp_path):
     assert [e["short"] for e in T["capital_events"]] == ["Reset → ₹2L", "+₹8L"]    # the chart's tags
     assert T["base_epoch"] == "2026-08-07"
     a = T["PAPER_10L"]
-    assert a["base_equity"] == 1_039_423.99 and a["base_ts"] == "2026-08-07T16:41:19"
-    assert a["abs_return_pct"] == round((1_084_859.92 / 1_039_423.99 - 1) * 100, 2)      # 4.37, not 8.49
-    assert a["cagr_pct"] == d.cagr(1_039_423.99, 1_084_859.92, a["days_elapsed"])
+    # #119: E0 = CONTRIBUTED capital (starting_capital), days from the injection
+    assert a["base_equity"] == 1_000_000.0 and a["base_ts"] == "2026-08-07T16:41:19"
+    assert a["abs_return_pct"] == 8.49                                                     # not 4.37 on 10,39,424
+    assert a["cagr_pct"] == d.cagr(1_000_000.0, 1_084_859.92, a["days_elapsed"])
+    b = T["benchmarks"]
+    assert b["base"] == 1_000_000.0 and b["epoch"] == "2026-08-07"
+    assert b["series"]["fd_7pct"][0] == {"ts": "2026-08-07T15:30:00", "value": 1_000_000.0}
+    assert b["series"]["nifty50"] == [] and "nifty50" in b["notes"]                     # no file in this tmp world
 
 
 def test_capital_event_labels_never_guess_an_amount(tmp_path):

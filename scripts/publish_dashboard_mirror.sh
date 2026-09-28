@@ -10,8 +10,11 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${DASHBOARD_RSYNC_TARGET:-$(cat "$HOME/.dashboard_target" 2>/dev/null || true)}"
 KEY="${DASHBOARD_PUSH_KEY:-$HOME/.ssh/dashboard_push}"
 if [ -z "$TARGET" ]; then echo "[publish] no target configured (~/.dashboard_target) — nothing pushed"; exit 0; fi
+# decision #119: refresh the benchmark closes (lake reads only) before the push
+PY0="${PYTHON_BIN:-$HERE/venv/bin/python}"; [ -x "$PY0" ] || PY0=python3
+( cd "$HERE" && "$PY0" -m src.dashboard.benchmarks ) 2>&1 | tail -1
 files=()
-for f in data/brain_map.db data/journal.jsonl logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl; do
+for f in data/brain_map.db data/journal.jsonl logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl data/dashboard_benchmarks.json; do
   [ -f "$HERE/$f" ] && files+=("$HERE/$f") || echo "[publish] absent $f"
 done
 # --temp-dir + delay-updates: the box never reads a half-written file

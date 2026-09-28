@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -16,6 +17,7 @@ import { Actionables } from "@/components/desk/Actionables";
 import { EmptyState, Panel } from "@/components/desk/Panel";
 import { PageHeader } from "@/components/desk/PageHeader";
 import { StatusPill } from "@/components/desk/StatusPill";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { latestReconQuery, treasuryQuery } from "@/lib/desk-queries";
 import {
   EM_DASH,
@@ -27,7 +29,18 @@ import {
   formatRupees,
   formatRupeesSigned,
 } from "@/lib/desk-format";
-import type { AccountTreasury, ReconRow } from "@/lib/api";
+import type { AccountTreasury, BenchmarkKey, ReconRow } from "@/lib/api";
+
+// The Compounding chart's optional passive lines (decision #119): off by
+// default, the viewer switches each one on. Colours are chart tokens so both
+// themes read them.
+type ChartRow = { t: number } & Partial<Record<"equity" | BenchmarkKey, number>>;
+
+const BENCHMARKS: { key: BenchmarkKey; label: string; stroke: string }[] = [
+  { key: "nifty50", label: "Nifty 50", stroke: "var(--color-chart-3)" },
+  { key: "gold", label: "Gold (GOLDBEES)", stroke: "var(--color-chart-4)" },
+  { key: "fd_7pct", label: "FD 7% p.a.", stroke: "var(--color-chart-5)" },
+];
 
 export const Route = createFileRoute("/_authenticated/overview")({
   head: () => ({
@@ -147,6 +160,8 @@ function ReconBanner({ recon, isPending }: { recon: ReconRow | null | undefined;
 function OverviewPage() {
   const treasury = useQuery(treasuryQuery);
   const recon = useQuery(latestReconQuery);
+  const [shown, setShown] = useState<BenchmarkKey[]>([]);
+  const bench = treasury.data?.benchmarks;
   // X axis on real time (decision #116): each point carries its epoch ms so
   // a two-week gap is wider than seven settlements in one morning.
   const curve = (treasury.data?.equity_curve ?? [])
@@ -157,6 +172,21 @@ function OverviewPage() {
   const events = (treasury.data?.capital_events ?? [])
     .map((e) => ({ ...e, t: Date.parse(e.ts) }))
     .filter((e) => !Number.isNaN(e.t));
+  // ONE merged dataset on the time axis (equity points + each shown
+  // benchmark's points, each row carrying only its own key). Recharts sizes
+  // the axes from the chart's data, so per-Line `data` props let a benchmark
+  // clip the equity curve out of view (seen 2026-09-28); merged rows with
+  // connectNulls keep every series inside the domain.
+  const chartData = useMemo(() => {
+    const rows: ChartRow[] = curve.map((p) => ({ t: p.t, equity: p.equity }));
+    for (const key of shown) {
+      for (const p of bench?.series?.[key] ?? []) {
+        const t = Date.parse(p.ts);
+        if (!Number.isNaN(t)) rows.push({ t, [key]: p.value });
+      }
+    }
+    return rows.sort((a, b) => a.t - b.t);
+  }, [curve, shown, bench]);
 
   return (
     <>
@@ -207,7 +237,7 @@ function OverviewPage() {
                       <p className={`num text-2xl font-semibold ${(a.abs_return_pct ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}>
                         {formatPct(a.abs_return_pct)}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">on the {formatRupees(a.base_equity ?? a.starting_capital)} base</p>
+                      <p className="text-[11px] text-muted-foreground">on {formatRupees(a.base_equity ?? a.starting_capital)} contributed</p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Days compounding</p>
@@ -224,12 +254,41 @@ function OverviewPage() {
                   </div>
                 );
               })()}
+              {bench && (
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Compare with</span>
+                  <ToggleGroup
+                    type="multiple"
+                    size="sm"
+                    variant="outline"
+                    value={shown}
+                    onValueChange={(v) => setShown(v as BenchmarkKey[])}
+                    aria-label="Benchmark lines"
+                  >
+                    {BENCHMARKS.map((b) => (
+                      <ToggleGroupItem
+                        key={b.key}
+                        value={b.key}
+                        disabled={(bench.series?.[b.key] ?? []).length === 0}
+                        title={bench.notes?.[b.key] ?? bench.sources?.[b.key]}
+                        className="h-7 px-2 text-xs"
+                      >
+                        <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: b.stroke }} />
+                        {b.label}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                  <span className="text-[11px] text-muted-foreground">
+                    each starts at {formatRupees(bench.base)} on {formatIstDate(`${bench.epoch}T15:30:00+05:30`)}
+                  </span>
+                </div>
+              )}
               {curve.length === 0 ? (
                 <EmptyState label="No history yet" />
               ) : (
                 <div className="h-[240px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={curve} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                    <ComposedChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
                       <CartesianGrid stroke="var(--color-border)" vertical={false} />
                       <XAxis
                         dataKey="t"
@@ -257,7 +316,7 @@ function OverviewPage() {
                         }}
                         labelFormatter={(value) => formatIstDateTime(new Date(Number(value)).toISOString())}
                         formatter={(value: number, name) =>
-                          name === "Drawdown" ? [formatPct(value), name] : [formatRupees(value), name]
+                          name === "Drawdown" ? [formatPct(value), name] : [formatRupees(value), String(name)]
                         }
                       />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -275,10 +334,25 @@ function OverviewPage() {
                           }}
                         />
                       ))}
+                      {BENCHMARKS.filter((b) => shown.includes(b.key)).map((b) => (
+                        <Line
+                          key={b.key}
+                          type="linear"
+                          dataKey={b.key}
+                          name={b.label}
+                          connectNulls
+                          stroke={b.stroke}
+                          strokeWidth={1.5}
+                          strokeDasharray="5 3"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      ))}
                       <Line
                         type="linear"
                         dataKey="equity"
                         name="Equity"
+                        connectNulls
                         stroke="var(--color-chart-1)"
                         strokeWidth={2}
                         dot={false}

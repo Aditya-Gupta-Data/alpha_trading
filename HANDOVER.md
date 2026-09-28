@@ -57,7 +57,16 @@ no network); `data.py` rebases both to ₹10L on the epoch and synthesises the
 OFF by default. On 09-28: Nifty 50 ≈ ₹9,27,100 (index −7.3% since 07-Aug),
 Gold ≈ ₹9,81,900, FD ≈ ₹10,10,000 vs the desk's ₹11,27,100.
 
-Deploy status is in the block below this line once done.
+**DEPLOYED 22:55 IST, both machines at `8e2e874`:** VM push built the file
+(nifty50 36 pts, gold 37 pts, no notes) and shipped 6 files; box bridge +
+Streamlit restarted, desk bundle shipped, link unchanged. Public API:
+`base_equity` 1,000,000 · return 12.71% · CAGR 130.63% (52.26 d) ·
+nifty50 → ₹9,27,132.57 · gold → ₹9,81,928.69 · fd_7pct → ₹10,10,021.53
+(all 09-28 15:30). React desk checked on the mock server (toggles draw
+dashed lines; a Recharts axis-domain bug — per-Line `data` clipped the
+equity curve — was caught and fixed with one merged dataset +
+connectNulls); Streamlit checked locally against the refreshed mirror.
+Suite 2,394 / 1 known before the last UI-only fix (tsc clean after).
 
 ## 2026-09-28 (23:xx) — decision #118: tunnel watchdog on the box + link-change Discord card from the VM + recon on weekday cron 15:42
 

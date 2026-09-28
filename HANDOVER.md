@@ -73,6 +73,9 @@ liquid stayed ~₹13k because approval converts pending locks to open trades).
 Tripwire reads `False` tonight. It pauses again after 3 trading days with no
 human approve/reject — a standing owner decision whether to lengthen it.
 
+**Suite** 2,388 passed / 1 failed (known `test_darling_shadow`), run after
+the deploy with nothing in flight.
+
 **Next:** watch Tuesday's session for the first PAPER_2L_ROT row and any
 `capital_rotation_declined` events; Stage B at 46/60, ~2 sessions behind the
 10-13 target (bar held, #86).

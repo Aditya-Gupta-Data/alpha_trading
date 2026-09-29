@@ -42,6 +42,17 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-29 (evening) — #105 confirmed for PAPER_2L_LIVE; chunked adversarial audit begun (Chunk 1: Accounting & Ledger)
+
+Architect confirmed #105 applies universally (no mid-trade stops, the
+ratchet is the only floor) — recorded in DECISIONS #120. The 5-lens
+finder + 2-refuter panel is now being run over the codebase in four
+chunks: 1 Accounting & Ledger (portfolio_manager, portfolio, journal,
+recon_engine, firm_treasury, equity_desk, wealth_lock, brain_map, the
+settlement seams of plan_tracker / live_pricer, the two offline repair
+scripts); 2 OMS & Execution; 3 Analytics & Sizing; 4 Dashboard & Bridge.
+Chunk 1 results and fixes are recorded below this line when done.
+
 ## 2026-09-29 — PAPER_2L_LIVE BUILT (decision #120): the live-quote arm — NOT YET DEPLOYED (market was open; deploy after 15:30)
 
 **What it is.** A fourth ₹2L paper account that marks and exits on live

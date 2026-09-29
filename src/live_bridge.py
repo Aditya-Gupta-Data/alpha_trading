@@ -403,7 +403,7 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                publish_snapshot: bool = False,
                candle_sink: "CandleSink" = None,
                flip_registry=None, closes_fn=None,
-               square_off_fn=None) -> list:
+               square_off_fn=None, live_account_fn=None) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
     push an advisory alert for each NEW exit signal. Returns the alerts
@@ -448,6 +448,15 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
     if publish_snapshot:
         from src import market_snapshot
         market_snapshot.write(spots, marks, now=now)
+    # decision #120: the live-quote arm marks and exits on its own chain
+    # quotes. None (offline callers, tests) is a byte-identical no-op; the
+    # daemon passes execution.live_pricer.tick. Fail-open: a broken tick
+    # can never touch this cycle's alerts or the primary's square-off.
+    if live_account_fn is not None:
+        try:
+            live_account_fn(now)
+        except Exception as e:
+            print(f"  (live account tick skipped: {e})")
 
     fired = []
     # decision #110: a directional spread that crossed a NEW ratchet rung
@@ -567,6 +576,16 @@ async def run_live_loop(underlyings=UNDERLYINGS,
         square_off_fn = intraday_square_off
         print("[Live Bridge] intraday profit-take square-off ARMED "
               "(real chain quotes, decision #69).", flush=True)
+    live_account_fn = None
+    try:
+        from src import portfolio_manager as _pm
+        if _pm.live_account_enabled():
+            from src.execution import live_pricer as _lp
+            live_account_fn = _lp.tick
+            print("[Live Bridge] PAPER_2L_LIVE live-quote arm ARMED "
+                  "(crossed bid/ask marks + exits, decision #120).", flush=True)
+    except Exception as e:
+        print(f"[Live Bridge] live-quote arm not armed ({e}).", flush=True)
     print(f"[Live Bridge] armed — {', '.join(underlyings)} every "
           f"{interval:g}s during "
           f"{MARKET_OPEN:%H:%M}-{MARKET_CLOSE:%H:%M} IST "
@@ -579,7 +598,7 @@ async def run_live_loop(underlyings=UNDERLYINGS,
                 aggregators=aggregators, registry=registry,
                 notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True,
                 candle_sink=candle_sink, flip_registry=flip_registry,
-                square_off_fn=square_off_fn)
+                square_off_fn=square_off_fn, live_account_fn=live_account_fn)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
                       f"({sig['capture_pct']:.0f}% capture).", flush=True)

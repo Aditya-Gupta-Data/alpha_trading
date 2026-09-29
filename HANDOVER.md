@@ -42,6 +42,41 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-29 — PAPER_2L_LIVE BUILT (decision #120): the live-quote arm — NOT YET DEPLOYED (market was open; deploy after 15:30)
+
+**What it is.** A fourth ₹2L paper account that marks and exits on live
+chain quotes with the spread crossed (longs at bid, shorts at ask) and
+settles itself; the answer to the 09-28 confidence read ("every exit is a
+modelled price"). Engine `src/execution/live_pricer.py`; details in
+DECISIONS #120 and MODULES.
+
+**How it was built.** Design spec → independent 3-lens panel (23 findings,
+14 survived adversarial refutation, incl. a blocker: the proposal-time
+lock would have orphaned on every rejection) → all folded in → implemented
+→ a second adversarial review of the diff: 5 finder lenses raised 40
+findings (many duplicates); the refuters were cut by a usage limit after
+confirming one, so every substantive one was judged by hand and 11 fixed
+(one-transaction settle, no blind reopen after a door error, unknown
+lookup = lock kept, sweep at the top of run_tracker, degenerate requote
+refused, unfloored settle, re-verify counted against the cap and mandatory
+before any cached-chain exit, venue-off path, unrecorded-entry repair,
+budget as a hard ceiling, test wall-clock dependence removed).
+`tests/test_live_account.py` now 29 tests. Suite 2,423 passed / 1 known failure.
+
+**Behaviour to expect after deploy.** The account seeds on its first
+signal and only ENTERS when the approval happens in market hours with a
+quotable chain (an approval after close is refused, lock released, named
+`live_entry_refused`). Its ticket fills at the crossed limits with zero
+tier slippage. It exits on its own ratchet / 65% take / pre-expiry rule at
+crossed quotes, intra-day, with the tick's timestamp; the primary's exit
+never closes it. Expect it to run ~3 chain fetches per minute-tick at most
+and none after 15:27.
+
+**Watch after deploy.** `paper_account_events` for `live_entry_refused`,
+`live_exit`, `live_exit_unfilled`, `live_lock_released_no_position`;
+`paper_live_positions` rows; the live-loop log line "PAPER_2L_LIVE
+live-quote arm ARMED". The desk shows the account once it has a row.
+
 ## 2026-09-28 (late) — decision #119: compounding base = contributed ₹10,00,000; optional Nifty 50 / Gold / FD 7% benchmark lines on the Compounding chart
 
 **Base.** `base_equity` is now `starting_capital` (₹10L contributed), days

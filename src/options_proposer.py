@@ -1369,6 +1369,71 @@ def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None) -> d
 
 
 _PAPER_VENUE_KEEP_CONN = False     # test seam: a shared in-memory conn must survive the call
+_LIVE_CHAIN_FN = None              # test seam: the live arm's chain source (None = dhan, muzzled under pytest)
+
+
+def _live_refuse(conn, acct: str, entry: dict, why: str) -> None:
+    """The live arm (#120) declines this entry at approval: verdict rejected,
+    its proposal-time lock released at zero, one named event."""
+    from src import portfolio_manager as pm
+    ref = entry.get("short_id")
+    if isinstance(entry.get("accounts"), dict):
+        entry["accounts"][acct] = dict(entry["accounts"].get(acct) or {}, status="rejected", lots=0,
+                                       margin_rs=None, ticket_id=None, reason=f"live entry refused: {why}")
+    try:
+        rel = pm.paper_release_margin(conn, acct, ref, 0.0)
+        pm.paper_log_event(conn, acct, "live_entry_refused", ref,
+                           f"{why} — lock {'released at zero' if rel.get('released') else 'not held'}")
+    except Exception as e:
+        print(f"  [{acct}] {ref}: refusal bookkeeping failed ({e})")
+    print(f"  [{acct}] {ref}: REFUSED at approval — {why}")
+
+
+def _live_requote(conn, acct: str, entry: dict) -> dict | None:
+    """Fresh crossed limits for the live arm, or None (refused + released)."""
+    from src.execution import live_pricer
+    try:
+        rq = live_pricer.requote_entry(entry, chain_fn=_LIVE_CHAIN_FN)
+    except Exception as e:
+        rq = {"ok": False, "reason": f"requote failed ({e})"}
+    if not rq.get("ok"):
+        _live_refuse(conn, acct, entry, rq.get("reason") or "no live quotes")
+        return None
+    return rq
+
+
+def _live_after_fill(conn, acct: str, entry: dict, stid: str, sview: dict, quote_ts: str) -> None:
+    """A FILLED live ticket becomes an open live position; anything else is
+    refused (ticket cancelled, lock released at zero)."""
+    from src import oms
+    from src.execution import live_pricer
+    try:
+        if sview.get("status") == oms.FILLED:
+            opened = live_pricer.open_position(conn, acct, entry, sview, quote_ts=quote_ts)
+            if isinstance(entry.get("accounts"), dict) and acct in entry["accounts"]:
+                entry["accounts"][acct].update(entry_quote_ts=quote_ts,
+                                               entry_mark_ps=opened["entry_mark_ps"],
+                                               max_loss_ps=opened["max_loss_ps"],
+                                               max_profit_ps=opened["max_profit_ps"])
+            print(f"  [{acct}] {entry.get('short_id')}: live position opened at crossed quotes "
+                  f"(d {opened['entry_mark_ps']:+.2f}/share, quoted {quote_ts})")
+            return
+        try:
+            oms.cancel_ticket(conn, stid, "live account: entry not filled")
+        except Exception:
+            pass
+        _live_refuse(conn, acct, entry, f"entry ticket {stid} not filled ({sview.get('status')})")
+    except Exception as e:
+        # the ticket IS filled: keep the lock, say so; live_pricer.tick's
+        # repair pass opens the position from the ticket on its next run
+        from src import portfolio_manager as pm
+        try:
+            pm.paper_log_event(conn, acct, "live_position_unrecorded", entry.get("short_id"),
+                               f"entry ticket {stid} filled but the position row failed ({e}) — "
+                               "lock kept; repaired from the ticket on the next live tick")
+        except Exception:
+            pass
+        print(f"  [{acct}] {entry.get('short_id')}: position row failed ({e}) — lock kept for repair")
 
 
 def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
@@ -1402,9 +1467,23 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
             for acct, verdict in (entry.get("accounts") or {}).items():
                 if (verdict or {}).get("status") == "approved" and int(verdict.get("lots") or 0) > 0:
                     tickets.append((acct, int(verdict["lots"])))
+            # decision #120: the live-quote arm is RE-QUOTED now, at approval
+            # (the proposal's quotes may be hours old); its ticket carries the
+            # fresh crossed limits, or it declines and releases its lock.
+            from src import portfolio_manager as _pm
+            live_quotes = {}
+            for acct, _lots in list(tickets):
+                if acct in _pm.LIVE_ACCOUNTS:
+                    rq = _live_requote(conn, acct, entry)
+                    if rq is None:
+                        tickets = [t for t in tickets if t[0] != acct]
+                    else:
+                        live_quotes[acct] = rq
             tids = {}
             for acct, lots in tickets:
-                issued = strategy_router.issue(conn, proposal, journal_ref=entry.get("short_id"),
+                prop = (dict(proposal, spread=dict(entry["spread"], legs=live_quotes[acct]["legs"]))
+                        if acct in live_quotes else proposal)
+                issued = strategy_router.issue(conn, prop, journal_ref=entry.get("short_id"),
                                                source="options_proposer.decide_pending",
                                                account_id=acct, lots=lots)
                 tids[acct] = issued["ticket_id"]
@@ -1427,6 +1506,8 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
                 if isinstance(entry.get("accounts"), dict) and acct in entry["accounts"]:
                     entry["accounts"][acct]["ticket_id"] = stid
                     entry["accounts"][acct]["venue_status"] = sview.get("status")
+                if acct in live_quotes:
+                    _live_after_fill(conn, acct, entry, stid, sview, live_quotes[acct]["quote_ts"])
             if view.get("status") == oms.FILLED:
                 fills = {(str(l["side"]).upper(), str(l.get("option_type") or "").upper(),
                           float(l["strike"])): l for l in view["legs"]}

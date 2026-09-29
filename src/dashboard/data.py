@@ -38,6 +38,7 @@ RECON_PATH = _LOGS / "recon.jsonl"
 # those moves drawn as labelled markers (`capital_events`).
 CURVE_EPOCH = "2026-08-07"
 CAPITAL_EVENT_TYPES = ("clean_sheet", "capital_injection")
+LIVE_ACCOUNTS = ("PAPER_2L_LIVE",)     # the live-quote arm (#120): marks itself
 STRATEGY_LABELS = {"bear_put_spread": "Bear Put", "bull_call_spread": "Bull Call",
                    "iron_condor": "Iron Condor", "iron_butterfly": "Iron Butterfly",
                    "equity_long": "Equity Long"}
@@ -176,12 +177,27 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None) -> dic
     for l in (locks if isinstance(locks, list) else []):
         a = out.setdefault(l["account_id"], {"unrealized_pnl": None, "marked_positions": 0,
                                             "open_positions": 0})
+        if l["account_id"] in LIVE_ACCOUNTS:
+            continue                    # priced below from its own crossed marks (#120)
         a["open_positions"] += 1
         m = marks.get(l["journal_ref"]) or {}
         if m.get("live_pnl_rs") is None or not l["primary_lots"]:
             continue
         pnl = float(m["live_pnl_rs"]) * float(l["lots"]) / float(l["primary_lots"])
         a["unrealized_pnl"] = round((a["unrealized_pnl"] or 0.0) + pnl, 2)
+        a["marked_positions"] += 1
+    # decision #120: the live-quote arm marks itself on crossed bid/ask —
+    # its unrealized is last_profit_ps x qty from paper_live_positions.
+    live = _q(conn, "SELECT account_id, lots, lot_size, last_profit_ps, last_mark_ts FROM paper_live_positions "
+                    "WHERE state != 'closed'")
+    for r in (live if isinstance(live, list) else []):
+        a = out.setdefault(r["account_id"], {"unrealized_pnl": None, "marked_positions": 0,
+                                            "open_positions": 0})
+        a["open_positions"] += 1
+        if r["last_profit_ps"] is None:
+            continue
+        a["unrealized_pnl"] = round((a["unrealized_pnl"] or 0.0)
+                                    + float(r["last_profit_ps"]) * int(r["lots"]) * int(r["lot_size"]), 2)
         a["marked_positions"] += 1
     return out
 

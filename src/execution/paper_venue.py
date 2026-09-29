@@ -48,6 +48,11 @@ from src import oms
 IST = timezone(timedelta(hours=5, minutes=30))
 VENUE = "paper_venue"
 FILL_BASIS = "venue"
+# decision #120: the live-quote arm's limits ARE crossed bid/ask prices, so
+# the venue adds no tier slippage on top (a literal, like oms.PRIMARY_ACCOUNT:
+# no Dept-3 import here) and stamps the fill basis that says so.
+ZERO_SLIP_ACCOUNTS = ("PAPER_2L_LIVE",)
+ZERO_SLIP_BASIS = "live_crossed"
 
 
 def _fill_fraction_default(_leg: dict) -> float:
@@ -80,7 +85,8 @@ def fill_leg(conn, leg: dict, ticket: dict, slippage_fn=None,
     if not limit or limit <= 0:
         r = oms.reject(conn, leg["leg_id"], f"{VENUE}: no usable limit price")
         return {**r, "leg_id": leg["leg_id"], "rejected": True}
-    frac = _tier_frac(ticket["underlying"], slippage_fn)
+    zero_slip = str(ticket.get("account_id") or "") in ZERO_SLIP_ACCOUNTS
+    frac = 0.0 if zero_slip else _tier_frac(ticket["underlying"], slippage_fn)
     px = slipped_price(limit, leg["side"], frac)
     remaining = int(leg["qty_target"]) - int(leg["qty_filled"])
     share = float((fill_fraction_fn or _fill_fraction_default)(leg))
@@ -89,7 +95,7 @@ def fill_leg(conn, leg: dict, ticket: dict, slippage_fn=None,
         return {"ok": False, "leg_id": leg["leg_id"], "reason": "nothing remaining"}
     r = oms.apply_fill(conn, leg["leg_id"], qty, px,
                        broker_order_id=f"{VENUE}:{(today or date.today()).isoformat()}",
-                       basis=FILL_BASIS)
+                       basis=ZERO_SLIP_BASIS if zero_slip else FILL_BASIS)
     return {**r, "leg_id": leg["leg_id"], "price": px, "qty": qty,
             "slippage_frac": frac, "limit": limit}
 

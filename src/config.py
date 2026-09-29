@@ -254,3 +254,14 @@ PAPER_2L_STARTING_CAPITAL_RS = float(_CONFIG.get("paper_2l_starting_capital_rs",
 # `paper_2l_account_enabled` off, the rotation arm is off too.
 CAPITAL_ROTATION_ENABLED = bool(_CONFIG.get("capital_rotation_enabled", True))
 CAPITAL_ROTATION_RR_MULTIPLE = float(_CONFIG.get("capital_rotation_rr_multiple", 1.5))
+# PAPER_2L_LIVE — the LIVE-QUOTE arm (decision #120, 2026-09-29, architect
+# directive). A fourth paper account, Rs.2L, same signals, whose marks and
+# exits are priced ONLY on live intra-day option-chain quotes with the
+# bid/ask spread crossed (longs at bid, shorts at ask) — never the EOD
+# time-value model — so the edge is measured net of real friction on thin
+# stock options. It settles ITSELF (its own predicates on its own marks);
+# the primary's exit does not close it. Rides the 2L switch. The live loop
+# fetches one option chain per (underlying, expiry) at most every
+# LIVE_QUOTE_INTERVAL_SECONDS during market hours for its open positions.
+PAPER_2L_LIVE_ACCOUNT_ENABLED = bool(_CONFIG.get("paper_2l_live_account_enabled", True))
+LIVE_QUOTE_INTERVAL_SECONDS = int(_CONFIG.get("live_quote_interval_seconds", 300))

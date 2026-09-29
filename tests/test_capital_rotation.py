@@ -61,6 +61,7 @@ def world(monkeypatch):
     pm.get_account(c)
     monkeypatch.setattr(pm, "PAPER_2L_ACCOUNT_ENABLED", True)
     monkeypatch.setattr(pm, "CAPITAL_ROTATION_ENABLED", True)
+    monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", False)   # #120's arm has its own file
     monkeypatch.setattr("src.config.PAPER_VENUE_ENABLED", True)
     monkeypatch.setattr(pv, "_tier_frac", lambda u, slippage_fn=None: 0.001)
     j = FakeJournal([_entry("old1"), _entry("old2")])

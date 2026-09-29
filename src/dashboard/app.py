@@ -92,7 +92,8 @@ def _body():
       else:
           for acct, title in (("PAPER_10L", "Primary account — ₹10L paper pool"),
                               ("PAPER_2L", "Shadow account — ₹2L stress test (sized independently)"),
-                              ("PAPER_2L_ROT", "Rotation arm — ₹2L with capital rotation / eviction (#115)")):
+                              ("PAPER_2L_ROT", "Rotation arm — ₹2L with capital rotation / eviction (#115)"),
+                              ("PAPER_2L_LIVE", "Live-quote arm — ₹2L marked and exited on crossed bid/ask (#120)")):
               a = T.get(acct)
               st.subheader(title)
               if not a:

@@ -397,7 +397,7 @@ def _spread_exit_costs(spread: dict, spot_exit: float, frac_left: float,
         frictions += pf.calculate_trade_frictions("OPTION", exit_side, exit_premium, qty)
         # #70: a "quoted" fill already crossed the bid-ask at entry (the
         # premium IS the worse side) — the ladder would double-charge it.
-        if leg.get("fill_basis") not in ("quoted", "venue"):   # #70; "venue" = paper venue already slipped (#101)
+        if leg.get("fill_basis") not in ("quoted", "venue", "live_crossed"):   # #70; "venue" = paper venue already slipped (#101); "live_crossed" = #120
             slippage += apply_slippage(leg["premium"], "OPTION", lots=lots) * qty
         # The EXIT crossing pays the CRISIS blowout at the exit-day VIX (P1).
         # #103: when the paper venue filled the exit, its slipped fills ARE
@@ -434,7 +434,7 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict,
         frictions += pf.calculate_trade_frictions("OPTION", entry_side, leg["premium"], qty)
         frictions += pf.calculate_trade_frictions("OPTION", exit_side, exit_premium, qty)
         # #70: same double-charge guard as _spread_exit_costs.
-        if leg.get("fill_basis") not in ("quoted", "venue"):   # #70; "venue" = paper venue already slipped (#101)
+        if leg.get("fill_basis") not in ("quoted", "venue", "live_crossed"):   # #70; "venue" = paper venue already slipped (#101); "live_crossed" = #120
             slippage += apply_slippage(leg["premium"], "OPTION") * qty
         if not exit_slipped:                                   # #103: venue exit already slipped
             slippage += apply_slippage(exit_premium, "OPTION") * qty
@@ -494,6 +494,7 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
                 for acct, v in (entry.get("accounts") or {}).items():
                     if (v or {}).get("status") == "approved" and v.get("ticket_id") \
                             and int(v.get("lots") or 0) > 0 \
+                            and acct not in _pm.LIVE_ACCOUNTS \
                             and not _pm.paper_lock_released(conn, acct, entry.get("short_id")):
                         tickets.append((acct, int(v["lots"])))
             lead = tickets[0][0]
@@ -1352,6 +1353,18 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
     — how src/api.py's async loop forwards resolutions to Discord without
     this sync module doing any network I/O itself. Fail-safe: a callback
     error never blocks resolution."""
+    # decision #120: the live-quote arm's expiry backstop runs FIRST — before
+    # this sweep reads the journal (so its best-effort journal stamp is never
+    # clobbered by the rewrite below) and before the no-open-plans early
+    # return (an expired live row must settle even when the primary book is
+    # flat). Its own rows, its own lock; fail-open.
+    try:
+        from src.execution import live_pricer
+        swept = live_pricer.eod_sweep_standalone(today=_today())
+        if swept.get("settled"):
+            print(f"Plan tracker: live account settled {len(swept['settled'])} expired position(s).")
+    except Exception as e:
+        print(f"Plan tracker: live account sweep skipped ({e}).")
     entries = journal.read_all()
     open_plans = [e for e in entries if _trackable(e)]
     open_spreads = [e for e in entries if _spread_trackable(e)]

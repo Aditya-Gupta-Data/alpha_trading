@@ -25,6 +25,7 @@ def _two_accounts_only(monkeypatch):
     """These tests pin the #102 two-account contract; the #115 rotation arm
     (a third account) has its own file, test_capital_rotation.py."""
     monkeypatch.setattr(pm, "CAPITAL_ROTATION_ENABLED", False)
+    monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", False)   # #120's arm: tests/test_live_account.py
 
 
 @pytest.fixture

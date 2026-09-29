@@ -31,6 +31,7 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | every 15m, mkt hrs Mon-Fri | `src.ingestion.intraday_tracker` | Read-only 15-min price snapshot → `data/lake/intraday_15m.jsonl` (not traded on yet). Self-gates to 09:15–15:30; fail-open per ticker. All calls share the host-wide `_throttle()` gate (DH-905 fix). |
 | 15:35 Mon-Fri | `src.main` | Watchlist alert checks. |
 | 15:40 Mon-Fri | `src.ingestion.chain_archiver` | EOD option-chain capture — unbuyable later (#36). After the 15:30 self-termination ⇒ zero token contention. |
+| (live loop, 60 s) | `execution.live_pricer.tick` via `live_bridge` | **#120:** PAPER_2L_LIVE marks/exits on crossed bid/ask — ≤ 3 option-chain fetches per tick, ≥ 3 s apart, one per (underlying, expiry) per 5 min, none at/after 15:27. |
 | 15:42 Mon-Fri | `src.execution.recon_engine` | **Broker recon (#118, was manual-only).** GET-only positions/holdings/funds vs the paper book → `logs/recon.jsonl`; 🔴 card only on a mismatch. Before the 15:45 mirror push so the desk's Compliance tab is fresh daily. Log: `logs/recon_engine.log` |
 | 15:45 Mon-Fri | `src.eod_summary` | MTM P&L + active positions + net-delta card. Journal + brain_map only (no Dhan token). |
 | 16:30 Mon-Fri | `src.ceo_brief` | ONE cross-department card (ops / issues / deploys / risk / P&L). Reuses eod_summary's numbers. |

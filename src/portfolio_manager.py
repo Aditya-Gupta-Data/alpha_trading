@@ -49,7 +49,8 @@ from datetime import datetime, timedelta, timezone
 from src import brain_map
 from src.config import (ACCOUNT_RISK_PER_TRADE_PCT,
                         CAPITAL_ROTATION_ENABLED, CAPITAL_ROTATION_RR_MULTIPLE,
-                        PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_STARTING_CAPITAL_RS)
+                        PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_LIVE_ACCOUNT_ENABLED,
+                        PAPER_2L_STARTING_CAPITAL_RS)
 from src.position_sizing import fractional_lots
 from src.portfolio import span_stress_factor
 
@@ -685,13 +686,20 @@ def account_summary(conn) -> dict:
 ACCOUNT_PAPER_10L = "PAPER_10L"     # the primary: account_state id=1 & co.
 ACCOUNT_PAPER_2L = "PAPER_2L"       # the Rs.2L stress-test shadow
 ACCOUNT_PAPER_2L_ROT = "PAPER_2L_ROT"   # the Rs.2L capital-rotation A/B arm (#115)
+ACCOUNT_PAPER_2L_LIVE = "PAPER_2L_LIVE"  # the Rs.2L live-quote arm (#120)
 
 # account_id -> starting capital. The primary's pool is whatever the live
 # `account_state` row says (STARTING_CAPITAL only seeds an empty DB).
 PAPER_ACCOUNTS = {
     ACCOUNT_PAPER_2L: float(PAPER_2L_STARTING_CAPITAL_RS),
     ACCOUNT_PAPER_2L_ROT: float(PAPER_2L_STARTING_CAPITAL_RS),
+    ACCOUNT_PAPER_2L_LIVE: float(PAPER_2L_STARTING_CAPITAL_RS),
 }
+# The accounts that price and SETTLE THEMSELVES on live bid/ask quotes
+# (decision #120, execution/live_pricer). The primary's exit does not close
+# them; release_shadow_locks skips their lock only while live_pricer holds an
+# OPEN position for it — no position = the lock is released at zero, named.
+LIVE_ACCOUNTS = frozenset({ACCOUNT_PAPER_2L_LIVE})
 # The accounts allowed to evict (decision #115). PAPER_10L and PAPER_2L are
 # NOT here and never may be: they stay first-come-first-served.
 ROTATION_ACCOUNTS = frozenset({ACCOUNT_PAPER_2L_ROT})
@@ -746,11 +754,25 @@ def rotation_enabled() -> bool:
     return shadow_accounts_enabled() and bool(CAPITAL_ROTATION_ENABLED)
 
 
+def live_account_enabled() -> bool:
+    """The #120 live-quote arm: its own switch AND the 2L experiment's."""
+    return shadow_accounts_enabled() and bool(PAPER_2L_LIVE_ACCOUNT_ENABLED)
+
+
 def shadow_account_ids() -> tuple:
     if not shadow_accounts_enabled():
         return ()
     return tuple(a for a in PAPER_ACCOUNTS
-                 if a not in ROTATION_ACCOUNTS or rotation_enabled())
+                 if (a not in ROTATION_ACCOUNTS or rotation_enabled())
+                 and (a not in LIVE_ACCOUNTS or live_account_enabled()))
+
+
+def _legs_all_quoted(spread: dict) -> bool:
+    """#120: the live arm only wants trades whose legs were priced off a
+    real bid/ask at proposal time (the #70 'quoted' basis) — a leg that
+    fell back to last-price had no crossable quote."""
+    legs = (spread or {}).get("legs") or []
+    return bool(legs) and all(str(l.get("fill_basis") or "") == "quoted" for l in legs)
 
 
 def ensure_accounts_schema(conn) -> None:
@@ -1190,6 +1212,13 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                     out[account] = {"status": "approved", "lots": held[1], "margin_rs": held[0],
                                     "reason": "margin already locked for this entry"}
                     continue
+                if account in LIVE_ACCOUNTS and not _legs_all_quoted(spread):
+                    paper_log_event(conn, account, "sizing_refused", journal_ref,
+                                    f"entry {journal_ref} refused (no live bid/ask at proposal — "
+                                    "a leg priced off last-price)")
+                    out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
+                                    "reason": "sizing refused: no live bid/ask at proposal"}
+                    continue
                 vix = proposal.get("vix")
                 rotation = None
                 sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
@@ -1270,6 +1299,37 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0) -
                         "WHERE journal_ref = ? AND released_at IS NULL",
                         (journal_ref,)).fetchall()
     for account, lots, primary_lots in (tuple(r) for r in rows):
+        if account in LIVE_ACCOUNTS:
+            # #120: a live-quote account settles ITSELF while it holds the
+            # position; a lock with no open position (rejected, never
+            # approved, entry refused/unfilled) is released at zero, named;
+            # a lock whose row already CLOSED (a crash between the two
+            # writes) is released at that row's settled P&L. An UNKNOWN
+            # state (lookup error) keeps the lock — never money on a guess.
+            try:
+                from src.execution import live_pricer
+                holds = live_pricer.has_open_position(conn, account, journal_ref)
+                late_pnl = None if holds else live_pricer.closed_pnl(conn, account, journal_ref)
+            except Exception as exc:
+                out[account] = {"released": False,
+                                "reason": f"live position lookup failed ({exc}) — lock kept"}
+                print(f"  [{account}] {journal_ref}: {out[account]['reason']}")
+                continue
+            if holds:
+                out[account] = {"released": False, "reason": "live account settles on its own quotes"}
+                continue
+            if late_pnl is not None:
+                out[account] = paper_release_margin(conn, account, journal_ref, late_pnl)
+                if out[account].get("released"):
+                    paper_log_event(conn, account, "live_lock_released_late", journal_ref,
+                                    f"lock released at the row's settled pnl Rs.{late_pnl:,.2f} "
+                                    "(row had closed before the lock settled)")
+                continue
+            out[account] = paper_release_margin(conn, account, journal_ref, 0.0)
+            if out[account].get("released"):
+                paper_log_event(conn, account, "live_lock_released_no_position", journal_ref,
+                                "lock released at zero: no live position was ever opened for this entry")
+            continue
         ratio = (float(lots) / float(primary_lots)) if primary_lots else 0.0
         pnl = round(float(primary_pnl_net) * ratio, 2)
         out[account] = paper_release_margin(conn, account, journal_ref, pnl)

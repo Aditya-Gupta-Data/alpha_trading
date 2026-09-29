@@ -81,7 +81,7 @@ def treasury(request: Request):
     t = d.treasury()
     if t.get("error"):
         raise HTTPException(status_code=503, detail=t["error"])
-    for acct in ("PAPER_10L", "PAPER_2L", "PAPER_2L_ROT"):
+    for acct in ("PAPER_10L", "PAPER_2L", "PAPER_2L_ROT", "PAPER_2L_LIVE"):
         if acct in t and t[acct].get("rejections") is None:
             t[acct]["rejections"] = 0
         if acct in t:

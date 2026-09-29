@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-29 · 2 commits · 19 files touched
+
+- `78b243c` fix(live_pricer): a closed live row whose lock survived is released at the next tick (live_lock_released_late), not only at the primary's exit; docs: second review round reconciled
+- `b3bec34` feat(treasury): PAPER_2L_LIVE — a fourth Rs.2L paper account marked and exited on live intra-day chain quotes with the bid/ask crossed, settling itself (decision #120): execution/live_pricer.py (requote at approval, paced/capped/cut-off chain fetches, own ratchet, one-transaction settle, resumable exits, expiry backstop), zero-slip venue fills, conditional lock release, dashboard cards
+
+
 ### 2026-09-24 · 17 commits · 118 files touched
 
 - `43dea96` docs: HANDOVER 09-24 18:55 — CAGR on the desk (decision #114), first Proving Court readout of ToD + Mansfield RS (docs/hypotheses.md table)

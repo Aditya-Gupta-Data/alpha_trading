@@ -62,6 +62,14 @@ refused, unfloored settle, re-verify counted against the cap and mandatory
 before any cached-chain exit, venue-off path, unrecorded-entry repair,
 budget as a hard ceiling, test wall-clock dependence removed).
 `tests/test_live_account.py` now 29 tests. Suite 2,423 passed / 1 known failure.
+The refuters were then re-run to completion (85 agents): 5 findings
+"survived", all already fixed in the deployed code (their evidence cited
+pre-fix line numbers); one extra came out of it — a closed row whose lock
+survived is now released at the next live TICK (`live_lock_released_late`),
+not only at the primary's exit. The one survivor outside #120 is the
+pre-existing `test_darling_shadow` failure (HCLTECH `time_stop` vs
+`strong_sell_tier`, as_of 2026-07-20 — deterministic, not calendar; blocks
+`wrap_session.sh`'s gate; spun off as its own task).
 
 **Behaviour to expect after deploy.** The account seeds on its first
 signal and only ENTERS when the approval happens in market hours with a

@@ -531,9 +531,20 @@ def test_an_unknown_position_state_keeps_the_lock_and_a_closed_row_releases_late
     # a row that closed with pnl but whose lock survived (crash after the row write): release at that pnl
     c.execute("UPDATE paper_live_positions SET state = 'closed', pnl_net = -1234.5 WHERE journal_ref = 'lv0001'")
     c.commit()
-    out = pm.release_shadow_locks(c, "lv0001", 5000.0)
-    assert out[LIVE]["released"] and out[LIVE]["pnl_net"] == -1234.5
+    # ...by the very next live tick, without waiting for the primary
+    t = lp.tick(now=OPEN, conn=c, chain_fn=lambda tk, x: BULL_ENTRY, sleep_fn=lambda s: None, now_epoch_fn=lambda: 1.0)
+    assert t.get("late_released") == ["lv0001"] and pm._active_shadow_lock(c, LIVE, "lv0001") is None
+    assert pm.paper_equity(c, LIVE) == 200000.0 - 1234.5
     assert c.execute("SELECT COUNT(*) FROM paper_account_events WHERE event_type = 'live_lock_released_late'").fetchone()[0] == 1
+    # and the primary-side path does the same when it gets there first
+    pm.paper_request_entry(c, LIVE, "lv0099", 100.0)
+    c.execute("INSERT INTO paper_live_positions (account_id, journal_ref, ticker, expiry, lots, lot_size, legs_json, "
+              "entry_mark_ps, width_ps, max_profit_ps, max_loss_ps, opened_at, state, pnl_net) "
+              "VALUES (?, 'lv0099', 'NIFTY 50', '2026-10-28', 1, 65, '[]', 70, 200, 130, 70, '2026-09-29T11:00:00', "
+              "'closed', -50.0)", (LIVE,))
+    c.commit()
+    out = pm.release_shadow_locks(c, "lv0099", 5000.0)
+    assert out[LIVE]["released"] and out[LIVE]["pnl_net"] == -50.0
 
 
 def test_unfilled_entry_ticket_and_unrecorded_position_paths(world, monkeypatch):

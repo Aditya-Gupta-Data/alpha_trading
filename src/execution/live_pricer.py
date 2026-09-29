@@ -595,6 +595,26 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
             "reason": rec.get("error") or rec.get("status")}
 
 
+def _repair_late_locks(conn, account: str) -> list:
+    """A CLOSED row whose lock is still active (a crash between the row
+    write and the lock settle, before both became one transaction):
+    release at the row's settled pnl now, not only at the primary's exit."""
+    from src import portfolio_manager as pm
+    ensure_schema(conn)
+    rows = conn.execute("SELECT p.journal_ref, p.pnl_net FROM paper_live_positions p JOIN paper_margin_locks l "
+                        "ON l.account_id = p.account_id AND l.journal_ref = p.journal_ref "
+                        "WHERE p.account_id = ? AND p.state = ? AND l.released_at IS NULL AND p.pnl_net IS NOT NULL",
+                        (account, STATE_CLOSED)).fetchall()
+    fixed = []
+    for ref, pnl in (tuple(r) for r in rows):
+        rel = pm.paper_release_margin(conn, account, ref, float(pnl))
+        if rel.get("released"):
+            pm.paper_log_event(conn, account, EVENT_LOCK_LATE, ref,
+                               f"lock released at the row's settled pnl Rs.{float(pnl):,.2f} on the next tick")
+            fixed.append(ref)
+    return fixed
+
+
 def _repair_unrecorded(conn, account: str, now: datetime) -> list:
     """A FILLED entry ticket with a live lock but no position row (the row
     insert failed at approval): open the position from the ticket."""
@@ -712,8 +732,11 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                 fixed = _repair_unrecorded(conn, acct, now)
                 if fixed:
                     out["repaired"] = fixed
+                late = _repair_late_locks(conn, acct)
+                if late:
+                    out["late_released"] = late
             except Exception as exc:
-                print(f"  (live account: unrecorded-position repair failed: {exc})")
+                print(f"  (live account: repair pass failed: {exc})")
             rows.extend(open_rows(conn, acct))
         out["rows"] = len(rows)
         for row in [r for r in rows if r["state"] == STATE_EXITING]:

@@ -566,3 +566,21 @@ def test_the_eod_walk_persists_a_live_spreads_ratchet(monkeypatch, tmp_path):
     assert pt.run_tracker(email=False) == 0
     got = _rows()["dir00001"]
     assert got["outcome"] is None and got["ratchet"]["as_of"] == RANGE_BARS[9][0]
+
+
+def test_a_lock_timeout_skips_one_row_not_the_whole_sweep(monkeypatch, tmp_path):
+    journal.log(_spread_row("aaaa0001"))
+    journal.log(_spread_row("bbbb0001", ticker="NIFTY BANK"))
+    _wire_tracker(monkeypatch, tmp_path, lambda t, s: RANGE_BARS)
+    real = journal.update_matching
+    calls = []
+
+    def flaky(match, mutate):
+        calls.append(1)
+        if len(calls) == 1:
+            raise journal.JournalLockTimeout("held")
+        return real(match, mutate)
+    monkeypatch.setattr(journal, "update_matching", flaky)
+    assert pt.run_tracker(email=False) == 1
+    rows = _rows()
+    assert rows["aaaa0001"]["outcome"] is None and rows["bbbb0001"]["outcome"] is not None

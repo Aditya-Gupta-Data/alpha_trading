@@ -46,6 +46,7 @@ from datetime import date, datetime
 from src import analyst
 from src import brain_map
 from src import journal
+from src.journal import JournalLockTimeout
 from src import portfolio as pf
 from src.config import PLAN_MAX_DAYS
 from src.dhan_client import get_ohlc_since
@@ -1822,7 +1823,13 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         # the sweep (digest formatting, another entry, email) must never
         # un-resolve it. Before this line existed, one such crash replayed
         # every resolution (and its Discord card) hourly (2026-07-09).
-        entry = journal.update_matching(lambda e, key=key: journal.row_key(e) == key, _settle_plan)
+        try:
+            entry = journal.update_matching(lambda e, key=key: journal.row_key(e) == key,
+                                            _settle_plan)
+        except JournalLockTimeout as e:
+            # a writer held the journal too long: skip this row, not the sweep
+            print(f"Plan tracker: {candidate['ticker']} skipped this run ({e}).")
+            continue
         if entry is None:
             if seen.get("status") == "live":
                 print(f"Plan tracker: {candidate['ticker']} still live "
@@ -1891,9 +1898,14 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             bars = []
         key = journal.row_key(candidate)
         seen = {}
-        entry = journal.update_matching(
-            lambda e, key=key: journal.row_key(e) == key,
-            lambda e, bars=bars, seen=seen: _settle_spread_row(e, bars, seen))
+        try:
+            entry = journal.update_matching(
+                lambda e, key=key: journal.row_key(e) == key,
+                lambda e, bars=bars, seen=seen: _settle_spread_row(e, bars, seen))
+        except JournalLockTimeout as e:
+            # a writer held the journal too long: skip this row, not the sweep
+            print(f"Plan tracker: {candidate['ticker']} spread skipped this run ({e}).")
+            continue
         if entry is None or seen.get("status") != "resolved":
             if seen.get("status") == "no_data":
                 print(f"Plan tracker: no price data for {candidate['ticker']} spread — will retry next run.")

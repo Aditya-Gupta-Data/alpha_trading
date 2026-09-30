@@ -42,6 +42,25 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-30 — the "known" `test_darling_shadow` failure FIXED (ledger Issue 36); suite gate green
+
+**Correction to the 09-29 note below.** That note called the HCLTECH
+`time_stop` vs `strong_sell_tier` failure "deterministic, not calendar". It
+WAS calendar-dependent: the test never pinned `now`, so the darling 45-day
+time stop (counted from the fixture's 2026-07-15 entries against the wall
+clock) pre-empted the Strong-Sell exit from 2026-08-29 onward. Not a #107
+regression; the code is unchanged. The test now pins `now` and passes with
+its original assertion.
+
+**Open (not fixed):** six other tests read real gitignored files under
+`data/` (`fo_liquidity.json`, `darling_ids.json`, `macro_templates.json`,
+likely the macro lake), so they fail in any checkout without them — a RULE 6
+hermeticity bug, detailed in ledger Issue 36. Run the gate on the Mac checkout
+until they are given fixtures.
+
+**Next:** unchanged from the entries below; this session touched only the
+test and the docs.
+
 ## 2026-09-29 (evening) — #105 confirmed for PAPER_2L_LIVE; chunked adversarial audit begun (Chunk 1: Accounting & Ledger)
 
 Architect confirmed #105 applies universally (no mid-trade stops, the

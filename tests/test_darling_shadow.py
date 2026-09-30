@@ -223,6 +223,18 @@ def test_darling_autopsy_texts():
 
 
 def test_run_darling_cycle_resolves_forces_then_proposes_offline():
+    """The Mac EOD cycle on 2026-07-20 over two shadows opened 2026-07-15:
+    TCS closes through its stop (stop_loss), HCLTECH is force-exited on
+    its Strong-Sell grade (strong_sell_tier), INFY is the day's new entry.
+
+    `now` is pinned to the fixture date. `track_open_shadows` dates the
+    time stop from `now` (wall clock by default), not from `as_of`, and it
+    runs BEFORE `force_exit_strong_sell` inside `run_darling_cycle` — so
+    left unpinned, from 2026-08-29 (45 days after the 07-15 entries,
+    `DARLING_TIME_STOP_DAYS`) the time stop pre-empted the Strong-Sell
+    exit and the test failed on `HCLTECH.NS: time_stop`. That ordering is
+    the code's intended behaviour and is unchanged since facd767 (not a
+    #107 regression); the test's wall-clock dependence was the bug."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         tiers, levels = _write_artifacts(
@@ -247,7 +259,9 @@ def test_run_darling_cycle_resolves_forces_then_proposes_offline():
                                    path=journal,
                                    quote_fn=lambda t: closes[t],
                                    universe={}, check_fn=_allow_all,
-                                   as_of="2026-07-20")
+                                   as_of="2026-07-20",
+                                   now=datetime(2026, 7, 20, 18, 0,
+                                                tzinfo=IST))
         reasons = {e["ticker"]: e["reason"] for e in res["exits"]}
         assert reasons == {"TCS.NS": "stop_loss",
                            "HCLTECH.NS": "strong_sell_tier"}

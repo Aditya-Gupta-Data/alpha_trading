@@ -1835,3 +1835,35 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   settled (append-only OMS; recon shows them as "underlying n/a" for that
   reason). Recon run 22:26:17 → PARITY (broker reachable, 0 positions,
   0 holdings, 26 paper rows, 0 mismatches); mirror pushed 22:26:22.
+
+## Issue 36 — `test_darling_shadow::test_run_darling_cycle_resolves_forces_then_proposes_offline` was a wall-clock time bomb, not a #107 regression (found 2026-09-29, FIXED 2026-09-30)
+
+- **Symptom:** HCLTECH.NS resolved `time_stop` instead of `strong_sell_tier`;
+  listed as "1 failed (known)" in every HANDOVER suite line since at least
+  09-24 and it blocked `wrap_session.sh`'s gate.
+- **Cause (verified in code):** the test passed `as_of="2026-07-20"` but no
+  `now`. `track_open_shadows` dates the time stop from `now` (wall clock by
+  default) and runs BEFORE `force_exit_strong_sell` inside
+  `run_darling_cycle`. The fixture's shadows open 2026-07-15 with the darling
+  45-day time stop, so from **2026-08-29** (07-15 + 45 days, computed; no run
+  on that date was inspected) the time stop pre-empted the Strong-Sell exit.
+- **Not a #107 regression:** the 45-day stop and the exit ordering date from
+  `facd767` (2026-07-20). #107 (`82d1460`) only added the ATR-trail branch for
+  desk-FUNDED positions; the fixture's shadows carry no `funding`, so that
+  branch never runs. The code's behaviour is intended and was not changed.
+- **Record correction:** the 09-11 entry above called it calendar-dependent
+  (correct); HANDOVER 09-29 said "deterministic, not calendar" (wrong).
+- **Fix:** the test pins `now=2026-07-20 18:00 IST`; the assertion is
+  unchanged; the docstring explains the leak. Main-checkout suite before the
+  fix: 2,423 passed / 1 failed (this test only).
+- **Latent RULE 6 issue, NOT fixed:** in a fresh worktree (no gitignored
+  `data/`) six more tests fail because they read real production files:
+  `test_chain_archiver::test_a_clean_day_stays_silent_on_the_ops_card`
+  (`data/fo_liquidity.json`), `test_intraday_exit::
+  test_live_quote_names_its_failure_instead_of_swallowing_it`
+  (`data/darling_ids.json`), and four in `test_strategy_registry.py`
+  (`data/macro_templates.json`; two of them still failed with that file
+  present, consistent with also reading the `data/lake/macro` lake — not
+  confirmed). They pass on the owner's Mac only because those files exist
+  there. A worktree or CI box sees a red suite; the Mac's result depends on
+  whatever those files hold today.

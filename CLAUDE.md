@@ -105,6 +105,10 @@ python3 -m pytest tests/test_foo.py -q    # while iterating
 ```
 
 - No network, no live token, no Ollama, no production data files in tests.
+- **Writes into the real `data/` or `logs/` fail the test** (2026-09-30,
+  ledger Issue 37): `tests/conftest.py` installs an audit hook that refuses
+  them. Inject a `tmp_path`, or monkeypatch the module's path constant.
+  Do not weaken the guard to make a test pass.
 - **A slow test is a bug report.** If a test takes seconds, it is almost
   certainly reaching a real external system rather than computing something
   hard.

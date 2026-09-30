@@ -14,8 +14,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
+
 from src import text_intelligence as ti
 from src.ingestion import rss_ingester as rss
+
+
+@pytest.fixture(autouse=True)
+def _signals_file_in_tmp(monkeypatch, tmp_path):
+    """run_daily_pull appends to rss.OUTPUT_PATH, the real
+    data/rss_signals.jsonl by default. Three tests here did not redirect it,
+    and every one of the 1,013 rows in the Mac's copy was theirs (ledger
+    Issue 37). A test that inspects the file re-points it itself."""
+    monkeypatch.setattr(rss, "OUTPUT_PATH", tmp_path / "rss_signals.jsonl")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NOW = lambda: datetime(2026, 7, 15, 20, 0, tzinfo=IST)

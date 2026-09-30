@@ -150,6 +150,7 @@ def test_intraday_square_off_verifies_the_lock_on_real_quotes(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         from pathlib import Path
         monkeypatch.setattr(journal, "JOURNAL_PATH", Path(tmp) / "j.jsonl")
+        monkeypatch.setattr(journal, "DATA_DIR", Path(tmp))   # journal.lock (Issue 37)
         e = _bear_put(entry_date="2026-09-24", expiry="2026-10-29")
         e["ratchet"] = {"peak_capture_pct": 85.0, "locked_pct": 50.0, "armed": True}
         journal.rewrite_all([e])
@@ -175,6 +176,7 @@ def test_note_ratchet_only_ever_raises_the_stored_state(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         from pathlib import Path
         monkeypatch.setattr(journal, "JOURNAL_PATH", Path(tmp) / "j.jsonl")
+        monkeypatch.setattr(journal, "DATA_DIR", Path(tmp))   # journal.lock (Issue 37)
         journal.rewrite_all([_bear_put()])
         assert pt.note_ratchet("rt000001", 62.0, 30.0)
         assert not pt.note_ratchet("rt000001", 45.0, 0.0)              # lower: ignored

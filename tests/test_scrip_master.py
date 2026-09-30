@@ -7,7 +7,17 @@ fetch failure is an OUTAGE and never a pass.
 """
 import json
 
+import pytest
+
 from src.ingestion import scrip_master as SM
+
+
+@pytest.fixture(autouse=True)
+def _outage_log_in_tmp(monkeypatch, tmp_path):
+    """SM.run logs outages to OUTAGE_LOG (the real logs/scrip_master.jsonl)
+    with no per-call seam; the two outage tests used to append SM-408 /
+    SM-500 lines there (ledger Issue 37)."""
+    monkeypatch.setattr(SM, "OUTAGE_LOG", tmp_path / "scrip_master.jsonl")
 
 HEADER = ("SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,"
           "SEM_TRADING_SYMBOL,SEM_CUSTOM_SYMBOL,SM_SYMBOL_NAME,SEM_SERIES")

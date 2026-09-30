@@ -512,9 +512,17 @@ def test_module_never_imports_a_second_discord_path():
     assert "send_webhook_message" not in src
 
 
-def test_dry_run_sends_nothing(monkeypatch, capsys):
+def test_dry_run_sends_nothing(monkeypatch, capsys, tmp_path):
     sent = []
     monkeypatch.setattr("src.notifier.fire_broadcast", lambda p: sent.append(p))
+    # main() binds the real logs/.ceo_brief_state.json, and even a dry run
+    # advances that sweep offset (ledger Issue 37 — a production bug, logged,
+    # not changed here), so the offset is routed to tmp for this test.
+    real_collect = ceo_brief.collect_issues
+    monkeypatch.setattr(ceo_brief, "collect_issues",
+                        lambda logs_dir=ceo_brief.LOGS_DIR, state_path=None:
+                        real_collect(logs_dir=logs_dir,
+                                     state_path=tmp_path / "state.json"))
     assert ceo_brief.main(["--dry-run"]) == 0
     assert sent == []
     assert "dry run" in capsys.readouterr().out

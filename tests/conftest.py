@@ -23,8 +23,115 @@ an explicit `path=`), which is how the intent becomes visible in the test
 instead of inherited from whatever box the suite happens to run on.
 """
 import os
+import sys
+from pathlib import Path
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# THE PRODUCTION WRITE GUARD (2026-09-30, ledger Issue 37).
+#
+# An audit found 18 tests in 8 files WRITING into this checkout's real
+# `data/` and `logs/`. On the owner's Mac that is working data: every
+# `deals_census` partition in the lake (37 of them, 07-11 -> 09-30) and every
+# row of `data/rss_signals.jsonl` (1,013) turned out to be test fixtures.
+#
+# A process-wide audit hook (PEP 578) now refuses, for the whole session,
+# any of these aimed at a path under `<repo>/data` or `<repo>/logs`:
+#   * open() / os.open() in a write mode (w, a, x, +, or O_WRONLY / O_RDWR /
+#     O_CREAT / O_APPEND / O_TRUNC) — covers write_text, json dumps,
+#     tempfile.mkstemp, atomic .tmp + os.replace, lock files;
+#   * os.remove / os.unlink / os.rename / os.replace / os.rmdir /
+#     shutil.rmtree / os.truncate;
+#   * sqlite3.connect (a default connect creates and writes the file).
+# The hook RAISES `ProdWriteBlocked` before the operation runs, so nothing
+# reaches the disk. Because fail-open production code may swallow that
+# exception, every refusal is also recorded, and the autouse fixture below
+# FAILS the test that caused it, naming the path. A test that needs to write
+# must inject a tmp_path (or monkeypatch the module's path constant).
+# Reads are not blocked (a separate, wider problem — see Issue 37).
+# ---------------------------------------------------------------------------
+_REPO = Path(__file__).resolve().parent.parent
+_PROTECTED = tuple(os.path.realpath(_REPO / d) for d in ("data", "logs"))
+_WRITE_FLAGS = (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND
+                | os.O_TRUNC)
+# event -> ((path arg index, dir_fd arg index | None), ...). A RELATIVE path
+# with a dir_fd is anchored to that directory, not to the cwd (shutil.rmtree
+# removes a temp dir's `logs/` child that way), so it is not resolved here;
+# a real rmtree of data/ is still caught by its own "shutil.rmtree" event.
+_PATH_EVENTS = {"os.remove": ((0, 1),), "os.rmdir": ((0, 1),),
+                "os.rename": ((0, 2), (1, 3)), "shutil.rmtree": ((0, 1),),
+                "os.truncate": ((0, None),), "sqlite3.connect": ((0, None),)}
+_blocked = []            # (event, path) refused since the last reset
+
+
+class ProdWriteBlocked(PermissionError):
+    """A test tried to write into the real data/ or logs/ (Issue 37)."""
+
+
+def _protected_path(target):
+    if isinstance(target, int):
+        return None                          # an fd: its open was audited
+    try:
+        raw = os.fsdecode(target)
+    except TypeError:
+        return None
+    if raw in ("", ":memory:") or (raw.startswith("file:")
+                                   and "mode=ro" in raw):
+        return None
+    if raw.startswith("file:"):
+        raw = raw[5:].split("?", 1)[0]
+    real = os.path.realpath(os.path.abspath(raw))
+    for root in _PROTECTED:
+        if real == root or real.startswith(root + os.sep):
+            return real
+    return None
+
+
+def _prod_write_audit(event, args):
+    if event == "open":
+        mode = args[1] if len(args) > 1 else None
+        flags = args[2] if len(args) > 2 else 0
+        writes = (any(c in mode for c in "wax+") if isinstance(mode, str)
+                  else bool(isinstance(flags, int) and flags & _WRITE_FLAGS))
+        if not writes:
+            return
+        hits = [_protected_path(args[0])]
+    elif event in _PATH_EVENTS:
+        hits = []
+        for i, fd_i in _PATH_EVENTS[event]:
+            if i >= len(args):
+                continue
+            anchored = (fd_i is not None and fd_i < len(args)
+                        and args[fd_i] is not None)
+            if anchored and not os.path.isabs(os.fsdecode(args[i])):
+                continue
+            hits.append(_protected_path(args[i]))
+    else:
+        return
+    for real in hits:
+        if real:
+            _blocked.append((event, real))
+            raise ProdWriteBlocked(
+                f"RULE 6 write guard: a test tried {event} on {real} — "
+                "inject a tmp_path instead (ledger Issue 37)")
+
+
+sys.addaudithook(_prod_write_audit)
+
+
+@pytest.fixture(autouse=True)
+def _no_writes_into_real_data_or_logs():
+    """Fail the test that caused any refused write, even if the code under
+    test swallowed the ProdWriteBlocked it raised."""
+    _blocked.clear()
+    yield
+    if _blocked:
+        seen = sorted({f"{ev} {os.path.relpath(p, _REPO)}"
+                       for ev, p in _blocked})
+        _blocked.clear()
+        pytest.fail("test wrote (or tried to write) into the real data/ or "
+                    "logs/: " + "; ".join(seen), pytrace=False)
 
 # Ambient switches that change ENGINE BEHAVIOUR and exist on the VM.
 # Cleared for every test; a test that needs one sets it explicitly.
@@ -47,3 +154,31 @@ def _isolated_human_pulse(monkeypatch, tmp_path):
     from src import human_pulse
     monkeypatch.setattr(human_pulse, "PULSE_PATH",
                         tmp_path / "human_pulse.json")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_brain_map(monkeypatch, tmp_path):
+    """`brain_map.connect()` with no path opens (and creates, and writes)
+    the real data/brain_map.db. 77 tests in 26 files reached it that way
+    (Issue 37, found by the write guard above); on the Mac that is the
+    owner's database. Every test now gets its own empty one. A test that
+    wants a specific database passes its own path or ':memory:'."""
+    from src import brain_map, eod_summary
+    monkeypatch.setattr(brain_map, "DEFAULT_DB_PATH",
+                        tmp_path / "brain_map.db")
+    # eod_summary keeps its own copy of the path (read by the CEO brief)
+    monkeypatch.setattr(eod_summary, "DEFAULT_DB_PATH",
+                        tmp_path / "brain_map.db")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_shared_runtime_files(monkeypatch, tmp_path):
+    """Two host-wide state files any test can reach through a real code
+    path (Issue 37): the Discord daily budget (an unmuzzled dispatch in a
+    test used to spend the owner's budget) and the cross-process Dhan
+    throttle slot. Each test gets its own."""
+    from src import dhan_client, notifier
+    monkeypatch.setattr(notifier, "BUDGET_STATE_PATH",
+                        tmp_path / ".discord_budget.json")
+    monkeypatch.setattr(dhan_client, "_THROTTLE_FILE",
+                        tmp_path / ".dhan_throttle")

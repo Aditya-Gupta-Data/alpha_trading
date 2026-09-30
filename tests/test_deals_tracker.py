@@ -203,7 +203,8 @@ def test_run_writes_snapshot_that_load_deals_reads_back():
         hist = Path(tmp) / "deals_history.jsonl"
         m = dt.run(output_path=out, snapshot_path=snap,
                    watchlist_path=Path(tmp) / "no.json",
-                   history_path=hist, use_live=False)
+                   history_path=hist, use_live=False,
+                   lake_root=Path(tmp) / "lake")   # census partition too (Issue 37)
         assert out.exists() and hist.exists()   # both artifacts, temp paths only
         on_disk = json.loads(out.read_text())
         assert on_disk == m

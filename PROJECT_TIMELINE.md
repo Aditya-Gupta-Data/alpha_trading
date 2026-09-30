@@ -235,8 +235,18 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-30 · 9 commits · 18 files touched
+### 2026-09-30 · 19 commits · 39 files touched
 
+- `8d82983` docs: audit Chunk 1 Batches A-C deployed (VM at a82d12f, services restarted 23:04 IST); D5 Brain Map repair run and verified on the VM (ledger Issue 39); DECISIONS #121 (outcome sync) and #122 (ledger integrity + four rulings); six fix-diff panel rounds recorded; Batch D still open
+- `a82d12f` fix(ledger): panel round 6 on c7ea551 — PAPER_2L_LIVE stores its ratchet peak floored too (a 89.997 capture no longer arms 90 -> 70 on the next tick); the stored-peak tests now drive note_ratchet and the live arm and fail on the parent
+- `c7ea551` fix(ledger): panel round 5 on 4c19e6c — stored ratchet peaks round DOWN (59.996 no longer arms the 60 -> 30 rung on the next walk or in the live bridge); test for the entry-side eviction estimate
+- `4c19e6c` fix(ledger): panel round 4 on 47fd03f — a ratchet lock earned on a close is kept as a dated rung (a partial Dhan bar series can no longer lower it), the eviction funding estimate counts the entry-side slippage beside the venue's exit slip
+- `47fd03f` fix(ledger): panel round 3 on f5761e5 — every intraday ratchet rung is kept with its own date and folded at it (a later raise never moves an earlier one), a rung newer than every bar is merged with what the closes built instead of replacing it, the eviction funding estimate prices the venue's tier slippage
+- `f5761e5` fix(ledger): panel round 2 on the follow-ups — a saved ratchet judges only closes from its own date forward (no backdated ratchet_hit; the same shape existed for intraday rungs since #110), an eviction that would not fund its entry is refused before any exit, reconcile's deferred wealth sweeps run even if a later ref raises
+- `f3d4458` fix(ledger): panel round 3 — a journal lock timeout skips one tracker row instead of aborting the sweep
+- `37a7708` fix(ledger): panel round 2 — the GOLDBEES wealth sweep and the live arm's Dhan re-quote run outside the journal lock, the EOD walk persists a still-open spread's ratchet again, a live position keeps its lock through the pending expiry; restore-tool note corrected
+- `53e79c1` fix(ledger): panel round 1 on 4c5a838 — CLI review decides through decide_pending, an eviction trims lots to the stressed ask so it funds its entry, a proposal journaled seconds after 15:30 expires at that close, --inject refuses --account, the D5 tool archives the links it deletes
+- `4c5a838` fix(ledger): audit Chunk 1 Batches A-C — journal lock + atomic writes, fresh-row settlement, failed-release retry, one-transaction live settle, 30s busy timeout; pending margin expires at 15:30, eviction only at approval, clear-halt for every account, shadow accounts pay their own brokerage; D5 repair tool
 - `09f3f24` docs: Issue 37 Mac data repaired (2 digest cards back in the queue, 3 test-written lines stripped from the Mac scores ledger + scoreboard rebuilt, 37 fixture census partitions and the fixture RSS file moved to a backup); Issue 38 also drains the real digest queue
 - `32c1154` fix(tests): isolate the Discord digest queue per test — ~13 tests drained the real logs/discord_digest_queue.jsonl (before the guard: owner cards moved to .drained unsent; after it: a red Mac suite from the next 19:15 spool); CEO-brief dry-run test routes its drain to tmp (ledger Issues 37, 38)
 - `6d23b88` docs: Issue 38 (ceo_brief --dry-run advances the real sweep offset; logged, fix deferred); Issue 37 repair attempt refused by the agent's permission classifier — digest cards and scores-ledger lines still open

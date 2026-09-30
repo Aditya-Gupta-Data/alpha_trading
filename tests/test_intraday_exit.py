@@ -8,7 +8,7 @@ Run either of these from the project folder:
 
 import json
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -418,16 +418,27 @@ def test_daily_darling_tap_skips_the_weekend():
     assert res["skipped"] == "weekend" and res["captured"] == 0
 
 
-def test_live_quote_names_its_failure_instead_of_swallowing_it(capsys):
-    """The fail-quiet seam that made the 15:45 outage undiagnosable."""
+def test_live_quote_names_its_failure_instead_of_swallowing_it(capsys, tmp_path):
+    """The fail-quiet seam that made the 15:45 outage undiagnosable.
+
+    The id map is a fixture written fresh here (ledger Issue 36, RULE 6). It
+    used to be the real data/darling_ids.json: absent in a fresh checkout,
+    and on the Mac the test would also have failed on its own once that file
+    aged past IDS_MAX_AGE_DAYS, because live_quote then stops at
+    no_security_id before the provider call it is meant to exercise."""
     from src import equity_desk
+    ids = tmp_path / "darling_ids.json"
+    ids.write_text(json.dumps({
+        "built_at": datetime.now(equity_desk.IST).isoformat(),
+        "ids": {"FINEORG": {"id": "5555"}}}))
     px = equity_desk.live_quote(
-        "FINEORG", quote_by_id_fn=lambda sid: (_ for _ in ()).throw(
+        "FINEORG", ids_path=ids, quote_by_id_fn=lambda sid: (_ for _ in ()).throw(
             RuntimeError("DH-905 rate limited")))
     out = capsys.readouterr().out
     assert px is None                          # still fails OPEN
     assert "FINEORG" in out and "RuntimeError" in out
     assert "DH-905 rate limited" in out
+    assert "id=5555" in out                    # reached the provider call
 
 
 def test_desk_universe_is_muzzled_under_pytest():

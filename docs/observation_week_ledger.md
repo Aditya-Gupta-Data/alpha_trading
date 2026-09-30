@@ -1867,3 +1867,62 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   confirmed). They pass on the owner's Mac only because those files exist
   there. A worktree or CI box sees a red suite; the Mac's result depends on
   whatever those files hold today.
+
+### Issue 36 — the six data-dependent tests FIXED (2026-09-30)
+
+- **`test_strategy_registry.py` (4 tests):** the builder tests now run over
+  a synthetic macro lake (NIFTY + every sector as seeded random walks, six
+  shock episodes in one archetype). The two `declare()` tests stub the two
+  featurizer seams, as `test_macro_regime.py` does, so the shock horizon
+  DECLARES. Before, whether any horizon declared depended on the real lake
+  that night, so the strategy-slice assertions could pass without running.
+  Tightened: every shock phase must have a cell, a missing archetype is
+  exactly `no_cell`, and the slice status is exactly `ok` / `unavailable`.
+  `test_build_on_real_templates_is_well_formed` is renamed
+  `test_build_is_well_formed_on_a_synthetic_lake`.
+- **`test_chain_archiver.py`:** an autouse fixture points `FO_PATH` and
+  `IDS_PATH` at absent temp files for the whole file. The other `run()` tests
+  had also been reading the real files and resolving real tier-1 and MCX
+  names into the muzzled Dhan door. The clean-day test now builds a clean
+  night from fixtures (core nine + one tier-1 name + one MCX commodity, all
+  answering) and asserts all three are clean.
+- **`test_intraday_exit.py::test_live_quote_names_its_failure…`:** writes its
+  own fresh id map. On the Mac the real one would also have broken the test
+  14 days (`IDS_MAX_AGE_DAYS`) after the last Mac rebuild of
+  `darling_ids.json`.
+- **Verified:** in the worktree with no `data/`, the full suite is 2,424
+  passed, 0 failed. An `open()` audit hook over the full suite recorded no
+  path under `data/` or `logs/` from these three files.
+
+## Issue 37 — the test suite WRITES into the repo's real `data/` and `logs/`; on the Mac that is the owner's working data (found 2026-09-30 by the Issue 36 audit; NOT fixed)
+
+- **How found:** a pytest plugin with a `sys.addaudithook` on `open()`, run
+  over the full suite in a worktree, logging write-mode opens under
+  `<repo>/data` and `<repo>/logs` per test.
+- **Writers (8 files, 18 tests):** `test_rss_ingester` (3, append
+  `data/rss_signals.jsonl`), `test_notifier` (5, `logs/.discord_budget.json`),
+  `test_macro_nightly` (3, `data/strategy_scoreboard.json` via `.tmp`),
+  `test_scrip_master` (2, append `logs/scrip_master.jsonl`),
+  `test_deals_tracker::test_run_writes_snapshot_that_load_deals_reads_back`
+  (a partition under `data/lake/deals_census/`), `test_ceo_brief::
+  test_dry_run_sends_nothing` (`logs/.ceo_brief_state.json`),
+  `test_recon_engine` (1, `data/.dhan_throttle`), `test_profit_ratchet`
+  (2, `data/journal.lock`).
+- **Seen in the Mac main checkout after the two suite runs on the morning
+  of 09-30 (all six files modified 08:46–08:47):**
+  `data/lake/deals_census/date=2026-09-30/part.jsonl.gz` is a one-row census
+  (1 ticker, 1 buy leg), consistent with that test's single LT fixture row,
+  although the test's own comment says "temp paths only".
+  `data/rss_signals.jsonl` ends with fixture rows (links `https://mc/1`,
+  `https://mc/2`, ts 2026-07-15). `logs/.discord_budget.json` reads
+  `{"date": "2026-09-30", "sent": 10}`; how much of that count is real sends
+  was not checked, nor whether the Mac sends cards through that budget.
+- **Reads are wider:** 159 tests in 45 files open some path under `data/` or
+  `logs/` (same audit, any mode). All pass with the files absent, so they
+  degrade to honest absence, but on the Mac they read the owner's copies
+  and their result can depend on them. Not triaged one by one.
+- **Not affected:** the append-only `logs/macro_regime_declarations.jsonl`
+  and `logs/macro_strategy_scores.jsonl` were only READ by tests.
+- **Nothing was cleaned up.** Removing fixture rows from the real files is an
+  owner decision. Until this is fixed, every Mac suite run (including
+  `wrap_session.sh`'s gate) repeats these writes.

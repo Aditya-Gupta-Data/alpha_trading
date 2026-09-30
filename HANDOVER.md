@@ -42,24 +42,32 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-09-30 — the "known" `test_darling_shadow` failure FIXED (ledger Issue 36); suite gate green
+## 2026-09-30 — the known failure and the six data-dependent tests FIXED; the suite still reads and WRITES real `data/` + `logs/` (ledger Issues 36, 37)
 
-**Correction to the 09-29 note below.** That note called the HCLTECH
-`time_stop` vs `strong_sell_tier` failure "deterministic, not calendar". It
-WAS calendar-dependent: the test never pinned `now`, so the darling 45-day
-time stop (counted from the fixture's 2026-07-15 entries against the wall
-clock) pre-empted the Strong-Sell exit from 2026-08-29 onward. Not a #107
-regression; the code is unchanged. The test now pins `now` and passes with
-its original assertion.
+**Fixed today.** (1) The "known" `test_darling_shadow` failure: the 09-29
+note below called it "deterministic, not calendar". It WAS
+calendar-dependent: the test never pinned `now`, so the darling 45-day time
+stop (from the fixture's 2026-07-15 entries, against the wall clock)
+pre-empted the Strong-Sell exit from 2026-08-29 onward. Not a #107
+regression; the code is unchanged. Pushed as `8374a8d`. (2) The six tests
+that read real gitignored files (`fo_liquidity.json`, `darling_ids.json`,
+`macro_templates.json`, the macro lake) now use fixtures. A checkout with no
+`data/` runs the full suite green: 2,424 passed, 0 failed. So the suite can
+now gate in a worktree, not only on the Mac.
 
-**Open (not fixed):** six other tests read real gitignored files under
-`data/` (`fo_liquidity.json`, `darling_ids.json`, `macro_templates.json`,
-likely the macro lake), so they fail in any checkout without them — a RULE 6
-hermeticity bug, detailed in ledger Issue 36. Run the gate on the Mac checkout
-until they are given fixtures.
+**Open — Issue 37 (not fixed, owner decision on cleanup).** Eighteen tests
+in eight files WRITE into the repo's real `data/` and `logs/`. On the Mac
+that means today's `data/lake/deals_census/date=2026-09-30/` partition is a
+one-row test fixture, `data/rss_signals.jsonl` ends with fixture headlines,
+and `logs/.discord_budget.json` is bumped by `test_notifier`. Every Mac suite
+run, including `wrap_session.sh`'s gate, repeats this. The append-only macro
+ledgers are only read, never written. The ledger lists every writer. Reads
+are wider still: 159 tests in 45 files open a path under `data/` or `logs/`.
+They pass without the files, but on the Mac they read the owner's copies.
 
-**Next:** unchanged from the entries below; this session touched only the
-test and the docs.
+**Next:** fix Issue 37 (point each writer at `tmp_path`), then decide
+whether to strip the fixture rows from the three Mac files. Otherwise
+unchanged from the entries below.
 
 ## 2026-09-29 (evening) — #105 confirmed for PAPER_2L_LIVE; chunked adversarial audit begun (Chunk 1: Accounting & Ledger)
 

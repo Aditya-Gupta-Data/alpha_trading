@@ -170,11 +170,70 @@ def test_independent_significance_is_directional():
     assert not SR._is_significant_independent(marg)
 
 
-# ------------------------------------------------------------- builder (real data)
+# ------------------------------------------------------------- builder
+#
+# HERMETIC since 2026-09-30 (ledger Issue 36, RULE 6). These tests used to
+# build over the REAL data/macro_templates.json and data/lake/macro, so they
+# failed in any checkout without those gitignored files and, on the Mac,
+# tested whatever the lake held that night. They now build over a small
+# synthetic lake: NIFTY + every sector as seeded random walks, six shock
+# episodes (one above MIN_EPISODE_LEGS) in ONE archetype, each with a full
+# T+120 window, so every shock phase has a cell and the placebo controls
+# ride through the same gate.
 
-def test_build_on_real_templates_is_well_formed():
-    doc = SR.build_strategies(dry_run=True)
+import random
+from datetime import date, timedelta
+
+from src.analysis import macro_playbooks as PB
+
+_EPISODES = [(f"ep{i}", i * 130) for i in range(6)]   # (name, anchor session)
+_SESSIONS = 800                                        # last anchor 650 + 120 < 800
+
+
+def _write_series(lake, key, rows):
+    lake.mkdir(parents=True, exist_ok=True)
+    (lake / f"{key}.csv").write_text(
+        "date,value\n" + "".join(f"{d},{v}\n" for d, v in rows))
+
+
+def _synthetic_lake(tmp_path):
+    lake = tmp_path / "macro"
+    days = [(date(2021, 1, 1) + timedelta(days=i)).isoformat()
+            for i in range(_SESSIONS)]
+    for k, key in enumerate((PB.BENCHMARK,) + PB.SECTORS):
+        rng, px, rows = random.Random(1000 + k), 100.0, []
+        for d in days:
+            px *= 1.0 + rng.gauss(0.0003, 0.012)
+            rows.append((d, round(px, 4)))
+        _write_series(lake, key, rows)
+    return lake, days
+
+
+def _synthetic_templates(tmp_path, days):
+    eps = [{"name": n, "anchor": days[i], "included": True}
+           for n, i in _EPISODES]
+    doc = {"built_at": "synthetic-t0", "episodes": eps,
+           "horizons": {"shock": {
+               "episodes": eps,
+               "archetypes": [{"id": "A1", "members": [e["name"] for e in eps],
+                               "medoid": eps[0]["name"]}]}}}
+    p = tmp_path / "templates.json"
+    p.write_text(json.dumps(doc))
+    return p
+
+
+@pytest.fixture
+def synthetic(tmp_path):
+    lake, days = _synthetic_lake(tmp_path)
+    return {"lake": lake, "templates": _synthetic_templates(tmp_path, days)}
+
+
+def test_build_is_well_formed_on_a_synthetic_lake(synthetic):
+    doc = SR.build_strategies(templates_path=synthetic["templates"],
+                              lake_dir=synthetic["lake"], dry_run=True)
     assert doc["strategies"] and doc["placebo_report"]["total"] > 0
+    # every shock phase got a cell, so the checks below are not vacuous
+    assert set(doc["table"]["A1"]) == {ph for ph, _, _ in PB.PHASES_BY_HORIZON["shock"]}
     for aid, phases in doc["table"].items():
         for ph, cell in phases.items():
             assert cell["verdict"] in ("PREFER", "SHOW", "ABSTAIN")
@@ -193,41 +252,86 @@ def test_top_strategies_honest_absence(tmp_path):
     assert out["status"] == "unavailable" and out["strategies"] == []
 
 
-def test_top_strategies_reads_written_artifact(tmp_path):
+def test_top_strategies_reads_written_artifact(tmp_path, synthetic):
     art = tmp_path / "macro_strategies.json"
-    SR.build_strategies(out_path=art)
+    SR.build_strategies(templates_path=synthetic["templates"],
+                        lake_dir=synthetic["lake"], out_path=art)
     out = SR.top_strategies("A1", "P1_shock", k=3, registry_path=art)
     assert out["status"] == "ok"
     assert out["verdict"] in ("PREFER", "SHOW", "ABSTAIN")
     assert len(out["strategies"]) <= 3
     # a cell that does not exist is an honest no_cell, never a crash
-    assert SR.top_strategies("A4", "P1_shock", registry_path=art)["status"] in (
-        "no_cell", "ok")
+    # (the synthetic templates have no A4)
+    assert SR.top_strategies("A4", "P1_shock", registry_path=art)["status"] == "no_cell"
 
 
 # ------------------------------------------- declare() integration (live path)
+#
+# declare() runs over the synthetic templates with its two featurizer seams
+# stubbed (the pattern tests/test_macro_regime.py uses): the current window
+# is a slice of a planted SHAPE and every A1 episode's fingerprint is a
+# near-copy of it, so the shock horizon DECLARES and the strategy-slice
+# branch is actually exercised. Before 2026-09-30 these tests read the real
+# lake, cache and ledger, and whether any horizon declared depended on the
+# market that night, so the slice assertions could pass without running.
 
-def test_declare_attaches_strategy_slice(tmp_path):
+_SHAPE = [0.0] * 30 + [3.0, 2.5, 2.0, 1.5, 1.0] + [0.4] * 106   # 141 rows
+
+
+def _rows(pattern, channel="BRENT:z20"):
+    return [{channel: v} for v in pattern]
+
+
+@pytest.fixture
+def declaring(monkeypatch, synthetic):
+    from src.analysis import macro_regime as MR
+    scales = (1.0, 1.01, 0.99, 1.02, 0.98, 1.005)
+    fps = {n: _rows([v * sc for v in _SHAPE])
+           for (n, _), sc in zip(_EPISODES, scales)}
+    monkeypatch.setattr(MR, "current_rows",
+                        lambda lake_dir=None, length=60, horizon="shock":
+                        ("2026-07-23", _rows(_SHAPE)[40:100]))
+    monkeypatch.setattr(MR, "episode_fingerprints",
+                        lambda templates, lake_dir=None, horizon="shock",
+                        cache_path=None, require_cache=False: fps)
+    monkeypatch.setattr(MR, "_load_fingerprint_cache",
+                        lambda *a, **k: (None, "hit"))
+    return MR, synthetic
+
+
+def _declare(MR, synthetic, tmp_path, strategies_path):
+    return MR.declare(templates_path=synthetic["templates"],
+                      lake_dir=synthetic["lake"],
+                      playbooks_path=tmp_path / "no_playbooks.json",
+                      state_path=tmp_path / "state.json",
+                      ledger_path=tmp_path / "ledger.jsonl",
+                      dry_run=True, strategies_path=strategies_path)
+
+
+def test_declare_attaches_strategy_slice(tmp_path, declaring):
     """A declared horizon carries the ranked recipes; an undeclared one gets
     None (mirroring playbook_slice)."""
-    from src.analysis.macro_regime import declare
+    MR, synthetic = declaring
     art = tmp_path / "macro_strategies.json"
-    SR.build_strategies(out_path=art)
-    doc = declare(dry_run=True, strategies_path=art)
+    SR.build_strategies(templates_path=synthetic["templates"],
+                        lake_dir=synthetic["lake"], out_path=art)
+    doc = _declare(MR, synthetic, tmp_path, art)
+    assert doc["horizons"]["shock"]["declared"]      # the branch below runs
     for hz, v in doc["horizons"].items():
         if v["declared"]:
             assert v["strategy_slice"] is not None
-            assert v["strategy_slice"]["status"] in ("ok", "no_cell")
+            assert v["strategy_slice"]["status"] == "ok"
         else:
             assert v["strategy_slice"] is None
 
 
-def test_declare_fails_open_when_registry_missing(tmp_path):
+def test_declare_fails_open_when_registry_missing(tmp_path, declaring):
     """A missing registry artifact NEVER blocks the declaration — the scoring
     clock must tick. The slice is an honest 'unavailable', not a crash."""
-    from src.analysis.macro_regime import declare
-    doc = declare(dry_run=True, strategies_path=tmp_path / "absent.json")
+    MR, synthetic = declaring
+    doc = _declare(MR, synthetic, tmp_path, tmp_path / "absent.json")
     assert "horizons" in doc                         # completed, no raise
+    assert doc["horizons"]["shock"]["declared"]      # the branch below runs
     for v in doc["horizons"].values():
         if v["declared"]:
-            assert v["strategy_slice"]["status"] in ("unavailable", "no_cell")
+            assert v["strategy_slice"]["status"] == "unavailable"

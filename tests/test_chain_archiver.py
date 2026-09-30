@@ -7,6 +7,7 @@ Run either of these from the project folder:
     python -m pytest tests/test_chain_archiver.py
 """
 
+import json as _json
 import sys
 import tempfile
 from datetime import date
@@ -14,8 +15,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
+
 from src import lake
 from src.ingestion import chain_archiver as ca
+
+
+@pytest.fixture(autouse=True)
+def _no_real_liquidity_or_id_files(monkeypatch, tmp_path):
+    """RULE 6 (ledger Issue 36, 2026-09-30): run() reads data/fo_liquidity.json
+    and data/darling_ids.json by default. Pointed at absent files here, so no
+    test in this file reads the owner's live artifacts or resolves real
+    tier-1 / MCX names; a test that wants the extensions writes its own."""
+    monkeypatch.setattr(ca, "FO_PATH", tmp_path / "absent_fo_liquidity.json")
+    monkeypatch.setattr(ca, "IDS_PATH", tmp_path / "absent_darling_ids.json")
 
 
 def _fetchers(expiries=("2026-07-16", "2026-07-23", "2026-07-30",
@@ -199,13 +212,32 @@ def test_every_underlying_empty_is_CA_BLACKOUT_not_nine_coincidences(capsys):
     assert any("CA-BLACKOUT" in ln for ln in _problem_lines(capsys))
 
 
-def test_a_clean_day_stays_silent_on_the_ops_card(capsys):
+def test_a_clean_day_stays_silent_on_the_ops_card(capsys, tmp_path):
     """The other half of the contract: a good night must not start
-    crying wolf, or the card becomes noise and gets ignored."""
-    with tempfile.TemporaryDirectory() as tmp:
-        summary = ca.run(today=date(2026, 7, 10), lake_root=tmp,
-                         **_fetchers()[0])
+    crying wolf, or the card becomes noise and gets ignored. A clean night
+    is the core nine AND the tier-1 extension AND the MCX commodities all
+    answering, from fixture files (it used to read the real ones and, in a
+    checkout without them, printed "fo_liquidity unavailable")."""
+    fo = tmp_path / "fo.json"
+    fo.write_text(_json.dumps({"as_of": "2026-07-10", "banned": [],
+                               "symbols": {"ABB": {"tier": "tier1"}}}))
+    ids = tmp_path / "ids.json"
+    ids.write_text(_json.dumps({
+        "ids": {"ABB": {"id": "13"}},
+        "commodities": {"GOLD": {"id": "4001", "seg": "MCX_COMM",
+                                 "expiry": "2026-08-05"}}}))
+    f, _ = _fetchers()
+    f["fo_path"], f["ids_path"] = fo, ids
+    f["expiry_by_id_fn"] = lambda sid, seg: ["2026-07-30", "2026-08-27"]
+    f["chain_by_id_fn"] = lambda sid, e, seg: {
+        "last_price": 1000.0, "oc": {"1000.000000": {"ce": {"last_price": 20}}}}
+    f["spot_by_id_fn"] = lambda sid, seg: 1000.0
+    summary = ca.run(today=date(2026, 7, 10), lake_root=tmp_path / "lake", **f)
     assert summary["skipped"] is None and summary["empty"] == []
+    assert summary["extension"]["captured"] == {"ABB.NS": 2}
+    assert summary["extension"]["empty"] == [] and summary["extension"]["skipped"] == []
+    assert summary["commodities"]["captured"] == {"GOLD (MCX)": 2}
+    assert summary["commodities"]["empty"] == [] and summary["commodities"]["skipped"] == []
     assert _problem_lines(capsys) == []
 
 
@@ -233,7 +265,6 @@ if __name__ == "__main__":
 
 # ------------------------------------------ tier-1 extension (2026-09-19, #100)
 
-import json as _json
 
 
 def _ext_files(tmp, tier1=("ABB", "BAJAJ-AUTO", "TCS", "AMBER", "BANNEDCO"),

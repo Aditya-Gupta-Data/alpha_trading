@@ -705,4 +705,25 @@ def test_a_newer_rung_is_merged_with_what_the_closes_built_never_replacing_it(mo
     walked = json.loads(json.dumps(row))
     assert pt._resolve_spread(walked, bars) is None
     assert walked["ratchet"]["locked_pct"] == 50.0
-    assert walked["ratchet"]["rungs"] == row["ratchet"]["rungs"]
+    rungs = walked["ratchet"]["rungs"]
+    assert row["ratchet"]["rungs"][0] in rungs                          # the intraday rung, dated
+    assert {"as_of": bars[1][0], "locked_pct": 50.0} .items() <= next(
+        r for r in rungs if r.get("source") == "close").items()        # the close-earned lock, dated
+
+
+def test_a_lock_earned_on_a_close_survives_a_partial_bar_series(monkeypatch):
+    """#122 panel round 4: the walk's own state was not durable — one run on
+    a Dhan series with a dropped row rebuilt a LOWER lock and wrote it. A
+    lock earned on a close is now kept as a dated rung like an intraday one."""
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2099-01-01")   # judge nothing
+    row = _directional_row("dir00006")
+    bars = _capture_bars(row, [10, 65, 45])            # the 07-08 close arms 60 -> lock 30
+    walked = json.loads(json.dumps(row))
+    assert pt._resolve_spread(walked, bars) is None and walked["ratchet"]["locked_pct"] == 30.0
+    partial = [bars[0], bars[2]]                       # the 07-08 row dropped by the feed
+    again = json.loads(json.dumps(walked))
+    assert pt._resolve_spread(again, partial) is None
+    assert again["ratchet"]["locked_pct"] == 30.0      # not lowered
+    # and still never backdated: the 07-08 rung does not judge the 07-07 close
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2026-07-01")
+    assert pt._resolve_spread(json.loads(json.dumps(walked)), bars) is None

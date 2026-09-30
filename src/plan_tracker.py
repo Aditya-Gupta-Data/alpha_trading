@@ -248,9 +248,19 @@ def _resolve_spread(entry: dict, bars: list):
             while pending and str(pending[0].get("as_of") or "") <= day:
                 peak, lock = _fold_rung(peak, lock, pending.pop(0))
             peak = capture if peak is None else max(float(peak), capture)
+            prev_lock = lock
             st = pr.state(peak, lock)
             lock = st["locked_pct"]
             last_day = day
+            if lock is not None and (prev_lock is None or float(lock) > float(prev_lock)) \
+                    and not any(r.get("locked_pct") is not None and float(r["locked_pct"]) >= float(lock)
+                                and str(r.get("as_of") or "") <= day for r in rungs):
+                # a lock EARNED on a close is as durable as an intraday rung:
+                # kept, dated, so a later walk over a partial bar series
+                # (a dropped or trimmed Dhan row) cannot lower it (#122 panel)
+                rungs.append({"as_of": day, "peak_capture_pct": st["peak_capture_pct"],
+                              "locked_pct": lock, "source": "close"})
+                rungs.sort(key=lambda r: str(r.get("as_of") or ""))
             entry["ratchet"] = dict(st, as_of=day, rungs=rungs)
             if day >= RATCHET_EFFECTIVE_DATE and pr.ratchet_hit(capture, lock):
                 entry["ratchet"]["hit_capture_pct"] = round(capture, 2)
@@ -746,7 +756,9 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
             frac = _pv._tier_frac(entry.get("ticker") or "")
             venue_s = sum((float(quotes[(float(l["strike"]), l["option_type"].upper())]) * frac + 0.05)
                           for l in spread["legs"]) * qty
-            est_s = max(est_s, venue_s)
+            # the booked cost = entry-side ladder + the venue's exit slip
+            _, entry_s = _spread_exit_costs_quoted(mine, quotes, exit_slipped=True)
+            est_s = max(est_s, entry_s + venue_s)
         except Exception:
             pass
         est_pnl = profit_ps * qty - est_f - est_s

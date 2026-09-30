@@ -693,7 +693,7 @@ def evaluate(row: dict, chain: dict, today: date) -> dict:
     if signal == "hold" and days_left <= pt._forced_exit_days(row["ticker"]):
         signal = "pre_expiry_exit"
     return {"ok": True, "reason": None, "mark_ps": m["mark_ps"], "profit_ps": round(profit_ps, 4),
-            "capture_pct": round(capture, 2), "peak": (round(float(peak), 2) if peak is not None else None),
+            "capture_pct": round(capture, 2), "peak": (pr.floor2(peak) if peak is not None else None),  # floored (#122)
             "lock": lock, "signal": signal, "prices": m["prices"], "days_left": days_left}
 
 

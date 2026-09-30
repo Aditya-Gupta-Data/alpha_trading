@@ -730,16 +730,34 @@ def test_a_lock_earned_on_a_close_survives_a_partial_bar_series(monkeypatch):
 
 
 def test_a_stored_peak_never_arms_a_rung_the_close_did_not_reach(monkeypatch):
-    """#122 panel round 5: a peak stored ROUNDED half-up (59.996 -> 60.00)
-    re-armed the 60 -> 30 rung on the next walk. Peaks are floored now, so
-    walking the same closes twice is idempotent and fires nothing new."""
+    """#122 panel rounds 5-6: a peak stored ROUNDED half-up (59.996 -> 60.00)
+    re-armed the 60 -> 30 rung when re-read — by the next walk, the live
+    bridge, or PAPER_2L_LIVE's own next tick. Stored peaks are floored."""
     from src import profit_ratchet as prm
     assert prm.state(59.996)["peak_capture_pct"] == 59.99 and prm.state(59.996)["locked_pct"] == 0.0
     monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2026-07-01")
     row = _directional_row("dir00007")
-    bars = _capture_bars(row, [10, 59.99])
-    first = json.loads(json.dumps(row))
-    assert pt._resolve_spread(first, bars) is None
-    second = json.loads(json.dumps(first))
-    assert pt._resolve_spread(second, bars) is None
-    assert second["ratchet"] == first["ratchet"]                       # no hourly spurious write
+    journal.log(row)
+    monkeypatch.setattr(pt, "date", type("D", (date,), {"today": staticmethod(lambda: date(2026, 7, 8))}))
+    assert pt.note_ratchet("dir00007", 59.996, 0.0)                  # an intraday peak just under 60
+    monkeypatch.setattr(pt, "date", date)
+    saved = _rows()["dir00007"]
+    assert saved["ratchet"]["peak_capture_pct"] == 59.99
+    bars = _capture_bars(row, [10, 20, 25])                          # a later 25% close
+    walked = json.loads(json.dumps(saved))
+    assert pt._resolve_spread(walked, bars) is None                  # half-up would lock 30 -> hit
+    assert walked["ratchet"]["locked_pct"] == 0.0
+
+
+def test_the_live_arm_stores_a_floored_peak(monkeypatch):
+    from src.execution import live_pricer as lp
+    captured = {}
+    monkeypatch.setattr(lp, "crossed_mark", lambda chain, legs: {"ok": True, "mark_ps": 70.0 + 0.2 * 130,
+                                                                  "prices": {}})
+    row = {"legs": [], "entry_mark_ps": 70.0, "max_loss_ps": 70.0, "max_profit_ps": 130.0,
+           "ratchet_peak_pct": 59.996, "ratchet_lock_pct": 0.0, "strategy": "bull_call_spread",
+           "direction": "bullish", "expiry": "2026-10-28", "ticker": "NIFTY 50"}
+    ev = lp.evaluate(row, {}, date(2026, 9, 29))
+    assert ev["peak"] == 59.99 and ev["lock"] == 0.0
+    ev2 = lp.evaluate(dict(row, ratchet_peak_pct=ev["peak"]), {}, date(2026, 9, 29))
+    assert ev2["lock"] == 0.0 and ev2["signal"] == "hold"            # 20% capture stays above lock 0

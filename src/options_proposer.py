@@ -1261,8 +1261,11 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
             human_pulse.touch("decide_pending")
         except Exception:
             pass
+    # The live arm's re-quote is a Dhan chain call: made HERE, before the
+    # journal lock, so no other writer waits on the network (#122 panel).
+    prefetched = _prefetch_live_requote(trade_id) if approve else None
     with journal.locked():
-        verdict = _decide_pending_locked(trade_id, approve, why)
+        verdict = _decide_pending_locked(trade_id, approve, why, live_requote=prefetched)
     if verdict["status"] not in ("approved", "rejected"):
         return verdict
     target, decision = verdict["entry"], verdict["status"]
@@ -1294,7 +1297,27 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     return {"status": decision, "entry": target}
 
 
-def _decide_pending_locked(trade_id: str, approve: bool, why: str) -> dict:
+def _prefetch_live_requote(trade_id: str):
+    """The live arm's crossed re-quote for this pending entry, fetched
+    OUTSIDE the journal lock; None when the arm is off, the row is not a
+    pending spread with every leg quoted, or the fetch raised (the arm then
+    re-quotes inside, as before). Never raises."""
+    try:
+        from src import portfolio_manager as pm
+        if not pm.live_account_enabled():
+            return None
+        e = journal.get_entry(trade_id)
+        if (not e or e.get("decision") != "pending_approval"
+                or not pm._legs_all_quoted(e.get("spread") or {})):
+            return None
+        from src.execution import live_pricer
+        return live_pricer.requote_entry(e, chain_fn=_LIVE_CHAIN_FN)
+    except Exception:
+        return None
+
+
+def _decide_pending_locked(trade_id: str, approve: bool, why: str,
+                           live_requote: dict = None) -> dict:
     """decide_pending's body — caller holds the journal lock."""
     import copy
     target = journal.get_entry(trade_id)
@@ -1345,7 +1368,7 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str) -> dict:
         # land on the row the tracker will read. Fail-open: a venue error
         # leaves the legacy fill in place and says so; nothing here touches
         # margin or the exit path.
-        target["execution"] = _execute_paper_entry(target)
+        target["execution"] = _execute_paper_entry(target, live_requote=live_requote)
     final = copy.deepcopy(target)
 
     def _replace(e):
@@ -1413,11 +1436,13 @@ def _live_refuse(conn, acct: str, entry: dict, why: str) -> None:
     print(f"  [{acct}] {ref}: REFUSED at approval — {why}")
 
 
-def _live_requote(conn, acct: str, entry: dict) -> dict | None:
-    """Fresh crossed limits for the live arm, or None (refused + released)."""
+def _live_requote(conn, acct: str, entry: dict, prefetched: dict = None) -> dict | None:
+    """Fresh crossed limits for the live arm, or None (refused + released).
+    `prefetched` = decide_pending's re-quote made before the journal lock."""
     from src.execution import live_pricer
     try:
-        rq = live_pricer.requote_entry(entry, chain_fn=_LIVE_CHAIN_FN)
+        rq = prefetched if prefetched is not None else live_pricer.requote_entry(
+            entry, chain_fn=_LIVE_CHAIN_FN)
     except Exception as e:
         rq = {"ok": False, "reason": f"requote failed ({e})"}
     if not rq.get("ok"):
@@ -1460,7 +1485,7 @@ def _live_after_fill(conn, acct: str, entry: dict, stid: str, sview: dict, quote
         print(f"  [{acct}] {entry.get('short_id')}: position row failed ({e}) — lock kept for repair")
 
 
-def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
+def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: dict = None) -> dict:
     """Issue the ticket and run one venue pass for THIS entry (decision
     #101). Returns a small execution record stamped on the journal row:
     {mode, ticket_id, status, filled_legs, error}. `mode` is
@@ -1498,7 +1523,7 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
             live_quotes = {}
             for acct, _lots in list(tickets):
                 if acct in _pm.LIVE_ACCOUNTS:
-                    rq = _live_requote(conn, acct, entry)
+                    rq = _live_requote(conn, acct, entry, prefetched=live_requote)
                     if rq is None:
                         tickets = [t for t in tickets if t[0] != acct]
                     else:

@@ -40,6 +40,7 @@ is never scanned (the trade happened near that day's close; its intraday low
 usually predates the entry).
 """
 
+import json
 from datetime import date, datetime
 
 from src import analyst
@@ -833,7 +834,10 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
             _settle_spread_cash(pnl_net)
             from src import portfolio_manager as pm
             release = pm.release_entry(short_id, pnl_net,
-                                       flat_frictions_rs=_flat_order_costs(spread, frictions))
+                                       flat_frictions_rs=_flat_order_costs(spread, frictions),
+                                       wealth_sweep=False)
+            if release.get("wealth_sweep_due"):
+                result["_wealth_sweep"] = (short_id, pnl_net)       # run after the lock
 
             entry["outcome"] = {
                 "checked": today.isoformat(),
@@ -869,10 +873,14 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
             return True
 
         updated = journal.update_entry(short_id, _mutate)
+        sweep = result.pop("_wealth_sweep", None)
         if updated is None:
             if result["status"] == "error":
                 result["status"] = "not_found"
             return result
+        if sweep:
+            from src import portfolio_manager as pm
+            pm.run_wealth_sweep(*sweep)                             # outside the journal lock
 
         # Post-settlement recording (both fail-open; the trade IS closed).
         try:
@@ -1483,7 +1491,7 @@ def reconcile_orphan_locks(now: datetime = None, conn=None,
     named `orphan_lock_released` event. {journal_ref: reason} returned."""
     from src import portfolio_manager as pm
     now_naive = (now or _ist_now()).replace(tzinfo=None)
-    out = {}
+    out, sweeps = {}, []
     with journal.locked():
         rows = {journal.row_key(e): e for e in journal.read_all()}
         own = conn is None
@@ -1525,7 +1533,10 @@ def reconcile_orphan_locks(now: datetime = None, conn=None,
                     pnl, flat, why = 0.0, 0.0, "entry rejected; lock was still held"
                 else:
                     continue                           # pending (D7) or open
-                res = pm.release_entry(ref, pnl, conn=conn, flat_frictions_rs=flat)
+                res = pm.release_entry(ref, pnl, conn=conn, flat_frictions_rs=flat,
+                                       wealth_sweep=False)
+                if res.get("wealth_sweep_due"):
+                    sweeps.append((ref, pnl))
                 released = [a for a, v in (res.get("shadow_accounts") or {}).items()
                             if (v or {}).get("released")]
                 if res.get("released"):
@@ -1542,6 +1553,8 @@ def reconcile_orphan_locks(now: datetime = None, conn=None,
         finally:
             if own:
                 conn.close()
+    for ref, pnl in sweeps:                                     # outside the journal lock
+        pm.run_wealth_sweep(ref, pnl)
     return out
 
 
@@ -1565,6 +1578,7 @@ def _settle_spread_row(entry: dict, bars: list, seen: dict) -> bool:
         seen["status"] = "already_resolved"
         return False
     spread = entry["spread"]
+    ratchet_before = json.dumps(entry.get("ratchet"), sort_keys=True)
     hit = _resolve_spread(entry, bars) if bars else None
     backstop = None
     # The bar walk only settles on a bar. Past expiry with no usable
@@ -1576,7 +1590,11 @@ def _settle_spread_row(entry: dict, bars: list, seen: dict) -> bool:
             hit = backstop[:4]
     if hit is None:
         seen["status"] = "live" if bars else "no_data"
-        return False
+        # The walk stamps the profit ratchet it saw on the closes (#110) so the
+        # live bridge and the journal share one state: a still-open spread's
+        # raised ratchet is written (the walk started from this FRESH row, and
+        # the ratchet only ever rises, so an intraday raise is never lowered).
+        return json.dumps(entry.get("ratchet"), sort_keys=True) != ratchet_before
 
     resolution, m_exit, frac_left, exit_day = hit
     approved = entry["decision"] == "approved"
@@ -1629,7 +1647,10 @@ def _settle_spread_row(entry: dict, bars: list, seen: dict) -> bool:
     release = pm.release_entry(entry.get("short_id", ""),
                                pnl_net if approved else 0.0,
                                flat_frictions_rs=(_flat_order_costs(spread, total_frictions)
-                                                  if approved else 0.0))
+                                                  if approved else 0.0),
+                               wealth_sweep=False)
+    if release.get("wealth_sweep_due"):
+        seen["wealth_sweep"] = (entry.get("short_id", ""), pnl_net)   # run after the lock
 
     entry["outcome"] = {
         "checked": date.today().isoformat(),
@@ -1873,7 +1894,7 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         entry = journal.update_matching(
             lambda e, key=key: journal.row_key(e) == key,
             lambda e, bars=bars, seen=seen: _settle_spread_row(e, bars, seen))
-        if entry is None:
+        if entry is None or seen.get("status") != "resolved":
             if seen.get("status") == "no_data":
                 print(f"Plan tracker: no price data for {candidate['ticker']} spread — will retry next run.")
             elif seen.get("status") == "live":
@@ -1885,6 +1906,9 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         spread = entry["spread"]
         resolution, exit_day = seen["resolution"], seen["exit_day"]
         pnl_net, total_frictions = seen["pnl_net"], seen["total_frictions"]
+        if seen.get("wealth_sweep"):
+            from src import portfolio_manager as pm
+            pm.run_wealth_sweep(*seen["wealth_sweep"])            # outside the journal lock
         resolved += 1
         resolved_lines.append(_spread_outcome_line(entry))
         print(f"Plan tracker: resolved {spread['strategy']} on {entry['ticker']} "

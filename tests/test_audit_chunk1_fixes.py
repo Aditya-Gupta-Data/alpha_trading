@@ -210,7 +210,7 @@ def test_an_approval_writes_only_its_row_so_a_nested_stamp_survives(monkeypatch)
     journal.log(_spread_row("pend0001", decision="pending_approval"))
     journal.log(_spread_row("held0001"))
 
-    def execute(entry):
+    def execute(entry, **k):
         journal.update_entry("held0001", lambda e: e.update(stamp="evicted"))   # nested write
         return {"mode": "legacy_instant", "ticket_id": None, "status": None,
                 "filled_legs": 0, "error": None}
@@ -224,7 +224,7 @@ def test_an_approval_writes_only_its_row_so_a_nested_stamp_survives(monkeypatch)
 def test_the_same_entry_cannot_be_approved_twice(monkeypatch):
     journal.log(_spread_row("pend0001", decision="pending_approval"))
     calls = []
-    _wire_decide(monkeypatch, lambda e: calls.append(e["short_id"]) or {"mode": "legacy_instant"})
+    _wire_decide(monkeypatch, lambda e, **k: calls.append(e["short_id"]) or {"mode": "legacy_instant"})
     assert op.decide_pending("pend0001", approve=True, human=False)["status"] == "approved"
     assert op.decide_pending("pend0001", approve=True, human=False)["status"] == "not_found"
     assert calls == ["pend0001"]
@@ -503,3 +503,66 @@ def test_every_brain_map_connection_waits_30_seconds_for_a_busy_writer(monkeypat
                         lambda path, **kw: seen.update(kw) or real(path, **kw))
     brain_map.connect(tmp_path / "t.db").close()
     assert seen.get("timeout") == 30.0
+
+
+def test_the_wealth_sweep_runs_after_the_journal_lock_is_released(monkeypatch, tmp_path):
+    """Panel finding on 4c5a838: the GOLDBEES sweep (a live quote with
+    retries and a Discord post) ran inside the settlement's journal lock,
+    stalling every other writer. It now runs after the row is written."""
+    journal.log(_spread_row("sp000001"))
+    _wire_tracker(monkeypatch, tmp_path, lambda t, s: RANGE_BARS)
+    calls = []
+    monkeypatch.setattr(pm, "release_entry", lambda ref, pnl=0.0, conn=None, **k:
+                        calls.append(("release", k.get("wealth_sweep"), journal.lock_held()))
+                        or {"released": True, "wealth_sweep_due": True})
+    monkeypatch.setattr(pm, "run_wealth_sweep", lambda ref, pnl:
+                        calls.append(("sweep", ref, journal.lock_held())))
+    assert pt.run_tracker(email=False) == 1
+    assert calls == [("release", False, True), ("sweep", "sp000001", False)]
+
+
+def test_a_live_position_keeps_its_lock_through_the_pending_expiry(conn, monkeypatch):
+    from src.execution import live_pricer
+    live = pm.ACCOUNT_PAPER_2L_LIVE
+    journal.log(_spread_row("pend0002", decision="pending_approval",
+                            created_at="2026-09-30T10:00:00+05:30"))
+    pm.paper_request_entry(conn, live, "pend0002", 5000.0)
+    monkeypatch.setattr(live_pricer, "has_open_position", lambda c, a, r: True)
+    out = pt.expire_pending_margin(now=datetime(2026, 9, 30, 15, 31, tzinfo=IST), conn=conn)
+    assert out == {} and pm._active_shadow_lock(conn, live, "pend0002") is not None
+
+
+def test_the_live_requote_is_fetched_before_the_journal_lock(monkeypatch):
+    """#122 panel: decide_pending used to make the live arm's Dhan chain
+    call while holding the journal lock every other writer waits on."""
+    from src.execution import live_pricer
+    journal.log(_spread_row("pend0003", decision="pending_approval"))
+    monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", True)
+    monkeypatch.setattr(pm, "_legs_all_quoted", lambda s: True)
+    seen = {}
+    monkeypatch.setattr(live_pricer, "requote_entry", lambda e, **k:
+                        seen.setdefault("held", journal.lock_held()) is not None
+                        and {"ok": True, "legs": [], "quote_ts": "t"})
+
+    def execute(entry, live_requote=None):
+        seen["passed"] = live_requote
+        return {"mode": "legacy_instant"}
+    _wire_decide(monkeypatch, execute)
+    assert op.decide_pending("pend0003", approve=True, human=False)["status"] == "approved"
+    assert seen["held"] is False and seen["passed"]["ok"] is True
+
+
+def test_the_eod_walk_persists_a_live_spreads_ratchet(monkeypatch, tmp_path):
+    """Panel finding on 4c5a838: with per-row writes, the ratchet the EOD
+    walk stamps on a spread that stays OPEN was never written (before, it
+    rode along only when another row resolved in the same run)."""
+    from src import profit_ratchet as prm
+    row = _spread_row("dir00001")
+    row["spread"]["strategy"] = "bull_call_spread"
+    journal.log(row)
+    monkeypatch.setattr(prm, "is_directional", lambda s: True)
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2099-01-01")   # arm, never fire
+    _wire_tracker(monkeypatch, tmp_path, lambda t, s: RANGE_BARS[:10])
+    assert pt.run_tracker(email=False) == 0
+    got = _rows()["dir00001"]
+    assert got["outcome"] is None and got["ratchet"]["as_of"] == RANGE_BARS[9][0]

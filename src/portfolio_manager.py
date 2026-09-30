@@ -615,6 +615,15 @@ def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
     for account, margin in conn.execute(
             "SELECT account_id, margin_rs FROM paper_margin_locks WHERE journal_ref = ? "
             "AND released_at IS NULL", (journal_ref,)).fetchall():
+        if account in LIVE_ACCOUNTS:
+            # the release_shadow_locks guard: a live position (or an unknown
+            # state) keeps its lock — it settles on its own quotes
+            try:
+                from src.execution import live_pricer
+                if live_pricer.has_open_position(conn, account, journal_ref):
+                    continue
+            except Exception:
+                continue
         conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = 0 WHERE "
                      "account_id = ? AND journal_ref = ? AND released_at IS NULL",
                      (now, account, journal_ref))
@@ -1585,7 +1594,7 @@ def gate_headless_entry(journal_ref: str, required_margin: float,
 
 
 def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None,
-                  flat_frictions_rs: float = 0.0) -> dict:
+                  flat_frictions_rs: float = 0.0, wealth_sweep: bool = True) -> dict:
     """Settle a resolved/rejected entry's lock; safe on unknown refs.
 
     D3 (decision #122): a FAILED release is no longer silent — the result
@@ -1636,20 +1645,38 @@ def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None,
         result["shadow_accounts_error"] = str(e)
         result.setdefault("error", f"shadow release: {e}")
     if result.get("released") and float(pnl_net) > 0:
-        try:
-            from src import wealth_lock
-            result["wealth_sweep"] = wealth_lock.sweep_on_settlement(
-                journal_ref, pnl_net, conn=conn)
-        except Exception as e:
-            print(f"  (wealth sweep skipped: {e})")
-            result["wealth_sweep"] = None
-            result["wealth_sweep_error"] = str(e)
+        if not wealth_sweep:
+            # a caller holding the journal lock runs the sweep (a live quote
+            # and a Discord card) AFTER releasing it — run_wealth_sweep (#122)
+            result["wealth_sweep_due"] = True
+        else:
+            try:
+                from src import wealth_lock
+                result["wealth_sweep"] = wealth_lock.sweep_on_settlement(
+                    journal_ref, pnl_net, conn=conn)
+            except Exception as e:
+                print(f"  (wealth sweep skipped: {e})")
+                result["wealth_sweep"] = None
+                result["wealth_sweep_error"] = str(e)
     if owns:
         try:
             conn.close()
         except Exception:
             pass
     return result
+
+
+def run_wealth_sweep(journal_ref: str, pnl_net: float) -> dict | None:
+    """The deferred half of release_entry(wealth_sweep=False): the advisory
+    GOLDBEES sweep, run by a caller only after it has let go of the journal
+    lock (#122 panel: a quote with retries and a Discord post must never
+    stall every other journal writer). Never raises."""
+    try:
+        from src import wealth_lock
+        return wealth_lock.sweep_on_settlement(journal_ref, pnl_net)
+    except Exception as e:
+        print(f"  (wealth sweep skipped: {e})")
+        return None
 
 
 if __name__ == "__main__":

@@ -1995,3 +1995,30 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   `logs/.ceo_brief_state.json`, so the next real brief can skip problem
   lines (a production bug, not changed). Reads: 159 tests in 45 files still
   read `data/` or `logs/`.
+
+- **Repair attempt, 2026-09-30 (later):** the owner approved restoring the
+  two drained digest cards and a one-time RULE 3 exception to strip the
+  three test-written lines (resolved_on 2026-09-30) from the Mac's
+  `logs/macro_strategy_scores.jsonl`. The agent's auto-mode permission
+  classifier refused both ("Modify Shared Resources", "Logging/Audit
+  Tampering") and neither file was changed. State re-checked just before
+  the attempt: the queue was empty, the two cards were the last two lines
+  of `.drained` (13,391 bytes), and the ledger was 1,815 bytes with the
+  three lines starting at byte 907. Both repairs are still OPEN. The
+  guard commits are pushed (`421b4cf`).
+
+## Issue 38 — `python3 -m src.ceo_brief --dry-run` advances the REAL sweep offset, so the next real brief can miss problem lines (found 2026-09-30; NOT fixed, owner: log only)
+
+- **Verified in code, not observed live:** `main(["--dry-run"])` calls
+  `build_brief_card(**kw)`, whose `state_path` defaults to
+  `logs/.ceo_brief_state.json`. That calls `collect_issues`, which saves the
+  new sweep offset to `state_path` unconditionally. A dry run therefore
+  moves the offset past every problem line it read, and the next real brief
+  no longer reports those lines. Nobody checked whether a production dry
+  run has already swallowed lines.
+- **Found** while isolating `test_ceo_brief::test_dry_run_sends_nothing` for
+  Issue 37. That test now routes the offset to a temp file. It asserts that
+  nothing is SENT, not that the offset is left alone, so it does not cover
+  this bug.
+- **Fix direction (deferred by the owner):** a dry run should read the
+  offset but never save it.

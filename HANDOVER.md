@@ -65,19 +65,22 @@ digest cards (tonight's Darling Tiers and Macro Regime transitions) into
 `logs/discord_digest_queue.jsonl.drained`. It also wrote the other files
 listed in ledger Issue 37.
 
-**Owner decisions / actions (none done; the agent was refused permission
-to move or restore files):**
-1. Restore the two drained digest cards (the last 909 bytes of
-   `.drained` back into the empty queue), or accept their loss.
-2. Remove today's fixture `deals_census` partition and the
-   `data/rss_signals.jsonl` file (every row is a test fixture). The other
-   36 `deals_census` partitions on the Mac are the same fixture.
-3. The three test-written lines in the Mac's scores ledger: RULE 3 says
-   that ledger is immutable, so whether to strip them is your call.
+**Owner decisions / actions.** On 09-30 the owner APPROVED (1) restoring
+the two drained digest cards and (3) a one-time RULE 3 exception to strip
+the three test-written 2026-09-30 lines from the Mac's
+`logs/macro_strategy_scores.jsonl`. The agent's auto-mode permission
+classifier refused both, so neither file changed and both are STILL OPEN.
+They need either a permission rule for the agent or the owner running them
+by hand. Exact bytes are in ledger Issue 37. (2) Removing today's fixture
+`deals_census` partition and `data/rss_signals.jsonl` (and the other 36
+fixture partitions) was not re-approved and is not done.
 
-**Also open:** `ceo_brief --dry-run` advances the real sweep offset (a
-production bug). 159 tests still READ `data/`/`logs/`. The guard commits
-are on local `main` only; say "push it" to publish.
+**Also open:** Issue 38, `ceo_brief --dry-run` advances the real sweep
+offset (logged, fix deferred by the owner). 159 tests still READ
+`data/`/`logs/`. The guard commits are pushed (`421b4cf`).
+
+**Next:** resume the Chunk 1 adversarial audit fixes (see the 09-29
+evening entry and `docs/audit_chunk1_accounting_ledger.md`).
 
 ## 2026-09-29 (evening) — #105 confirmed for PAPER_2L_LIVE; chunked adversarial audit begun (Chunk 1: Accounting & Ledger)
 

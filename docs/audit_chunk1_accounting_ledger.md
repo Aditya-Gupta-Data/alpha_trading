@@ -7,7 +7,16 @@ findings raised → 34 survived, 17 refuted. The 34 collapse into the 14
 distinct defects below (most were found by 2–5 lenses independently). Real-data
 evidence was checked read-only on the trading VM at 2026-09-30 ~19:30 IST.
 
-**Nothing here is fixed yet.** This file is the work list for the fix pass.
+**Fix status (2026-09-30 night):** D1–D8 and D13 are fixed in `4c5a838`
+and the follow-ups through `a82d12f` (decisions #121, #122; the owner ruled
+D6, D7, D8 and D13 the same day). They were deployed to the VM at 23:04 IST.
+D5's data repair is a one-off tool, `scripts/repair_d5_brain_map_outcomes.py`.
+It ran on the VM at 23:04:46 IST, verified, and is recorded in HANDOVER and
+ledger Issue 39. D9–D12 and D14
+(Batch D, minor) are still open. The same panel re-reviewed the fix diff; its
+result is in the "Fix-diff review" section at the end.
+
+The table below is the original audit and is left as it was written.
 
 ## Scope (files audited)
 
@@ -80,3 +89,68 @@ Refuted as deliberate design, unreachable in production, or harmless to money:
    - D14: build recon's book side from active locks only.
 
 Deploy each batch after 15:30 IST. Chunk 2 (OMS & Execution) starts after Batch A is deployed and re-reviewed.
+
+## Fix-diff review (2026-09-30 night)
+
+**Round 1, over `4c5a838`:** the same five lenses, then two refuters per
+finding defaulting to "refuted". 19 findings were raised by the five lenses,
+several of them the same defect, which leaves 10 distinct ones.
+
+| # | Finding | Panel verdict | Fixed in |
+|---|---------|---------------|----------|
+| 1 | The `--review-pending` CLI approved an entry after its D7 expiry with no margin in any account (it never went through the gate) | CONFIRMED major (3 lenses) | `53e79c1`: the CLI decides through `decide_pending` |
+| 2 | A proposal the closing cycle journals at 15:30:xx was pushed to the next day's close | CONFIRMED minor (3 lenses) | `53e79c1`: before 16:00 = that session's close |
+| 3 | `--account` was silently ignored by `--inject` | CONFIRMED minor | `53e79c1`: refused |
+| 4 | `decide_pending` held the journal lock through Dhan calls (live re-quote, rotation quotes) | CONFIRMED, rated minor by both refuters | `37a7708`: the live re-quote is prefetched before the lock. **Residual:** a margin-walled rotation eviction at approval still fetches its quotes under the lock |
+| 5 | The EOD walk's ratchet on a still-open spread was no longer written | CONFIRMED minor (2 lenses) | `37a7708` |
+| 6 | The restore-tool correction note overstated #122 | CONFIRMED minor | `37a7708` |
+| 7 | The D5 tool deleted link rows without archiving them | PLAUSIBLE (1 of 2 refuters) | `53e79c1` |
+| 8 | A pending expiry could release a live account lock that holds an open position | PLAUSIBLE | `37a7708` |
+| 9 | The wealth sweep (quote + Discord) ran inside the settlement lock | REFUTED (both refuters: minor, not major) | fixed anyway, `37a7708` |
+| 10 | An eviction at approval could be followed by the entry's refusal (stressed vs unstressed margin) | REFUTED (2 lenses) | fixed anyway, `53e79c1`, with a test |
+
+Also refuted: "#121/#122 do not exist in DECISIONS.md" (true at review time
+and added before commit) and "a crash between the side effects and the row
+write re-settles" (not introduced by this diff; the window is narrower than
+before). `f3d4458` adds a fix the panel suggested: a journal lock timeout
+skips one tracker row instead of aborting the sweep.
+
+**Round 2, over `4c5a838..f3d4458` (the follow-ups):** 13 findings, 4
+distinct. The worst was a **blocker in my own round-2 change**: persisting the
+EOD walk's ratchet let the next hourly walk judge EARLIER closes against the
+saved lock and fire a backdated `ratchet_hit`. The same flaw had existed for
+intraday rungs since #110. The VM history check found none backdated. The
+other three: an eviction that closes at a loss can still leave the entry
+unfunded; reconcile's deferred wealth sweeps could be lost if a later ref
+raised; and a docs claim made before the repair had run. All four are fixed
+in `f5761e5`.
+
+**Round 3, over `f5761e5`:** 7 findings, 4 distinct.
+- Three were CONFIRMED or PLAUSIBLE and are fixed in `47fd03f`:
+  - A later intraday rung moved an earlier rung's date. Every rung is now kept with its own date.
+  - A saved rung newer than every bar replaced the higher lock the closes had built. It is now merged instead.
+  - The eviction funding estimate used ladder slippage, which can be below the venue's tier slippage. It now takes the worse of the two.
+- One was refuted and is not fixed: an eviction whose own loss trips the daily breaker. This predates the audit fixes.
+
+**Round 4, over `47fd03f`:** 6 findings, 2 distinct, both CONFIRMED or
+PLAUSIBLE, both minor, both fixed in `4c19e6c`:
+- The lock earned on closes was not durable, so one run on a partial Dhan bar series could lower it. A close-earned lock is now a dated rung.
+- The eviction estimate dropped the entry-side slippage when the venue slip won. It now counts entry-side ladder + venue exit.
+
+**Round 5, over `4c19e6c`:** 3 findings, 2 distinct, both addressed in `c7ea551`:
+- CONFIRMED minor: a peak stored rounded half-up (59.996 → 60.00) re-armed the 60 → 30 rung on the next walk. Stored peaks are now floored.
+- REFUTED, but done anyway: the entry-side estimate fix had no test. It has one now.
+
+**Round 6, over `c7ea551`, plus a blocker/major-only sweep of the whole
+series `4091dfa..c7ea551`:** the sweep found **no blocker or major**. The
+rounding lens found 2 minor issues, both CONFIRMED and fixed in `a82d12f`:
+- PAPER_2L_LIVE's own ratchet still stored its peak rounded half-up. It is now floored.
+- The round-5 test's walk half tested a genuine arm, not the rounding. It now drives `note_ratchet` and the live arm, and both tests fail on the parent.
+
+The review ends here. Every finding the panel upheld across the six rounds
+is fixed, and each fix has a test that fails on the code before it. The
+refuted findings not acted on are listed above.
+
+**Known residual (not fixed):** when PAPER_2L_ROT is margin-walled at
+approval, its eviction quotes are fetched while the journal lock is held.
+This happens only in that case and lasts a few seconds.

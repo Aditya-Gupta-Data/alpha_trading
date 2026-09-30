@@ -42,6 +42,75 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-09-30 (late night) — audit Chunk 1 Batches A–C FIXED and DEPLOYED (#122); Brain Map outcomes REPAIRED (#121); Batch D still open
+
+**What is live now (VM at `a82d12f`; api and Discord services restarted
+23:04:19 IST; the scheduler loads the new code at 09:10).**
+- **Journal (D1/D2):** every write to `data/journal.jsonl` goes through one
+  lock on `data/journal.lock` and is written atomically. The hourly tracker,
+  approvals (Discord, auto, the `--review-pending` CLI), `review.py` and
+  `/api/review` write only their own row, re-read fresh. A trade settled by
+  another process is skipped, never settled twice.
+- **Margin release (D3):** a failed release is named on the trade
+  (`margin_release_error`) and retried by `reconcile_orphan_locks` at the top
+  of every tracker run.
+- **Live account (D4):** PAPER_2L_LIVE's settle is one transaction.
+- **Database:** busy timeout is 30 s.
+- **Rotation (D6):** PAPER_2L_ROT evicts only at approval, only trades the
+  firm entered, and only when the eviction funds the new entry
+  (`would_not_fund` otherwise).
+- **Pending margin (D7):** a proposal not approved by the 15:30 close gives
+  its margin back (`pending_lock_expired` events; scheduler close plus hourly
+  backstop). Approving it later takes the margin again.
+- **Halt clear (D8):** `python3 -m src.portfolio_manager --reset-halt
+  --account PAPER_2L --why "..." --yes` works for every paper account.
+- **Brokerage (D13):** the ₹2L accounts pay their own flat brokerage.
+  Forward-only.
+- **Profit ratchet storage (#110, corrected):** intraday and close-earned
+  locks are kept as dated `ratchet.rungs`. Each judges only closes from its
+  own date, and peaks are floored. This removed a latent backdated-exit bug;
+  no past `ratchet_hit` was backdated.
+- **Pre-deploy dry run:** the new exit walk over the VM's 17 open spreads
+  left all 17 open and lowered no lock. The new lock sweeps found nothing to
+  touch (18 primary and 11 shadow locks, all on approved trades).
+
+**Brain Map repair (D5, ledger Issue 39).** Run 23:04:46 IST.
+- Backup: `data/brain_map.db.bak-d5-20260930-230446`.
+- Rows fixed: 54365ef1 and 2ff3443a are now wins; bd73554d and efe1681e
+  have their true r and date; f8356c9c's premature row is deleted.
+- Verified, and no other row disagrees with the journal.
+
+**Review.** The fix diff went through the same panel six times. Every upheld
+finding is fixed with a test that fails on the old code; details are in
+`docs/audit_chunk1_accounting_ledger.md`, "Fix-diff review". Suite: 2,468.
+
+**Still open.**
+- **Batch D (D9–D12, D14, all minor):**
+  - D9: portfolio.json lock and atomic write.
+  - D10: mirror from an sqlite `.backup` snapshot.
+  - D11: equity-desk lock ordering.
+  - D12: equity-curve ordering, plus correcting the 09-24 note.
+  - D14: recon's book side from locks.
+- **Known residuals:**
+  - An approval-time rotation eviction fetches its quotes while holding the
+    journal lock (seconds, rare).
+  - An eviction whose own loss trips the daily breaker (refuted as
+    pre-existing).
+  - `tests/test_options_spreads.py` assigns `plan_tracker.journal` without
+    restoring it, so running it before `test_intraday_exit.py` on the
+    command line fails five tests. The full suite's order is unaffected.
+- **Rotated:** the VM's own quick-tunnel URL. Its unit still has
+  `Requires=alpha-trading`, so it restarted with the api at 23:04:19, as it
+  does on every deploy. The dashboard link on the Oracle box has its own
+  tunnel and is unaffected.
+
+**Next.**
+1. Watch the 10-01 session. Expect no `JournalLockTimeout` in the logs,
+   `ratchet.rungs` appearing on directional rows, and at the close a
+   `15:30 sweep` line only if a proposal was left pending.
+2. Batch D on the owner's go-ahead.
+3. Then Chunk 2 (OMS & Execution).
+
 ## 2026-09-30 (night) — tests can no longer write into `data/`/`logs/` (write guard, Issue 37); Mac test pollution and the agent-caused incident REPAIRED
 
 **Fixed today.** (1) The "known" `test_darling_shadow` failure. The 09-29

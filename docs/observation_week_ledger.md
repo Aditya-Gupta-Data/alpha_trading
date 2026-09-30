@@ -2082,3 +2082,39 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   Mac would therefore throw away the two cards restored under Issue 37.
 - **Fix direction (deferred by the owner):** a dry run should read the
   offset and the queue but never save or drain them.
+
+## Issue 39 — the Brain Map `outcomes` table held the five voided Issue-31 stop-loss results for trades the journal records differently (audit Chunk 1 D5; REPAIRED 2026-09-30 23:04 IST, owner-authorised, decision #121)
+
+- **Cause (verified in code):** `brain_map.record_outcome` is
+  `INSERT … ON CONFLICT DO NOTHING`. The #105 restore tool
+  (`scripts/restore_issue31_trades.py`, 2026-09-23) assumed an upsert and left
+  these rows for "the real resolution to overwrite". Nothing ever did.
+- **State before the repair (VM, read-only check 2026-09-30 21:14 and the tool's
+  dry run 23:04):**
+
+  | Trade | Journal | Brain Map |
+  |-------|---------|-----------|
+  | 54365ef1 | `profit_take` +₹11,136.68, r 1.59, 09-21 | `loss`, r −1.14, 09-15 |
+  | 2ff3443a | `pre_expiry_exit` +₹14,482.63, r 1.60, 09-28 | `loss`, r −0.56, 09-22 |
+  | bd73554d | −₹10,472.10, r −1.12, 09-28 | `loss`, r −1.10, 09-09 |
+  | efe1681e | −₹6,242.13, r −0.85, 09-22 | `loss`, r −0.68, 09-15 |
+  | f8356c9c | still OPEN | closed `loss`, r −1.15, 08-17 |
+
+  No other outcomes row disagreed with its journal row. No knowledge-graph
+  edges came from these rows: the VM's causal-link step has no LLM and
+  deferred all 24 outcomes.
+- **Repair:** `scripts/repair_d5_brain_map_outcomes.py --yes` on the VM,
+  2026-09-30 23:04:46 IST.
+  - **Backup:** `data/brain_map.db.bak-d5-20260930-230446`. It was taken with sqlite's online backup API and passed `integrity_check`. It holds 424 outcomes rows.
+  - **Archive:** every touched row and its event links were saved verbatim to `data/d5_brain_map_outcome_repairs.jsonl` (5 lines).
+  - **Rows replaced in place** (same id, links kept, post_mortem NULL):
+    - 54365ef1 → `win`, r 1.59, 09-21
+    - 2ff3443a → `win`, r 1.60, 09-28
+    - bd73554d → `loss`, r −1.12, 09-28
+    - efe1681e → `loss`, r −0.85, 09-22
+  - **Row deleted:** f8356c9c, together with its links. It will be recorded fresh when the trade resolves.
+  - 423 outcomes rows remain.
+  - The tool printed "VERIFIED: all five match the journal", and a second run printed "Nothing to repair".
+- **Not recovered:** the real resolutions' analyst post-mortems. Those
+  write-backs were dropped by the same insert-ignore, and a repair does not
+  re-run the LLM.

@@ -630,7 +630,8 @@ def test_a_saved_ratchet_never_judges_earlier_closes(monkeypatch):
     row["ratchet"]["as_of"] = "2026-12-31"
     walked = json.loads(json.dumps(row))
     assert pt._resolve_spread(walked, bars) is None
-    assert walked["ratchet"]["locked_pct"] == 30.0 and walked["ratchet"]["as_of"] == "2026-12-31"
+    assert walked["ratchet"]["locked_pct"] == 30.0                    # effective state keeps it
+    assert walked["ratchet"]["rungs"][0]["as_of"] == "2026-12-31"      # at its own date
     # the same lock DOES judge a close on/after its own date
     row["ratchet"]["as_of"] = bars[-1][0]
     later = bars + _capture_bars(row, [10, 20, 35, 38, 12])[4:]
@@ -668,3 +669,40 @@ def test_reconcile_still_sweeps_a_committed_release_when_a_later_ref_raises(conn
     with pytest.raises(sqlite3.OperationalError):
         pt.reconcile_orphan_locks(now=datetime(2026, 9, 30, 12, 0, tzinfo=IST), conn=conn)
     assert swept == [("setl0001", 5000.0), ("setl0002", 100.0)]
+
+
+
+def test_each_intraday_rung_judges_from_its_own_date(monkeypatch):
+    """#122 panel round 3: one saved as_of meant a later rung moved an
+    earlier rung's date, so the close between them escaped the earlier lock.
+    note_ratchet now keeps every rung dated; the walk folds each at its own."""
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2026-07-01")
+    row = _directional_row("dir00004")
+    bars = _capture_bars(row, [10, 20, 25, 35])       # closes never arm by themselves
+    journal.log(row)
+    monkeypatch.setattr(pt, "date", type("D", (date,), {"today": staticmethod(lambda: date(2026, 7, 8))}))
+    assert pt.note_ratchet("dir00004", 62.0, 30.0)                  # rung A, 07-08: lock 30
+    monkeypatch.setattr(pt, "date", type("D", (date,), {"today": staticmethod(lambda: date(2026, 7, 10))}))
+    assert pt.note_ratchet("dir00004", 85.0, 50.0)                  # rung B, 07-10: lock 50
+    monkeypatch.setattr(pt, "date", date)            # (never monkeypatch.undo(): it reverts conftest too)
+    saved = _rows()["dir00004"]
+    assert [r["as_of"] for r in saved["ratchet"]["rungs"]] == ["2026-07-08", "2026-07-10"]
+    hit = pt._resolve_spread(json.loads(json.dumps(saved)), bars)
+    # the 07-08 close (20%) is judged by rung A's lock 30 — not rung B's 50,
+    # and not left unjudged until 07-10
+    assert hit is not None and hit[0] == "ratchet_hit" and hit[3] == "2026-07-08"
+
+
+def test_a_newer_rung_is_merged_with_what_the_closes_built_never_replacing_it(monkeypatch):
+    """#122 panel round 3: when a saved rung is newer than every bar, the
+    walk used to restore it verbatim and discard a HIGHER lock the closes
+    had just built. The effective state is now the max of both."""
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2099-01-01")   # judge nothing
+    row = _directional_row("dir00005")
+    bars = _capture_bars(row, [10, 85])                # the 07-08 close arms 80 -> lock 50
+    row["ratchet"] = {"peak_capture_pct": 62.0, "locked_pct": 30.0, "as_of": "2026-12-31",
+                      "rungs": [{"as_of": "2026-12-31", "peak_capture_pct": 62.0, "locked_pct": 30.0}]}
+    walked = json.loads(json.dumps(row))
+    assert pt._resolve_spread(walked, bars) is None
+    assert walked["ratchet"]["locked_pct"] == 50.0
+    assert walked["ratchet"]["rungs"] == row["ratchet"]["rungs"]

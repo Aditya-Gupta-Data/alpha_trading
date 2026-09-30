@@ -218,16 +218,18 @@ def _resolve_spread(entry: dict, bars: list):
     from src import profit_ratchet as pr
     from src.config import RATCHET_EFFECTIVE_DATE, RATCHET_ENABLED
     ratcheted = RATCHET_ENABLED and pr.is_directional(spread) and max_profit_ps > 0
-    # A SAVED ratchet (the live bridge's intraday rung, or an earlier run of
-    # this walk) judges only the bars from its own date forward: folded in at
-    # the first bar on/after its `as_of` (an intraday rung survives that
-    # day's close, #110). Seeding it at the entry day made a lock raised
-    # later judge EARLIER closes and fire a backdated ratchet_hit (#122
-    # panel). The walk rebuilds peak and lock from the bars up to there.
-    rstate = dict(entry.get("ratchet") or {})
-    saved_from = rstate.get("as_of") or ""
-    peak, lock = None, None
-    folded = False
+    # SAVED RUNGS judge only the closes from their own date forward (#122
+    # panel): each intraday rung the live bridge noted is folded in at the
+    # first bar on/after ITS `as_of` (an intraday rung survives that day's
+    # close, #110) — never at the entry day, which fired backdated
+    # ratchet_hits on older, weaker closes. Peak and lock are otherwise
+    # rebuilt from the closes on every walk, so the top-level peak/lock on
+    # the row is DERIVED (the effective state the live bridge reads), and a
+    # later rung never moves an earlier one's date. A pre-#122 row with no
+    # `rungs` list counts its saved state as one rung at its own as_of.
+    rungs = _saved_rungs(entry.get("ratchet"))
+    pending = list(rungs)
+    peak, lock, last_day = None, None, None
 
     for day, _low, _high, close in bars:
         if day <= entry["date"]:
@@ -243,18 +245,13 @@ def _resolve_spread(entry: dict, bars: list):
         m_now = m_entry + profit_ps
         if ratcheted:
             capture = profit_ps / max_profit_ps * 100.0
-            if not folded and rstate and day >= saved_from:
-                folded = True
-                if rstate.get("peak_capture_pct") is not None:
-                    peak = (float(rstate["peak_capture_pct"]) if peak is None
-                            else max(float(peak), float(rstate["peak_capture_pct"])))
-                if rstate.get("locked_pct") is not None:
-                    lock = (float(rstate["locked_pct"]) if lock is None
-                            else max(float(lock), float(rstate["locked_pct"])))
+            while pending and str(pending[0].get("as_of") or "") <= day:
+                peak, lock = _fold_rung(peak, lock, pending.pop(0))
             peak = capture if peak is None else max(float(peak), capture)
             st = pr.state(peak, lock)
             lock = st["locked_pct"]
-            entry["ratchet"] = dict(st, as_of=day)
+            last_day = day
+            entry["ratchet"] = dict(st, as_of=day, rungs=rungs)
             if day >= RATCHET_EFFECTIVE_DATE and pr.ratchet_hit(capture, lock):
                 entry["ratchet"]["hit_capture_pct"] = round(capture, 2)
                 return "ratchet_hit", m_now, frac_left, day
@@ -269,11 +266,39 @@ def _resolve_spread(entry: dict, bars: list):
         # existing 2-day rule.
         if days_left <= _forced_exit_days(entry.get("ticker")):
             return "pre_expiry_exit", m_now, frac_left, day
-    if ratcheted and rstate and not folded:
-        # the saved rung is newer than every bar walked (an intraday raise
-        # today, before today's bar exists): keep it — never lowered
-        entry["ratchet"] = rstate
+    if ratcheted and last_day is not None and pending:
+        # rungs newer than every bar walked (an intraday raise today, before
+        # today's bar exists) still count in the EFFECTIVE state the live
+        # bridge judges against — merged, never replacing what the closes built
+        eff_peak, eff_lock = peak, lock
+        for r in pending:
+            eff_peak, eff_lock = _fold_rung(eff_peak, eff_lock, r)
+        entry["ratchet"] = dict(pr.state(eff_peak, eff_lock), as_of=last_day, rungs=rungs)
     return None
+
+
+def _saved_rungs(saved) -> list:
+    """The dated rungs on a row's ratchet, oldest first (see _resolve_spread)."""
+    saved = dict(saved or {})
+    if "rungs" in saved:
+        rungs = [dict(r) for r in (saved.get("rungs") or []) if isinstance(r, dict)]
+    elif saved.get("peak_capture_pct") is not None or saved.get("locked_pct") is not None:
+        rungs = [{"as_of": saved.get("as_of") or "",
+                  "peak_capture_pct": saved.get("peak_capture_pct"),
+                  "locked_pct": saved.get("locked_pct")}]
+    else:
+        rungs = []
+    return sorted(rungs, key=lambda r: str(r.get("as_of") or ""))
+
+
+def _fold_rung(peak, lock, rung: dict) -> tuple:
+    if rung.get("peak_capture_pct") is not None:
+        p = float(rung["peak_capture_pct"])
+        peak = p if peak is None else max(float(peak), p)
+    if rung.get("locked_pct") is not None:
+        l = float(rung["locked_pct"])
+        lock = l if lock is None else max(float(lock), l)
+    return peak, lock
 
 
 def _resolve_spread_trailed(entry: dict, bars: list):
@@ -713,6 +738,17 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
     mine = dict(spread, lots=lots)
     if need_rs is not None:
         est_f, est_s = _spread_exit_costs_quoted(mine, quotes, exit_slipped=False)
+        # the paper venue fills this exit at the underlying's liquidity-tier
+        # fraction, which can exceed the premium ladder: take the worse of
+        # the two (+ a tick of rounding per leg) so the estimate is a bound
+        try:
+            from src.execution import paper_venue as _pv
+            frac = _pv._tier_frac(entry.get("ticker") or "")
+            venue_s = sum((float(quotes[(float(l["strike"]), l["option_type"].upper())]) * frac + 0.05)
+                          for l in spread["legs"]) * qty
+            est_s = max(est_s, venue_s)
+        except Exception:
+            pass
         est_pnl = profit_ps * qty - est_f - est_s
         freed = pm.paper_available_cash(conn, account) + held[0] + est_pnl
         if freed < float(need_rs):
@@ -776,9 +812,16 @@ def note_ratchet(short_id: str, peak_capture_pct: float, locked_pct: float) -> b
             if cur.get("locked_pct") is not None and new_lock <= float(cur["locked_pct"]) \
                     and new_peak <= float(cur.get("peak_capture_pct") or -1e9):
                 return False
+            today_iso = date.today().isoformat()
+            # #122: every raise is also kept as its OWN dated rung, so the
+            # EOD walk folds each at its own date (a later raise never moves
+            # an earlier rung's date, nor judges closes before its own)
+            rungs = _saved_rungs(cur)
+            rungs.append({"as_of": today_iso, "peak_capture_pct": round(new_peak, 2),
+                          "locked_pct": new_lock})
             entry["ratchet"] = dict(cur, peak_capture_pct=round(new_peak, 2),
                                     locked_pct=new_lock, armed=True,
-                                    as_of=date.today().isoformat(), source="live_bridge")
+                                    as_of=today_iso, source="live_bridge", rungs=rungs)
             return True
         return bool(journal.update_entry(short_id, _mutate))
     except Exception as exc:

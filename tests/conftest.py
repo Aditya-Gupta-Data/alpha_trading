@@ -173,11 +173,17 @@ def _isolated_brain_map(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def _isolated_shared_runtime_files(monkeypatch, tmp_path):
-    """Two host-wide state files any test can reach through a real code
-    path (Issue 37): the Discord daily budget (an unmuzzled dispatch in a
-    test used to spend the owner's budget) and the cross-process Dhan
-    throttle slot. Each test gets its own."""
-    from src import dhan_client, notifier
+    """Host-wide state files any test can reach through a real code path
+    (Issue 37): the Discord daily budget (an unmuzzled dispatch in a test
+    used to spend the owner's budget), the cross-process Dhan throttle slot,
+    and the adaptive-sizing ledger — its `record()` READS the last action
+    per key as de-dup memory and appends when it differs, so on the Mac 23
+    tests in 7 files appended to the real logs/sizing_adjustments.jsonl and
+    their path depended on what the owner's ledger held. Each test gets its
+    own."""
+    from src import adaptive_sizing, dhan_client, notifier
+    monkeypatch.setattr(adaptive_sizing, "ADJUSTMENTS_PATH",
+                        tmp_path / "sizing_adjustments.jsonl")
     monkeypatch.setattr(notifier, "BUDGET_STATE_PATH",
                         tmp_path / ".discord_budget.json")
     monkeypatch.setattr(dhan_client, "_THROTTLE_FILE",

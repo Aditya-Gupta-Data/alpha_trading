@@ -328,3 +328,22 @@ def test_a_pending_trade_is_never_an_eviction_candidate(world):
     assert res["status"] == "not_entered"
     assert pm._active_shadow_lock(conn, ROT, "old1") is not None
     assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0
+
+
+def test_an_eviction_always_funds_the_entry_it_was_made_for(world):
+    """#122 panel finding: the sizer counts lots on the UNSTRESSED per-lot
+    margin, so after an eviction it could pick 2 lots whose VIX-stressed ask
+    no longer fits — the gate then refused the very entry a live trade was
+    closed for. The lots are now trimmed to what the stressed ask fits."""
+    conn, j = world
+    conn.execute("UPDATE paper_margin_locks SET margin_rs = 35000 WHERE account_id = ? "
+                  "AND journal_ref = 'old1'", (ROT,))
+    conn.execute("UPDATE paper_margin_locks SET margin_rs = 165000 WHERE account_id = ? "
+                  "AND journal_ref = 'old2'", (ROT,))
+    conn.commit()
+    hot = dict(_new_proposal(), vix=30.0)                     # stress factor 1.3
+    out = pm.evaluate_shadow_accounts("new1", hot, conn=conn, risk_pct=5.0, marks_fn=_marks,
+                                      evict_fn=_evict_fn(j), allow_rotation=True)
+    assert out[ROT]["rotation"]["evicted"] == "old1"
+    assert out[ROT]["status"] == "approved" and out[ROT]["lots"] == 1
+    assert out[ROT]["margin_rs"] == pm.required_margin_for({"spread": dict(_spread(), lots=1), "vix": 30.0})

@@ -216,10 +216,13 @@ def main(argv=None) -> int:
         for s in plan(conn, journal.read_all()):
             if s["action"] not in ("replace", "delete"):
                 continue
+            links = [dict(r) for r in conn.execute(
+                "SELECT * FROM event_outcome_link WHERE outcome_id = ?", (s["current"]["id"],))]
             with open(archive, "a") as f:
                 f.write(json.dumps({"repaired_at": datetime.now(IST).isoformat(timespec="seconds"),
                                     "decision": 121, "action": s["action"], "ref": s["ref"],
-                                    "row_before": s["current"], "why": s["why"]},
+                                    "row_before": s["current"], "links_before": links,
+                                    "why": s["why"]},
                                    sort_keys=True, default=str) + "\n")
             if s["action"] == "replace":
                 replace_outcome(conn, s["ref"], s["want"])

@@ -1590,24 +1590,17 @@ def review_pending() -> int:
         decision = "approved" if answer == "y" else "rejected"
         why = input("Why? (one line) ").strip() or "(no reason given)"
 
-        # D1 (#122): write THIS row, fresh, only if it is still undecided
-        # (the loop may have waited minutes on input() above).
-        def _decide(e, decision=decision, why=why):
-            if e.get("decision") != "pending_approval" or e.get("outcome"):
-                return False
-            e["decision"] = decision
-            e["why"] = why
-            return True
-        if journal.update_matching(
-                lambda e, key=journal.row_key(entry): journal.row_key(e) == key,
-                _decide) is None:
-            print("  (decided or resolved elsewhere meanwhile — left as-is)")
+        # #122: the CLI decides through decide_pending — the ONE decision
+        # path (margin gate, shadow accounts, venue, a rejection's release,
+        # the journal lock). Before #122 it only flipped the journal field:
+        # an approval after a D7 expiry would have run with no margin.
+        verdict = decide_pending(journal.row_key(entry), approve=(decision == "approved"),
+                                 why=why, human=True)
+        if verdict["status"] not in ("approved", "rejected"):
+            print(f"  not decided: {verdict['status']}"
+                  + (f" ({verdict['reason']})" if verdict.get("reason") else ""))
             continue
         decided += 1
-        marker = "✅" if decision == "approved" else "❌"
-        _notify_discord(f"{marker} **Pending decision on {entry['ticker']} "
-                        f"{entry['spread']['strategy'].replace('_', ' ')}: "
-                        f"{decision.upper()}**\nWhy: {why}")
         if decision == "approved":
             print("  approved on paper — the plan tracker manages the exit "
                   "from here.")

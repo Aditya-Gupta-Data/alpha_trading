@@ -1401,10 +1401,15 @@ def _ist_now() -> datetime:
     return datetime.now(IST)
 
 
+PENDING_LATE_PROPOSAL_HOUR = 16     # proposed before 16:00 -> that day's close
+
+
 def pending_cutoff(entry: dict):
-    """The IST moment a pending entry's margin expires: 15:30 on the day it
-    was proposed (the next day's 15:30 if proposed after the close). None
-    when the row carries no usable date."""
+    """The IST moment a pending entry's margin expires: the 15:30 close of
+    the session it was proposed in. A proposal the closing cycle journals a
+    few seconds after 15:30:00 still belongs to THAT session (so the
+    scheduler's close sweep catches it); only one made after 16:00 waits for
+    the next day's close. None when the row carries no usable date."""
     from datetime import time as dtime, timedelta
     from src.portfolio_manager import IST
     close = dtime(*PENDING_LOCK_CUTOFF)
@@ -1420,7 +1425,7 @@ def pending_cutoff(entry: dict):
         except (TypeError, ValueError):
             return None
     cutoff = datetime.combine(created.date(), close, tzinfo=IST)
-    return cutoff + timedelta(days=1) if created >= cutoff else cutoff
+    return cutoff + timedelta(days=1) if created.hour >= PENDING_LATE_PROPOSAL_HOUR else cutoff
 
 
 def expire_pending_margin(now: datetime = None, conn=None) -> dict:

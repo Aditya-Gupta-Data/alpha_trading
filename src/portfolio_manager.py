@@ -1447,6 +1447,18 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                         sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
                         required = required_margin_for(
                             {"spread": dict(spread, lots=max(1, sized["lots"])), "vix": vix})
+                if rotation is not None and rotation.get("evicted"):
+                    # D6 (#122): an eviction must fund the entry it was made
+                    # for. The sizer counts lots on the unstressed per-lot
+                    # margin; trim to what the VIX-stressed ask fits in the
+                    # freed cash (evaluate_eviction guaranteed one lot does).
+                    cash = paper_available_cash(conn, account)
+                    fit = max(1, int(sized["lots"]))
+                    while fit > 1 and required_margin_for(
+                            {"spread": dict(spread, lots=fit), "vix": vix}) > cash:
+                        fit -= 1
+                    sized = dict(sized, lots=fit)
+                    required = required_margin_for({"spread": dict(spread, lots=fit), "vix": vix})
                 verdict = paper_request_entry(conn, account, journal_ref, required,
                                               lots=sized["lots"], primary_lots=primary_lots)
                 out[account] = {"status": "approved" if verdict["approved"] else "rejected",
@@ -1692,6 +1704,11 @@ if __name__ == "__main__":
         connection.close()
         sys.exit(0 if outcome["cleared"] else 1)
     if cli.inject is not None:
+        if not _is_primary(cli.account):
+            print(f"--inject moves capital into {ACCOUNT_PAPER_10L} only; "
+                  f"--account {cli.account} is not supported for injections.")
+            connection.close()
+            sys.exit(1)
         if not cli.yes:
             print("Refusing to move capital without --yes.")
             print(f"Would inject Rs.{cli.inject:,.2f}. Re-run with --yes.")

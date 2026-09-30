@@ -283,6 +283,9 @@ def test_reconcile_releases_only_the_locks_the_settlement_path_should_have(conn)
 def test_the_pending_cutoff_is_the_1530_close_of_the_proposal_day():
     assert pt.pending_cutoff({"created_at": "2026-09-30T10:00:00+05:30"}) == \
         datetime(2026, 9, 30, 15, 30, tzinfo=IST)
+    # the closing cycle can journal a few seconds after 15:30:00 — same session
+    assert pt.pending_cutoff({"created_at": "2026-09-30T15:30:40+05:30"}) == \
+        datetime(2026, 9, 30, 15, 30, tzinfo=IST)
     assert pt.pending_cutoff({"created_at": "2026-09-30T16:05:00+05:30"}) == \
         datetime(2026, 10, 1, 15, 30, tzinfo=IST)
     assert pt.pending_cutoff({"date": "2026-09-30"}) == datetime(2026, 9, 30, 15, 30, tzinfo=IST)
@@ -488,6 +491,7 @@ def test_the_d5_tool_syncs_the_five_rows_to_the_journal_after_a_backup(tmp_path,
     archive = [json.loads(l) for l in (tmp_path / "d5_brain_map_outcome_repairs.jsonl").read_text().splitlines()]
     assert len(archive) == 5 and {a["action"] for a in archive} == {"replace", "delete"}
     assert all(a["row_before"]["result"] == "loss" for a in archive)
+    assert all(len(a["links_before"]) == 1 for a in archive)            # the links are archived too
     assert tool.main(["--db", str(db), "--yes"]) == 0                    # idempotent
     assert "Nothing to repair." in capsys.readouterr().out
 

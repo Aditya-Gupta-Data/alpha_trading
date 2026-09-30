@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-09-30 · 1 commits · 3 files touched
+
+- `8374a8d` fix(tests): pin `now` in the darling EOD-cycle test — the 45-day time stop was reading the wall clock (ledger Issue 36)
+
+
 ### 2026-09-29 · 2 commits · 19 files touched
 
 - `78b243c` fix(live_pricer): a closed live row whose lock survived is released at the next tick (live_lock_released_late), not only at the primary's exit; docs: second review round reconciled

@@ -1926,3 +1926,72 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Nothing was cleaned up.** Removing fixture rows from the real files is an
   owner decision. Until this is fixed, every Mac suite run (including
   `wrap_session.sh`'s gate) repeats these writes.
+
+### Issue 37 — test side FIXED: a production write guard (2026-09-30); Mac data cleanup NOT done
+
+- **Guard (`tests/conftest.py`, commits `6c6c4aa`, `a8b6971`):** a
+  process-wide `sys.addaudithook` refuses, before it reaches the disk, any
+  write-mode `open`/`os.open`, `os.remove`/`rename`/`replace`/`rmdir`,
+  `shutil.rmtree`, `os.truncate` or `sqlite3.connect` (except `mode=ro` URIs)
+  aimed at `<repo>/data` or `<repo>/logs`. An autouse fixture fails the test
+  that caused a refusal, even when fail-open code swallowed the exception.
+  Self-test: `tests/test_prod_write_guard.py` (5 tests). Reads are not blocked.
+- **What it found, beyond the `open()` audit above:** switched on in a clean
+  worktree it failed 129 tests. 77 tests in 26 files opened the real
+  `data/brain_map.db` through `brain_map.connect()`'s default path. The rest
+  were the 18 writers listed above. Its first run on the Mac found 23 more
+  in 7 files, appending to `logs/sizing_adjustments.jsonl`. That writer
+  (`adaptive_sizing.record`) reads the ledger as de-dup memory, so it only
+  fired where the file already existed.
+- **Fixes:** per-test tmp files via conftest for the brain map DB (both
+  `brain_map` and `eod_summary` defaults), the Discord budget, the Dhan
+  throttle slot and the sizing ledger. Autouse tmp paths in
+  `test_rss_ingester` and `test_scrip_master`. `lake_root` in
+  `test_deals_tracker`. A stubbed scorer stage in 3 `test_macro_nightly`
+  tests: they had been running the REAL forward scorer against the real
+  scores ledger. `journal.DATA_DIR` in 2 `test_profit_ratchet` tests. A tmp
+  sweep offset in the CEO-brief dry-run test. No assertion was loosened.
+- **Guard false positive, fixed before commit:** tempfile cleanup removes a
+  temp dir's `logs/` child by a relative name plus `dir_fd`. The guard
+  skips relative paths anchored to a `dir_fd`.
+- **Verified:** clean worktree (no `data/`, no `logs/`): 2,429 passed and
+  no file created. Mac main checkout at `a8b6971`: 2,429 passed. A mtime and
+  size snapshot of every file under `data/` and `logs/` showed no file
+  changed by the test process. Six files did change during that run
+  (`darlings_valuation.json`, `fo_liquidity.json`,
+  `sector_index_bars.json`, `fo_bhavcopy.log`, `mac_auto_sync*.log`). The
+  owner's `com.aditrader.sync` LaunchAgent was running at the time and its
+  log shows it wrote them.
+- **INCIDENT, caused by the agent (2026-09-30 19:41:54–19:42:22 IST):** a
+  parallel session had committed `8384894` to `main`, so the fast-forward of
+  the main checkout failed. The agent's chained command still ran the full
+  suite there on the PRE-GUARD code. That run wrote:
+  `logs/macro_strategy_scores.jsonl` 907 → 1,815 bytes, i.e. three new lines
+  (declaration 2026-08-04, resolved_on 2026-09-30, A1 P1_shock:
+  long_energy_oil, long_pharma, half_tilt_pharma) in an append-only ledger.
+  It drained `logs/discord_digest_queue.jsonl` (909 bytes → 0): the two cards
+  the Mac EOD chain had queued at 19:15:25 (`darling_tiers`) and 19:17:19
+  (`macro_regime_transition`) now sit at the tail of `.drained` (12,482 →
+  13,391 bytes) and will not be delivered. It also wrote
+  `data/brain_map.db` (4,177,920 → 4,198,400 bytes),
+  `logs/sizing_adjustments.jsonl` (+82,093 bytes), `data/rss_signals.jsonl`
+  (+1,740), `logs/scrip_master.jsonl` (+184), and rewrote
+  `data/strategy_scoreboard.json`, today's `deals_census` partition,
+  `logs/.ceo_brief_state.json`, `logs/.discord_budget.json`,
+  `data/journal.lock` and `data/.dhan_throttle`.
+- **Before today (every earlier Mac suite run):** all 37 partitions in the
+  Mac's `data/lake/deals_census` (07-11 → 09-30) are the same one-row test
+  fixture, each written at a suite-run time. All 1,013 rows of
+  `data/rss_signals.jsonl` (before the incident) were the two
+  `test_rss_ingester` fixture items. The scores ledger's first three lines
+  (resolved_on 2026-09-25, file time 09-25 10:19): no Mac crontab line runs
+  the scorer, and whether a test run wrote them is NOT determined.
+- **NOT done: the data cleanup.** The agent's permission classifier refused
+  both restoring the two drained digest cards and moving today's census
+  partition and the RSS file into a quarantine folder. The agent did not
+  retry. The scores-ledger lines, the brain map rows and the log appends
+  were never in the cleanup scope (RULE 3 / owner decision).
+- **Also open:** a real `python3 -m src.ceo_brief --dry-run` advances
+  `logs/.ceo_brief_state.json`, so the next real brief can skip problem
+  lines (a production bug, not changed). Reads: 159 tests in 45 files still
+  read `data/` or `logs/`.

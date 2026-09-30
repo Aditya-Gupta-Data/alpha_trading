@@ -1305,10 +1305,11 @@ def _default_marks_fn(refs):
     return plan_tracker.rotation_marks(refs)
 
 
-def _default_evict_fn(conn, account, journal_ref, lots, max_rr_left, reason):
+def _default_evict_fn(conn, account, journal_ref, lots, max_rr_left, reason, need_rs=None):
     from src import plan_tracker
     return plan_tracker.evict_for_rotation(conn, account, journal_ref, lots,
-                                           max_rr_left=max_rr_left, reason=reason)
+                                           max_rr_left=max_rr_left, reason=reason,
+                                           need_rs=need_rs)
 
 
 def _try_rotation(conn, account: str, journal_ref: str, spread: dict, vix,
@@ -1332,7 +1333,7 @@ def _try_rotation(conn, account: str, journal_ref: str, spread: dict, vix,
     # the chain says is not (rr_left above new_rr / multiple) stays open.
     max_rr_left = verdict["new_rr"] / verdict["multiple"] if verdict["multiple"] else None
     ex = (evict_fn or _default_evict_fn)(conn, account, w["journal_ref"], w["lots"],
-                                          max_rr_left, verdict["reason"])
+                                          max_rr_left, verdict["reason"], need_rs=need)
     verdict["exit"] = ex
     if (ex or {}).get("status") != "evicted":
         paper_log_event(conn, account, ROTATION_DECLINED_EVENT, journal_ref,

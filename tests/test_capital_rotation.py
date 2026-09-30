@@ -78,10 +78,10 @@ def world(monkeypatch):
 
 
 def _evict_fn(j):
-    def fn(conn, account, ref, lots, max_rr_left, reason):
+    def fn(conn, account, ref, lots, max_rr_left, reason, need_rs=None):
         return pt.evict_for_rotation(conn, account, ref, lots, max_rr_left=max_rr_left,
                                      reason=reason, quotes_fn=lambda e: QUOTES[e["short_id"]],
-                                     entries=j.rows)
+                                     entries=j.rows, need_rs=need_rs)
     return fn
 
 
@@ -207,7 +207,7 @@ def test_a_weak_trade_that_is_strong_on_real_quotes_is_not_evicted(world, monkey
 def test_no_chain_quotes_means_no_eviction(world):
     conn, j = world
 
-    def evict(conn, account, ref, lots, max_rr_left, reason):
+    def evict(conn, account, ref, lots, max_rr_left, reason, need_rs=None):
         return pt.evict_for_rotation(conn, account, ref, lots, max_rr_left=max_rr_left,
                                      quotes_fn=lambda e: None, entries=j.rows)
     out = pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn,
@@ -235,7 +235,7 @@ def test_a_rejudge_keeps_a_held_2l_entry_approved(world):
     and could stamp 'rejected' on a trade the 2L account holds."""
     conn, _ = world
     v = pm.evaluate_shadow_accounts("old1", _new_proposal(), conn=conn,
-                                    marks_fn=_marks, evict_fn=lambda *a: {"status": "x"})
+                                    marks_fn=_marks, evict_fn=lambda *a, **k: {"status": "x"})
     assert v[TWO_L]["status"] == "approved" and v[TWO_L]["margin_rs"] == 100000.0
 
 
@@ -302,7 +302,7 @@ def test_a_proposal_never_evicts_the_margin_wall_is_a_named_deferral(world):
     conn, j = world
     calls = []
     out = pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn, marks_fn=_marks,
-                                      evict_fn=lambda *a: calls.append(a) or {"status": "evicted"})
+                                      evict_fn=lambda *a, **k: calls.append(a) or {"status": "evicted"})
     assert calls == []
     assert out[ROT]["status"] == "rejected" and "judged at approval" in out[ROT]["reason"]
     assert "rotation" not in out[ROT]
@@ -347,3 +347,26 @@ def test_an_eviction_always_funds_the_entry_it_was_made_for(world):
     assert out[ROT]["rotation"]["evicted"] == "old1"
     assert out[ROT]["status"] == "approved" and out[ROT]["lots"] == 1
     assert out[ROT]["margin_rs"] == pm.required_margin_for({"spread": dict(_spread(), lots=1), "vix": 30.0})
+
+
+
+def test_an_eviction_that_would_not_fund_the_entry_is_refused_before_any_exit(world):
+    """#122 panel round 2: the funding check counted the evicted lock's
+    margin but not the P&L its exit books. A slice closed at a loss could
+    leave the one-lot ask unfunded after the trade was already gone. The
+    exit is now refused BEFORE any ticket when cash + margin + the slice's
+    P&L on the quotes cannot fund one stressed lot."""
+    conn, j = world
+    conn.execute("UPDATE paper_margin_locks SET margin_rs = 12600 WHERE account_id = ? "
+                 "AND journal_ref = 'old1'", (ROT,))
+    conn.execute("UPDATE paper_margin_locks SET margin_rs = 182400 WHERE account_id = ? "
+                 "AND journal_ref = 'old2'", (ROT,))
+    conn.commit()
+    assert pm.paper_available_cash(conn, ROT) == 5000.0     # 5,000 + 12,600 = 17,600 >= 17,550 before P&L
+    # old1 marks at 98 - 30 = 68 vs its 70 debit: a small loss plus exit costs
+    res = pt.evict_for_rotation(conn, ROT, "old1", 1, max_rr_left=5.0,
+                                quotes_fn=lambda e: {(24000.0, "CE"): 98.0, (24200.0, "CE"): 30.0},
+                                entries=j.rows, need_rs=17550.0)
+    assert res["status"] == "would_not_fund"
+    assert pm._active_shadow_lock(conn, ROT, "old1") is not None
+    assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0

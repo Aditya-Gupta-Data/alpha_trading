@@ -218,9 +218,16 @@ def _resolve_spread(entry: dict, bars: list):
     from src import profit_ratchet as pr
     from src.config import RATCHET_EFFECTIVE_DATE, RATCHET_ENABLED
     ratcheted = RATCHET_ENABLED and pr.is_directional(spread) and max_profit_ps > 0
+    # A SAVED ratchet (the live bridge's intraday rung, or an earlier run of
+    # this walk) judges only the bars from its own date forward: folded in at
+    # the first bar on/after its `as_of` (an intraday rung survives that
+    # day's close, #110). Seeding it at the entry day made a lock raised
+    # later judge EARLIER closes and fire a backdated ratchet_hit (#122
+    # panel). The walk rebuilds peak and lock from the bars up to there.
     rstate = dict(entry.get("ratchet") or {})
-    peak = rstate.get("peak_capture_pct")
-    lock = rstate.get("locked_pct")
+    saved_from = rstate.get("as_of") or ""
+    peak, lock = None, None
+    folded = False
 
     for day, _low, _high, close in bars:
         if day <= entry["date"]:
@@ -236,6 +243,14 @@ def _resolve_spread(entry: dict, bars: list):
         m_now = m_entry + profit_ps
         if ratcheted:
             capture = profit_ps / max_profit_ps * 100.0
+            if not folded and rstate and day >= saved_from:
+                folded = True
+                if rstate.get("peak_capture_pct") is not None:
+                    peak = (float(rstate["peak_capture_pct"]) if peak is None
+                            else max(float(peak), float(rstate["peak_capture_pct"])))
+                if rstate.get("locked_pct") is not None:
+                    lock = (float(rstate["locked_pct"]) if lock is None
+                            else max(float(lock), float(rstate["locked_pct"])))
             peak = capture if peak is None else max(float(peak), capture)
             st = pr.state(peak, lock)
             lock = st["locked_pct"]
@@ -254,6 +269,10 @@ def _resolve_spread(entry: dict, bars: list):
         # existing 2-day rule.
         if days_left <= _forced_exit_days(entry.get("ticker")):
             return "pre_expiry_exit", m_now, frac_left, day
+    if ratcheted and rstate and not folded:
+        # the saved rung is newer than every bar walked (an intraday raise
+        # today, before today's bar exists): keep it — never lowered
+        entry["ratchet"] = rstate
     return None
 
 
@@ -619,7 +638,7 @@ def rotation_marks(refs, entries=None, spot_fn=None, today: date = None) -> dict
 def evict_for_rotation(conn, account: str, journal_ref: str, lots: int,
                        max_rr_left: float = None, reason: str = "",
                        quotes_fn=None, entries=None, venue_mod=None,
-                       today: date = None) -> dict:
+                       today: date = None, need_rs: float = None) -> dict:
     """Close `account`'s `lots` of `journal_ref` NOW (decision #115).
     Returns {status, ...}: "evicted" (with pnl_rs, capture_pct, rr_left,
     ticket_id) or a named refusal that leaves the trade open everywhere —
@@ -658,14 +677,18 @@ def evict_for_rotation(conn, account: str, journal_ref: str, lots: int,
                     return dict(res, status="not_entered")
                 entry = fresh
             return _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason,
-                                 quotes, entry, venue_mod, today, res)
+                                 quotes, entry, venue_mod, today, res, need_rs=need_rs)
     except Exception as exc:
         return dict(res, reason=f"{type(exc).__name__}: {exc}")
 
 
 def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes, entry,
-                  venue_mod, today, res) -> dict:
-    """evict_for_rotation's body, run under the journal lock."""
+                  venue_mod, today, res, need_rs: float = None) -> dict:
+    """evict_for_rotation's body, run under the journal lock. `need_rs` (the
+    new trade's one-lot, VIX-stressed margin): the eviction is refused as
+    "would_not_fund" unless the account's liquid cash + this lock's margin +
+    the slice's P&L on these quotes (the conservative ladder exit costs)
+    covers it — a live trade is never closed for an entry it cannot fund."""
     from src import portfolio_manager as pm
     spread = entry["spread"]
     try:
@@ -682,11 +705,20 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
     res["rr_left"] = None if rr_real in (None, float("inf")) else round(rr_real, 4)
     if rr_real is None or (max_rr_left is not None and rr_real > max_rr_left):
         return dict(res, status="stronger_on_real_quotes")
-    if pm._active_shadow_lock(conn, account, journal_ref) is None:
+    held = pm._active_shadow_lock(conn, account, journal_ref)
+    if held is None:
         return dict(res, status="not_open", reason="no active lock for this account")
     lots = int(lots)
     qty = lot * lots
     mine = dict(spread, lots=lots)
+    if need_rs is not None:
+        est_f, est_s = _spread_exit_costs_quoted(mine, quotes, exit_slipped=False)
+        est_pnl = profit_ps * qty - est_f - est_s
+        freed = pm.paper_available_cash(conn, account) + held[0] + est_pnl
+        if freed < float(need_rs):
+            return dict(res, status="would_not_fund",
+                        reason=(f"closing it frees Rs.{freed:,.0f} after its P&L on the quotes; "
+                                f"one lot of the new trade needs Rs.{float(need_rs):,.0f}"))
     execution = _execute_paper_exit(entry, quotes, "capital_rotation_eviction",
                                     conn=conn, venue_mod=venue_mod, today=today,
                                     accounts=[(account, lots)])
@@ -1493,6 +1525,16 @@ def reconcile_orphan_locks(now: datetime = None, conn=None,
     from src import portfolio_manager as pm
     now_naive = (now or _ist_now()).replace(tzinfo=None)
     out, sweeps = {}, []
+    try:
+        _reconcile_locked(now_naive, conn, grace_minutes, out, sweeps)
+    finally:
+        for ref, pnl in sweeps:                                 # outside the journal lock,
+            pm.run_wealth_sweep(ref, pnl)                       # even if a later ref raised
+    return out
+
+
+def _reconcile_locked(now_naive, conn, grace_minutes, out, sweeps) -> None:
+    from src import portfolio_manager as pm
     with journal.locked():
         rows = {journal.row_key(e): e for e in journal.read_all()}
         own = conn is None
@@ -1554,9 +1596,6 @@ def reconcile_orphan_locks(now: datetime = None, conn=None,
         finally:
             if own:
                 conn.close()
-    for ref, pnl in sweeps:                                     # outside the journal lock
-        pm.run_wealth_sweep(ref, pnl)
-    return out
 
 
 def _flat_order_costs(spread: dict, total_frictions: float) -> float:

@@ -584,3 +584,87 @@ def test_a_lock_timeout_skips_one_row_not_the_whole_sweep(monkeypatch, tmp_path)
     assert pt.run_tracker(email=False) == 1
     rows = _rows()
     assert rows["aaaa0001"]["outcome"] is None and rows["bbbb0001"]["outcome"] is not None
+
+
+def _directional_row(sid, monkeypatch=None):
+    s = StrategyConstructor(vix=13.0, lot_size=65).construct_bull_call_spread(24000, 24200, 100.0, 30.0)
+    s.update(lots=1, expiry="2026-07-26", entry_spot=24000.0)
+    return _spread_row(sid, spread=s, shares=65, price=s.get("net_debit"))
+
+
+def _capture_bars(row, captures):
+    """Daily closes (from 2026-07-07) whose modeled capture is as close as
+    possible to each target % (a bull call's capture rises with spot)."""
+    spread = row["spread"]
+    lot = int(spread["lot_size"])
+    mp = float(spread["max_profit"]) / lot
+    ml = float(spread["max_loss"]) / lot
+    entry = pt._spread_entry_mark(spread)
+    expiry = date.fromisoformat(spread["expiry"])
+    total = max(1, (expiry - date.fromisoformat(row["date"])).days)
+    bars = []
+    for i, want in enumerate(captures):
+        day = date(2026, 7, 7) + timedelta(days=i)
+        frac = max(0.0, (expiry - day).days / total)
+        _, spot = min((abs(max(-ml, min(pt._spread_mark(spread, float(sp), frac) - entry, mp)) / mp * 100
+                           - want), sp) for sp in range(23900, 24300))
+        bars.append((day.isoformat(), float(spot), float(spot), float(spot)))
+    return bars
+
+
+def test_a_saved_ratchet_never_judges_earlier_closes(monkeypatch):
+    """#122 panel round 2 (blocker, found in 37a7708): the walk seeded the
+    SAVED lock at the entry day, so a lock raised later (an intraday rung, or
+    the walk's own persisted state) fired a BACKDATED ratchet_hit on an older,
+    weaker close. The saved state now applies from its own date forward."""
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2026-07-01")
+    row = _directional_row("dir00002")
+    bars = _capture_bars(row, [10, 20, 35, 38])          # never armed by its own closes
+    assert pt._resolve_spread(json.loads(json.dumps(row)), bars) is None
+    # an intraday rung raised on the LAST bar's day (lock 30): it must not
+    # judge the 10% / 20% closes before it; the 38% close on its day is above
+    row["ratchet"] = {"peak_capture_pct": 62.0, "locked_pct": 30.0, "armed": True,
+                      "as_of": bars[-1][0], "source": "live_bridge"}
+    assert pt._resolve_spread(json.loads(json.dumps(row)), bars) is None
+    # a rung raised TODAY, after the last bar: kept as saved, never lowered
+    row["ratchet"]["as_of"] = "2026-12-31"
+    walked = json.loads(json.dumps(row))
+    assert pt._resolve_spread(walked, bars) is None
+    assert walked["ratchet"]["locked_pct"] == 30.0 and walked["ratchet"]["as_of"] == "2026-12-31"
+    # the same lock DOES judge a close on/after its own date
+    row["ratchet"]["as_of"] = bars[-1][0]
+    later = bars + _capture_bars(row, [10, 20, 35, 38, 12])[4:]
+    hit = pt._resolve_spread(json.loads(json.dumps(row)), later)
+    assert hit is not None and hit[0] == "ratchet_hit" and hit[3] == later[-1][0]
+
+
+def test_the_persisted_walk_state_does_not_backdate_the_next_run(monkeypatch, tmp_path):
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2026-07-01")
+    row = _directional_row("dir00003")
+    bars = _capture_bars(row, [5, 65, 62])              # armed at 60 -> lock 30 on day 2
+    journal.log(row)
+    _wire_tracker(monkeypatch, tmp_path, lambda t, s: bars)
+    assert pt.run_tracker(email=False) == 0              # run 1: open, ratchet saved
+    assert _rows()["dir00003"]["ratchet"]["locked_pct"] is not None
+    assert pt.run_tracker(email=False) == 0              # run 2, same bars: still open
+    assert _rows()["dir00003"]["outcome"] is None
+
+
+def test_reconcile_still_sweeps_a_committed_release_when_a_later_ref_raises(conn, monkeypatch):
+    journal.log(_spread_row("setl0001", outcome={"resolution": "profit_take", "pnl_rs": 5000.0,
+                                                 "frictions_rs": 300.0, "hypothetical": False}))
+    journal.log(_spread_row("setl0002", outcome={"resolution": "profit_take", "pnl_rs": 100.0,
+                                                 "frictions_rs": 300.0, "hypothetical": False}))
+    pm.request_entry(conn, "setl0001", 1000.0)
+    pm.request_entry(conn, "setl0002", 1000.0)
+    swept, logged = [], []
+
+    def flaky_log(c, kind, detail=""):
+        logged.append(detail)
+        if len(logged) == 2:
+            raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(pm, "log_event", flaky_log)
+    monkeypatch.setattr(pm, "run_wealth_sweep", lambda ref, pnl: swept.append((ref, pnl)))
+    with pytest.raises(sqlite3.OperationalError):
+        pt.reconcile_orphan_locks(now=datetime(2026, 9, 30, 12, 0, tzinfo=IST), conn=conn)
+    assert swept == [("setl0001", 5000.0), ("setl0002", 100.0)]

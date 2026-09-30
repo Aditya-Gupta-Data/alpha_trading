@@ -2007,6 +2007,60 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   three lines starting at byte 907. Both repairs are still OPEN. The
   guard commits are pushed (`421b4cf`).
 
+### Issue 37 — Mac data REPAIRED (2026-09-30 20:37–20:38 IST, owner-approved, auto mode off)
+
+- **Pre-check:** four independent read-only verifiers (a workflow) re-checked
+  every target first. Verified: all 37 `deals_census` partitions are the
+  one-row fixture `build_census` produces for `test_deals_tracker`'s LT/FII
+  BUY row (0 mismatches). All 1,018 RSS rows are the two
+  `test_rss_ingester` items (611 + 407). No Mac cron job or LaunchAgent
+  writes either file, and no reader needs them, so "absent" is their true
+  state on the Mac. Nothing ships them to the VM. No process had the target
+  files open.
+- **Found by the pre-check and fixed first (`32c1154`):** the guard did not
+  isolate `notifier.DIGEST_QUEUE_PATH`. About a dozen tests
+  (`eod_summary.build_eod_card()` callers, and the CEO-brief dry run through
+  its `logs_dir`) drain the default queue. Before the guard they had moved
+  the owner's queued cards into `.drained` unsent; INFERRED, most or all of
+  the 30 earlier cards in `.drained` went that way. After the guard, any
+  queued card would have turned the Mac suite red. Conftest now isolates
+  the queue per test, and the CEO-brief dry-run test routes its drain to
+  tmp. Verified with a synthetic non-empty queue in the worktree: 2,429
+  passed and the probe was untouched.
+- **Repairs**, each preceded by size and sha256 checks. Backups are in
+  `data/_issue37_backup_20260930/` (gitignored, nothing reads it):
+  1. The two cards (19:15:25 `darling_tiers`, 19:17:19
+     `macro_regime_transition`) were moved from the tail of `.drained` back
+     into `logs/discord_digest_queue.jsonl` (now 909 bytes, 2 lines).
+     `.drained` is back to 12,482 bytes.
+  2. `logs/macro_strategy_scores.jsonl` was cut to 907 bytes. The first
+     three lines are byte-identical (sha256 a47a7cb3…c59c4b). The three
+     2026-09-30 lines are gone, under a one-time RULE 3 exception from the
+     owner. `data/strategy_scoreboard.json` was rebuilt from it
+     (`python3 -m src.analysis.strategy_scoreboard`, which writes only that
+     file). Each A1/P1_shock cell is back to forward n=1, last_call
+     2026-07-27.
+  3. `data/lake/deals_census/` (the whole folder, 37 partitions) and
+     `data/rss_signals.jsonl` (1,018 rows) were moved into the backup
+     folder. Neither exists on the Mac now.
+- **Verified after:** Mac main checkout at `32c1154`, guarded suite 2,429
+  passed. A mtime and size snapshot of every file under `data/` and `logs/`
+  showed no change during the run. The queue kept its 2 cards and the
+  ledger its 907 bytes.
+- **Caveats:**
+  - **The two cards will not send by themselves.** No scheduled Mac job
+    drains the digest queue. Only the VM's `eod_summary` (15:45) and
+    `ceo_brief` (16:30) drain, and they drain the VM's own queue. The cards
+    sit in the Mac queue until something on the Mac drains it.
+  - **The 19:15 Darling Tiers card was queued, not sent, because of the
+    tests.** `logs/.discord_budget.json` read `sent: 15` for 09-30. Tests
+    had pushed the counter past the daily budget of 5, so the card was
+    spooled instead. The counter resets on the next IST date.
+  - **The three stripped lines were not fixture rows.** They were the real
+    scorer's grades of the Mac's real 2026-08-04 declaration, written at
+    test time. A future run of the scorer on the Mac would write equivalent
+    lines again. No Mac job runs it.
+
 ## Issue 38 — `python3 -m src.ceo_brief --dry-run` advances the REAL sweep offset, so the next real brief can miss problem lines (found 2026-09-30; NOT fixed, owner: log only)
 
 - **Verified in code, not observed live:** `main(["--dry-run"])` calls
@@ -2020,5 +2074,11 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   Issue 37. That test now routes the offset to a temp file. It asserts that
   nothing is SENT, not that the offset is left alone, so it does not cover
   this bug.
+- **Also verified in code (added the same evening):** the dry run also
+  DRAINS the real Discord digest queue. `build_brief_card` calls
+  `drain_digest_queue(queue_path=logs_dir / "discord_digest_queue.jsonl")`
+  with the default `logs_dir`, which archives queued cards into `.drained`
+  and empties the queue WITHOUT sending them. A manual `--dry-run` on the
+  Mac would therefore throw away the two cards restored under Issue 37.
 - **Fix direction (deferred by the owner):** a dry run should read the
-  offset but never save it.
+  offset and the queue but never save or drain them.

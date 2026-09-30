@@ -42,19 +42,20 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-09-30 (night) — tests can no longer write into `data/`/`logs/` (write guard, Issue 37); OWNER ACTION: the Mac data cleanup was not done, and one agent-caused incident
+## 2026-09-30 (night) — tests can no longer write into `data/`/`logs/` (write guard, Issue 37); Mac test pollution and the agent-caused incident REPAIRED
 
 **Fixed today.** (1) The "known" `test_darling_shadow` failure. The 09-29
 note below called it "deterministic, not calendar", but it WAS
 calendar-dependent: an unpinned `now` let the darling 45-day time stop
 pre-empt the Strong-Sell exit from 2026-08-29. Not a #107 regression
 (`8374a8d`). (2) The six tests that read real gitignored files now use
-fixtures (`e868c7c`, pushed). (3) **Write guard** (`6c6c4aa`, `a8b6971`,
-NOT pushed): `tests/conftest.py` refuses any test write into the real
-`data/` or `logs/` and fails the test. It found 129 + 23 offending tests,
-all fixed (brain map DB, Discord budget, Dhan throttle and sizing ledger
-now per-test tmp). Suite 2,429 passed in a clean worktree and on the Mac,
-with no data/logs file touched by the test process.
+fixtures (`e868c7c`). (3) **Write guard** (`6c6c4aa` … `32c1154`):
+`tests/conftest.py` refuses any test write into the real `data/` or
+`logs/` and fails the test. It found 129 + 23 offending tests, plus a
+dozen digest-queue drainers caught by a pre-repair review. All are fixed:
+the brain map DB, Discord budget, digest queue, Dhan throttle and sizing
+ledger are now per-test tmp. Suite 2,429 passed in a clean worktree and on
+the Mac, with no data/logs file touched by the test process.
 
 **Incident (agent error, 19:41 IST).** After a failed fast-forward (a
 parallel session had pushed `8384894`), the agent's chained command still
@@ -65,19 +66,23 @@ digest cards (tonight's Darling Tiers and Macro Regime transitions) into
 `logs/discord_digest_queue.jsonl.drained`. It also wrote the other files
 listed in ledger Issue 37.
 
-**Owner decisions / actions.** On 09-30 the owner APPROVED (1) restoring
-the two drained digest cards and (3) a one-time RULE 3 exception to strip
-the three test-written 2026-09-30 lines from the Mac's
-`logs/macro_strategy_scores.jsonl`. The agent's auto-mode permission
-classifier refused both, so neither file changed and both are STILL OPEN.
-They need either a permission rule for the agent or the owner running them
-by hand. Exact bytes are in ledger Issue 37. (2) Removing today's fixture
-`deals_census` partition and `data/rss_signals.jsonl` (and the other 36
-fixture partitions) was not re-approved and is not done.
+**Repaired 20:37–20:38 (owner-approved; details and checksums in ledger
+Issue 37).** Backups of everything touched are in
+`data/_issue37_backup_20260930/`.
+- The two cards are back in `logs/discord_digest_queue.jsonl`. **No
+  scheduled Mac job drains that queue**, so they will not send by
+  themselves.
+- The Mac scores ledger is back to its 3 pre-incident lines, under a
+  one-time RULE 3 exception, and `data/strategy_scoreboard.json` was
+  rebuilt from it (n=1 per cell).
+- `data/lake/deals_census/` (37 fixture partitions) and
+  `data/rss_signals.jsonl` (1,018 fixture rows) were moved into the backup,
+  so both are now absent, which is their true state on the Mac.
 
-**Also open:** Issue 38, `ceo_brief --dry-run` advances the real sweep
-offset (logged, fix deferred by the owner). 159 tests still READ
-`data/`/`logs/`. The guard commits are pushed (`421b4cf`).
+**Also open:** Issue 38. `ceo_brief --dry-run` advances the real sweep
+offset AND drains the real digest queue without sending (logged, fix
+deferred by the owner). Do not run it on the Mac while the two cards are
+queued. 159 tests still READ `data/`/`logs/`.
 
 **Next:** resume the Chunk 1 adversarial audit fixes (see the 09-29
 evening entry and `docs/audit_chunk1_accounting_ledger.md`).

@@ -78,7 +78,22 @@ chunks: 1 Accounting & Ledger (portfolio_manager, portfolio, journal,
 recon_engine, firm_treasury, equity_desk, wealth_lock, brain_map, the
 settlement seams of plan_tracker / live_pricer, the two offline repair
 scripts); 2 OMS & Execution; 3 Analytics & Sizing; 4 Dashboard & Bridge.
-Chunk 1 results and fixes are recorded below this line when done.
+**Chunk 1 DONE (audit only, 09-30):** 51 findings → 34 survived two
+refuters each → 14 distinct defects, full table and fix plan in
+`docs/audit_chunk1_accounting_ledger.md`. Worst: D1 (blocker) the api
+tracker and `decide_pending` rewrite journal.jsonl from a stale copy
+without the lock — latent, no damage found on the VM; D5 (blocker) the
+Brain Map `outcomes` table still holds the five voided Issue-31 stop-loss
+results — CONFIRMED LIVE (54365ef1 and 2ff3443a are journal wins stored as
+losses; f8356c9c is open but stored as a closed loss); D4 my own #120
+"one-transaction settle" claim is false (executescript's implicit commit)
+— self-heals, but the test was vacuous. Nothing fixed yet; Batch A (D1-D4
++ busy timeout) is next and needs no ruling; D5 repair and D6/D7/D8/D13
+need the owner.
+
+**PAPER_2L_LIVE day one (09-30):** armed at 09:15; one entry, 24f931bb
+NIFTY MID SELECT bear put, re-quoted and filled 10:58 at crossed prices,
+marked live all day (last 15:22:25, capture −1.5%), still open.
 
 ## 2026-09-29 — PAPER_2L_LIVE BUILT (decision #120): the live-quote arm — NOT YET DEPLOYED (market was open; deploy after 15:30)
 

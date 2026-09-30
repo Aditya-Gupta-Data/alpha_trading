@@ -179,12 +179,18 @@ def _isolated_shared_runtime_files(monkeypatch, tmp_path):
     and the adaptive-sizing ledger — its `record()` READS the last action
     per key as de-dup memory and appends when it differs, so on the Mac 23
     tests in 7 files appended to the real logs/sizing_adjustments.jsonl and
-    their path depended on what the owner's ledger held. Each test gets its
-    own."""
+    their path depended on what the owner's ledger held. Also the Discord
+    digest queue: `eod_summary.build_eod_card()` drains the default
+    logs/discord_digest_queue.jsonl, so while the owner's queue held cards
+    (the Mac 19:15 chain spools them every weekday) about a dozen tests
+    either drained real cards into `.drained` unsent (before the guard) or
+    failed on the guard (after it). Each test gets its own."""
     from src import adaptive_sizing, dhan_client, notifier
     monkeypatch.setattr(adaptive_sizing, "ADJUSTMENTS_PATH",
                         tmp_path / "sizing_adjustments.jsonl")
     monkeypatch.setattr(notifier, "BUDGET_STATE_PATH",
                         tmp_path / ".discord_budget.json")
+    monkeypatch.setattr(notifier, "DIGEST_QUEUE_PATH",
+                        tmp_path / "discord_digest_queue.jsonl")
     monkeypatch.setattr(dhan_client, "_THROTTLE_FILE",
                         tmp_path / ".dhan_throttle")

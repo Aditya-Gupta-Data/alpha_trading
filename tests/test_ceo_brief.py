@@ -515,14 +515,21 @@ def test_module_never_imports_a_second_discord_path():
 def test_dry_run_sends_nothing(monkeypatch, capsys, tmp_path):
     sent = []
     monkeypatch.setattr("src.notifier.fire_broadcast", lambda p: sent.append(p))
-    # main() binds the real logs/.ceo_brief_state.json, and even a dry run
-    # advances that sweep offset (ledger Issue 37 — a production bug, logged,
-    # not changed here), so the offset is routed to tmp for this test.
+    # main() binds the real logs/ dir, and even a dry run advances the real
+    # sweep offset AND drains the real Discord digest queue without sending
+    # it (ledger Issue 38 — a production bug, logged, not changed here), so
+    # both are routed to tmp for this test.
     real_collect = ceo_brief.collect_issues
     monkeypatch.setattr(ceo_brief, "collect_issues",
                         lambda logs_dir=ceo_brief.LOGS_DIR, state_path=None:
                         real_collect(logs_dir=logs_dir,
                                      state_path=tmp_path / "state.json"))
+    from src import notifier
+    real_drain = notifier.drain_digest_queue
+    monkeypatch.setattr(notifier, "drain_digest_queue",
+                        lambda queue_path=None, max_lines=12:
+                        real_drain(queue_path=tmp_path / "queue.jsonl",
+                                   max_lines=max_lines))
     assert ceo_brief.main(["--dry-run"]) == 0
     assert sent == []
     assert "dry run" in capsys.readouterr().out

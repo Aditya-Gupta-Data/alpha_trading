@@ -235,8 +235,16 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-09-30 · 1 commits · 3 files touched
+### 2026-09-30 · 9 commits · 18 files touched
 
+- `09f3f24` docs: Issue 37 Mac data repaired (2 digest cards back in the queue, 3 test-written lines stripped from the Mac scores ledger + scoreboard rebuilt, 37 fixture census partitions and the fixture RSS file moved to a backup); Issue 38 also drains the real digest queue
+- `32c1154` fix(tests): isolate the Discord digest queue per test — ~13 tests drained the real logs/discord_digest_queue.jsonl (before the guard: owner cards moved to .drained unsent; after it: a red Mac suite from the next 19:15 spool); CEO-brief dry-run test routes its drain to tmp (ledger Issues 37, 38)
+- `6d23b88` docs: Issue 38 (ceo_brief --dry-run advances the real sweep offset; logged, fix deferred); Issue 37 repair attempt refused by the agent's permission classifier — digest cards and scores-ledger lines still open
+- `421b4cf` docs: Issue 37 — write guard verified on both checkouts; agent-caused 19:41 incident recorded (3 test lines in the Mac scores ledger, 2 drained digest cards); Mac data cleanup NOT done (permission refused) — owner actions in HANDOVER
+- `a8b6971` fix(tests): isolate the adaptive-sizing ledger per test — 23 tests in 7 files appended to the real logs/sizing_adjustments.jsonl on the Mac (found by the write guard's first Mac run; ledger Issue 37)
+- `6c6c4aa` fix(tests): production write guard — the suite can no longer write into the real data/ or logs/ (ledger Issue 37)
+- `8384894` docs(audit): Chunk 1 Accounting & Ledger adversarial audit — 14 verified defects (D1 journal stale-rewrite race, D5 Brain Map outcomes confirmed wrong live), fix plan; PAPER_2L_LIVE day one
+- `e868c7c` fix(tests): the six data-dependent tests run on fixtures — the suite is green in a checkout with no data/ (ledger Issue 36); log Issue 37 (tests write into real data/ + logs/)
 - `8374a8d` fix(tests): pin `now` in the darling EOD-cycle test — the 45-day time stop was reading the wall clock (ledger Issue 36)
 
 

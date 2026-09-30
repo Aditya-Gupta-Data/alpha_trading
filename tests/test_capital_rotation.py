@@ -370,3 +370,26 @@ def test_an_eviction_that_would_not_fund_the_entry_is_refused_before_any_exit(wo
     assert res["status"] == "would_not_fund"
     assert pm._active_shadow_lock(conn, ROT, "old1") is not None
     assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0
+
+
+def test_the_funding_estimate_counts_entry_side_slippage_beside_the_venue_exit(world, monkeypatch):
+    """#122 panel round 5: when the venue's tier slippage beats the exit
+    ladder, the estimate must still count the entry-side ladder the settle
+    books (legs without a quoted/venue fill basis)."""
+    conn, j = world
+    monkeypatch.setattr(pv, "_tier_frac", lambda u, slippage_fn=None: 0.005)
+    quotes = QUOTES["old1"]
+    mine = dict(_spread(), lots=1)
+    assert all(l.get("fill_basis") not in ("quoted", "venue", "live_crossed") for l in mine["legs"])
+    f, ladder = pt._spread_exit_costs_quoted(mine, quotes, exit_slipped=False)
+    _, entry_side = pt._spread_exit_costs_quoted(mine, quotes, exit_slipped=True)
+    venue = sum(q * 0.005 + 0.05 for q in quotes.values()) * 65
+    assert entry_side > 0 and venue > ladder                        # the case that mattered
+    profit = (min(250.0 - 60.0 - 70.0, 130.0)) * 65
+    cash, margin = pm.paper_available_cash(conn, ROT), 100000.0
+    freed_without_entry_side = cash + margin + profit - f - max(ladder, venue)
+    res = pt.evict_for_rotation(conn, ROT, "old1", 1, max_rr_left=5.0, quotes_fn=lambda e: quotes,
+                                entries=j.rows, need_rs=freed_without_entry_side - 0.01)
+    assert res["status"] == "would_not_fund"
+    assert pm._active_shadow_lock(conn, ROT, "old1") is not None
+    assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0

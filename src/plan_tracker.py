@@ -807,6 +807,11 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
                 ticket_id=execution.get("ticket_id"), execution_mode=execution.get("mode"))
 
 
+def pr_floor2(x: float) -> float:
+    from src.profit_ratchet import floor2
+    return floor2(x)
+
+
 def note_ratchet(short_id: str, peak_capture_pct: float, locked_pct: float) -> bool:
     """Persist a ratchet rung crossing seen intraday (decision #110): the
     live bridge saw the modeled capture reach a new arm level, so the peak
@@ -818,7 +823,7 @@ def note_ratchet(short_id: str, peak_capture_pct: float, locked_pct: float) -> b
             if entry.get("outcome") is not None or not entry.get("spread"):
                 return False
             cur = dict(entry.get("ratchet") or {})
-            new_peak = max(float(peak_capture_pct), float(cur.get("peak_capture_pct") or -1e9))
+            new_peak = pr_floor2(max(float(peak_capture_pct), float(cur.get("peak_capture_pct") or -1e9)))
             new_lock = (max(float(locked_pct), float(cur["locked_pct"]))
                         if cur.get("locked_pct") is not None else float(locked_pct))
             if cur.get("locked_pct") is not None and new_lock <= float(cur["locked_pct"]) \
@@ -829,9 +834,9 @@ def note_ratchet(short_id: str, peak_capture_pct: float, locked_pct: float) -> b
             # EOD walk folds each at its own date (a later raise never moves
             # an earlier rung's date, nor judges closes before its own)
             rungs = _saved_rungs(cur)
-            rungs.append({"as_of": today_iso, "peak_capture_pct": round(new_peak, 2),
+            rungs.append({"as_of": today_iso, "peak_capture_pct": new_peak,
                           "locked_pct": new_lock})
-            entry["ratchet"] = dict(cur, peak_capture_pct=round(new_peak, 2),
+            entry["ratchet"] = dict(cur, peak_capture_pct=new_peak,
                                     locked_pct=new_lock, armed=True,
                                     as_of=today_iso, source="live_bridge", rungs=rungs)
             return True

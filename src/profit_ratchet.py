@@ -64,9 +64,17 @@ def state(peak_capture_pct: float | None, persisted_lock: float | None = None,
     lock = locked_pct(peak_capture_pct, rungs)
     if persisted_lock is not None:
         lock = persisted_lock if lock is None else max(float(lock), float(persisted_lock))
-    return {"peak_capture_pct": (round(float(peak_capture_pct), 2)
+    return {"peak_capture_pct": (floor2(peak_capture_pct)
                                  if peak_capture_pct is not None else None),
             "locked_pct": lock, "armed": lock is not None}
+
+
+def floor2(x: float) -> float:
+    """A peak rounded DOWN to 2 dp (#122 panel): a stored peak re-read by the
+    next walk or the live bridge must never imply an arm the capture did not
+    reach (59.996 rounded half-up is 60.00, which arms the 60 -> 30 rung)."""
+    import math
+    return math.floor(float(x) * 100 + 1e-9) / 100
 
 
 def walk(captures: list, effective_date: str, persisted_lock: float | None = None,

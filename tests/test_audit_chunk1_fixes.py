@@ -727,3 +727,19 @@ def test_a_lock_earned_on_a_close_survives_a_partial_bar_series(monkeypatch):
     # and still never backdated: the 07-08 rung does not judge the 07-07 close
     monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2026-07-01")
     assert pt._resolve_spread(json.loads(json.dumps(walked)), bars) is None
+
+
+def test_a_stored_peak_never_arms_a_rung_the_close_did_not_reach(monkeypatch):
+    """#122 panel round 5: a peak stored ROUNDED half-up (59.996 -> 60.00)
+    re-armed the 60 -> 30 rung on the next walk. Peaks are floored now, so
+    walking the same closes twice is idempotent and fires nothing new."""
+    from src import profit_ratchet as prm
+    assert prm.state(59.996)["peak_capture_pct"] == 59.99 and prm.state(59.996)["locked_pct"] == 0.0
+    monkeypatch.setattr("src.config.RATCHET_EFFECTIVE_DATE", "2026-07-01")
+    row = _directional_row("dir00007")
+    bars = _capture_bars(row, [10, 59.99])
+    first = json.loads(json.dumps(row))
+    assert pt._resolve_spread(first, bars) is None
+    second = json.loads(json.dumps(first))
+    assert pt._resolve_spread(second, bars) is None
+    assert second["ratchet"] == first["ratchet"]                       # no hourly spurious write

@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tests.fake_journal import FakeJournalBase
 from src import analyst
 from src import brain_map
 from src.portfolio import calculate_trade_frictions, calculate_span_margin
@@ -158,7 +159,7 @@ def make_open_spread(short_id="sp123456", decision="approved", lots=1):
     }
 
 
-class FakeJournal:
+class FakeJournal(FakeJournalBase):
     def __init__(self, entries):
         self.entries = entries
         self.rewritten = None

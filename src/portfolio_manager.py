@@ -109,9 +109,37 @@ def ist_today() -> str:
     return datetime.now(IST).date().isoformat()
 
 
-def ensure_schema(conn) -> None:
-    conn.executescript(_SCHEMA)
+_SCHEMA_OBJECTS = ("account_state", "margin_locks", "equity_curve", "account_events")
+
+
+def _schema_present(conn, names) -> bool:
+    try:
+        row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name IN (%s)"
+                           % ",".join("?" * len(names)), tuple(names)).fetchone()
+    except Exception:
+        return False
+    return int(row[0]) == len(names)
+
+
+def _apply_schema(conn, script: str, names) -> None:
+    """Create the tables once; afterwards touch NOTHING (audit Chunk 1 D4,
+    decision #122). `executescript` COMMITS whatever transaction the caller
+    has open — which is how live_pricer's "one transaction" settle was
+    silently split in two. So: tables present -> no statement at all;
+    missing inside an open transaction -> each statement joins it."""
+    if _schema_present(conn, names):
+        return
+    if conn.in_transaction:
+        for stmt in script.split(";"):
+            if stmt.strip():
+                conn.execute(stmt)
+        return
+    conn.executescript(script)
     conn.commit()
+
+
+def ensure_schema(conn) -> None:
+    _apply_schema(conn, _SCHEMA, _SCHEMA_OBJECTS)
 
 
 def get_account(conn) -> dict:
@@ -490,6 +518,15 @@ def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
                           "AND released_at IS NULL", (journal_ref,)).fetchone()
     if active:
         return {"approved": True, "reason": "margin already locked for this entry"}
+    # A released row for this ref: only a pending lock that EXPIRED unapproved
+    # (D7) may be taken again — at approval, judged on today's cash below.
+    # Anything else was settled, and a settled ref is never re-locked (it
+    # used to hit the PRIMARY KEY and fail the gate OPEN).
+    prior = conn.execute("SELECT 1 FROM margin_locks WHERE journal_ref = ?",
+                         (journal_ref,)).fetchone()
+    if prior is not None and not _lock_expired_unapproved(conn, None, journal_ref):
+        return {"approved": False,
+                "reason": "this entry's margin lock was already settled — never re-locked"}
 
     for check in ENTRY_HALT_CHECKS:
         halt = check(conn)
@@ -512,10 +549,83 @@ def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
                   f"entry {journal_ref} rejected ({reason})")
         return {"approved": False, "reason": reason}
 
+    if prior is not None:
+        conn.execute("UPDATE margin_locks SET margin_rs = ?, locked_at = ?, released_at = NULL, "
+                     "pnl_net = NULL WHERE journal_ref = ?", (margin, _now_iso(), journal_ref))
+        conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)",
+                     (_now_iso(), PENDING_LOCK_REVIVED_EVENT,
+                      f"{journal_ref}: expired pending lock taken again at approval "
+                      f"(Rs.{margin:,.2f})"))
+        conn.commit()
+        return {"approved": True, "reason": "margin locked (expired pending lock renewed at approval)"}
     conn.execute("INSERT INTO margin_locks (journal_ref, margin_rs, locked_at) "
                  "VALUES (?, ?, ?)", (journal_ref, margin, _now_iso()))
     conn.commit()
     return {"approved": True, "reason": "margin locked"}
+
+
+# --- pending-lock expiry (audit Chunk 1 D7, decision #122) ----------------
+# A proposal's margin is locked the moment it is proposed. If nobody
+# approves it by the 15:30 close of the day it was proposed, every lock it
+# holds (the primary's and each shadow account's) EXPIRES: released at zero
+# P&L, no equity-curve point (nothing was realized), one named event per
+# account. The proposal itself stays pending; approving it later re-judges
+# its margin on that day's cash.
+PENDING_LOCK_EXPIRED_EVENT = "pending_lock_expired"
+PENDING_LOCK_REVIVED_EVENT = "pending_lock_revived"
+
+
+def _lock_expired_unapproved(conn, account, journal_ref: str) -> bool:
+    """True when the LAST thing that happened to this ref's lock was a D7
+    expiry (no revival since)."""
+    if _is_primary(account):
+        row = conn.execute(
+            "SELECT event_type FROM account_events WHERE event_type IN (?, ?) AND detail LIKE ? "
+            "ORDER BY ts DESC, rowid DESC LIMIT 1",
+            (PENDING_LOCK_EXPIRED_EVENT, PENDING_LOCK_REVIVED_EVENT,
+             f"{journal_ref}:%")).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT event_type FROM paper_account_events WHERE account_id = ? AND journal_ref = ? "
+            "AND event_type IN (?, ?) ORDER BY ts DESC, rowid DESC LIMIT 1",
+            (account, journal_ref, PENDING_LOCK_EXPIRED_EVENT,
+             PENDING_LOCK_REVIVED_EVENT)).fetchone()
+    return bool(row) and row[0] == PENDING_LOCK_EXPIRED_EVENT
+
+
+def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
+    """Expire every ACTIVE lock held for one still-pending entry (the
+    caller has established it is pending and past its cutoff). Returns
+    {account_id: margin_rs released}. Idempotent: nothing active, nothing
+    done. One commit for all of it."""
+    ensure_accounts_schema(conn)
+    now = _now_iso()
+    note = why or "not approved by the 15:30 close"
+    out = {}
+    row = conn.execute("SELECT margin_rs FROM margin_locks WHERE journal_ref = ? "
+                       "AND released_at IS NULL", (journal_ref,)).fetchone()
+    if row is not None:
+        conn.execute("UPDATE margin_locks SET released_at = ?, pnl_net = 0 WHERE journal_ref = ? "
+                     "AND released_at IS NULL", (now, journal_ref))
+        conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)",
+                     (now, PENDING_LOCK_EXPIRED_EVENT,
+                      f"{journal_ref}: pending lock Rs.{float(row[0]):,.2f} expired unapproved "
+                      f"— released at zero ({note})"))
+        out[ACCOUNT_PAPER_10L] = float(row[0])
+    for account, margin in conn.execute(
+            "SELECT account_id, margin_rs FROM paper_margin_locks WHERE journal_ref = ? "
+            "AND released_at IS NULL", (journal_ref,)).fetchall():
+        conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = 0 WHERE "
+                     "account_id = ? AND journal_ref = ? AND released_at IS NULL",
+                     (now, account, journal_ref))
+        conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, journal_ref, "
+                     "detail) VALUES (?, ?, ?, ?, ?)",
+                     (account, now, PENDING_LOCK_EXPIRED_EVENT, journal_ref,
+                      f"pending lock Rs.{float(margin):,.2f} expired unapproved — released at "
+                      f"zero ({note})"))
+        out[account] = float(margin)
+    conn.commit()
+    return out
 
 
 def release_margin(conn, journal_ref: str, pnl_net: float = 0.0) -> dict:
@@ -775,10 +885,13 @@ def _legs_all_quoted(spread: dict) -> bool:
     return bool(legs) and all(str(l.get("fill_basis") or "") == "quoted" for l in legs)
 
 
+_ACCOUNTS_OBJECTS = ("paper_accounts", "paper_margin_locks", "paper_equity_curve",
+                     "paper_account_events", "idx_paper_locks_ref")
+
+
 def ensure_accounts_schema(conn) -> None:
     ensure_schema(conn)
-    conn.executescript(_ACCOUNTS_SCHEMA)
-    conn.commit()
+    _apply_schema(conn, _ACCOUNTS_SCHEMA, _ACCOUNTS_OBJECTS)
 
 
 def _is_primary(account: str) -> bool:
@@ -880,6 +993,40 @@ def paper_trading_halted(conn, account: str) -> bool:
     return False
 
 
+def paper_clear_halt(conn, account: str, why: str = "", who: str = "owner") -> dict:
+    """THE DOOR OUT of a latched risk-of-ruin halt, for ANY paper account
+    (audit Chunk 1 D8, decision #122 — extends #92). The primary delegates
+    to clear_halt(); a shadow or live account gets the identical rules on
+    its own trail: a stated reason is mandatory, the clear is an
+    append-only `ruin_halt_cleared` row naming who and why, and the latch
+    re-arms at once if the drawdown is still past the limit. Before this,
+    PAPER_2L / ROT / LIVE had no door at all — only hand-SQL, which #92
+    forbids."""
+    if _is_primary(account):
+        return dict(clear_halt(conn, why=why, who=who), account_id=ACCOUNT_PAPER_10L)
+    if account not in PAPER_ACCOUNTS:
+        return {"cleared": False, "account_id": account,
+                "reason": f"refused: unknown paper account {account!r}"}
+    ensure_accounts_schema(conn)
+    get_paper_account(conn, account)
+    if not why or not str(why).strip():
+        return {"cleared": False, "account_id": account,
+                "reason": "refused: clearing a ruin halt requires a stated why"}
+    if not paper_halt_latched(conn, account):
+        return {"cleared": False, "account_id": account, "reason": "no latched halt to clear",
+                "halted": paper_trading_halted(conn, account)}
+    dd = paper_drawdown_pct(conn, account)
+    paper_log_event(conn, account, HALT_CLEAR_EVENT, None,
+                    f"latched ruin halt cleared by {who} at drawdown {dd:.2f}% "
+                    f"(limit {MAX_DRAWDOWN_PCT:g}%) — {why}")
+    still = paper_trading_halted(conn, account)   # re-latches instantly if still breached
+    return {"cleared": True, "account_id": account, "drawdown_pct": dd, "why": why,
+            "who": who, "halted": still,
+            "reason": ("cleared, but drawdown is still past the limit — the latch "
+                       "re-armed immediately" if still
+                       else "cleared; entries are live again")}
+
+
 def paper_daily_breaker_status(conn, account: str, today: str = None) -> dict:
     if _is_primary(account):
         return daily_breaker_status(conn, today)
@@ -923,6 +1070,12 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
                           (account, journal_ref)).fetchone()
     if active:
         return {"approved": True, "reason": "margin already locked for this entry"}
+    # same rule as request_entry: only a D7-expired pending lock is renewed
+    prior = conn.execute("SELECT 1 FROM paper_margin_locks WHERE account_id = ? AND "
+                         "journal_ref = ?", (account, journal_ref)).fetchone()
+    if prior is not None and not _lock_expired_unapproved(conn, account, journal_ref):
+        return {"approved": False,
+                "reason": "this entry's margin lock was already settled — never re-locked"}
     if paper_trading_halted(conn, account):
         reason = (f"risk-of-ruin halt: drawdown {paper_drawdown_pct(conn, account):.2f}% "
                   f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked")
@@ -943,6 +1096,18 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
         paper_log_event(conn, account, "margin_exhaustion", journal_ref,
                         f"entry {journal_ref} rejected ({reason})")
         return {"approved": False, "reason": reason}
+    if prior is not None:
+        conn.execute("UPDATE paper_margin_locks SET margin_rs = ?, lots = ?, primary_lots = ?, "
+                     "locked_at = ?, released_at = NULL, pnl_net = NULL WHERE account_id = ? "
+                     "AND journal_ref = ?",
+                     (margin, int(lots), int(primary_lots), _now_iso(), account, journal_ref))
+        conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, journal_ref, "
+                     "detail) VALUES (?, ?, ?, ?, ?)",
+                     (account, _now_iso(), PENDING_LOCK_REVIVED_EVENT, journal_ref,
+                      f"expired pending lock taken again at approval (Rs.{margin:,.2f}, "
+                      f"{int(lots)} lot(s))"))
+        conn.commit()
+        return {"approved": True, "reason": "margin locked (expired pending lock renewed at approval)"}
     conn.execute("INSERT INTO paper_margin_locks (account_id, journal_ref, margin_rs, "
                  "lots, primary_lots, locked_at) VALUES (?, ?, ?, ?, ?, ?)",
                  (account, journal_ref, margin, int(lots), int(primary_lots), _now_iso()))
@@ -965,25 +1130,41 @@ def paper_release_margin(conn, account: str, journal_ref: str, pnl_net: float = 
     if _is_primary(account):
         return release_margin(conn, journal_ref, pnl_net)
     ensure_accounts_schema(conn)
-    active = conn.execute("SELECT margin_rs FROM paper_margin_locks WHERE account_id = ? "
-                          "AND journal_ref = ? AND released_at IS NULL",
-                          (account, journal_ref)).fetchone()
-    if active is None:
-        return {"released": False, "reason": "no active lock for this ref"}
     was_halted = paper_trading_halted(conn, account)
     pnl = round(float(pnl_net), 2)
-    conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = ? WHERE "
-                 "account_id = ? AND journal_ref = ?", (_now_iso(), pnl, account, journal_ref))
+    released = paper_release_rows(conn, account, journal_ref, pnl)
+    conn.commit()          # also ends the write transaction a 0-row UPDATE opened
+    if not released:
+        return {"released": False, "reason": "no active lock for this ref"}
+    return paper_after_release(conn, account, journal_ref, pnl, was_halted)
+
+
+def paper_release_rows(conn, account: str, journal_ref: str, pnl: float) -> bool:
+    """The money half of a shadow release — the lock row and the account's
+    realized P&L — as plain statements with NO commit and NO schema DDL, so
+    a caller can put them in ITS OWN transaction (live_pricer._settle, D4).
+    False when there is no active lock (nothing written)."""
+    cur = conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = ? WHERE "
+                       "account_id = ? AND journal_ref = ? AND released_at IS NULL",
+                       (_now_iso(), round(float(pnl), 2), account, journal_ref))
+    if cur.rowcount == 0:
+        return False
     conn.execute("UPDATE paper_accounts SET realized_pnl = round(realized_pnl + ?, 2), "
                  "peak_equity = max(peak_equity, starting_capital + realized_pnl + ?) "
-                 "WHERE account_id = ?", (pnl, pnl, account))
-    conn.commit()
+                 "WHERE account_id = ?", (float(pnl), float(pnl), account))
+    return True
+
+
+def paper_after_release(conn, account: str, journal_ref: str, pnl: float,
+                        was_halted: bool) -> dict:
+    """After a COMMITTED paper_release_rows: the curve point and the halt
+    record (derived facts — a failure here never un-settles the money)."""
     snap = _paper_snapshot(conn, account)
     if not was_halted and paper_trading_halted(conn, account):
         paper_log_event(conn, account, "risk_of_ruin_halt", journal_ref,
                         f"drawdown hit {snap['drawdown_pct']:.2f}% after settling "
                         f"{journal_ref} (pnl Rs.{pnl:,.2f}) — execution blocked")
-    return dict(snap, released=True, reason="settled", pnl_net=pnl,
+    return dict(snap, released=True, reason="settled", pnl_net=round(float(pnl), 2),
                 halted=paper_trading_halted(conn, account))
 
 
@@ -1182,11 +1363,18 @@ def paper_lock_released(conn, account: str, journal_ref: str) -> bool:
 
 def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                              risk_pct: float = None, marks_fn=None,
-                             evict_fn=None) -> dict:
+                             evict_fn=None, allow_rotation: bool = False) -> dict:
     """Judge one PRIMARY-APPROVED proposal against every shadow account,
     independently: size on the account's own capital, then its own gate.
     Returns {account_id: {status, lots, margin_rs, reason}} -- `status` is
     "approved" | "rejected" | "error"; {} when the switch is off.
+
+    `allow_rotation` (audit Chunk 1 D6, decision #122 amending #115): the
+    rotation account may evict ONLY when this is the APPROVAL judgement
+    (decide_pending passes True). At proposal time it is judged like
+    PAPER_2L — a margin wall is a refusal, named as deferred — because a
+    live, risk-bearing position must never be closed to fund a proposal
+    that may yet be rejected.
 
     Fail-safe seam (the gate_headless_entry contract): never raises, and
     a broken shadow ledger can never touch the primary decision."""
@@ -1222,9 +1410,11 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                 vix = proposal.get("vix")
                 rotation = None
                 sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
-                if (sized["lots"] <= 0 and account in ROTATION_ACCOUNTS
-                        and sized.get("by_margin") == 0 and not paper_trading_halted(conn, account)
-                        and not paper_daily_breaker_status(conn, account)["halted"]):
+                walled = (sized["lots"] <= 0 and account in ROTATION_ACCOUNTS
+                          and sized.get("by_margin") == 0 and not paper_trading_halted(conn, account)
+                          and not paper_daily_breaker_status(conn, account)["halted"])
+                deferred = walled and not allow_rotation
+                if walled and allow_rotation:
                     # #115: the margin wall, not a halt or an unmeasurable
                     # loss, is the one refusal an eviction may answer.
                     rotation = _try_rotation(conn, account, journal_ref, spread, vix,
@@ -1235,13 +1425,15 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                     paper_log_event(conn, account, "sizing_refused", journal_ref,
                                     f"entry {journal_ref} refused ({sized['reason']})")
                     out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
-                                    "reason": f"sizing refused: {sized['reason']}"}
+                                    "reason": f"sizing refused: {sized['reason']}"
+                                              + (" (eviction is judged at approval, #122)"
+                                                 if deferred else "")}
                     if rotation is not None:
                         out[account]["rotation"] = _rotation_stamp(rotation)
                     continue
                 required = required_margin_for(
                     {"spread": dict(spread, lots=sized["lots"]), "vix": vix})
-                if (account in ROTATION_ACCOUNTS and rotation is None
+                if (account in ROTATION_ACCOUNTS and rotation is None and allow_rotation
                         and required > paper_available_cash(conn, account)
                         and not paper_trading_halted(conn, account)
                         and not paper_daily_breaker_status(conn, account)["halted"]):
@@ -1290,9 +1482,33 @@ def _rotation_stamp(rotation: dict) -> dict:
             "pnl_rs": ex.get("pnl_rs"), "reason": rotation.get("reason")}
 
 
-def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0) -> dict:
+def shadow_pnl(primary_pnl_net: float, lots: int, primary_lots: int,
+               flat_frictions_rs: float = 0.0) -> float:
+    """A ratio-settled shadow account's P&L (D13, decision #122).
+
+    Everything in the primary's net P&L scales with size — the premium
+    P&L, the slippage, the turnover-based charges (STT, stamp, exchange,
+    SEBI, their GST) — EXCEPT the flat brokerage per order, which a 1-lot
+    retail account pays in full. So the flat part is taken out, the rest
+    is scaled by lots/primary_lots, and the account pays its own flat part:
+
+        shadow = ratio x (primary_net + flat) - flat
+
+    Before #122 the whole net was scaled, flat part included, which let a
+    1-lot account pay a fraction of a real ticket's brokerage."""
+    ratio = (float(lots) / float(primary_lots)) if primary_lots else 0.0
+    flat = float(flat_frictions_rs or 0.0)
+    if ratio == 0.0:
+        return 0.0
+    return round(ratio * (float(primary_pnl_net) + flat) - flat, 2)
+
+
+def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
+                         flat_frictions_rs: float = 0.0) -> dict:
     """Settle every shadow lock on `journal_ref` in the same call that
-    settled the primary, P&L scaled by lot ratio. Safe on unknown refs."""
+    settled the primary: P&L scaled by lot ratio, each account paying its
+    own flat brokerage (`flat_frictions_rs` = the primary's flat part, the
+    same order count at any size — D13). Safe on unknown refs."""
     out = {}
     ensure_accounts_schema(conn)
     rows = conn.execute("SELECT account_id, lots, primary_lots FROM paper_margin_locks "
@@ -1330,8 +1546,7 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0) -
                 paper_log_event(conn, account, "live_lock_released_no_position", journal_ref,
                                 "lock released at zero: no live position was ever opened for this entry")
             continue
-        ratio = (float(lots) / float(primary_lots)) if primary_lots else 0.0
-        pnl = round(float(primary_pnl_net) * ratio, 2)
+        pnl = shadow_pnl(primary_pnl_net, lots, primary_lots, flat_frictions_rs)
         out[account] = paper_release_margin(conn, account, journal_ref, pnl)
     return out
 
@@ -1357,8 +1572,14 @@ def gate_headless_entry(journal_ref: str, required_margin: float,
         return True, f"margin gate unavailable ({e})"
 
 
-def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None) -> dict:
+def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None,
+                  flat_frictions_rs: float = 0.0) -> dict:
     """Settle a resolved/rejected entry's lock; safe on unknown refs.
+
+    D3 (decision #122): a FAILED release is no longer silent — the result
+    carries `error` (callers name it on the row, and
+    plan_tracker.reconcile_orphan_locks retries it), and the shadow
+    accounts are still settled when the primary's release fails.
 
     Post-trade hook (Wealth-Locking Flywheel, paper scope): a PROFITABLE
     settlement that actually released a lock also triggers the 50%
@@ -1369,30 +1590,39 @@ def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None) -> dict:
     try:
         if conn is None:
             conn = brain_map.connect()
+    except Exception as e:
+        print(f"  (margin release skipped — database unavailable: {e})")
+        return {"released": False, "reason": str(e), "error": str(e)}
+    try:
         result = release_margin(conn, journal_ref, pnl_net)
     except Exception as e:
-        print(f"  (margin release skipped: {e})")
-        if owns and conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return {"released": False, "reason": str(e)}
+        print(f"  (primary margin release FAILED for {journal_ref}: {e})")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        result = {"released": False, "reason": str(e), "error": str(e)}
     # The release is COMMITTED past this point — nothing that follows may
     # flip the answer back to released=False, or the caller keeps
     # accounting a lock the DB has already let go. The sweep is advisory:
     # its failure is recorded on the result, never propagated.
     # Dual treasury (#102): the shadow accounts settle HERE, off the same
-    # tracker call, P&L scaled by lot ratio — the one settlement path.
-    # Runs whether or not the primary had a lock (a human rejection
-    # releases both at zero); fail-open, recorded on the result.
+    # tracker call, P&L scaled by lot ratio less each account's own flat
+    # brokerage (D13) — the one settlement path. Runs whether or not the
+    # primary had a lock, or its release failed (a human rejection
+    # releases all at zero); fail-open, recorded on the result.
     try:
-        shadow = release_shadow_locks(conn, journal_ref, pnl_net)
+        shadow = release_shadow_locks(conn, journal_ref, pnl_net, flat_frictions_rs)
         if shadow:
             result["shadow_accounts"] = shadow
     except Exception as e:
-        print(f"  (shadow account release skipped: {e})")
+        print(f"  (shadow account release FAILED for {journal_ref}: {e})")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         result["shadow_accounts_error"] = str(e)
+        result.setdefault("error", f"shadow release: {e}")
     if result.get("released") and float(pnl_net) > 0:
         try:
             from src import wealth_lock
@@ -1424,6 +1654,10 @@ if __name__ == "__main__":
                          "Requires --why and --yes. Nothing else clears it: "
                          "not a capital injection, not a recovering "
                          "drawdown, not a new day.")
+    ap.add_argument("--account", default=ACCOUNT_PAPER_10L,
+                    help="with --reset-halt: which paper account's halt "
+                         f"(default {ACCOUNT_PAPER_10L}; also "
+                         f"{', '.join(PAPER_ACCOUNTS)}) — decision #122")
     ap.add_argument("--why", default="",
                     help="audit note for --inject / --reset-halt "
                          "(mandatory for --reset-halt)")
@@ -1441,14 +1675,19 @@ if __name__ == "__main__":
                   'gamma-exit rule tightened"')
             connection.close()
             sys.exit(1)
+        if not _is_primary(cli.account) and cli.account not in PAPER_ACCOUNTS:
+            print(f"Unknown account {cli.account!r}. Choose one of: "
+                  f"{ACCOUNT_PAPER_10L}, {', '.join(PAPER_ACCOUNTS)}.")
+            connection.close()
+            sys.exit(1)
         if not cli.yes:
             print("Refusing to clear the halt without --yes.")
-            print(f"Latched: {halt_latched(connection)} · drawdown "
-                  f"{drawdown_pct(connection):.2f}% (limit "
+            print(f"{cli.account} latched: {paper_halt_latched(connection, cli.account)} · "
+                  f"drawdown {paper_drawdown_pct(connection, cli.account):.2f}% (limit "
                   f"{MAX_DRAWDOWN_PCT:g}%). Re-run with --yes.")
             connection.close()
             sys.exit(1)
-        outcome = clear_halt(connection, why=cli.why, who="owner (CLI)")
+        outcome = paper_clear_halt(connection, cli.account, why=cli.why, who="owner (CLI)")
         print(json.dumps(outcome, indent=2))
         connection.close()
         sys.exit(0 if outcome["cleared"] else 1)

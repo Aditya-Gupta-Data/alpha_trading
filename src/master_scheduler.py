@@ -301,6 +301,18 @@ async def run_trading_session(underlyings=UNDERLYINGS, *, now_fn=ist_now,
         await asyncio.gather(*tasks, return_exceptions=True)
 
     ended = now_fn()
+    if status == "completed":
+        # The 15:30 EOD sweep (audit Chunk 1 D7, decision #122): a proposal
+        # nobody approved today gives its margin back at the close. The
+        # api's hourly tracker repeats it as a backstop. Fail-open.
+        try:
+            from src import plan_tracker
+            expired = await asyncio.to_thread(plan_tracker.expire_pending_margin, ended)
+            if expired:
+                print(f"[Scheduler] 15:30 sweep: {len(expired)} pending proposal(s) "
+                      "released their margin unapproved.", flush=True)
+        except Exception as e:
+            print(f"[Scheduler] 15:30 pending-margin sweep skipped ({e}).", flush=True)
     await _notify(notify_fn,
                   "🔴 Trading session CLOSED" if status == "completed"
                   else "🟠 Trading session STOPPED (signal)",

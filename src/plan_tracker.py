@@ -595,7 +595,9 @@ def rotation_marks(refs, entries=None, spot_fn=None, today: date = None) -> dict
     spots = {}
     for ref in refs or []:
         e = rows.get(ref)
-        if not e or not _spread_trackable(e):
+        # D6 (decision #122): only a trade the firm ENTERED is a candidate —
+        # a still-pending proposal's lock is a reservation, not a position.
+        if not e or not _spread_trackable(e) or e.get("decision") != "approved":
             continue
         try:
             t = e["ticker"]
@@ -620,7 +622,14 @@ def evict_for_rotation(conn, account: str, journal_ref: str, lots: int,
     Returns {status, ...}: "evicted" (with pnl_rs, capture_pct, rr_left,
     ticket_id) or a named refusal that leaves the trade open everywhere —
     "not_rotation_account", "not_open", "no_chain_quotes",
-    "stronger_on_real_quotes", "exit_not_filled". Never raises."""
+    "stronger_on_real_quotes", "exit_not_filled", "not_entered". Never
+    raises.
+
+    D1/D6 (decision #122): the quotes are fetched first (network, no lock);
+    the exit, the release and the stamp then run under the journal lock on
+    the row re-read FRESH — a trade the tracker settled meanwhile is
+    "not_open", and one the firm never entered (still pending approval) is
+    "not_entered": a reservation is not a position to evict."""
     from src import portfolio_manager as pm
     today = today or date.today()
     res = {"status": "error", "journal_ref": journal_ref, "account": account}
@@ -631,69 +640,89 @@ def evict_for_rotation(conn, account: str, journal_ref: str, lots: int,
         entry = next((e for e in rows if e.get("short_id") == journal_ref), None)
         if entry is None or not _spread_trackable(entry):
             return dict(res, status="not_open")
+        if entry.get("decision") != "approved":
+            return dict(res, status="not_entered")
         if quotes_fn is None:
             from src.live_bridge import _leg_quotes_for as quotes_fn
         quotes = quotes_fn(entry)
         if not quotes:
             return dict(res, status="no_chain_quotes")
-        spread = entry["spread"]
-        try:
-            m_exit = sum((1.0 if l["side"].upper() == "BUY" else -1.0)
-                         * float(quotes[(float(l["strike"]), l["option_type"].upper())])
-                         for l in spread["legs"])
-        except (KeyError, TypeError, ValueError):
-            return dict(res, status="no_chain_quotes")
-        lot = int(spread["lot_size"])
-        max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
-        max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
-        profit_ps = max(-max_loss_ps, min(m_exit - _spread_entry_mark(spread), max_profit_ps))
-        rr_real = pm.reward_risk_left(spread, profit_ps)
-        res["rr_left"] = None if rr_real in (None, float("inf")) else round(rr_real, 4)
-        if rr_real is None or (max_rr_left is not None and rr_real > max_rr_left):
-            return dict(res, status="stronger_on_real_quotes")
-        lots = int(lots)
-        qty = lot * lots
-        mine = dict(spread, lots=lots)
-        execution = _execute_paper_exit(entry, quotes, "capital_rotation_eviction",
-                                        conn=conn, venue_mod=venue_mod, today=today,
-                                        accounts=[(account, lots)])
-        if execution.get("mode") == "paper_venue" and execution.get("status") != "FILLED":
-            try:
-                from src import oms
-                oms.cancel_ticket(conn, execution["ticket_id"], "rotation exit not filled")
-            except Exception:
-                pass
-            return dict(res, status="exit_not_filled", ticket_id=execution.get("ticket_id"))
-        slipped = execution.get("venue_slippage_ps") is not None
-        frictions, slippage = _spread_exit_costs_quoted(mine, quotes, exit_slipped=slipped)
-        if slipped:
-            slippage += float(execution["venue_slippage_ps"]) * qty
-        pnl_net = round(profit_ps * qty - frictions - slippage, 2)
-        capture = (profit_ps / max_profit_ps * 100) if max_profit_ps > 0 else 0.0
-        settled = pm.paper_release_margin(conn, account, journal_ref, pnl_net)
-        if not settled.get("released"):
-            return dict(res, status="not_open", reason=settled.get("reason"))
-        stamp = {"status": "evicted", "evicted_on": today.isoformat(), "pnl_rs": pnl_net,
-                 "capture_pct": round(capture, 2), "exit_ticket_id": execution.get("ticket_id"),
-                 "reason": reason}
-
-        def _mutate(e):
-            acc = e.get("accounts")
-            if not isinstance(acc, dict) or not isinstance(acc.get(account), dict):
-                return False
-            acc[account].update(stamp)
-            return True
-        try:
-            journal.update_entry(journal_ref, _mutate)
-        except Exception as exc:
-            # the lock table is the truth (paper_lock_released guards the
-            # later exit); a lost stamp is cosmetic, said aloud
-            print(f"  (rotation stamp skipped for {journal_ref}: {exc})")
-        return dict(res, status="evicted", pnl_rs=pnl_net, capture_pct=round(capture, 2),
-                    frictions_rs=round(frictions, 2), slippage_rs=round(slippage, 2),
-                    ticket_id=execution.get("ticket_id"), execution_mode=execution.get("mode"))
+        with journal.locked():
+            if entries is None:
+                fresh = journal.get_entry(journal_ref)
+                if fresh is None or not _spread_trackable(fresh):
+                    return dict(res, status="not_open")
+                if fresh.get("decision") != "approved":
+                    return dict(res, status="not_entered")
+                entry = fresh
+            return _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason,
+                                 quotes, entry, venue_mod, today, res)
     except Exception as exc:
         return dict(res, reason=f"{type(exc).__name__}: {exc}")
+
+
+def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes, entry,
+                  venue_mod, today, res) -> dict:
+    """evict_for_rotation's body, run under the journal lock."""
+    from src import portfolio_manager as pm
+    spread = entry["spread"]
+    try:
+        m_exit = sum((1.0 if l["side"].upper() == "BUY" else -1.0)
+                     * float(quotes[(float(l["strike"]), l["option_type"].upper())])
+                     for l in spread["legs"])
+    except (KeyError, TypeError, ValueError):
+        return dict(res, status="no_chain_quotes")
+    lot = int(spread["lot_size"])
+    max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+    max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+    profit_ps = max(-max_loss_ps, min(m_exit - _spread_entry_mark(spread), max_profit_ps))
+    rr_real = pm.reward_risk_left(spread, profit_ps)
+    res["rr_left"] = None if rr_real in (None, float("inf")) else round(rr_real, 4)
+    if rr_real is None or (max_rr_left is not None and rr_real > max_rr_left):
+        return dict(res, status="stronger_on_real_quotes")
+    if pm._active_shadow_lock(conn, account, journal_ref) is None:
+        return dict(res, status="not_open", reason="no active lock for this account")
+    lots = int(lots)
+    qty = lot * lots
+    mine = dict(spread, lots=lots)
+    execution = _execute_paper_exit(entry, quotes, "capital_rotation_eviction",
+                                    conn=conn, venue_mod=venue_mod, today=today,
+                                    accounts=[(account, lots)])
+    if execution.get("mode") == "paper_venue" and execution.get("status") != "FILLED":
+        try:
+            from src import oms
+            oms.cancel_ticket(conn, execution["ticket_id"], "rotation exit not filled")
+        except Exception:
+            pass
+        return dict(res, status="exit_not_filled", ticket_id=execution.get("ticket_id"))
+    slipped = execution.get("venue_slippage_ps") is not None
+    frictions, slippage = _spread_exit_costs_quoted(mine, quotes, exit_slipped=slipped)
+    if slipped:
+        slippage += float(execution["venue_slippage_ps"]) * qty
+    pnl_net = round(profit_ps * qty - frictions - slippage, 2)
+    capture = (profit_ps / max_profit_ps * 100) if max_profit_ps > 0 else 0.0
+    settled = pm.paper_release_margin(conn, account, journal_ref, pnl_net)
+    if not settled.get("released"):
+        return dict(res, status="not_open", reason=settled.get("reason"))
+    stamp = {"status": "evicted", "evicted_on": today.isoformat(), "pnl_rs": pnl_net,
+             "capture_pct": round(capture, 2), "exit_ticket_id": execution.get("ticket_id"),
+             "reason": reason}
+
+    def _mutate(e):
+        acc = e.get("accounts")
+        if not isinstance(acc, dict) or not isinstance(acc.get(account), dict):
+            return False
+        acc[account].update(stamp)
+        return True
+    try:
+        journal.update_entry(journal_ref, _mutate)
+    except Exception as exc:
+        # the lock table is the truth (paper_lock_released guards the
+        # later exit); a lost stamp is cosmetic, said aloud
+        print(f"  (rotation stamp skipped for {journal_ref}: {exc})")
+    return dict(res, status="evicted", pnl_rs=pnl_net, capture_pct=round(capture, 2),
+                frictions_rs=round(frictions, 2), slippage_rs=round(slippage, 2),
+                ticket_id=execution.get("ticket_id"), execution_mode=execution.get("mode"))
 
 
 def note_ratchet(short_id: str, peak_capture_pct: float, locked_pct: float) -> bool:
@@ -803,7 +832,8 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
 
             _settle_spread_cash(pnl_net)
             from src import portfolio_manager as pm
-            pm.release_entry(short_id, pnl_net)
+            release = pm.release_entry(short_id, pnl_net,
+                                       flat_frictions_rs=_flat_order_costs(spread, frictions))
 
             entry["outcome"] = {
                 "checked": today.isoformat(),
@@ -831,6 +861,9 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
                 "verdict": _spread_verdict(entry, resolution, pnl_net,
                                            capture_pct),
             }
+            if release.get("error"):
+                # D3: named on the row; reconcile_orphan_locks retries it
+                entry["outcome"]["margin_release_error"] = release["error"]
             result.update(status="squared_off", pnl_rs=pnl_net,
                           capture_pct=round(capture_pct, 2))
             return True
@@ -1345,6 +1378,301 @@ def _spread_outcome_line(entry: dict) -> str:
             f"Rs.{o['slippage_rs']:,.2f} already deducted from that P&L.")
 
 
+# ------------------------------------------------- lock housekeeping (#122)
+#
+# Two sweeps over the capital layer's locks, both at the top of every
+# run_tracker and both under the journal lock (so no approval or
+# settlement interleaves):
+#   expire_pending_margin   D7 — a proposal nobody approved by the 15:30
+#                           close of its day loses its margin locks (the
+#                           proposal stays pending; approval re-gates it).
+#   reconcile_orphan_locks  D3 — a lock whose trade is already settled,
+#                           rejected, or was never journaled is released:
+#                           the retry for a release that failed.
+# The equity desk's `eqd:` locks are not options locks and keep their own
+# sweep (equity_desk.sweep_orphan_locks).
+
+PENDING_LOCK_CUTOFF = (15, 30)          # IST — the market close
+ORPHAN_LOCK_GRACE_MINUTES = 30          # a lock is taken just BEFORE its row is journaled
+
+
+def _ist_now() -> datetime:
+    from src.portfolio_manager import IST
+    return datetime.now(IST)
+
+
+def pending_cutoff(entry: dict):
+    """The IST moment a pending entry's margin expires: 15:30 on the day it
+    was proposed (the next day's 15:30 if proposed after the close). None
+    when the row carries no usable date."""
+    from datetime import time as dtime, timedelta
+    from src.portfolio_manager import IST
+    close = dtime(*PENDING_LOCK_CUTOFF)
+    created = None
+    try:
+        created = datetime.fromisoformat(str(entry.get("created_at")))
+        created = created.astimezone(IST) if created.tzinfo else created.replace(tzinfo=IST)
+    except (TypeError, ValueError):
+        created = None
+    if created is None:
+        try:
+            return datetime.combine(date.fromisoformat(str(entry.get("date"))), close, tzinfo=IST)
+        except (TypeError, ValueError):
+            return None
+    cutoff = datetime.combine(created.date(), close, tzinfo=IST)
+    return cutoff + timedelta(days=1) if created >= cutoff else cutoff
+
+
+def expire_pending_margin(now: datetime = None, conn=None) -> dict:
+    """D7 (decision #122): release the margin of every still-pending entry
+    whose 15:30 cutoff has passed. {journal_ref: {account: margin_rs}} for
+    what was released. Idempotent (an expired lock is not active)."""
+    from src import portfolio_manager as pm
+    now = now or _ist_now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=pm.IST)
+    out = {}
+    with journal.locked():
+        due = []
+        for e in journal.read_all():
+            if (e.get("decision") != "pending_approval" or e.get("outcome") is not None
+                    or not e.get("short_id")):
+                continue
+            cutoff = pending_cutoff(e)
+            if cutoff is not None and now >= cutoff:
+                due.append((e, cutoff))
+        if not due:
+            return out
+        own = conn is None
+        if own:
+            conn = _brain_connect()
+        try:
+            for e, cutoff in due:
+                freed = pm.expire_pending_lock(
+                    conn, e["short_id"],
+                    why=f"proposed {e.get('created_at') or e.get('date')}, not approved by "
+                        f"{cutoff:%Y-%m-%d %H:%M} IST")
+                if freed:
+                    out[e["short_id"]] = freed
+                    print(f"Plan tracker: pending {e['short_id']} ({e.get('ticker')}) — margin "
+                          f"expired unapproved: {freed}")
+        finally:
+            if own:
+                conn.close()
+    return out
+
+
+def reconcile_orphan_locks(now: datetime = None, conn=None,
+                           grace_minutes: int = ORPHAN_LOCK_GRACE_MINUTES) -> dict:
+    """D3 (decision #122): release the ACTIVE options locks the settlement
+    path should already have released — the retry for a failed release:
+
+      the row is resolved   -> release at its settled P&L (hypothetical: 0),
+                               shadows scaled with their own brokerage
+      the row was rejected  -> release at zero
+      no journal row at all -> release at zero, once every lock on the ref
+                               is older than `grace_minutes` (the gate locks
+                               a proposal just before journaling it)
+
+    Pending and open-approved rows are left alone. Every release is a
+    named `orphan_lock_released` event. {journal_ref: reason} returned."""
+    from src import portfolio_manager as pm
+    now_naive = (now or _ist_now()).replace(tzinfo=None)
+    out = {}
+    with journal.locked():
+        rows = {journal.row_key(e): e for e in journal.read_all()}
+        own = conn is None
+        if own:
+            conn = _brain_connect()
+        try:
+            pm.ensure_accounts_schema(conn)
+            locks = {}
+            for ref, locked_at in conn.execute(
+                    "SELECT journal_ref, locked_at FROM margin_locks WHERE released_at IS NULL"):
+                locks.setdefault(ref, []).append(locked_at)
+            for acct, ref, locked_at in conn.execute(
+                    "SELECT account_id, journal_ref, locked_at FROM paper_margin_locks "
+                    "WHERE released_at IS NULL"):
+                locks.setdefault(ref, []).append(locked_at)
+            for ref, stamps in locks.items():
+                if str(ref).startswith("eqd:"):
+                    continue
+                e = rows.get(ref)
+                if e is None:
+                    try:
+                        newest = max(datetime.fromisoformat(str(s)) for s in stamps)
+                    except (TypeError, ValueError):
+                        continue
+                    if (now_naive - newest).total_seconds() < grace_minutes * 60:
+                        continue
+                    pnl, flat, why = 0.0, 0.0, "no journal row for this lock"
+                elif e.get("outcome") is not None:
+                    o = e["outcome"]
+                    real = e.get("decision") == "approved" and not o.get("hypothetical")
+                    if real and o.get("pnl_rs") is None:
+                        continue                       # never money on a guess
+                    pnl = float(o["pnl_rs"]) if real else 0.0
+                    flat = (_flat_order_costs(e.get("spread") or {}, o.get("frictions_rs"))
+                            if real else 0.0)
+                    why = (f"trade settled ({o.get('resolution')}) but its lock was still held"
+                           if real else "hypothetical resolution; lock was still held")
+                elif e.get("decision") == "rejected":
+                    pnl, flat, why = 0.0, 0.0, "entry rejected; lock was still held"
+                else:
+                    continue                           # pending (D7) or open
+                res = pm.release_entry(ref, pnl, conn=conn, flat_frictions_rs=flat)
+                released = [a for a, v in (res.get("shadow_accounts") or {}).items()
+                            if (v or {}).get("released")]
+                if res.get("released"):
+                    released.insert(0, pm.ACCOUNT_PAPER_10L)
+                if not released:
+                    continue
+                pm.log_event(conn, "orphan_lock_released",
+                             f"{ref}: {why} — released {', '.join(released)} at "
+                             f"Rs.{pnl:,.2f} (primary basis)")
+                for acct in released[1 if res.get("released") else 0:]:
+                    pm.paper_log_event(conn, acct, "orphan_lock_released", ref, why)
+                out[ref] = why
+                print(f"Plan tracker: orphan lock {ref} released ({why}): {', '.join(released)}")
+        finally:
+            if own:
+                conn.close()
+    return out
+
+
+def _flat_order_costs(spread: dict, total_frictions: float) -> float:
+    """The size-independent part of a settled spread's frictions (D13,
+    decision #122): the flat brokerage + GST on every order it paid — one
+    entry and one exit order per leg. Zero when no frictions were charged
+    (the no-price backstop invents none)."""
+    if not total_frictions:
+        return 0.0
+    return pf.flat_order_cost_rs(2 * len(spread.get("legs") or []))
+
+
+def _settle_spread_row(entry: dict, bars: list, seen: dict) -> bool:
+    """Settle ONE spread on its FRESH journal row — run inside
+    journal.update_matching, i.e. under the journal lock (D1, decision
+    #122): the row cannot have been resolved, reopened or re-ratcheted by
+    another process between this check and the write. Returns True to
+    write the outcome; False (with `seen["status"]`) leaves it untouched."""
+    if not _spread_trackable(entry):
+        seen["status"] = "already_resolved"
+        return False
+    spread = entry["spread"]
+    hit = _resolve_spread(entry, bars) if bars else None
+    backstop = None
+    # The bar walk only settles on a bar. Past expiry with no usable
+    # exit (no bars, a gap over the exit window, or a "pre-expiry" hit
+    # that landed on a POST-expiry bar) the wall clock takes over.
+    if hit is None or hit[3] > spread["expiry"]:
+        backstop = _expiry_backstop(entry, bars)
+        if backstop is not None:
+            hit = backstop[:4]
+    if hit is None:
+        seen["status"] = "live" if bars else "no_data"
+        return False
+
+    resolution, m_exit, frac_left, exit_day = hit
+    approved = entry["decision"] == "approved"
+    qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
+    m_entry = _spread_entry_mark(spread)
+    gross_pnl = (m_exit - m_entry) * qty
+
+    if backstop is not None:
+        exit_close = backstop[4]
+        if exit_close is None:
+            # No price to cost an exit against: the mark is already the
+            # full defined loss; frictions/slippage are not invented.
+            total_frictions, total_slippage = 0.0, 0.0
+        else:
+            total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), 0.0)
+    else:
+        _day, _low, _high, exit_close = bars[[b[0] for b in bars].index(exit_day)]
+        total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), frac_left)
+    execution = None
+    if backstop is None and approved:
+        # Decision #103: the exit is an OMS ticket the paper venue fills
+        # at the modeled per-leg exit premium (+ tier slippage). Filled
+        # -> the venue's basket mark is the exit and the exit-side
+        # ladder is skipped; anything else -> the modeled exit above.
+        limits = {(float(l["strike"]), str(l.get("option_type") or "").upper()):
+                  round(_leg_model_premium(l, float(exit_close), spread.get("entry_spot"),
+                                           frac_left), 2)
+                  for l in spread["legs"]}
+        execution = _execute_paper_exit(entry, limits, resolution,
+                                        today=date.fromisoformat(exit_day))
+        if execution.get("venue_slippage_ps") is not None:
+            total_frictions, total_slippage = _spread_exit_costs(
+                spread, float(exit_close), frac_left, exit_slipped=True)
+            total_slippage = round(total_slippage
+                                   + float(execution["venue_slippage_ps"]) * qty, 2)
+            total_frictions = round(total_frictions, 2)
+    pnl_net = round(gross_pnl - total_frictions - total_slippage, 2)
+
+    max_profit_total = float(spread["max_profit"]) * int(spread.get("lots", 1))
+    max_loss_total = float(spread["max_loss"]) * int(spread.get("lots", 1))
+    capture_pct = (gross_pnl / max_profit_total * 100) if max_profit_total > 0 else 0.0
+
+    settled = _settle_spread_cash(pnl_net) if approved else False
+    # Phase 6G: release the capital layer's margin lock (safe no-op if
+    # this entry never passed through the gate). Hypothetical trades
+    # never consumed real capital, so they settle at zero P&L. D3: the
+    # answer is READ — a failed release is named on the outcome and
+    # retried by reconcile_orphan_locks on the next sweep.
+    from src import portfolio_manager as pm
+    release = pm.release_entry(entry.get("short_id", ""),
+                               pnl_net if approved else 0.0,
+                               flat_frictions_rs=(_flat_order_costs(spread, total_frictions)
+                                                  if approved else 0.0))
+
+    entry["outcome"] = {
+        "checked": date.today().isoformat(),
+        "settled_at": datetime.now().isoformat(timespec="seconds"),  # wall clock (Issue 31)
+        "resolution": resolution,
+        "price": round(m_exit, 2),          # basket mark per share at exit
+        "exit_date": exit_day,
+        "pct": round(capture_pct, 2),        # % of max profit captured
+        "r_multiple": round(pnl_net / max_loss_total, 2) if max_loss_total > 0 else None,
+        "days_in_trade": (date.fromisoformat(exit_day)
+                          - date.fromisoformat(entry["date"])).days,
+        "pnl_rs": pnl_net,
+        "frictions_rs": round(total_frictions, 2),
+        "slippage_rs": round(total_slippage, 2),
+        "exit_style": "atomic_basket",       # all legs closed together, always
+        "hypothetical": not approved,
+        "position_closed": settled,
+    }
+    if release.get("error"):
+        entry["outcome"]["margin_release_error"] = release["error"]
+        print(f"Plan tracker: margin release FAILED for {entry.get('short_id')} "
+              f"({release['error']}) — retried on the next sweep.")
+    if execution is not None and (execution.get("mode") == "paper_venue"
+                                  or execution.get("error")):
+        # #103: the exit ticket record. `exit_basis` keeps describing
+        # the PRICE basis (bars / intraday chain); the venue's cost sits
+        # inside slippage_rs and is itemised here.
+        entry["outcome"]["execution"] = execution
+        if execution.get("venue_slippage_ps") is not None:
+            entry["outcome"]["venue_slippage_rs"] = round(
+                float(execution["venue_slippage_ps"]) * qty, 2)
+    if backstop is not None:
+        # Additive keys (older rows lack them; readers tolerate absence):
+        # WHICH price settled the row, and from WHICH session.
+        entry["outcome"]["settlement_basis"] = backstop[5]
+        entry["outcome"]["settlement_close_date"] = backstop[6]
+        entry["outcome"]["settled_on"] = _today().isoformat()
+    tr = observe_tranches(entry, bars, exit_day, m_exit,
+                          base_lots=int(spread.get("lots", 1)),
+                          unit=int(spread["lot_size"]))
+    if tr is not None:
+        entry["outcome"]["tranches"] = tr
+    entry["outcome"]["verdict"] = _spread_verdict(entry, resolution, pnl_net, capture_pct)
+    seen.update(status="resolved", resolution=resolution, exit_day=exit_day,
+                pnl_net=pnl_net, total_frictions=total_frictions)
+    return True
+
+
 def run_tracker(email: bool = True, on_episode=None) -> int:
     """Sweep all open plans; returns how many resolved this run.
 
@@ -1365,6 +1693,21 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             print(f"Plan tracker: live account settled {len(swept['settled'])} expired position(s).")
     except Exception as e:
         print(f"Plan tracker: live account sweep skipped ({e}).")
+    # Audit Chunk 1 (decision #122): the lock housekeeping runs before the
+    # sweep — a pending entry's margin expires once its 15:30 has passed
+    # (D7), and a lock whose trade is already settled, rejected or was
+    # never journaled is released (D3's retry). Both fail-open.
+    try:
+        expire_pending_margin()
+    except Exception as e:
+        print(f"Plan tracker: pending-margin expiry skipped ({e}).")
+    try:
+        reconcile_orphan_locks()
+    except Exception as e:
+        print(f"Plan tracker: orphan-lock reconcile skipped ({e}).")
+    # This read only picks the CANDIDATES. Every resolution below re-reads
+    # its row fresh under the journal lock and writes that row alone (D1):
+    # the network work happens outside the lock, the settlement inside it.
     entries = journal.read_all()
     open_plans = [e for e in entries if _trackable(e)]
     open_spreads = [e for e in entries if _spread_trackable(e)]
@@ -1381,70 +1724,89 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         brain = None
 
     resolved_lines, resolved = [], 0
-    for entry in open_plans:
-        bars = _daily_bars(entry["ticker"], entry["date"])
+    for candidate in open_plans:
+        bars = _daily_bars(candidate["ticker"], candidate["date"])
         if not bars:
-            print(f"Plan tracker: no price data for {entry['ticker']} — will retry next run.")
+            print(f"Plan tracker: no price data for {candidate['ticker']} — will retry next run.")
             continue
-        hit = _resolve(entry, bars)
-        stop_price = entry["plan"]["stop_loss"]["price"]
-        if hit is None:
-            _day, low, high, close = bars[-1]
-            print(f"Plan tracker: {entry['ticker']} still live "
-                  f"(now Rs.{close:,.2f}; stop Rs.{stop_price:,.2f}, "
-                  f"target Rs.{entry['plan']['target']['price']:,.2f}).")
-            continue
+        key = journal.row_key(candidate)
+        seen = {}
 
-        resolution, exit_price, exit_day = hit
-        pct = (exit_price - entry["price"]) / entry["price"] * 100
-        risk_per_share = entry["price"] - stop_price
-        approved = entry["decision"] == "approved"
+        def _settle_plan(entry, bars=bars, seen=seen):
+            if not _trackable(entry):
+                seen["status"] = "already_resolved"
+                return False
+            hit = _resolve(entry, bars)
+            stop_price = entry["plan"]["stop_loss"]["price"]
+            if hit is None:
+                seen.update(status="live", close=bars[-1][3], stop=stop_price,
+                            target=entry["plan"]["target"]["price"])
+                return False
 
-        # Infer instrument type and apply trade frictions and slippage
-        instrument_type = _get_instrument_type(entry["ticker"])
-        closed = _close_paper_position(entry, exit_price, instrument_type) if approved else False
+            resolution, exit_price, exit_day = hit
+            pct = (exit_price - entry["price"]) / entry["price"] * 100
+            risk_per_share = entry["price"] - stop_price
+            approved = entry["decision"] == "approved"
 
-        entry_frictions = pf.calculate_trade_frictions(instrument_type, "BUY", entry["price"], entry["shares"])
-        exit_frictions = pf.calculate_trade_frictions(instrument_type, "SELL", exit_price, entry["shares"])
-        total_frictions = entry_frictions + exit_frictions
+            # Infer instrument type and apply trade frictions and slippage
+            instrument_type = _get_instrument_type(entry["ticker"])
+            closed = _close_paper_position(entry, exit_price, instrument_type) if approved else False
 
-        # Gap 4: STOCK fills pay the liquidity-tier slippage (was 0.0%).
-        entry_slippage = apply_slippage(entry["price"], instrument_type,
-                                        symbol=entry.get("ticker")) * entry["shares"]
-        exit_slippage = apply_slippage(exit_price, instrument_type,
-                                       symbol=entry.get("ticker")) * entry["shares"]
-        total_slippage = entry_slippage + exit_slippage
+            entry_frictions = pf.calculate_trade_frictions(instrument_type, "BUY", entry["price"], entry["shares"])
+            exit_frictions = pf.calculate_trade_frictions(instrument_type, "SELL", exit_price, entry["shares"])
+            total_frictions = entry_frictions + exit_frictions
 
-        gross_pnl = entry["shares"] * (exit_price - entry["price"])
-        net_pnl_rs = round(gross_pnl - total_frictions - total_slippage, 2)
+            # Gap 4: STOCK fills pay the liquidity-tier slippage (was 0.0%).
+            entry_slippage = apply_slippage(entry["price"], instrument_type,
+                                            symbol=entry.get("ticker")) * entry["shares"]
+            exit_slippage = apply_slippage(exit_price, instrument_type,
+                                           symbol=entry.get("ticker")) * entry["shares"]
+            total_slippage = entry_slippage + exit_slippage
 
-        entry["outcome"] = {
-            "checked": date.today().isoformat(),
-            "settled_at": datetime.now().isoformat(timespec="seconds"),  # wall clock (Issue 31)
-            "resolution": resolution,
-            "price": exit_price,
-            "exit_date": exit_day,
-            "pct": round(pct, 2),
-            "r_multiple": round((exit_price - entry["price"]) / risk_per_share, 2)
-                          if risk_per_share > 0 else None,
-            "days_in_trade": (date.fromisoformat(exit_day)
-                              - date.fromisoformat(entry["date"])).days,
-            "pnl_rs": net_pnl_rs,
-            "frictions_rs": round(total_frictions, 2),
-            "slippage_rs": round(total_slippage, 2),
-            "hypothetical": not approved,
-            "position_closed": closed,
-            "verdict": _verdict(entry, resolution, pct),
-        }
-        tr = observe_tranches(entry, bars, exit_day, exit_price,
-                              base_lots=int(entry["shares"]), unit=1)
-        if tr is not None:
-            entry["outcome"]["tranches"] = tr
+            gross_pnl = entry["shares"] * (exit_price - entry["price"])
+            net_pnl_rs = round(gross_pnl - total_frictions - total_slippage, 2)
+
+            entry["outcome"] = {
+                "checked": date.today().isoformat(),
+                "settled_at": datetime.now().isoformat(timespec="seconds"),  # wall clock (Issue 31)
+                "resolution": resolution,
+                "price": exit_price,
+                "exit_date": exit_day,
+                "pct": round(pct, 2),
+                "r_multiple": round((exit_price - entry["price"]) / risk_per_share, 2)
+                              if risk_per_share > 0 else None,
+                "days_in_trade": (date.fromisoformat(exit_day)
+                                  - date.fromisoformat(entry["date"])).days,
+                "pnl_rs": net_pnl_rs,
+                "frictions_rs": round(total_frictions, 2),
+                "slippage_rs": round(total_slippage, 2),
+                "hypothetical": not approved,
+                "position_closed": closed,
+                "verdict": _verdict(entry, resolution, pct),
+            }
+            tr = observe_tranches(entry, bars, exit_day, exit_price,
+                                  base_lots=int(entry["shares"]), unit=1)
+            if tr is not None:
+                entry["outcome"]["tranches"] = tr
+            seen.update(status="resolved", exit_day=exit_day, resolution=resolution,
+                        net_pnl_rs=net_pnl_rs, total_frictions=total_frictions)
+            return True
+
         # Persist THIS resolution immediately — a crash anywhere later in
         # the sweep (digest formatting, another entry, email) must never
         # un-resolve it. Before this line existed, one such crash replayed
         # every resolution (and its Discord card) hourly (2026-07-09).
-        journal.rewrite_all(entries)
+        entry = journal.update_matching(lambda e, key=key: journal.row_key(e) == key, _settle_plan)
+        if entry is None:
+            if seen.get("status") == "live":
+                print(f"Plan tracker: {candidate['ticker']} still live "
+                      f"(now Rs.{seen['close']:,.2f}; stop Rs.{seen['stop']:,.2f}, "
+                      f"target Rs.{seen['target']:,.2f}).")
+            elif seen.get("status") == "already_resolved":
+                print(f"Plan tracker: {candidate['ticker']} already resolved elsewhere — skipped.")
+            continue
+        resolution, exit_day = seen["resolution"], seen["exit_day"]
+        net_pnl_rs, total_frictions = seen["net_pnl_rs"], seen["total_frictions"]
         resolved += 1
         resolved_lines.append(_outcome_line(entry))
         print(f"Plan tracker: resolved {entry['ticker']} — {entry['outcome']['verdict']}")
@@ -1492,121 +1854,32 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
                 print(f"Plan tracker: episode capture failed for {entry['ticker']} ({e}).")
 
     # ---- Phase 5: options spread sweep (atomic basket exits) ----------
-    for entry in open_spreads:
-        spread = entry["spread"]
+    for candidate in open_spreads:
         # A dead feed must not kill the sweep: the expiry backstop below is
-        # exactly for the days the feed is dead (Issues 26/28).
+        # exactly for the days the feed is dead (Issues 26/28). Fetched
+        # OUTSIDE the journal lock (network); the settlement runs inside it.
         try:
-            bars = _daily_bars(entry["ticker"], entry["date"])
+            bars = _daily_bars(candidate["ticker"], candidate["date"])
         except Exception as e:
-            print(f"Plan tracker: price feed error for {entry['ticker']} spread ({e}).")
+            print(f"Plan tracker: price feed error for {candidate['ticker']} spread ({e}).")
             bars = []
-        hit = _resolve_spread(entry, bars) if bars else None
-        backstop = None
-        # The bar walk only settles on a bar. Past expiry with no usable
-        # exit (no bars, a gap over the exit window, or a "pre-expiry" hit
-        # that landed on a POST-expiry bar) the wall clock takes over.
-        if hit is None or hit[3] > spread["expiry"]:
-            backstop = _expiry_backstop(entry, bars)
-            if backstop is not None:
-                hit = backstop[:4]
-        if hit is None:
-            if not bars:
-                print(f"Plan tracker: no price data for {entry['ticker']} spread — will retry next run.")
-            else:
-                print(f"Plan tracker: {spread['strategy']} on {entry['ticker']} still live "
-                      f"(expiry {spread['expiry']}).")
+        key = journal.row_key(candidate)
+        seen = {}
+        entry = journal.update_matching(
+            lambda e, key=key: journal.row_key(e) == key,
+            lambda e, bars=bars, seen=seen: _settle_spread_row(e, bars, seen))
+        if entry is None:
+            if seen.get("status") == "no_data":
+                print(f"Plan tracker: no price data for {candidate['ticker']} spread — will retry next run.")
+            elif seen.get("status") == "live":
+                print(f"Plan tracker: {candidate['spread']['strategy']} on {candidate['ticker']} still live "
+                      f"(expiry {candidate['spread']['expiry']}).")
+            elif seen.get("status") == "already_resolved":
+                print(f"Plan tracker: {candidate['ticker']} spread already resolved elsewhere — skipped.")
             continue
-
-        resolution, m_exit, frac_left, exit_day = hit
-        approved = entry["decision"] == "approved"
-        qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
-        m_entry = _spread_entry_mark(spread)
-        gross_pnl = (m_exit - m_entry) * qty
-
-        if backstop is not None:
-            exit_close = backstop[4]
-            if exit_close is None:
-                # No price to cost an exit against: the mark is already the
-                # full defined loss; frictions/slippage are not invented.
-                total_frictions, total_slippage = 0.0, 0.0
-            else:
-                total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), 0.0)
-        else:
-            _day, _low, _high, exit_close = bars[[b[0] for b in bars].index(exit_day)]
-            total_frictions, total_slippage = _spread_exit_costs(spread, float(exit_close), frac_left)
-        execution = None
-        if backstop is None and approved:
-            # Decision #103: the exit is an OMS ticket the paper venue fills
-            # at the modeled per-leg exit premium (+ tier slippage). Filled
-            # -> the venue's basket mark is the exit and the exit-side
-            # ladder is skipped; anything else -> the modeled exit above.
-            limits = {(float(l["strike"]), str(l.get("option_type") or "").upper()):
-                      round(_leg_model_premium(l, float(exit_close), spread.get("entry_spot"),
-                                               frac_left), 2)
-                      for l in spread["legs"]}
-            execution = _execute_paper_exit(entry, limits, resolution,
-                                            today=date.fromisoformat(exit_day))
-            if execution.get("venue_slippage_ps") is not None:
-                total_frictions, total_slippage = _spread_exit_costs(
-                    spread, float(exit_close), frac_left, exit_slipped=True)
-                total_slippage = round(total_slippage
-                                       + float(execution["venue_slippage_ps"]) * qty, 2)
-                total_frictions = round(total_frictions, 2)
-        pnl_net = round(gross_pnl - total_frictions - total_slippage, 2)
-
-        max_profit_total = float(spread["max_profit"]) * int(spread.get("lots", 1))
-        max_loss_total = float(spread["max_loss"]) * int(spread.get("lots", 1))
-        capture_pct = (gross_pnl / max_profit_total * 100) if max_profit_total > 0 else 0.0
-
-        settled = _settle_spread_cash(pnl_net) if approved else False
-        # Phase 6G: release the capital layer's margin lock (safe no-op if
-        # this entry never passed through the gate). Hypothetical trades
-        # never consumed real capital, so they settle at zero P&L.
-        from src import portfolio_manager as pm
-        pm.release_entry(entry.get("short_id", ""),
-                         pnl_net if approved else 0.0)
-
-        entry["outcome"] = {
-            "checked": date.today().isoformat(),
-            "settled_at": datetime.now().isoformat(timespec="seconds"),  # wall clock (Issue 31)
-            "resolution": resolution,
-            "price": round(m_exit, 2),          # basket mark per share at exit
-            "exit_date": exit_day,
-            "pct": round(capture_pct, 2),        # % of max profit captured
-            "r_multiple": round(pnl_net / max_loss_total, 2) if max_loss_total > 0 else None,
-            "days_in_trade": (date.fromisoformat(exit_day)
-                              - date.fromisoformat(entry["date"])).days,
-            "pnl_rs": pnl_net,
-            "frictions_rs": round(total_frictions, 2),
-            "slippage_rs": round(total_slippage, 2),
-            "exit_style": "atomic_basket",       # all legs closed together, always
-            "hypothetical": not approved,
-            "position_closed": settled,
-        }
-        if execution is not None and (execution.get("mode") == "paper_venue"
-                                      or execution.get("error")):
-            # #103: the exit ticket record. `exit_basis` keeps describing
-            # the PRICE basis (bars / intraday chain); the venue's cost sits
-            # inside slippage_rs and is itemised here.
-            entry["outcome"]["execution"] = execution
-            if execution.get("venue_slippage_ps") is not None:
-                entry["outcome"]["venue_slippage_rs"] = round(
-                    float(execution["venue_slippage_ps"]) * qty, 2)
-        if backstop is not None:
-            # Additive keys (older rows lack them; readers tolerate absence):
-            # WHICH price settled the row, and from WHICH session.
-            entry["outcome"]["settlement_basis"] = backstop[5]
-            entry["outcome"]["settlement_close_date"] = backstop[6]
-            entry["outcome"]["settled_on"] = _today().isoformat()
-        tr = observe_tranches(entry, bars, exit_day, m_exit,
-                              base_lots=int(spread.get("lots", 1)),
-                              unit=int(spread["lot_size"]))
-        if tr is not None:
-            entry["outcome"]["tranches"] = tr
-        entry["outcome"]["verdict"] = _spread_verdict(entry, resolution, pnl_net, capture_pct)
-        # Same immediate-persistence rule as the equity sweep above.
-        journal.rewrite_all(entries)
+        spread = entry["spread"]
+        resolution, exit_day = seen["resolution"], seen["exit_day"]
+        pnl_net, total_frictions = seen["pnl_net"], seen["total_frictions"]
         resolved += 1
         resolved_lines.append(_spread_outcome_line(entry))
         print(f"Plan tracker: resolved {spread['strategy']} on {entry['ticker']} "
@@ -1649,10 +1922,10 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
 
     if brain is not None:
         brain.close()
-    if resolved:
-        journal.rewrite_all(entries)
-        if email:
-            send_digest("Paper Trading: plans resolved", resolved_lines)
+    # No closing whole-file rewrite (D1): every resolution above already
+    # wrote its own row, fresh, under the lock.
+    if resolved and email:
+        send_digest("Paper Trading: plans resolved", resolved_lines)
     return resolved
 
 

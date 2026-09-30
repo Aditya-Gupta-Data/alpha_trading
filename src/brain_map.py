@@ -61,6 +61,9 @@ NEWS_SENTIMENT_PATH = ROOT / "data" / "news_sentiment.json"
 # How many linked outcomes query_similar_events() returns as examples.
 MAX_EXAMPLES = 5
 
+# sqlite busy timeout for every writer connection (decision #122).
+BUSY_TIMEOUT_SECONDS = 30.0
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +105,10 @@ def connect(db_path=None) -> sqlite3.Connection:
         db_path = DEFAULT_DB_PATH
     if str(db_path) != ":memory:":
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    # 30 s busy timeout (audit Chunk 1, decision #122): three processes
+    # write this one file; the 5 s default turned a slow commit elsewhere
+    # into a "database is locked" failure mid-settlement.
+    conn = sqlite3.connect(str(db_path), timeout=BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)

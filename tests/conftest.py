@@ -185,7 +185,12 @@ def _isolated_shared_runtime_files(monkeypatch, tmp_path):
     (the Mac 19:15 chain spools them every weekday) about a dozen tests
     either drained real cards into `.drained` unsent (before the guard) or
     failed on the guard (after it). Each test gets its own."""
-    from src import adaptive_sizing, dhan_client, notifier
+    from src import adaptive_sizing, dhan_client, journal, notifier
+    # The journal and its write lock (decision #122: every journal write
+    # takes journal.lock beside the file) — a test that fakes read_all /
+    # rewrite_all still takes the lock, so the lock must live in tmp too.
+    monkeypatch.setattr(journal, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(journal, "JOURNAL_PATH", tmp_path / "journal.jsonl")
     monkeypatch.setattr(adaptive_sizing, "ADJUSTMENTS_PATH",
                         tmp_path / "sizing_adjustments.jsonl")
     monkeypatch.setattr(notifier, "BUDGET_STATE_PATH",

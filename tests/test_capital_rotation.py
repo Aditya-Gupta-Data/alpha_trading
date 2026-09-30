@@ -12,6 +12,7 @@ import sqlite3
 
 import pytest
 
+from tests.fake_journal import FakeJournalBase
 from src import brain_map, oms, plan_tracker as pt, portfolio_manager as pm
 from src.dashboard import data as dash
 from src.execution import paper_venue as pv
@@ -41,7 +42,7 @@ QUOTES = {"old1": {(24000.0, "CE"): 250.0, (24200.0, "CE"): 60.0},    # +120 of 
           "old2": {(24000.0, "CE"): 100.0, (24200.0, "CE"): 30.0}}    # flat -> rr_left 130/70
 
 
-class FakeJournal:
+class FakeJournal(FakeJournalBase):
     def __init__(self, rows):
         self.rows = rows
 
@@ -149,7 +150,8 @@ def test_2l_rejects_while_2l_rot_evicts_the_weak_trade_and_funds_the_strong_one(
     conn, j = world
     before_10l = pm.account_summary(conn)
     out = pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn,
-                                      marks_fn=_marks, evict_fn=_evict_fn(j))
+                                      marks_fn=_marks, evict_fn=_evict_fn(j),
+                                      allow_rotation=True)
     # PAPER_2L: first-come-first-served -> refused, both old trades still held
     assert out[TWO_L]["status"] == "rejected" and "rotation" not in out[TWO_L]
     assert pm._active_shadow_lock(conn, TWO_L, "old1") is not None
@@ -193,7 +195,7 @@ def test_a_weak_trade_that_is_strong_on_real_quotes_is_not_evicted(world, monkey
     # the model calls old2 weak; the chain says it is flat (rr_left 1.857 > 1.857/1.5)
     out = pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn,
                                       marks_fn=lambda refs: {"old2": 0.05, "old1": 5.0},
-                                      evict_fn=_evict_fn(j))
+                                      evict_fn=_evict_fn(j), allow_rotation=True)
     assert out[ROT]["status"] == "rejected" and out[ROT]["rotation"]["evicted"] is None
     assert pm._active_shadow_lock(conn, ROT, "old2") is not None
     assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0
@@ -209,14 +211,15 @@ def test_no_chain_quotes_means_no_eviction(world):
         return pt.evict_for_rotation(conn, account, ref, lots, max_rr_left=max_rr_left,
                                      quotes_fn=lambda e: None, entries=j.rows)
     out = pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn,
-                                      marks_fn=_marks, evict_fn=evict)
+                                      marks_fn=_marks, evict_fn=evict, allow_rotation=True)
     assert out[ROT]["status"] == "rejected"
     assert pm._active_shadow_lock(conn, ROT, "old1") is not None
 
 
 def test_a_rejudge_at_approval_never_evicts_twice(world):
     conn, j = world
-    kw = dict(conn=conn, marks_fn=_marks, evict_fn=_evict_fn(j))
+    kw = dict(conn=conn, marks_fn=_marks, evict_fn=_evict_fn(j),
+                                      allow_rotation=True)
     pm.evaluate_shadow_accounts("new1", _new_proposal(), **kw)
     again = pm.evaluate_shadow_accounts("new1", _new_proposal(), **kw)   # decide_pending re-judge
     assert again[ROT] == {"status": "approved", "lots": 1, "margin_rs": 17550.0,
@@ -239,7 +242,8 @@ def test_a_rejudge_keeps_a_held_2l_entry_approved(world):
 def test_the_primary_exit_later_skips_the_evicted_account(world):
     conn, j = world
     pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn,
-                                marks_fn=_marks, evict_fn=_evict_fn(j))
+                                marks_fn=_marks, evict_fn=_evict_fn(j),
+                                      allow_rotation=True)
     old1 = j.rows[0]
     old1["accounts"][ROT]["status"] = "approved"      # even if a stale rewrite lost the stamp
     rec = pt._execute_paper_exit(old1, QUOTES["old1"], "profit_take", conn=conn)
@@ -275,7 +279,8 @@ def test_the_switch_off_keeps_the_rotation_account_out(world, monkeypatch):
 def test_the_audit_log_shows_the_eviction(world, tmp_path):
     conn, j = world
     pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn,
-                                marks_fn=_marks, evict_fn=_evict_fn(j))
+                                marks_fn=_marks, evict_fn=_evict_fn(j),
+                                      allow_rotation=True)
     db = tmp_path / "b.db"
     conn.commit()
     disk = sqlite3.connect(db)
@@ -286,3 +291,40 @@ def test_the_audit_log_shows_the_eviction(world, tmp_path):
     assert '"evicted": "old1"' in rows[0]["detail"] and '"funded": "new1"' in rows[0]["detail"]
     t = dash.treasury(db_path=db)
     assert ROT in t and t[ROT]["open_locks"] == 2
+
+
+# ------------------------------------------- D6 (decision #122): approval only
+
+def test_a_proposal_never_evicts_the_margin_wall_is_a_named_deferral(world):
+    """#122 amends #115: at PROPOSAL time the rotation account is judged
+    like PAPER_2L — no live position is closed to fund a signal that may
+    yet be rejected. The eviction happens only at approval."""
+    conn, j = world
+    calls = []
+    out = pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn, marks_fn=_marks,
+                                      evict_fn=lambda *a: calls.append(a) or {"status": "evicted"})
+    assert calls == []
+    assert out[ROT]["status"] == "rejected" and "judged at approval" in out[ROT]["reason"]
+    assert "rotation" not in out[ROT]
+    assert pm._active_shadow_lock(conn, ROT, "old1") is not None
+    assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0
+    # the approval judgement of the same entry does evict
+    again = pm.evaluate_shadow_accounts("new1", _new_proposal(), conn=conn, marks_fn=_marks,
+                                        evict_fn=_evict_fn(j), allow_rotation=True)
+    assert again[ROT]["status"] == "approved" and again[ROT]["rotation"]["evicted"] == "old1"
+
+
+def test_a_pending_trade_is_never_an_eviction_candidate(world):
+    """A still-pending proposal's lock is a reservation, not a position:
+    rotation_marks leaves it out, and evict_for_rotation refuses it."""
+    conn, j = world
+    j.rows[0]["decision"] = "pending_approval"
+    from datetime import date
+    m = pt.rotation_marks(["old1", "old2"], entries=j.rows, spot_fn=lambda t: 24150.0,
+                          today=date(2026, 10, 27))
+    assert set(m) == {"old2"}
+    res = pt.evict_for_rotation(conn, ROT, "old1", 1, quotes_fn=lambda e: QUOTES["old1"],
+                                entries=j.rows)
+    assert res["status"] == "not_entered"
+    assert pm._active_shadow_lock(conn, ROT, "old1") is not None
+    assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0

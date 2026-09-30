@@ -10,6 +10,8 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
+import sqlite3
+
 import pytest
 
 from src import brain_map, oms, plan_tracker as pt, portfolio_manager as pm
@@ -509,15 +511,45 @@ def test_a_door_error_after_issue_leaves_the_row_for_resume_never_reissues(world
     assert c.execute("SELECT COUNT(*) FROM trade_tickets WHERE note LIKE 'EXIT%'").fetchone()[0] == 1
 
 
-def test_close_and_release_are_one_transaction(world, monkeypatch):
+def test_close_and_release_are_one_transaction(world):
+    """Real path, no monkeypatch (audit Chunk 1 D4, decision #122): the lock
+    UPDATE itself fails inside SQLite (a trigger aborts it), so the row
+    close that ran before it in the same transaction must roll back. Before
+    #122 this test replaced the release with a stub and passed while a
+    schema executescript committed the row close on its own."""
     c = world
     _open(c)
     row = lp.open_rows(c, LIVE)[0]
-    monkeypatch.setattr(pm, "paper_release_margin", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("locked")))
-    with pytest.raises(RuntimeError):
+    c.execute("CREATE TRIGGER fail_release BEFORE UPDATE OF released_at ON paper_margin_locks "
+              "BEGIN SELECT RAISE(ABORT, 'simulated lock write failure'); END")
+    c.commit()
+    eq_before = pm.paper_equity(c, LIVE)
+    with pytest.raises(sqlite3.IntegrityError):
         lp._settle(c, row, 87.0, "ratchet_hit", "live_bid_ask", 0.0, OPEN)
     assert lp.open_rows(c, LIVE)[0]["state"] == "open"                         # rolled back, retried later
     assert pm._active_shadow_lock(c, LIVE, "lv0001") is not None
+    assert pm.paper_equity(c, LIVE) == eq_before
+    c.execute("DROP TRIGGER fail_release")
+    c.commit()
+    out = lp._settle(c, row, 87.0, "ratchet_hit", "live_bid_ask", 0.0, OPEN)   # the retry settles both
+    assert out["status"] == "settled" and out["lock_released"] is True
+    assert pm._active_shadow_lock(c, LIVE, "lv0001") is None
+    assert c.execute("SELECT state FROM paper_live_positions WHERE journal_ref = 'lv0001'").fetchone()[0] == "closed"
+
+
+def test_the_schema_check_never_commits_an_open_transaction(world):
+    """The mechanism behind D4: once the tables exist, ensure_*_schema runs
+    no statement at all, so a caller's open transaction stays open."""
+    c = world
+    pm.ensure_accounts_schema(c)
+    pm.get_paper_account(c, LIVE)          # first touch seeds (and commits) the account row
+    c.execute("INSERT INTO paper_account_events (account_id, ts, event_type) VALUES ('X', 't', 'probe')")
+    assert c.in_transaction
+    pm.ensure_accounts_schema(c)
+    pm.paper_trading_halted(c, LIVE)
+    assert c.in_transaction
+    c.rollback()
+    assert c.execute("SELECT COUNT(*) FROM paper_account_events WHERE event_type = 'probe'").fetchone()[0] == 0
 
 
 def test_an_unknown_position_state_keeps_the_lock_and_a_closed_row_releases_late(world, monkeypatch):

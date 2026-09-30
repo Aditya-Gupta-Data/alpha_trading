@@ -143,6 +143,13 @@ def calculate_trade_frictions(instrument_type: str, side: str, premium: float, q
     return round(total_friction, 2)
 
 
+def flat_order_cost_rs(orders: int) -> float:
+    """The part of the friction stack that does NOT scale with size: the
+    flat brokerage on each executed order plus its 18% GST. A 1-lot order
+    pays exactly what a 10-lot order pays (decision #122, audit D13)."""
+    return round(max(0, int(orders)) * BROKERAGE_FLAT * (1 + GST_RATE), 2)
+
+
 def calculate_span_margin(legs: list, lot_size: int) -> dict:
     """Simulate NSE SPAN margin for a basket of option legs, WITH the
     hedge offsets a real clearing house grants — so a defined-risk spread

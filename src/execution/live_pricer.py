@@ -425,7 +425,13 @@ def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, f
     d = float(row["entry_mark_ps"])
     profit_ps = _clamp(float(exit_mark_ps) - d, float(row["max_loss_ps"]), float(row["max_profit_ps"]))
     pnl = round(profit_ps * qty - float(frictions), 2)
-    pm.ensure_accounts_schema(conn)          # its executescript commits — do it before the transaction
+    # Everything that may commit or write runs BEFORE the transaction opens
+    # (audit Chunk 1 D4, decision #122): the schema check, and the halt
+    # read that can latch a halt row. Inside it: only plain statements.
+    pm.ensure_accounts_schema(conn)
+    if conn.in_transaction:
+        conn.commit()
+    was_halted = pm.paper_trading_halted(conn, row["account_id"])
     cur = conn.execute("UPDATE paper_live_positions SET state = ?, closed_at = ?, resolution = ?, "
                        "exit_mark_ps = ?, settlement_basis = ?, frictions_rs = ?, pnl_net = ?, "
                        "exit_ticket_id = COALESCE(?, exit_ticket_id), last_profit_ps = ?, "
@@ -439,15 +445,26 @@ def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, f
     if cur.rowcount == 0:
         conn.rollback()
         return {"status": "already_closed", "journal_ref": row["journal_ref"]}
-    # The row close above is NOT committed yet: paper_release_margin's own
-    # commit lands both in one transaction; a failure inside it rolls the
-    # row back to where it was, so the next tick retries (never a closed
-    # row with a live lock).
+    # The row close above is NOT committed yet. The lock release and the
+    # account's P&L join it as plain statements (no DDL, no commit inside),
+    # and ONE commit lands all three; a failure anywhere rolls the row back
+    # to where it was, so the next tick retries — never a closed row with a
+    # live lock. (Before #122 a schema executescript inside the release
+    # committed the row close on its own: the "one transaction" was two.)
     try:
-        released = pm.paper_release_margin(conn, row["account_id"], row["journal_ref"], pnl)
+        lock_released = pm.paper_release_rows(conn, row["account_id"], row["journal_ref"], pnl)
+        conn.commit()
     except Exception:
         conn.rollback()
         raise
+    released = {"released": False}
+    if lock_released:
+        try:
+            released = pm.paper_after_release(conn, row["account_id"], row["journal_ref"], pnl,
+                                              was_halted)
+        except Exception as exc:    # the money is settled; a curve point is not
+            print(f"  (live account: post-settle record skipped for {row['journal_ref']}: {exc})")
+            released = {"released": True}
     payload = {"resolution": resolution, "basis": basis, "closed_at": _iso(now), "ticker": row["ticker"],
                "strategy": row["strategy"], "lots": row["lots"], "entry_mark_ps": d,
                "exit_mark_ps": round(float(exit_mark_ps), 4), "profit_ps": round(profit_ps, 4),

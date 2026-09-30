@@ -61,7 +61,7 @@ def run_tracker_on(tmp, entries, bars, today: date, feed_raises=False):
     plan_tracker._close_paper_position = lambda entry, price, *a, **k: True
     plan_tracker._brain_connect = lambda: brain_map.connect(db_path)
     plan_tracker._today = lambda: today
-    pm.release_entry = lambda ref, pnl=0.0, conn=None: released.append((ref, pnl)) or {}
+    pm.release_entry = lambda ref, pnl=0.0, conn=None, **k: released.append((ref, pnl)) or {}
     analyst.generate_post_mortem = lambda plan, execution: None
     resolved = plan_tracker.run_tracker(email=False)
     return resolved, fj, settled, released

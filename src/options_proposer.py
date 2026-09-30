@@ -1244,7 +1244,14 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     fail-safe Discord confirmation the interactive review does.
 
     Returns {"status": "approved"|"rejected"|"not_found"|"already_resolved",
-             "entry": dict-or-None}."""
+             "entry": dict-or-None}.
+
+    D1 (decision #122): the whole decision runs under the journal lock on
+    the row read FRESH inside it, and writes THAT ROW alone — two taps (or
+    a tap racing auto-approve) cannot both approve one entry, a tracker
+    resolution cannot be reverted by a stale copy, and a rotation stamp
+    this approval writes on the EVICTED trade's row survives. Discord
+    notes go out after the lock is released."""
     if human:
         # Phase 3 (§6.6): any human decision — button, CLI, either verdict
         # — is the pulse that keeps full autonomy armed. Recorded before
@@ -1254,64 +1261,11 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
             human_pulse.touch("decide_pending")
         except Exception:
             pass
-    entries = journal.read_all()
-    target = None
-    for e in entries:
-        if (e.get("decision") == "pending_approval"
-                and e.get("short_id") == trade_id):
-            target = e
-            break
-    if target is None:
-        return {"status": "not_found", "entry": None}
-    if target.get("outcome"):
-        return {"status": "already_resolved", "entry": target}
-
-    if approve:
-        # Phase 6J: approval is the moment a trade is ACCEPTED, so the
-        # capital layer must grant its margin first (idempotent no-op when
-        # the headless gate already locked it at proposal time). A
-        # margin-blocked approval leaves the entry pending — nothing is
-        # journaled, broadcast, or settled.
-        spread = target.get("spread") or {}
-        per_lot = (spread.get("margin") or {}).get("total_margin")
-        if per_lot is not None:
-            from src import portfolio_manager as pm
-            # Same reservation math as the headless gate (incl. the
-            # entry-time VIX-stress factor) — the entry's receipt carries
-            # the VIX it was born under; None degrades to factor 1.0.
-            required = pm.required_margin_for(
-                {"spread": spread,
-                 "vix": (target.get("receipt") or {}).get("vix")})
-            allowed, gate_reason = pm.gate_headless_entry(trade_id, required)
-            if not allowed:
-                return {"status": "margin_blocked", "entry": target,
-                        "reason": gate_reason}
-            # #102: approval is the acceptance moment for the shadow
-            # accounts too (idempotent re-request on an active lock; a
-            # proposal-time refusal is re-judged on today's cash).
-            target["accounts"] = _judge_shadow_accounts(
-                trade_id, {"spread": spread, "lots": spread.get("lots"),
-                           "vix": (target.get("receipt") or {}).get("vix")})
-
-    decision = "approved" if approve else "rejected"
-    target["decision"] = decision
-    target["why"] = (why or "").strip() or "(no reason given)"
-    if approve:
-        # Phase M2 (decision #101): an approved ENTRY becomes an Order
-        # Ticket the PAPER venue fills leg by leg — the legacy "the journal
-        # line IS the fill" model is replaced for new entries when the
-        # flag is on. Runs BEFORE the rewrite so the venue's fill prices
-        # land on the row the tracker will read. Fail-open: a venue error
-        # leaves the legacy fill in place and says so; nothing here touches
-        # margin or the exit path.
-        target["execution"] = _execute_paper_entry(target)
-    journal.rewrite_all(entries)
-    if not approve:
-        # Phase 6G: a human rejection frees the entry's margin lock right
-        # away (zero P&L — the trade never happened). Safe no-op if the
-        # entry predates the capital layer.
-        from src import portfolio_manager as pm
-        pm.release_entry(trade_id, 0.0)
+    with journal.locked():
+        verdict = _decide_pending_locked(trade_id, approve, why)
+    if verdict["status"] not in ("approved", "rejected"):
+        return verdict
+    target, decision = verdict["entry"], verdict["status"]
     marker = "✅" if approve else "❌"
     strategy = (target.get("spread") or {}).get("strategy", "proposal")
     _notify_discord(f"{marker} **Pending decision on {target['ticker']} "
@@ -1340,11 +1294,80 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     return {"status": decision, "entry": target}
 
 
-def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None) -> dict:
+def _decide_pending_locked(trade_id: str, approve: bool, why: str) -> dict:
+    """decide_pending's body — caller holds the journal lock."""
+    import copy
+    target = journal.get_entry(trade_id)
+    if target is None or target.get("decision") != "pending_approval":
+        return {"status": "not_found", "entry": None}
+    if target.get("outcome"):
+        return {"status": "already_resolved", "entry": target}
+
+    if approve:
+        # Phase 6J: approval is the moment a trade is ACCEPTED, so the
+        # capital layer must grant its margin first (idempotent no-op when
+        # the headless gate already locked it at proposal time; a lock that
+        # EXPIRED unapproved at 15:30 — D7 — is taken again on today's
+        # cash). A margin-blocked approval leaves the entry pending —
+        # nothing is journaled, broadcast, or settled.
+        spread = target.get("spread") or {}
+        per_lot = (spread.get("margin") or {}).get("total_margin")
+        if per_lot is not None:
+            from src import portfolio_manager as pm
+            # Same reservation math as the headless gate (incl. the
+            # entry-time VIX-stress factor) — the entry's receipt carries
+            # the VIX it was born under; None degrades to factor 1.0.
+            required = pm.required_margin_for(
+                {"spread": spread,
+                 "vix": (target.get("receipt") or {}).get("vix")})
+            allowed, gate_reason = pm.gate_headless_entry(trade_id, required)
+            if not allowed:
+                return {"status": "margin_blocked", "entry": target,
+                        "reason": gate_reason}
+            # #102: approval is the acceptance moment for the shadow
+            # accounts too (idempotent re-request on an active lock; a
+            # proposal-time refusal is re-judged on today's cash). D6
+            # (#122): this is the ONLY judgement where the rotation account
+            # may evict — the entry is being accepted, not merely proposed.
+            target["accounts"] = _judge_shadow_accounts(
+                trade_id, {"spread": spread, "lots": spread.get("lots"),
+                           "vix": (target.get("receipt") or {}).get("vix")},
+                allow_rotation=True)
+
+    decision = "approved" if approve else "rejected"
+    target["decision"] = decision
+    target["why"] = (why or "").strip() or "(no reason given)"
+    if approve:
+        # Phase M2 (decision #101): an approved ENTRY becomes an Order
+        # Ticket the PAPER venue fills leg by leg — the legacy "the journal
+        # line IS the fill" model is replaced for new entries when the
+        # flag is on. Runs BEFORE the write so the venue's fill prices
+        # land on the row the tracker will read. Fail-open: a venue error
+        # leaves the legacy fill in place and says so; nothing here touches
+        # margin or the exit path.
+        target["execution"] = _execute_paper_entry(target)
+    final = copy.deepcopy(target)
+
+    def _replace(e):
+        e.clear()
+        e.update(final)
+    journal.update_entry(trade_id, _replace)
+    if not approve:
+        # Phase 6G: a human rejection frees the entry's margin lock right
+        # away (zero P&L — the trade never happened). Safe no-op if the
+        # entry predates the capital layer.
+        from src import portfolio_manager as pm
+        pm.release_entry(trade_id, 0.0)
+    return {"status": decision, "entry": final}
+
+
+def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None,
+                           allow_rotation: bool = False) -> dict:
     """The dual-treasury seam (#102): {account_id: {status, lots, margin_rs,
     reason}} from `portfolio_manager.evaluate_shadow_accounts`, {} when the
     switch is off. Never raises — a broken shadow ledger cannot touch the
-    primary path. Each refusal is printed so the session log reads it."""
+    primary path. Each refusal is printed so the session log reads it.
+    `allow_rotation` is True only for the APPROVAL judgement (D6, #122)."""
     try:
         from src import brain_map, portfolio_manager as pm
         if not pm.shadow_accounts_enabled():
@@ -1352,7 +1375,8 @@ def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None) -> d
         conn = brain_map.connect()
         try:
             verdicts = pm.evaluate_shadow_accounts(journal_ref, proposal, conn=conn,
-                                                   risk_pct=risk_pct)
+                                                   risk_pct=risk_pct,
+                                                   allow_rotation=allow_rotation)
         finally:
             if not _PAPER_VENUE_KEEP_CONN:      # same seam as the venue step
                 conn.close()
@@ -1488,9 +1512,9 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None) -> dict:
                                                account_id=acct, lots=lots)
                 tids[acct] = issued["ticket_id"]
             tid = tids[oms.PRIMARY_ACCOUNT]
-            # journal.rewrite_all just wrote this row; the venue's stamp goes
-            # through update_entry, so stamping is deferred to the caller's
-            # next read — here we only fill and report.
+            # The caller (decide_pending) writes this row itself, under the
+            # journal lock, after this returns — the venue's own stamp is
+            # off here; the fills are copied onto the legs below instead.
             venue.sweep(conn, stamp=False)
             view = oms.ticket_view(conn, tid) or {}
             record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"),
@@ -1565,8 +1589,20 @@ def review_pending() -> int:
         answer = input("\nTake this spread on paper? [y/N] ").strip().lower()
         decision = "approved" if answer == "y" else "rejected"
         why = input("Why? (one line) ").strip() or "(no reason given)"
-        entry["decision"] = decision
-        entry["why"] = why
+
+        # D1 (#122): write THIS row, fresh, only if it is still undecided
+        # (the loop may have waited minutes on input() above).
+        def _decide(e, decision=decision, why=why):
+            if e.get("decision") != "pending_approval" or e.get("outcome"):
+                return False
+            e["decision"] = decision
+            e["why"] = why
+            return True
+        if journal.update_matching(
+                lambda e, key=journal.row_key(entry): journal.row_key(e) == key,
+                _decide) is None:
+            print("  (decided or resolved elsewhere meanwhile — left as-is)")
+            continue
         decided += 1
         marker = "✅" if decision == "approved" else "❌"
         _notify_discord(f"{marker} **Pending decision on {entry['ticker']} "
@@ -1579,7 +1615,6 @@ def review_pending() -> int:
             print("  skipped — the tracker will score the skip.")
 
     if decided:
-        journal.rewrite_all(entries)
         print(f"\n{decided} pending proposal(s) decided and journaled.")
     return decided
 

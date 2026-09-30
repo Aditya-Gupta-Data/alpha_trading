@@ -969,15 +969,26 @@ def review(req: ReviewRequest):
                      f"{req.ticker} on {req.date}."},
         )
 
-    entries[idx]["review"] = {
+    review_fields = {
         "pm_right": (req.pm_right or "").strip() or None,
         "pm_wrong": (req.pm_wrong or "").strip() or None,
         "pm_error_category": req.pm_error_category or None,
         "reviewed_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
-    journal.rewrite_all(entries)
+    key = journal.row_key(entries[idx])
+
+    # D1 (#122): write this one row onto a FRESH read under the journal
+    # lock — never the whole file from the copy read above.
+    def _apply(fresh):
+        for e in fresh:
+            if journal.row_key(e) == key and e.get("ticker") == req.ticker \
+                    and e.get("date") == req.date:
+                e["review"] = review_fields
+                return True
+        return False
+    journal.mutate_all(_apply)
     return {"ok": True, "ticker": req.ticker, "date": req.date,
-            "review": entries[idx]["review"]}
+            "review": review_fields}
 
 
 # =========================================================== /api/sync-market

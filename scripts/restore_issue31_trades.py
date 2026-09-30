@@ -24,6 +24,12 @@ Deliberately NOT touched:
                     by journal_ref, so the REAL resolution overwrites each one
                     when it comes; the loss-permanence invariant (#33) is not
                     broken by hand.
+CORRECTION (2026-09-30, audit Chunk 1 D4/D5, decisions #121/#122): two claims
+above were false. `record_outcome` is INSERT-OR-IGNORE, not an upsert, so the
+five voided outcomes stayed in the Brain Map — repaired by
+scripts/repair_d5_brain_map_outcomes.py (#121). And the "one transaction"
+below was not one: the schema executescript inside the release helpers
+committed early (fixed in portfolio_manager by #122).
 Guards: refuses any ref whose journal outcome is not `stop_loss`, whose lock is
 not released, or whose lock pnl_net differs from the journal pnl by > Rs.0.01.
 Idempotent: a ref already OPEN is skipped, not double-restored.

@@ -50,6 +50,7 @@ def run_review():
 
     cutoff = (date.today() - timedelta(days=REVIEW_AFTER_DAYS)).isoformat()
     lines, checked = [], 0
+    scored = {}                  # row_key -> outcome, written under the lock below
 
     for entry in entries:
         if entry["outcome"] is not None or entry["date"] > cutoff:
@@ -70,6 +71,7 @@ def run_review():
             "pct": round(pct, 2),
             "verdict": verdict,
         }
+        scored[journal.row_key(entry)] = entry["outcome"]
         checked += 1
         verb = "bought" if entry["action"] == "BUY" else "sold"
         did = "You" if entry["decision"] == "approved" else "You considered, but skipped,"
@@ -82,7 +84,17 @@ def run_review():
         )
 
     if checked:
-        journal.rewrite_all(entries)
+        # D1 (#122): the quotes above took network time; write only the rows
+        # scored here, onto a FRESH read, and only where still unscored.
+        def _apply(fresh):
+            n = 0
+            for e in fresh:
+                outcome = scored.get(journal.row_key(e))
+                if outcome is not None and e.get("outcome") is None:
+                    e["outcome"] = outcome
+                    n += 1
+            return n
+        journal.mutate_all(_apply)
 
     # Running totals across everything ever scored.
     scored = [e for e in entries if e["outcome"]]

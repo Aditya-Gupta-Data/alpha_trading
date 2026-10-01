@@ -13,7 +13,9 @@ D6, D7, D8 and D13 the same day). They were deployed to the VM at 23:04 IST.
 D5's data repair is a one-off tool, `scripts/repair_d5_brain_map_outcomes.py`.
 It ran on the VM at 23:04:46 IST, verified, and is recorded in HANDOVER and
 ledger Issue 39. D9–D12 and D14
-(Batch D, minor) are still open. The same panel re-reviewed the fix diff; its
+(Batch D, minor) were fixed on 2026-10-01 (decision #123, `a91f532` → `0e66454`)
+together with the two residuals of the fix-diff review. **Chunk 1 is closed**
+(see "Batch D review" at the end). The same panel re-reviewed the fix diff; its
 result is in the "Fix-diff review" section at the end.
 
 The table below is the original audit and is left as it was written.
@@ -154,3 +156,55 @@ refuted findings not acted on are listed above.
 **Known residual (not fixed):** when PAPER_2L_ROT is margin-walled at
 approval, its eviction quotes are fetched while the journal lock is held.
 This happens only in that case and lasts a few seconds.
+
+
+## Batch D review (2026-10-01)
+
+Batch D and the two leftovers shipped in `a91f532`. The same panel reviewed
+it, then reviewed each fix it led to:
+
+- **`a91f532`:** 20 findings, 7 distinct (11 CONFIRMED, 4 PLAUSIBLE, 5
+  REFUTED). The two majors:
+  - The orphan sweep would have released every desk lock at zero on an
+    unreadable or empty ledger read.
+  - Nothing read the `funding_revoked` correction.
+
+  The minors:
+  - `/api/decision` DISMISS returned a 500 after journaling (from the D9 rework).
+  - Curve points could be written from a stale equity read.
+  - The edge-miner and pull-script copy paths still copied the live files.
+  - Recon ignored a per-account eviction.
+  - One test proved nothing.
+
+  All fixed in `fad4b72`.
+- **`fad4b72`:** 14 findings across 4 lenses, all minor. 6 CONFIRMED, 3 PLAUSIBLE, 5 REFUTED. Every
+  one was addressed in `0e66454`:
+  - A curve rounding mismatch on exact-half values, and a read-back race.
+  - A revocation shown as an EXIT, and one written without checking it persisted.
+  - The sweep silently paused by one torn line.
+  - A phantom-funded exit going through the OMS.
+  - A D7 expiry hiding a position from recon.
+  - DISMISS journaling before its read.
+  - The export's margin column on revoked rows.
+  - Weak reader tests, and stale module rows.
+- **`0e66454`:** reviewed together with a blocker/major-only sweep of the whole
+  Batch D series `ddaa1f7..0e66454`.
+  - **The sweep found nothing.**
+  - 10 findings, all minor: 5 CONFIRMED, 1 PLAUSIBLE, 4 REFUTED.
+  - Two concerned code:
+    - A lockless funded entry whose exit was already on the ledger was never corrected.
+    - Recon's D7 check ran one query per lock.
+  - Six were untested claims, among them the write lock across a curve point's read; that test was rewritten after a mutant showed it passing for the wrong reason.
+  - All fixed in `95c053f`.
+- **`95c053f`:** 2 findings, both CONFIRMED minor, both fixed in `7ebda95`:
+  - The module row lacked the reverse sweep's era cutoff.
+  - The primary half of recon's expiry fold was unpinned through a revival.
+
+  A refuter checked the new fold against `pm._lock_expired_unapproved` on
+  300 random event sequences and found 0 differences. No code changed after
+  this round.
+
+**Batch D outcome:**
+- Every finding the panel upheld across the four rounds is fixed with a test.
+- The one test shown passing for the wrong reason was rewritten and re-checked against a mutant.
+- The whole-series sweep found no blocker or major.

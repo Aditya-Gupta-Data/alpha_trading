@@ -42,6 +42,96 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-01 — audit Chunk 1 Batch D + leftovers BUILT, REVIEWED, PUSHED (#123); VM DEPLOY NOT DONE — the owner deploys it manually this evening
+
+**State.** `origin/main` carries `a91f532` → `7ebda95` plus this doc commit.
+Suite: 2,499 tests. **The VM is still at `a82d12f`** (the Batch A–C deploy
+of 09-30); none of #123 is live yet. The 15:32 automatic deploy was
+cancelled on the owner's instruction.
+
+**What #123 changes:**
+- **D9:** `portfolio.json` is written under one lock, atomically.
+- **D10:** the mirror, `scripts/pull_dashboard_data.sh` and the Mac edge
+  miner copy VM snapshots (`src/dashboard/mirror_snapshot.py`), never the
+  live db or journal.
+- **D11:** the equity desk writes its ledger entry before taking its lock.
+  - A `funding_revoked` correction is applied on read by every
+    equity-ledger reader.
+  - A reverse sweep corrects entries logged as funded with no lock, from
+    `REVERSE_SWEEP_FROM` (10-01 15:30) only.
+  - The no-entry orphan release acts only on a clean ledger, one lock per
+    pass.
+- **D12:** each curve point is the state at its own write, and same-second
+  reads use the row id. The 09-24 "curve ₹14.49 above equity" note was this
+  ordering, not a missing point.
+- **D14:** recon drops ticket-only rows the journal or the account's own
+  lock says are settled, except a D7 expiry.
+- **Leftovers:**
+  - The rotation eviction's network calls now happen before the journal
+    lock.
+  - An eviction that would trip its own daily breaker or ruin halt is
+    refused.
+
+**Review.** Four panel rounds; the full record is in
+`docs/audit_chunk1_accounting_ledger.md`, "Batch D review".
+- The panel found a 500 on `/api/decision` DISMISS from my D9 rework, and
+  an orphan sweep that would have released every desk lock on an
+  unreadable ledger. Both were fixed.
+- The final sweep of the whole series found no blocker or major.
+
+**Read-only VM check before deploy (10-01 ~12:20):**
+- The equity ledger is clean (218 lines, 0 unparseable).
+- No `eqd:` lock is missing its ledger entry.
+- No funded entry lacks a lock.
+- Recon has 0 ticket-only phantom rows.
+
+So the new sweeps should touch nothing on deploy.
+
+**First live session on the A–C code (10-01).**
+- There were no journal lock timeouts or tracebacks in the logs.
+- Overnight the tracker settled 2 trades. Each came from an intraday ratchet
+  rung judged on the next close (c0dd2578 −₹1,865.15, 084c8cbf −₹13,398.27),
+  so neither was backdated.
+- The D13 brokerage was booked on PAPER_2L (−₹1,757.38 on a 1-of-8-lot
+  slice).
+
+**Deploy (owner, after 15:30):** as on 09-30.
+1. Check that the VM's tracked files are clean.
+2. `git merge --ff-only origin/main`.
+3. `sudo systemctl restart alpha-trading alpha-discord-bot`.
+4. One manual `bash scripts/publish_dashboard_mirror.sh` to see the
+   snapshot path work.
+
+Deploy before the Mac edge miner's 21:00 run: it now needs
+`src.dashboard.mirror_snapshot` on the VM.
+
+**Chunk 1 is closed in code.** It closes in production once #123 is deployed.
+
+**Next: Chunk 2 (OMS & Execution).** Same panel.
+- **Files:**
+  - `src/oms.py`
+  - `src/strategy_router.py`
+  - `src/execution/paper_venue.py`
+  - `src/execution/live_pricer.py` (its pricing and exit paths)
+  - `src/live_bridge.py`
+  - `src/market_loop.py`
+  - `src/master_scheduler.py`
+  - `src/exposure_gate.py`
+  - `src/dhan_guard.py`, and the quote and chain paths of `src/dhan_client.py`
+  - `src/market_snapshot.py`
+  - `src/options_proposer.py` (`run_headless`, `decide_pending`, `_execute_paper_entry`)
+  - `src/equity_desk.py` (`_execute_equity_exit`) and `src/equity_trail.py`
+  - `src/human_pulse.py`
+- **Risk vectors:**
+  - Order-lifecycle idempotency: duplicate or orphaned tickets, and EXIT
+    tickets with no settlement. The Issue-31 refs carry more than one
+    FILLED EXIT.
+  - Fill-price integrity: the #70 crossing, tier slippage versus zero-slip,
+    clamps, and stale or torn quotes.
+  - Timing and concurrency: the entry loop, the live-bridge thread and api
+    approvals in parallel; market-hours gates; Dhan pacing and failure
+    modes.
+
 ## 2026-09-30 (late night) — audit Chunk 1 Batches A–C FIXED and DEPLOYED (#122); Brain Map outcomes REPAIRED (#121); Batch D still open
 
 **What is live now (VM at `a82d12f`; api and Discord services restarted

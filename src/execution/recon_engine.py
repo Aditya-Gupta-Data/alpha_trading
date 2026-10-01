@@ -211,6 +211,27 @@ def _settled_refs(journal_rows=None) -> set:
     return out
 
 
+def _expired_unapproved_keys(conn, tables) -> set:
+    """(ref, account) whose LAST pending-lock event is a D7 expiry (no
+    revival since) — one query per events table, folded here (#123)."""
+    last = {}
+    kinds = ("pending_lock_expired", "pending_lock_revived")
+    if "account_events" in tables:
+        for kind, detail in conn.execute(
+                "SELECT event_type, detail FROM account_events WHERE event_type IN (?, ?) "
+                "ORDER BY ts, rowid", kinds):
+            ref = str(detail or "").split(":", 1)[0]
+            if str(detail or "").startswith("eqd:"):
+                ref = ":".join(str(detail).split(":", 2)[:2])
+            last[(ref, "PAPER_10L")] = kind
+    if "paper_account_events" in tables:
+        for acct, ref, kind in conn.execute(
+                "SELECT account_id, journal_ref, event_type FROM paper_account_events "
+                "WHERE event_type IN (?, ?) ORDER BY ts, rowid", kinds):
+            last[(ref, acct)] = kind
+    return {k for k, kind in last.items() if kind == "pending_lock_expired"}
+
+
 def read_paper_book(conn: sqlite3.Connection = None, db_path=None,
                     journal_rows=None) -> list:
     """What THIS desk believes is open, from brain_map.db, read-only:
@@ -294,9 +315,7 @@ def read_paper_book(conn: sqlite3.Connection = None, db_path=None,
             # settlement: an entry approved later while the gate failed open
             # can hold a filled position on an expired lock (#123 panel)
             try:
-                from src import portfolio_manager as pm
-                released_keys = {k for k in released_keys
-                                 if not pm._lock_expired_unapproved(conn, k[1], k[0])}
+                released_keys -= _expired_unapproved_keys(conn, tables)
             except Exception:
                 released_keys = set()
             live_closed = set()

@@ -230,7 +230,7 @@ def test_an_entry_logged_funded_with_no_lock_is_revoked_on_the_ledger(tmp_path):
     funding_revoked correction, and every reader then sees telemetry."""
     desk, conn = _desk_world(tmp_path)
     ledger = tmp_path / "shadow.jsonl"
-    now = datetime(2026, 10, 1, 12, 0, tzinfo=IST)
+    now = datetime(2026, 10, 2, 12, 0, tzinfo=IST)   # after the #123 cutoff
     old = (now - timedelta(hours=2)).isoformat()
     ledger.write_text(json.dumps({"event": "entry", "id": "dead0001", "ticker": "TCS.NS", "ts": old,
                                   "mode": "PAPER_CAPITAL", "capital_allocated": 40000,
@@ -277,7 +277,7 @@ def test_every_ledger_reader_sees_a_revoked_entry_as_unfunded(tmp_path):
 def test_a_revocation_is_written_once_and_never_shown_as_an_exit(tmp_path, monkeypatch):
     desk, conn = _desk_world(tmp_path)
     ledger = tmp_path / "shadow.jsonl"
-    now = datetime(2026, 10, 1, 12, 0, tzinfo=IST)
+    now = datetime(2026, 10, 2, 12, 0, tzinfo=IST)   # after the #123 cutoff
     ledger.write_text(json.dumps({"event": "entry", "id": "dead0002", "ticker": "INFY.NS",
                                   "ts": (now - timedelta(hours=2)).isoformat(),
                                   "mode": "PAPER_CAPITAL", "funding": {"funded": True}}) + "\n")
@@ -534,3 +534,154 @@ def test_dismiss_survives_an_unreadable_book_without_a_second_row(monkeypatch):
                                                          "entry": 100.0})
     assert r.status_code == 200 and r.json()["portfolio"] is None
     assert [e["decision"] for e in journal.read_all()] == ["rejected"]
+
+
+# ================================================= round-3 panel: pinned claims
+
+def test_a_lockless_funded_entry_is_revoked_even_after_its_exit_but_mac_era_rows_are_not(tmp_path):
+    desk, conn = _desk_world(tmp_path)
+    ledger = tmp_path / "shadow.jsonl"
+    now = datetime(2026, 10, 2, 12, 0, tzinfo=IST)
+    rows = [{"event": "entry", "id": "new00001", "ticker": "TCS.NS", "ts": "2026-10-02T10:00:00+05:30",
+             "mode": "PAPER_CAPITAL", "funding": {"funded": True}},
+            {"event": "exit", "id": "new00001", "ticker": "TCS.NS", "ts": "2026-10-02T10:05:00+05:30"},
+            {"event": "entry", "id": "mac00001", "ticker": "DABUR.NS", "ts": "2026-07-20T15:00:00+05:30",
+             "mode": "PAPER_CAPITAL", "funding": {"funded": True}},
+            {"event": "exit", "id": "mac00001", "ticker": "DABUR.NS", "ts": "2026-07-25T15:00:00+05:30"}]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    out = desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now)
+    assert [o["lock_ref"] for o in out] == ["eqd:new00001"]
+    revoked = [e["id"] for e in kg.read_events(ledger) if e.get("event") == "funding_revoked"]
+    assert revoked == ["new00001"]
+
+
+def test_an_unknown_lock_state_never_revokes_and_never_skips_a_real_exit(tmp_path, monkeypatch):
+    desk, conn = _desk_world(tmp_path)
+    monkeypatch.setattr(desk, "_connect", lambda c: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    assert desk._ever_locked(None, "x") is True                   # unknown counts as locked
+
+
+def test_the_reverse_sweep_still_runs_on_an_unclean_ledger(tmp_path, monkeypatch):
+    desk, conn = _desk_world(tmp_path)
+    monkeypatch.setattr("src.notifier.fire_broadcast", lambda *a, **k: None)
+    ledger = tmp_path / "shadow.jsonl"
+    now = datetime(2026, 10, 2, 12, 0, tzinfo=IST)
+    ledger.write_text(json.dumps({"event": "entry", "id": "dead0003", "ticker": "INFY.NS",
+                                  "ts": "2026-10-02T09:30:00+05:30", "mode": "PAPER_CAPITAL",
+                                  "funding": {"funded": True}}) + "\n{torn line\n")
+    out = desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now)
+    assert [o.get("revoked") for o in out] == [True]
+
+
+def test_the_unclean_notice_refires_the_next_day_and_never_for_a_missing_ledger(tmp_path, monkeypatch):
+    desk, conn = _desk_world(tmp_path)
+    cards = []
+    monkeypatch.setattr("src.notifier.fire_broadcast", cards.append)
+    desk.sweep_orphan_locks(ledger_path=tmp_path / "absent.jsonl", conn=conn)
+    (tmp_path / "empty.jsonl").write_text("")
+    desk.sweep_orphan_locks(ledger_path=tmp_path / "empty.jsonl", conn=conn)
+    assert cards == []
+    yesterday = (datetime.now(IST) - timedelta(days=1)).replace(tzinfo=None).isoformat(timespec="seconds")
+    conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES "
+                 "(?, 'equity_sweep_skipped_unclean_ledger', 'yesterday')", (yesterday,))
+    conn.commit()
+    ledger = tmp_path / "shadow.jsonl"
+    ledger.write_text(json.dumps({"event": "entry", "id": "x1", "ticker": "X.NS"}) + "\n{torn\n")
+    desk.sweep_orphan_locks(ledger_path=ledger, conn=conn)
+    assert len(cards) == 1
+
+
+def test_recon_keeps_a_shadow_position_held_on_an_expired_lock(tmp_path):
+    c = sqlite3.connect(tmp_path / "bm.db")
+    pm.ensure_accounts_schema(c)
+    c.execute("CREATE TABLE trade_tickets (ticket_id TEXT, journal_ref TEXT, underlying TEXT, "
+              "status TEXT, kind TEXT, account_id TEXT)")
+    c.execute("INSERT INTO trade_tickets VALUES ('t1', 'late0002', 'NIFTY', 'FILLED', 'ENTRY', 'PAPER_2L')")
+    c.commit()
+    pm.paper_request_entry(c, "PAPER_2L", "late0002", 1000.0)
+    pm.expire_pending_lock(c, "late0002")
+    rows = [{"short_id": "late0002", "decision": "approved", "outcome": None}]
+    keys = {(r["ref"], r["account"]) for r in recon.read_paper_book(conn=c, journal_rows=rows)}
+    assert keys == {("late0002", "PAPER_2L")}
+    pm.paper_request_entry(c, "PAPER_2L", "late0002", 1000.0)       # revived, then settled
+    pm.paper_release_margin(c, "PAPER_2L", "late0002", 50.0)
+    keys = {(r["ref"], r["account"]) for r in recon.read_paper_book(conn=c, journal_rows=rows)}
+    assert keys == set()
+    c.close()
+
+
+def test_an_eviction_that_would_trip_the_ruin_halt_is_refused(monkeypatch):
+    from src import plan_tracker as pt
+    import src.execution.paper_venue as pv
+    from tests.test_capital_rotation import _entry as rot_entry
+    ROT = pm.ACCOUNT_PAPER_2L_ROT
+    monkeypatch.setattr(pm, "PAPER_2L_ACCOUNT_ENABLED", True)
+    monkeypatch.setattr(pm, "CAPITAL_ROTATION_ENABLED", True)
+    monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", False)
+    monkeypatch.setattr(pv, "_tier_frac", lambda u, slippage_fn=None: 0.001)
+    monkeypatch.setattr(pm, "MAX_DAILY_LOSS_PCT", 99.0)                # isolate the halt half
+    c = brain_map.connect(":memory:")
+    pm.ensure_accounts_schema(c)
+    oms.ensure_schema(c)
+    pm.get_paper_account(c, ROT)
+    pm.paper_request_entry(c, ROT, "old1", 20000.0, lots=1, primary_lots=1)
+    # 9.95% below peak already (realized long ago, not today)
+    c.execute("UPDATE paper_accounts SET realized_pnl = -19900 WHERE account_id = ?", (ROT,))
+    c.commit()
+    losing = {(24000.0, "CE"): 60.0, (24200.0, "CE"): 30.0}
+    res = pt.evict_for_rotation(c, ROT, "old1", 1, max_rr_left=99.0, quotes_fn=lambda e: losing,
+                                entries=[rot_entry("old1")], need_rs=1.0)
+    assert res["status"] == "would_halt"
+    assert pm._active_shadow_lock(c, ROT, "old1") is not None
+    assert c.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0
+    c.close()
+
+
+def test_a_crash_mid_save_leaves_the_previous_portfolio_intact(monkeypatch):
+    import os
+    pf.save({"cash": 500.0, "holdings": {}})
+    monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk gone")))
+    with pytest.raises(OSError):
+        pf.save({"cash": 999.0, "holdings": {}})
+    assert json.loads(pf.PORTFOLIO_PATH.read_text())["cash"] == 500.0
+    assert not [p for p in pf.PORTFOLIO_PATH.parent.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_a_curve_point_holds_the_write_lock_across_its_read(tmp_path):
+    """BEGIN IMMEDIATE before the read: a second process cannot settle
+    between the read and the insert, so the point is the state it records."""
+    db = tmp_path / "bm.db"
+    a = brain_map.connect(db)
+    pm.ensure_accounts_schema(a)
+    pm.get_account(a)
+    seen = {}
+
+    class _Rows:                                   # a finished read: no statement lock held
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+    class Racing(sqlite3.Connection):
+        def execute(self, sql, *args):
+            cur = super().execute(sql, *args)
+            if sql.startswith("SELECT starting_capital, realized_pnl, peak_equity FROM account_state"):
+                cur = _Rows(cur.fetchall())
+                other = sqlite3.connect(db, timeout=0.1)
+                try:
+                    other.execute("UPDATE account_state SET realized_pnl = realized_pnl + 1 WHERE id = 1")
+                    other.commit()
+                    seen["blocked"] = False
+                except sqlite3.OperationalError:
+                    seen["blocked"] = True
+                finally:
+                    other.close()
+            return cur
+    r = sqlite3.connect(db, factory=Racing)
+    point = pm._snapshot_equity(r)
+    assert seen == {"blocked": True}
+    last = r.execute("SELECT equity FROM equity_curve ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+    assert point["equity"] == last == pm.equity(r)
+    r.close()
+    a.close()

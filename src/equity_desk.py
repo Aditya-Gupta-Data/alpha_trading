@@ -343,6 +343,9 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
 
 
 ORPHAN_NO_ENTRY_GRACE_MINUTES = 30
+# the reverse sweep judges only entries logged under the ledger-before-lock
+# order (#123 deployed 2026-10-01 after the close)
+REVERSE_SWEEP_FROM = "2026-10-01T15:30:00"
 
 
 def _ever_locked(conn, entry_id) -> bool:
@@ -459,7 +462,12 @@ def sweep_orphan_locks(ledger_path=None, conn=None, now=None) -> list:
         # moves (nothing was locked), so this runs on ANY readable ledger: a
         # junk line can only hide an entry, never fake a lockless one.
         for eid, e in entries.items():
-            if (not (e.get("funding") or {}).get("funded") or eid in exits
+            # an EXITED lockless entry is corrected too (its exit may have been
+            # logged by the block leg first, Issue 30) — but only entries from
+            # the ledger-before-lock era: Mac-era rows merged under #83 were
+            # funded without a VM lock by design and stay as they are
+            if (not (e.get("funding") or {}).get("funded")
+                    or str(e.get("ts") or "") < REVERSE_SWEEP_FROM
                     or _ever_locked(conn, eid)):
                 continue
             try:

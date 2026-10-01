@@ -2161,3 +2161,4 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
     name it.
   - Chain calls now queue up to 3.5 s behind each other. A market-loop
     cycle that fetches nine chains takes about 30 s longer at most.
+- **Deployed 2026-10-01 19:01 IST** with #123: the VM is at `0f978eb`, and both services restarted clean. The cause stays unconfirmed until the next refusal or failed fetch logs its reason.

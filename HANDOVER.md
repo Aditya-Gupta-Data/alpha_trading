@@ -42,6 +42,30 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-01 19:01 IST — #123 (Batch D + leftovers) and Issue 40 DEPLOYED; VM at `0f978eb`
+
+**Deploy:** 19:00–19:01 IST, market closed.
+- Before the deploy: no cron jobs were running and the VM's tracked files were clean.
+- `git merge --ff-only origin/main` went `a82d12f` → `0f978eb` (32 files).
+- `sudo systemctl restart alpha-trading alpha-discord-bot` worked.
+  - Both services are active with NRestarts=0, and `deploy_log.jsonl` records both on `0f978eb`.
+  - `/api/health` returns ok, and the journal shows no errors since the restart.
+  - `cloudflared-tunnel` is active and the tunnel URL is unchanged.
+
+**Mirror:** a manual `bash scripts/publish_dashboard_mirror.sh` exited 0 and published 6 files to the Oracle box.
+- `src.dashboard.mirror_snapshot` imports on the VM, so the Mac edge miner's 21:00 run has what it needs.
+- `brain_map.db` passes `quick_check`, and no snapshot temp, `-journal` or `-wal` files were left in `data/`.
+
+**Live from tomorrow's 09:10 scheduler start:** #123's ledger fixes (the reverse sweep acts from 10-01 15:30) and Issue 40 (the chain lane, plus named refusal and tick-failure reasons).
+
+**Check first tomorrow:**
+- `paper_account_events` for PAPER_2L_LIVE: any `live_entry_refused` now names its reason.
+- `logs/master_scheduler.log`: look for `(live account: chain … failed: …)` lines.
+- The market-loop cycle length: chain calls are now spaced ≥ 3.5 s apart.
+- `24f931bb`: PAPER_2L_LIVE keeps it open after the primary's ratchet settles it. Confirm the LIVE lock was NOT released.
+
+**Still open:** the PAPER_2L_LIVE adversarial sweep is paused (see the block below; resume after the weekly limit resets 10-04). Chunk 2 (OMS & Execution) follows.
+
 ## 2026-10-01 (~14:25) — PAPER_2L_LIVE adversarial sweep PAUSED at the 85% usage guardrail (weekly 86%); no code changed
 
 **What is done:**

@@ -522,6 +522,11 @@ def test_recon_does_not_treat_a_d7_expiry_as_a_settlement(tmp_path):
     rows = [{"short_id": "late0001", "decision": "approved", "outcome": None}]
     keys = {(r["ref"], r["account"]) for r in recon.read_paper_book(conn=c, journal_rows=rows)}
     assert keys == {("late0001", "PAPER_10L")}
+    # revived at approval, then released: the LAST event (a revival) wins -> settled
+    assert "renewed" in pm.request_entry(c, "late0001", 1000.0)["reason"]
+    pm.release_margin(c, "late0001", 50.0)
+    keys = {(r["ref"], r["account"]) for r in recon.read_paper_book(conn=c, journal_rows=rows)}
+    assert keys == set()
     c.close()
 
 

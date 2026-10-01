@@ -235,6 +235,16 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-01 · 6 commits · 24 files touched
+
+- `7511c61` docs: audit Chunk 1 Batch D + leftovers (#123) — DECISIONS #123, the four Batch D panel rounds in the audit doc, HANDOVER (built + pushed; VM deploy left to the owner this evening; Chunk 2 OMS & Execution scope)
+- `7ebda95` fix(ledger): Batch D panel round 4 — the primary recon expiry fold is pinned through a revival and settlement; MODULES names the reverse sweep's era cutoff and exited-entry scope
+- `95c053f` fix(ledger): Batch D panel round 3 — the reverse sweep also corrects an EXITED lockless funded entry (from the ledger-before-lock era only; Mac-era rows untouched), recon folds the D7-expiry check into one query per table; tests pin the write lock across a curve point's read (fails on a mutant), the unknown-lock fail-safe, the unclean-ledger reverse sweep and daily re-fire, the shadow expiry branch, the ruin-halt projection and the atomic portfolio save
+- `0e66454` fix(ledger): Batch D panel round 2 — curve points rounded exactly like the account reads under one write lock (no read-back race), a funded-but-never-locked entry gets no OMS exit and is revoked (written-once, shown as FUNDING REVOKED not EXIT), an unclean equity ledger is reported once a day instead of silently pausing the sweep, recon keeps a D7-expired lock's position, DISMISS reads the book before journaling, the export gates margin on funding; MODULES rows match the code
+- `fad4b72` fix(ledger): Batch D panel round 1 — /api/decision DISMISS no longer 500s (D9 rework), the no-entry orphan sweep acts only on a clean ledger read and one lock per pass, funding_revoked is applied on read by every equity-ledger reader + the reverse orphan (funded entry, no lock) is revoked, curve points are computed inside their INSERT, recon drops an account's slice once its own lock is released, edge_miner and pull_dashboard_data copy VM snapshots; MODULES rows for #123
+- `a91f532` fix(ledger): audit Chunk 1 Batch D + leftovers (#123) — portfolio.json locked + atomic (D9), the dashboard mirror pushes sqlite-backup / journal-lock snapshots (D10), equity desk logs the entry before taking its lock + sweeps lock-without-entry orphans (D11), same-second curve points resolve by rowid (D12), recon drops ticket-only rows the journal has settled (D14); eviction quotes prefetched outside the journal lock, an eviction that would trip the daily breaker or ruin halt is refused
+
+
 ### 2026-09-30 · 19 commits · 39 files touched
 
 - `8d82983` docs: audit Chunk 1 Batches A-C deployed (VM at a82d12f, services restarted 23:04 IST); D5 Brain Map repair run and verified on the VM (ledger Issue 39); DECISIONS #121 (outcome sync) and #122 (ledger integrity + four rulings); six fix-diff panel rounds recorded; Batch D still open

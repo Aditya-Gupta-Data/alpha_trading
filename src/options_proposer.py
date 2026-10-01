@@ -1264,8 +1264,14 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     # The live arm's re-quote is a Dhan chain call: made HERE, before the
     # journal lock, so no other writer waits on the network (#122 panel).
     prefetched = _prefetch_live_requote(trade_id) if approve else None
+    # #123 (Chunk 1 leftover): the rotation arm's marks and the eviction
+    # candidate's chain quotes are fetched here too, before the lock; inside
+    # it the eviction only re-verifies on these quotes (a candidate that
+    # changed meanwhile has none, so it is simply not evicted).
+    rotation = _prefetch_rotation(trade_id) if approve else None
     with journal.locked():
-        verdict = _decide_pending_locked(trade_id, approve, why, live_requote=prefetched)
+        verdict = _decide_pending_locked(trade_id, approve, why, live_requote=prefetched,
+                                         rotation=rotation)
     if verdict["status"] not in ("approved", "rejected"):
         return verdict
     target, decision = verdict["entry"], verdict["status"]
@@ -1316,8 +1322,70 @@ def _prefetch_live_requote(trade_id: str):
         return None
 
 
+def _prefetch_rotation(trade_id: str):
+    """The rotation arm's network work for approving `trade_id`, done
+    OUTSIDE the journal lock: {"marks": {ref: rr_left}, "quotes": {ref:
+    leg quotes}} for the account's open trades and the one trade
+    evaluate_eviction would evict. None when the arm is off, the row is not
+    a pending spread, or anything failed (no eviction then). Never raises."""
+    try:
+        from src import brain_map, plan_tracker, portfolio_manager as pm
+        if not pm.rotation_enabled():
+            return None
+        e = journal.get_entry(trade_id)
+        if not e or e.get("decision") != "pending_approval" or not (e.get("spread") or {}).get("legs"):
+            return None
+        spread = e["spread"]
+        vix = (e.get("receipt") or {}).get("vix")
+        conn = brain_map.connect()
+        try:
+            pm.ensure_accounts_schema(conn)
+            marks, quotes = {}, {}
+            for account in pm.ROTATION_ACCOUNTS:
+                refs = [r[0] for r in conn.execute(
+                    "SELECT journal_ref FROM paper_margin_locks WHERE account_id = ? AND "
+                    "released_at IS NULL", (account,)).fetchall()]
+                if not refs:
+                    continue
+                m = plan_tracker.rotation_marks(refs)
+                marks.update(m)
+                need = pm.required_margin_for({"spread": dict(spread, lots=1), "vix": vix})
+                v = pm.evaluate_eviction(conn, account, spread, m, need)
+                weak = (v.get("weakest") or {}).get("journal_ref")
+                if v.get("evict") and weak:
+                    row = journal.get_entry(weak)
+                    if row:
+                        from src.live_bridge import _leg_quotes_for
+                        q = _leg_quotes_for(row)
+                        if q:
+                            quotes[weak] = q
+            return {"marks": marks, "quotes": quotes}
+        finally:
+            if not _PAPER_VENUE_KEEP_CONN:      # same seam as the venue step
+                conn.close()
+    except Exception as exc:
+        print(f"  (rotation prefetch skipped: {exc})")
+        return None
+
+
+def _rotation_fns(rotation):
+    """(marks_fn, evict_fn) that use ONLY the prefetched data — no network
+    inside the journal lock. No prefetch -> no marks -> no eviction."""
+    from src import plan_tracker
+    data = rotation or {"marks": {}, "quotes": {}}
+
+    def marks_fn(refs):
+        return {r: data["marks"][r] for r in refs if r in data["marks"]}
+
+    def evict_fn(conn, account, ref, lots, max_rr_left, reason, need_rs=None):
+        return plan_tracker.evict_for_rotation(
+            conn, account, ref, lots, max_rr_left=max_rr_left, reason=reason, need_rs=need_rs,
+            quotes_fn=lambda e: data["quotes"].get(e.get("short_id")))
+    return marks_fn, evict_fn
+
+
 def _decide_pending_locked(trade_id: str, approve: bool, why: str,
-                           live_requote: dict = None) -> dict:
+                           live_requote: dict = None, rotation: dict = None) -> dict:
     """decide_pending's body — caller holds the journal lock."""
     import copy
     target = journal.get_entry(trade_id)
@@ -1352,10 +1420,11 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
             # proposal-time refusal is re-judged on today's cash). D6
             # (#122): this is the ONLY judgement where the rotation account
             # may evict — the entry is being accepted, not merely proposed.
+            marks_fn, evict_fn = _rotation_fns(rotation)
             target["accounts"] = _judge_shadow_accounts(
                 trade_id, {"spread": spread, "lots": spread.get("lots"),
                            "vix": (target.get("receipt") or {}).get("vix")},
-                allow_rotation=True)
+                allow_rotation=True, marks_fn=marks_fn, evict_fn=evict_fn)
 
     decision = "approved" if approve else "rejected"
     target["decision"] = decision
@@ -1385,7 +1454,8 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
 
 
 def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None,
-                           allow_rotation: bool = False) -> dict:
+                           allow_rotation: bool = False, marks_fn=None,
+                           evict_fn=None) -> dict:
     """The dual-treasury seam (#102): {account_id: {status, lots, margin_rs,
     reason}} from `portfolio_manager.evaluate_shadow_accounts`, {} when the
     switch is off. Never raises — a broken shadow ledger cannot touch the
@@ -1399,7 +1469,8 @@ def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None,
         try:
             verdicts = pm.evaluate_shadow_accounts(journal_ref, proposal, conn=conn,
                                                    risk_pct=risk_pct,
-                                                   allow_rotation=allow_rotation)
+                                                   allow_rotation=allow_rotation,
+                                                   marks_fn=marks_fn, evict_fn=evict_fn)
         finally:
             if not _PAPER_VENUE_KEEP_CONN:      # same seam as the venue step
                 conn.close()

@@ -187,7 +187,7 @@ def firm_equity_curve(src: Sources, args: dict) -> dict:
     try:
         rows = _rows(src.conn().execute(
             "SELECT ts, equity, peak_equity, drawdown_pct "
-            "FROM equity_curve ORDER BY ts"))
+            "FROM equity_curve ORDER BY ts, rowid"))
     except sqlite3.Error:
         rows = []
     return {"available": bool(rows), "points": rows,

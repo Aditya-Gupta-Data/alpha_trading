@@ -14,7 +14,18 @@ if [ -z "$TARGET" ]; then echo "[publish] no target configured (~/.dashboard_tar
 PY0="${PYTHON_BIN:-$HERE/venv/bin/python}"; [ -x "$PY0" ] || PY0=python3
 ( cd "$HERE" && "$PY0" -m src.dashboard.benchmarks ) 2>&1 | tail -1
 files=()
-for f in data/brain_map.db data/journal.jsonl logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl data/dashboard_benchmarks.json; do
+# D10 (decision #123): the two files the engine writes concurrently are
+# published from CONSISTENT SNAPSHOTS — brain_map.db via sqlite's online
+# backup API, journal.jsonl copied under the journal lock — never the live
+# file mid-commit. A snapshot that fails is skipped (the box keeps its last
+# good copy); the live file is never pushed in its place.
+SNAP="$(mktemp -d "${TMPDIR:-/tmp}/dashboard_mirror.XXXXXX")"
+trap 'rm -rf "$SNAP"' EXIT
+( cd "$HERE" && "$PY0" -m src.dashboard.mirror_snapshot "$SNAP" ) 2>&1 | grep -v "^$SNAP/" || true
+for f in brain_map.db journal.jsonl; do
+  [ -f "$SNAP/$f" ] && files+=("$SNAP/$f") || echo "[publish] no consistent snapshot of $f — not pushed"
+done
+for f in logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl data/dashboard_benchmarks.json; do
   [ -f "$HERE/$f" ] && files+=("$HERE/$f") || echo "[publish] absent $f"
 done
 # --temp-dir + delay-updates: the box never reads a half-written file

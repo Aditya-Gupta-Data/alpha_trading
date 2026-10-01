@@ -467,9 +467,9 @@ def _settle_spread_cash(pnl_net: float) -> bool:
     """Net-settle a resolved approved spread against paper cash (entry
     premiums and exit values collapse to one net P&L figure — margin was
     only ever virtually blocked, never deducted)."""
-    book = pf.load()
-    book["cash"] = round(book["cash"] + pnl_net, 2)
-    pf.save(book)
+    def _credit(book):                    # D9 (#123): fresh read, one lock
+        book["cash"] = round(book["cash"] + pnl_net, 2)
+    pf.update(_credit)
     return True
 
 
@@ -767,6 +767,26 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
             return dict(res, status="would_not_fund",
                         reason=(f"closing it frees Rs.{freed:,.0f} after its P&L on the quotes; "
                                 f"one lot of the new trade needs Rs.{float(need_rs):,.0f}"))
+        if est_pnl < 0:
+            # #123 (Chunk 1 leftover): an eviction whose OWN realized loss
+            # would trip the account's daily breaker or its 10% ruin halt
+            # closes a live trade for an entry the halt then refuses —
+            # project both on the estimated P&L and refuse first
+            breaker = pm.paper_daily_breaker_status(conn, account)
+            open_eq = float(breaker.get("session_open_equity")
+                            or (pm.paper_equity(conn, account) - float(breaker.get("pnl_today") or 0.0)))
+            projected = pm.check_daily_breaker(open_eq, float(breaker.get("pnl_today") or 0.0) + est_pnl)
+            if projected["halted"]:
+                return dict(res, status="would_trip_breaker",
+                            reason=f"its estimated P&L Rs.{est_pnl:,.0f} would trip the daily breaker "
+                                   f"({projected['daily_loss_pct']}% of session-open equity)")
+            peak = float(pm.get_paper_account(conn, account)["peak_equity"])
+            eq_after = pm.paper_equity(conn, account) + est_pnl
+            if peak > 0 and (peak - eq_after) / peak * 100 >= pm.MAX_DRAWDOWN_PCT:
+                return dict(res, status="would_halt",
+                            reason=f"its estimated P&L Rs.{est_pnl:,.0f} would take the account to "
+                                   f"{(peak - eq_after) / peak * 100:.2f}% drawdown (ruin halt "
+                                   f"{pm.MAX_DRAWDOWN_PCT:g}%)")
     execution = _execute_paper_exit(entry, quotes, "capital_rotation_eviction",
                                     conn=conn, venue_mod=venue_mod, today=today,
                                     accounts=[(account, lots)])
@@ -1359,12 +1379,12 @@ def _close_paper_position(entry: dict, exit_price: float, instrument_type: str =
     """Close the tracked holding at the plan's exit price. Returns False if
     the position was already closed some other way (e.g. a Death Cross sell
     the user approved in a session) — the outcome still gets recorded."""
-    book = pf.load()
-    if entry["ticker"] not in book["holdings"]:
-        return False
-    pf.sell(book, entry["ticker"], exit_price, instrument_type=instrument_type)
-    pf.save(book)
-    return True
+    def _sell(book):                      # D9 (#123): fresh read, one lock
+        if entry["ticker"] not in book["holdings"]:
+            return False
+        pf.sell(book, entry["ticker"], exit_price, instrument_type=instrument_type)
+        return True
+    return pf.update(_sell) is True
 
 
 # Patchable seam for tests (point it at a temp DB) — production always

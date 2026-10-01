@@ -119,7 +119,7 @@ def read_account(db_path=None) -> dict:
             ("account", "SELECT starting_capital, realized_pnl, peak_equity "
                         "FROM account_state WHERE id = 1"),
             ("curve", "SELECT ts, equity, peak_equity, drawdown_pct FROM "
-                      "equity_curve ORDER BY ts DESC LIMIT 1"),
+                      "equity_curve ORDER BY ts DESC, rowid DESC LIMIT 1"),
             ("max_drawdown_pct", "SELECT MAX(drawdown_pct) FROM equity_curve"),
         ):
             try:
@@ -178,7 +178,7 @@ def read_paper_accounts(db_path=None) -> dict:
                     "WHERE account_id = ? AND released_at IS NULL", (acct,)).fetchone()
                 rec["open_locks"], rec["locked"] = int(n), float(locked)
                 row = conn.execute("SELECT drawdown_pct FROM paper_equity_curve WHERE "
-                                   "account_id = ? ORDER BY ts DESC LIMIT 1", (acct,)).fetchone()
+                                   "account_id = ? ORDER BY ts DESC, rowid DESC LIMIT 1", (acct,)).fetchone()
                 rec["curve_dd"] = row[0] if row else None
                 row = conn.execute("SELECT MAX(drawdown_pct) FROM paper_equity_curve WHERE "
                                    "account_id = ?", (acct,)).fetchone()

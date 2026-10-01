@@ -198,7 +198,8 @@ def drawdown_line(db_path=None) -> str | None:
         try:
             row = conn.execute(
                 "SELECT equity, peak_equity, drawdown_pct FROM equity_curve "
-                "ORDER BY ts DESC LIMIT 1").fetchone()
+                # same-second points: the later write wins (D12, #123)
+                "ORDER BY ts DESC, rowid DESC LIMIT 1").fetchone()
         finally:
             conn.close()
     except Exception:

@@ -12,7 +12,12 @@ Safety rails:
   - one position can never exceed MAX_POSITION_PCT of the whole portfolio
 """
 
+import fcntl
 import json
+import os
+import threading
+import time
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
@@ -23,24 +28,97 @@ STARTING_CASH = 100_000.0  # Rs. 1,00,000 fake starting capital (decision #12)
 MAX_POSITION_PCT = 25      # no single stock may be >25% of the portfolio
 
 
+# ---- concurrency (audit Chunk 1 D9, decision #123) -----------------------
+# Three processes move paper cash (the api's hourly tracker and its decision
+# endpoint, the scheduler's intraday square-off). Every read-modify-write now
+# runs under ONE cross-process lock (an flock on portfolio.lock beside the
+# file, re-entrant within a thread) via `update()` / `locked()`, and every
+# save is atomic (temp file + fsync + os.replace) — two settlements in the
+# same instant can no longer lose one credit, and a crash can no longer
+# leave a half-written file.
+LOCK_TIMEOUT_SECONDS = 60.0
+_tls = threading.local()
+
+
+class PortfolioLockTimeout(TimeoutError):
+    """portfolio.lock stayed held past LOCK_TIMEOUT_SECONDS."""
+
+
+@contextmanager
+def locked(timeout: float = None):
+    depth = getattr(_tls, "depth", 0)
+    if depth:
+        _tls.depth = depth + 1
+        try:
+            yield
+        finally:
+            _tls.depth -= 1
+        return
+    path = PORTFOLIO_PATH.parent / "portfolio.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    limit = LOCK_TIMEOUT_SECONDS if timeout is None else float(timeout)
+    with open(path, "a") as lock:
+        deadline = time.monotonic() + limit
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise PortfolioLockTimeout(f"portfolio lock {path} still held after {limit:g}s")
+                time.sleep(0.05)
+        _tls.depth = 1
+        try:
+            yield
+        finally:
+            _tls.depth = 0
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def load() -> dict:
     """Load the portfolio, creating a fresh one on first run."""
     if not PORTFOLIO_PATH.exists():
-        portfolio = {
-            "cash": STARTING_CASH,
-            "holdings": {},  # ticker -> {"shares": int, "avg_price": float}
-            "created": date.today().isoformat(),
-        }
-        save(portfolio)
-        return portfolio
+        with locked():
+            if not PORTFOLIO_PATH.exists():
+                portfolio = {
+                    "cash": STARTING_CASH,
+                    "holdings": {},  # ticker -> {"shares": int, "avg_price": float}
+                    "created": date.today().isoformat(),
+                }
+                save(portfolio)
+                return portfolio
     with open(PORTFOLIO_PATH, "r") as f:
         return json.load(f)
 
 
 def save(portfolio: dict) -> None:
-    DATA_DIR.mkdir(exist_ok=True)
-    with open(PORTFOLIO_PATH, "w") as f:
-        json.dump(portfolio, f, indent=2)
+    """Atomic replace under the lock (D9). A caller that loaded the book
+    earlier must hold `locked()` across its load and save, or use update()."""
+    with locked():
+        PORTFOLIO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PORTFOLIO_PATH.with_name(
+            f".{PORTFOLIO_PATH.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            with open(tmp, "w") as f:
+                json.dump(portfolio, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, PORTFOLIO_PATH)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+
+def update(mutate_fn):
+    """Race-safe read-modify-write: under the lock, load FRESH, call
+    `mutate_fn(book)` (mutate in place; return False to abort, nothing
+    saved), save atomically. Returns mutate_fn's result."""
+    with locked():
+        book = load()
+        result = mutate_fn(book)
+        if result is not False:
+            save(book)
+        return result
 
 
 def total_value(portfolio: dict, prices: dict) -> float:

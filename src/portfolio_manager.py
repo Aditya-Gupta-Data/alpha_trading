@@ -501,11 +501,15 @@ def _daily_breaker_check(conn) -> dict:
 ENTRY_HALT_CHECKS = (_risk_of_ruin_check, _daily_breaker_check)
 
 
-def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
+def request_entry(conn, journal_ref: str, required_margin: float,
+                  dry_run: bool = False) -> dict:
     """The strict entry guard. Approve = the margin is locked under
     `journal_ref` (idempotent: re-requesting an active ref re-approves
     without double-locking). Reject = nothing is locked and the reason is
-    logged to `account_events`.
+    logged to `account_events`. `dry_run` (decision #123, the equity desk's
+    ledger-before-lock order): every guard runs and a refusal is logged as
+    usual, but an approval locks NOTHING — the caller commits it later with
+    a normal call.
 
     Order of the guards matters: the composed halt list first (lifetime
     risk-of-ruin, then the daily circuit breaker — even a tiny trade is
@@ -549,6 +553,8 @@ def request_entry(conn, journal_ref: str, required_margin: float) -> dict:
                   f"entry {journal_ref} rejected ({reason})")
         return {"approved": False, "reason": reason}
 
+    if dry_run:
+        return {"approved": True, "reason": "margin available (dry run — nothing locked)"}
     if prior is not None:
         conn.execute("UPDATE margin_locks SET margin_rs = ?, locked_at = ?, released_at = NULL, "
                      "pnl_net = NULL WHERE journal_ref = ?", (margin, _now_iso(), journal_ref))

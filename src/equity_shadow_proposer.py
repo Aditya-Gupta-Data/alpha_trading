@@ -58,6 +58,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 MODE = "PAPER_TELEMETRY"
 CAPITAL_MODE = "PAPER_CAPITAL"   # darling entries the equity desk funds
+FUNDING_REVOKED_EVENT = "funding_revoked"   # #123: logged as funded, lock then refused
 PULLBACK_BAND_PCT = 5.0   # entry zone: floor .. floor*(1+5%)
 STOP_PCT = 2.0            # stop 2% below the block-VWAP floor
 REWARD_RISK = 2.0         # target = entry + 2 * (entry - stop)
@@ -471,7 +472,7 @@ def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
                             as_of=None, check_fn=None, universe=None,
                             vix_fn=None, nifty_trend_fn=None,
                             capital_fn=None, quote_fn=None,
-                            fill_basis="eod_close") -> list:
+                            fill_basis="eod_close", commit_fn=None) -> list:
     """Log an entry for every entry-eligible Buy-tier darling that clears
     the equity halt stack (equity_entry_checks — the single enforcement
     door: ban-list/expiry/overextension judged there, never re-implemented
@@ -560,7 +561,29 @@ def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
                 entry["mode"] = CAPITAL_MODE
                 entry["capital_allocated"] = funding["notional"]
                 entry["kya_kara_action"]["qty"] = funding["qty"]
-        logged.append(kg.log_event(entry, path=path))
+        row = kg.log_event(entry, path=path)
+        if commit_fn is not None and (entry.get("funding") or {}).get("funded"):
+            # LEDGER BEFORE LOCK (audit Chunk 1 D11, decision #123): the desk
+            # approved without locking; the lock is taken only now that the
+            # entry is on the ledger. Not persisted -> no lock at all. A
+            # commit refused in between -> one named correction event, so
+            # the ledger never claims capital the firm did not lock.
+            if row.get("_persisted") is False:
+                row["funding"] = dict(row.get("funding") or {}, funded=False,
+                                      reason="ledger append failed — nothing locked")
+            else:
+                try:
+                    committed = commit_fn(entry)
+                except Exception as exc:
+                    committed = {"funded": False, "reason": f"desk unavailable ({exc})"}
+                if not committed.get("funded"):
+                    kg.log_event({"event": FUNDING_REVOKED_EVENT, "id": entry.get("id"),
+                                  "ticker": entry.get("ticker"),
+                                  "lock_ref": (entry.get("funding") or {}).get("lock_ref"),
+                                  "reason": committed.get("reason")}, path=path)
+                    row["funding"] = dict(row.get("funding") or {}, funded=False,
+                                          reason=f"lock refused after logging: {committed.get('reason')}")
+        logged.append(row)
     return logged
 
 

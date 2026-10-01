@@ -715,37 +715,39 @@ def decision(req: DecisionRequest):
         )
 
     proposal = _decision_to_proposal(req)
-    book = pf.load()
     executed = False
 
     if decision_kind == "PAPER_TRADE":
-        try:
-            if proposal["action"] == "BUY":
-                shares = min(
-                    proposal["shares"],
-                    pf.max_affordable_shares(book, proposal["price"], {proposal["ticker"]: proposal["price"]}),
-                )
-                if shares <= 0:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"ok": False, "error": "Paper rails reject this: "
-                                 "0 affordable shares (cash or 25%/stock cap)."},
+        # D9 (#123): load, check, mutate and save the book under ONE lock
+        with pf.locked():
+            try:
+                book = pf.load()
+                if proposal["action"] == "BUY":
+                    shares = min(
+                        proposal["shares"],
+                        pf.max_affordable_shares(book, proposal["price"], {proposal["ticker"]: proposal["price"]}),
                     )
-                proposal["shares"] = shares
-                pf.buy(book, proposal["ticker"], shares, proposal["price"])
-            else:  # SELL
-                if proposal["ticker"] not in book["holdings"]:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"ok": False, "error": f"Cannot sell "
-                                 f"{proposal['ticker']} — no paper position held."},
-                    )
-                proposal["shares"] = book["holdings"][proposal["ticker"]]["shares"]
-                pf.sell(book, proposal["ticker"], proposal["price"])
-            pf.save(book)
-            executed = True
-        except ValueError as e:
-            return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+                    if shares <= 0:
+                        return JSONResponse(
+                            status_code=400,
+                            content={"ok": False, "error": "Paper rails reject this: "
+                                     "0 affordable shares (cash or 25%/stock cap)."},
+                        )
+                    proposal["shares"] = shares
+                    pf.buy(book, proposal["ticker"], shares, proposal["price"])
+                else:  # SELL
+                    if proposal["ticker"] not in book["holdings"]:
+                        return JSONResponse(
+                            status_code=400,
+                            content={"ok": False, "error": f"Cannot sell "
+                                     f"{proposal['ticker']} — no paper position held."},
+                        )
+                    proposal["shares"] = book["holdings"][proposal["ticker"]]["shares"]
+                    pf.sell(book, proposal["ticker"], proposal["price"])
+                pf.save(book)
+                executed = True
+            except ValueError as e:
+                return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
         journal_decision = "approved"
     else:  # DISMISS
         journal_decision = "rejected"

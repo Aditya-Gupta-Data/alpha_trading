@@ -193,10 +193,37 @@ def _norm_funds(f: dict) -> dict:
 
 
 # -------------------------------------------------------------------- book
-def read_paper_book(conn: sqlite3.Connection = None, db_path=None) -> list:
+def _settled_refs(journal_rows=None) -> set:
+    """Journal refs whose trade is DEFINITIVELY over (outcome set, or the
+    entry was rejected) — read-only; an unreadable journal settles nothing
+    (the book then keeps every ticket row, the pre-#123 behaviour)."""
+    try:
+        if journal_rows is None:
+            from src import journal
+            journal_rows = journal.read_all()
+    except Exception:
+        return set()
+    out = set()
+    for e in journal_rows or []:
+        ref = e.get("short_id")
+        if ref and (e.get("outcome") is not None or e.get("decision") == "rejected"):
+            out.add(ref)
+    return out
+
+
+def read_paper_book(conn: sqlite3.Connection = None, db_path=None,
+                    journal_rows=None) -> list:
     """What THIS desk believes is open, from brain_map.db, read-only:
     active margin locks (primary + shadow accounts) and FILLED OMS ENTRY
-    tickets that have no FILLED EXIT. One row per (underlying, account)."""
+    tickets that have no FILLED EXIT. One row per (underlying, account).
+
+    D14 (decision #123): a ticket-only row (no active lock behind it) is
+    dropped when the trade is definitively settled — its journal row has an
+    outcome or was rejected, PAPER_2L_LIVE's own position row is closed, or
+    (for a ref the journal does not carry, e.g. the equity desk) no account
+    still holds a lock on it. The expiry backstop, an unfilled EOD exit and
+    a venue-off exit settle WITHOUT an exit ticket, and used to linger here
+    as phantom open rows."""
     owns = conn is None
     if owns:
         from src.brain_map import DEFAULT_DB_PATH
@@ -241,6 +268,27 @@ def read_paper_book(conn: sqlite3.Connection = None, db_path=None) -> list:
                                             "source": "oms_ticket"})
                 row["underlying"] = t["underlying"]
                 row["ticket_id"] = t["ticket_id"]
+            settled = _settled_refs(journal_rows)
+            journal_refs = None
+            if journal_rows is not None:
+                journal_refs = {e.get("short_id") for e in journal_rows if e.get("short_id")}
+            else:
+                try:
+                    from src import journal
+                    journal_refs = {e.get("short_id") for e in journal.read_all() if e.get("short_id")}
+                except Exception:
+                    journal_refs = None
+            locked_refs = {r["ref"] for r in rows.values() if r["source"] != "oms_ticket"}
+            live_closed = set()
+            if "paper_live_positions" in tables:
+                live_closed = {(r[0], r[1]) for r in conn.execute(
+                    "SELECT journal_ref, account_id FROM paper_live_positions WHERE state = 'closed'")}
+            for key in [k for k, r in rows.items() if r["source"] == "oms_ticket"]:
+                ref = rows[key]["ref"]
+                if (ref in settled or key in live_closed
+                        or (journal_refs is not None and ref not in journal_refs
+                            and ref not in locked_refs)):
+                    del rows[key]
     finally:
         if owns:
             conn.close()

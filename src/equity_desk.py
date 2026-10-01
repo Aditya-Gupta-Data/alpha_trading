@@ -159,11 +159,18 @@ def size_entry(entry_price: float, stop: float, desk_capital: float,
 
 # --------------------------------------------------------- fund / settle
 
-def fund_entry(entry: dict, conn=None) -> dict:
+def fund_entry(entry: dict, conn=None, commit: bool = True) -> dict:
     """The capital_fn seam: adaptive consult → sizing on desk capital →
     desk ruin halt → desk budget → the firm's ONE entry door
     (pm.request_entry: cash + firm halts). Fails CLOSED; the caller logs
-    its telemetry row regardless of the verdict."""
+    its telemetry row regardless of the verdict.
+
+    `commit=False` (audit Chunk 1 D11, decision #123 — LEDGER BEFORE LOCK):
+    every gate runs but nothing is locked; the verdict carries
+    `pending_commit`, and the caller takes the lock with commit_funding()
+    only AFTER the entry is on the ledger. Before #123 the lock was
+    committed first, so an entry whose ledger append failed left a lock no
+    sweep could ever settle."""
     if not EQUITY_DESK_ENABLED:
         return {"funded": False, "reason": "equity desk disabled"}
     action = entry.get("kya_kara_action") or {}
@@ -207,13 +214,37 @@ def fund_entry(entry: dict, conn=None) -> dict:
                              f"{entry.get('ticker')}: {reason}")
                 return {"funded": False, "reason": reason}
             ref = LOCK_PREFIX + str(entry.get("id"))
-            gate = pm.request_entry(conn, ref, sized["notional"])
+            gate = pm.request_entry(conn, ref, sized["notional"], dry_run=not commit)
             if not gate["approved"]:
                 return {"funded": False, "reason": gate["reason"]}
-            return {"funded": True, "qty": sized["qty"],
-                    "notional": sized["notional"], "lock_ref": ref,
-                    "reason": ("funded" if mult == 1.0
-                               else f"funded (sizing x{mult})")}
+            out = {"funded": True, "qty": sized["qty"],
+                   "notional": sized["notional"], "lock_ref": ref,
+                   "reason": ("funded" if mult == 1.0
+                              else f"funded (sizing x{mult})")}
+            if not commit:
+                out["pending_commit"] = True
+            return out
+        finally:
+            if owns:
+                conn.close()
+    except Exception as exc:
+        return {"funded": False, "reason": f"desk unavailable ({exc})"}
+
+
+def commit_funding(entry: dict, conn=None) -> dict:
+    """The second half of the ledger-before-lock order (#123): lock the
+    notional fund_entry(commit=False) approved, for an entry that IS on the
+    ledger. The firm's door re-runs its halts and cash check, so a refusal
+    here (another entry took the cash in between) is honest. Fails CLOSED."""
+    funding = entry.get("funding") or {}
+    ref, notional = funding.get("lock_ref"), funding.get("notional")
+    if not ref or notional is None:
+        return {"funded": False, "reason": "nothing to commit (entry not funded)"}
+    try:
+        conn, owns = _connect(conn)
+        try:
+            gate = pm.request_entry(conn, ref, float(notional))
+            return {"funded": bool(gate["approved"]), "reason": gate["reason"]}
         finally:
             if owns:
                 conn.close()
@@ -311,26 +342,51 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
             conn.close()
 
 
-def sweep_orphan_locks(ledger_path=None, conn=None) -> list:
+ORPHAN_NO_ENTRY_GRACE_MINUTES = 30
+
+
+def sweep_orphan_locks(ledger_path=None, conn=None, now=None) -> list:
     """Reconciler: a settle that crashed mid-run leaves an exited position
     still locked. Re-drive settlement for every active eqd: lock whose
-    ledger entry already carries an exit."""
+    ledger entry already carries an exit.
+
+    And (audit Chunk 1 D11, decision #123) an active eqd: lock with NO
+    ledger entry at all — the pre-#123 order (lock, then log) could leave
+    one when the append failed — is released at zero once it is older than
+    ORPHAN_NO_ENTRY_GRACE_MINUTES, as a named `equity_orphan_lock_released`
+    event. Since #123 the entry is logged before the lock is taken, so this
+    only ever cleans up the old order's leftovers."""
     from src import knowledge_graph_logger as kg
     events = kg.read_events(ledger_path)
     entries = {e.get("id"): e for e in events if e.get("event") == "entry"}
     exits = {e.get("id"): e for e in events if e.get("event") == "exit"}
     conn, owns = _connect(conn)
     try:
-        active = [r[0] for r in conn.execute(
-            "SELECT journal_ref FROM margin_locks WHERE released_at IS NULL "
-            "AND journal_ref LIKE ?", (LOCK_PREFIX + "%",)).fetchall()]
+        active = conn.execute(
+            "SELECT journal_ref, locked_at FROM margin_locks WHERE released_at IS NULL "
+            "AND journal_ref LIKE ?", (LOCK_PREFIX + "%",)).fetchall()
         settled = []
-        for ref in active:
+        now_naive = (now or datetime.now(IST)).replace(tzinfo=None)
+        for ref, locked_at in (tuple(r) for r in active):
             eid = ref[len(LOCK_PREFIX):]
             if eid in exits and eid in entries:
                 s = settle_exit(entries[eid], exits[eid], conn=conn)
                 if s:
                     settled.append(s)
+            elif eid not in entries:
+                try:
+                    age = (now_naive - datetime.fromisoformat(str(locked_at))).total_seconds()
+                except (TypeError, ValueError):
+                    continue
+                if age < ORPHAN_NO_ENTRY_GRACE_MINUTES * 60:
+                    continue
+                rel = pm.release_margin(conn, ref, 0.0)
+                if rel.get("released"):
+                    pm.log_event(conn, "equity_orphan_lock_released",
+                                 f"{ref}: active lock with no ledger entry (locked {locked_at}) "
+                                 "— released at zero")
+                    settled.append({"ticker": ref, "lock_ref": ref, "pnl_net": 0.0,
+                                    "reason": "orphan lock, no ledger entry"})
         return settled
     finally:
         if owns:
@@ -477,7 +533,8 @@ def run_darling_live_cycle(tiers_path=None, levels_path=None, path=None,
         entries = sp.propose_darling_entries(
             tiers_path=tiers_path, levels_path=levels_path, path=path,
             check_fn=check_fn, universe=universe,
-            capital_fn=lambda e: fund_entry(e, conn=conn),
+            capital_fn=lambda e: fund_entry(e, conn=conn, commit=False),
+            commit_fn=lambda e: commit_funding(e, conn=conn),
             quote_fn=quote_fn, fill_basis="live")
     result = {"entries": entries, "exits": exits,
               "settlements": settlements, "tiers_fresh": fresh}

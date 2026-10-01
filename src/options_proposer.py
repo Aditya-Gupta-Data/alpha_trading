@@ -1479,6 +1479,8 @@ def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None,
         return {}
     for acct, v in (verdicts or {}).items():
         if v.get("status") == "approved":
+            if v.get("reason") == pm.HELD_LOCK_REASON:
+                continue    # the proposal-time lock, re-confirmed at approval: printed when taken
             print(f"  [{acct}] {journal_ref}: approved {v['lots']} lot(s), "
                   f"margin Rs.{float(v['margin_rs'] or 0):,.0f}")
         else:

@@ -122,6 +122,54 @@ def test_get_option_chain_none_on_failure_status_or_garbage():
             assert dc.get_option_chain("NIFTY 50", "2026-07-14") is None
 
 
+def test_a_none_chain_names_its_reason_and_a_good_one_clears_it():
+    """2026-10-01: the live arm's ICICIBANK entry was refused "option chain
+    unavailable" with nothing to say why. The door now keeps the reason."""
+    cases = [
+        ({"status": "failure", "remarks": {"error_code": "DH-904", "error_type": "Rate_Limit",
+                                            "error_message": "Too many requests"}},
+         lambda why: why.startswith("rate limit (DH-904") and "Too many requests" in why),
+        ({"status": "failure", "remarks": "Too many requests on option chain"},
+         lambda why: why.startswith("rate limit (")),
+        ({"status": "failure", "remarks": {"error_code": "DH-907", "error_message": "no data"}},
+         lambda why: why == "DH-907: no data"),
+        ({"status": "success", "data": None},
+         lambda why: why.startswith("empty chain")),
+    ]
+    for resp, ok in cases:
+        p1, p2 = _with_client()
+        with p1, p2 as get_client:
+            get_client.return_value.option_chain.return_value = resp
+            assert dc.get_option_chain("NIFTY 50", "2026-07-14") is None
+            assert ok(dc.last_chain_error()), (resp, dc.last_chain_error())
+    p1, p2 = _with_client()
+    with p1, p2 as get_client:
+        get_client.return_value.option_chain.side_effect = ConnectionError("reset by peer")
+        assert dc.get_option_chain("NIFTY 50", "2026-07-14") is None
+        assert dc.last_chain_error() == "transport error: reset by peer"
+    p1, p2 = _with_client(resolved=False)
+    with p1, p2:
+        assert dc.get_option_chain("NOT MAPPED", "2026-07-14") is None
+        assert dc.last_chain_error() == "no instrument mapped"
+    p1, p2 = _with_client()
+    with p1, p2 as get_client:
+        get_client.return_value.option_chain.return_value = {"status": "success",
+                                                             "data": {"data": CHAIN_INNER}}
+        assert dc.get_option_chain("NIFTY 50", "2026-07-14") == CHAIN_INNER
+        assert dc.last_chain_error() is None
+
+
+def test_option_chain_calls_ride_the_chain_lane():
+    """Every chain request asks the gate for the CHAIN lane (>= 3.5 s from
+    any other chain call on the host), not just the 1.1 s general gap."""
+    p1, p2 = _with_client()
+    with p1, p2 as get_client, mock.patch.object(dc, "_throttle") as gate:
+        get_client.return_value.option_chain.return_value = {"status": "success", "data": CHAIN_INNER}
+        dc.get_option_chain("NIFTY 50", "2026-07-14")
+        dc.get_option_chain_by_id("4963", "2026-07-14")
+    assert gate.call_args_list == [mock.call(chain=True), mock.call(chain=True)]
+
+
 # --- 2026-07-10 audit: the remaining parsers, same latent double-nesting ---
 
 BAR_ARRAYS = {"timestamp": [1751932800, 1752019200],

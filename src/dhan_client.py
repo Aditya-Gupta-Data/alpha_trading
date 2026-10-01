@@ -24,10 +24,13 @@ Public wrappers:
   get_daily_closes(ticker, days)   -> [close, ...] oldest first (suggestions)
   get_option_chain(index_ticker, expiry_date)
   get_expiry_list(index_ticker)
+  last_chain_error()               -> why this thread's last chain call was None
 """
 
 import time
 import os
+import threading
+from contextlib import ExitStack
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -59,48 +62,86 @@ _last_api_call = 0.0  # per-process fallback timestamp
 # on the box is spaced >= _RATE_PAUSE apart no matter which process makes it.
 _THROTTLE_FILE = ROOT / "data" / ".dhan_throttle"
 
+# The CHAIN LANE (2026-10-01): the option-chain endpoint is slower still —
+# ~1 request per 3 s — and the 1.1 s gate above lets two chain calls through
+# 1.1 s apart. That morning the PAPER_2L_LIVE re-quote of the ICICIBANK chain
+# went out ~2 s after the proposer's own fetch of it and the entry was refused
+# "option chain unavailable" (the reason was not logged; see last_chain_error).
+# Every chain call on the host now ALSO reserves a slot in this second file,
+# >= _CHAIN_PAUSE after the previous chain call, whichever process or module
+# made it (proposer, live arm, intraday square-off, archiver). 3.5 s, not 3.0:
+# half a second of margin for jitter between two send times.
+_CHAIN_PAUSE = 3.5
+_CHAIN_THROTTLE_FILE = ROOT / "data" / ".dhan_chain_throttle"
+_last_chain_call = 0.0  # per-process fallback timestamp (chain lane)
 
-def _throttle() -> None:
-    """Space Dhan calls >= _RATE_PAUSE apart HOST-WIDE (all processes share the
-    same one-account budget). Fail-open to per-process pacing — throttle
-    bookkeeping must never break a real market-data call."""
-    global _last_api_call
-    if fcntl is None:
-        return _throttle_local()
+
+def _read_slot(f, now: float) -> float:
+    """The last slot reserved in an open, locked gate file. Self-heals a
+    corrupt file or a backwards clock: no real slot sits further ahead than
+    one chain pause plus one call pause."""
     try:
-        _THROTTLE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_THROTTLE_FILE, "a+") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                f.seek(0)
-                last = float(f.read().strip() or 0.0)
-            except (ValueError, OSError):
-                last = 0.0
+        f.seek(0)
+        last = float(f.read().strip() or 0.0)
+    except (ValueError, OSError):
+        last = 0.0
+    if not (0.0 <= last <= now + _RATE_PAUSE + _CHAIN_PAUSE):
+        last = now
+    return last
+
+
+def _throttle(chain: bool = False) -> None:
+    """Space Dhan calls >= _RATE_PAUSE apart HOST-WIDE (all processes share the
+    same one-account budget); `chain=True` also spaces option-chain calls
+    >= _CHAIN_PAUSE apart (the chain lane). Each caller flock's its lane
+    files (chain lane first, then the general gate — one order, no
+    deadlock), reserves ONE slot that satisfies both and writes it to both,
+    then sleeps outside the locks. Fail-open to per-process pacing —
+    throttle bookkeeping must never break a real market-data call."""
+    global _last_api_call, _last_chain_call
+    if fcntl is None:
+        return _throttle_local(chain)
+    try:
+        lanes = ([(_CHAIN_THROTTLE_FILE, _CHAIN_PAUSE)] if chain else []) \
+            + [(_THROTTLE_FILE, _RATE_PAUSE)]
+        with ExitStack() as stack:
+            files = []
+            for path, pause in lanes:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                f = stack.enter_context(open(path, "a+"))
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                files.append((f, pause))
             now = time.time()
-            # self-heal a corrupt file or a backwards clock: a slot can never
-            # be more than one pause in the future.
-            if not (0.0 <= last <= now + _RATE_PAUSE):
-                last = now
-            slot = max(now, last + _RATE_PAUSE)
-            f.seek(0)
-            f.truncate()
-            f.write(f"{slot:.6f}")
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            slot = max([now] + [_read_slot(f, now) + pause for f, pause in files])
+            for f, _ in files:
+                f.seek(0)
+                f.truncate()
+                f.write(f"{slot:.6f}")
+                f.flush()
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         delay = slot - time.time()
         if delay > 0:
             time.sleep(delay)
         _last_api_call = time.monotonic()
+        if chain:
+            _last_chain_call = _last_api_call
     except Exception:
-        _throttle_local()
+        _throttle_local(chain)
 
 
-def _throttle_local() -> None:
-    """Per-process fallback: the original single-process pacing."""
-    global _last_api_call
-    wait = _RATE_PAUSE - (time.monotonic() - _last_api_call)
+def _throttle_local(chain: bool = False) -> None:
+    """Per-process fallback: the original single-process pacing, plus the
+    chain lane's longer gap for an option-chain call."""
+    global _last_api_call, _last_chain_call
+    now = time.monotonic()
+    wait = _RATE_PAUSE - (now - _last_api_call)
+    if chain:
+        wait = max(wait, _CHAIN_PAUSE - (now - _last_chain_call))
     if wait > 0:
         time.sleep(wait)
     _last_api_call = time.monotonic()
+    if chain:
+        _last_chain_call = _last_api_call
 
 
 def _load_env() -> None:
@@ -557,21 +598,57 @@ def get_expiry_list(index_ticker: str) -> list:
     return data if isinstance(data, list) else []
 
 
+# Why this thread's last option-chain call came back None (2026-10-01): the
+# public functions keep their dict-or-None contract, and a caller that must
+# NAME a refusal (the live arm's re-quote) reads the reason from here.
+_chain_status = threading.local()
+
+
+def last_chain_error() -> str | None:
+    """The reason this thread's most recent option-chain call returned None
+    ("rate limit (DH-904: ...)", "transport error: ...", ...); None after a
+    call that returned a chain, or before any call."""
+    return getattr(_chain_status, "error", None)
+
+
+def _chain_failure(resp) -> str:
+    """A non-success chain response, named: Dhan's code and message, flagged
+    as a rate limit when it is one."""
+    try:
+        from src.dhan_guard import classify_failure     # local: dhan_guard imports this module
+        err = classify_failure(resp)
+        text = f"{err.code}: {err.message}".strip()
+        msg = err.message.lower()
+        if err.code == "DH-904" or "too many request" in msg or "rate limit" in msg:
+            return f"rate limit ({text})"
+        return text
+    except Exception:
+        return f"status={resp.get('status')!r}" if isinstance(resp, dict) else "unreadable response"
+
+
 def _chain_call(instr: dict, expiry_date: str) -> dict | None:
-    """The one Dhan option-chain request, given a resolved instrument."""
+    """The one Dhan option-chain request, given a resolved instrument. Paced
+    on the chain lane; a None return leaves its reason in last_chain_error()."""
+    _chain_status.error = None
     client = _get_client()
     if instr is None or client is None:
+        _chain_status.error = "no instrument mapped" if instr is None else "no Dhan client (credentials)"
         return None
-    _throttle()
+    _throttle(chain=True)
     try:
         resp = client.option_chain(int(instr["id"]), instr["seg"], expiry_date)
     except Exception as e:
         print(f"  Dhan option_chain error: {e}")
+        _chain_status.error = f"transport error: {e}"
         return None
     if not isinstance(resp, dict) or resp.get("status") != "success":
+        _chain_status.error = _chain_failure(resp)
         return None
     data = unwrap_payload(resp, inner_marker="oc")
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        _chain_status.error = "empty chain (no data in a success response)"
+        return None
+    return data
 
 
 def get_expiry_list_by_id(security_id, segment: str = "NSE_EQ") -> list:

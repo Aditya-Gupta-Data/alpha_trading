@@ -2118,3 +2118,46 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Not recovered:** the real resolutions' analyst post-mortems. Those
   write-backs were dropped by the same insert-ignore, and a repair does not
   re-run the LLM.
+
+## Issue 40 — PAPER_2L_LIVE refused ICICIBANK `1c0d04d0` "option chain unavailable", with no reason logged (2026-10-01 09:17 IST; FIXED in code, NOT deployed — cause unconfirmed)
+
+- **What happened (VM, read-only check 2026-10-01 13:09 IST):**
+  - `paper_margin_locks`: PAPER_2L_LIVE locked ₹36,890 for `1c0d04d0` at
+    09:17:09. The lock was released at 09:17:11 with pnl 0.
+  - `paper_account_events`: `live_entry_refused` at 09:17:11, detail
+    "option chain unavailable — lock released at zero".
+  - `logs/master_scheduler.log`: "[PAPER_2L_LIVE] 1c0d04d0: REFUSED at
+    approval — option chain unavailable". PAPER_2L and PAPER_2L_ROT took the
+    same trade.
+  - The log has no line saying why the chain call failed.
+- **Why it was silent (verified in code):** `dhan_client._chain_call`
+  returned None on a non-success response without logging or keeping the
+  reason.
+- **Likely cause (NOT verified):** the live arm re-quoted the ICICIBANK chain
+  about 2 s after the proposer's own fetch of it.
+  - The live arm's `_pace` only counted its own calls, and the host-wide gate
+    spaces calls 1.1 s apart.
+  - The chain endpoint allows about 1 request per 3 s (the archiver's measured
+    limit).
+  - On 09-30 the successful NIFTY MID SELECT entry had about 3 s between lock
+    (10:58:05) and fill (10:58:08). That fits the explanation but does not
+    prove it.
+- **Also found (verified in code):** the tick paced twice per fetch. `_fetch`
+  ran `_pace`, then `_default_chain` ran `_pace` again, about 3 s of extra
+  sleep per tick fetch.
+- **Fix (code, tests green, NOT deployed):**
+  - Every chain call on the host now waits ≥ 3.5 s after the previous one,
+    whichever process made it (`dhan_client` chain lane).
+  - `dhan_client.last_chain_error()` names why a chain call returned None.
+  - A live-arm refusal now reads e.g. "option chain unavailable (rate limit
+    (DH-904: …))", in both the log line and the event.
+  - A failed tick fetch is logged with its reason.
+  - The inner `_pace` was removed.
+  - Each shadow account printed "approved 1 lot(s)" twice per trade: at
+    proposal, then again when approval re-confirmed the same lock. It now
+    prints once, when the lock is taken.
+- **Not fixed / to watch:**
+  - The original cause stays unconfirmed. The next refusal's reason will
+    name it.
+  - Chain calls now queue up to 3.5 s behind each other. A market-loop
+    cycle that fetches nine chains takes about 30 s longer at most.

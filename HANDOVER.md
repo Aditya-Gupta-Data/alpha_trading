@@ -42,6 +42,37 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-01 (afternoon) — Issue 40 fix (PAPER_2L_LIVE chain collision + refusal reasons) BUILT + PUSHED; deploy it WITH #123 tonight
+
+**State.** `origin/main` now carries the Issue 40 commit on top of #123. The
+VM is still at `a82d12f`: none of #123 and none of Issue 40 is live. The deploy
+below is unchanged — `git merge --ff-only origin/main` takes both.
+
+**What it changes** (full record in `docs/observation_week_ledger.md`, Issue 40):
+- **Chain lane:** every option-chain call on the host is now spaced ≥ 3.5 s
+  from the previous one, whichever process made it (proposer, live arm,
+  intraday square-off, archiver).
+  - Before this, only the 1.1 s general gate applied across modules.
+  - The 09:17 ICICIBANK `1c0d04d0` refusal was most likely a re-quote ~2 s
+    after the proposer's fetch. That is **unverified**: nothing logged why.
+- **Refusal reasons:** a live-arm refusal for no chain now names the cause in
+  the log and the `live_entry_refused` event, e.g. "option chain unavailable
+  (rate limit (DH-904: …))". A failed live tick fetch is logged with its reason.
+- **Cosmetic:** each shadow account's "approved N lot(s)" line prints once,
+  when the lock is taken, not again at approval.
+
+**PAPER_2L_LIVE at 13:09 (read-only):**
+- ₹2,00,000, realized 0. One open position: `24f931bb` NIFTY MID SELECT
+  bear put, ₹16,764 locked.
+- Mark 48.60 vs entry 39.65/share, about +₹1,074 before exit costs. Ratchet
+  peak 16.23%, not armed (the first rung is at 40%).
+
+**After the deploy, check first:**
+- The next `live_entry_refused` event, if any, now names its reason. Read it
+  before guessing.
+- Look for `(live account: chain … failed: …)` lines in
+  `logs/master_scheduler.log`.
+
 ## 2026-10-01 — audit Chunk 1 Batch D + leftovers BUILT, REVIEWED, PUSHED (#123); VM DEPLOY NOT DONE — the owner deploys it manually this evening
 
 **State.** `origin/main` carries `a91f532` → `7ebda95` plus this doc commit.

@@ -20,7 +20,9 @@ ENTRY (options_proposer._execute_paper_entry, at approval): the chain is
 RE-QUOTED at that moment (`requote_entry`) — the proposal-time quotes may
 be hours old under a paused auto-approve — and the account refuses, with
 its lock released, unless the market is open and every leg has a usable
-crossed quote (BUY at ask, SELL at bid, the #70 rule). The paper venue
+crossed quote (BUY at ask, SELL at bid, the #70 rule). A refusal for no
+chain carries the door's reason ("option chain unavailable (rate limit
+(DH-904: ...))") into the log line and the `live_entry_refused` event. The paper venue
 fills that ticket at the crossed limits with ZERO tier slippage
 (`paper_venue.ZERO_SLIP_ACCOUNTS`): crossing IS the cost. `open_position`
 then records the fills; d = Σ sign × fill (long +, short −; d > 0 debit,
@@ -30,7 +32,9 @@ width − d (debit) or −d (credit), max_loss = d (debit) or width + d (credit)
 MARK + EXIT (`tick`, from live_bridge.live_cycle every 60 s in market
 hours): one option chain per (underlying, expiry) at most every
 LIVE_QUOTE_INTERVAL_SECONDS, at most `max_fetches` per tick, paced ≥ 3 s
-apart (the chain endpoint's own limit), never after `cutoff` (15:27 IST —
+apart on the tick's own clock and ≥ 3.5 s from ANY chain call on the host
+(dhan_client's chain lane); a failed fetch is logged with the door's
+reason. Never after `cutoff` (15:27 IST —
 the scheduler must still self-terminate at 15:30). Per leg: a SHORT leg
 with no ask, a bid above the ask, or a quote > 50% off its last price
 means NO mark this tick (abstain, keep the last mark); a LONG leg with no
@@ -146,8 +150,10 @@ def _is_test_env() -> bool:
 
 
 def _pace(sleep_fn=time.sleep, now_epoch_fn=time.time) -> None:
-    """Keep this module's chain calls >= CHAIN_PACE_SECONDS apart (the
-    endpoint's measured limit; the host-wide 1.1 s throttle is too fast)."""
+    """Keep the tick's own chain calls >= CHAIN_PACE_SECONDS apart, on the
+    tick's injectable clock (its fetch budget is counted on it). The
+    host-wide guarantee — every chain call on the box, the proposer's too —
+    is dhan_client's chain lane."""
     global _LAST_CHAIN_CALL
     wait = CHAIN_PACE_SECONDS - (now_epoch_fn() - _LAST_CHAIN_CALL)
     if wait > 0:
@@ -155,14 +161,23 @@ def _pace(sleep_fn=time.sleep, now_epoch_fn=time.time) -> None:
     _LAST_CHAIN_CALL = now_epoch_fn()
 
 
+class ChainUnavailable(Exception):
+    """The live door answered no chain; the message is dhan_client's reason."""
+
+
 def _default_chain(ticker: str, expiry: str):
-    """The one live data door, paced. Muzzled under pytest (Issue 29
-    discipline): a test that wants a chain injects `chain_fn`."""
+    """The one live data door. Paced host-wide by dhan_client's chain lane
+    (2026-10-01: this module's own pacer could not see the proposer's fetch
+    of the same chain ~2 s earlier). An empty answer raises ChainUnavailable
+    carrying the door's reason. Muzzled under pytest (Issue 29 discipline):
+    a test that wants a chain injects `chain_fn`."""
     if _is_test_env():
         return None
-    from src.dhan_client import get_option_chain
-    _pace()
-    return get_option_chain(ticker, expiry)
+    from src.dhan_client import get_option_chain, last_chain_error
+    chain = get_option_chain(ticker, expiry)
+    if not chain:
+        raise ChainUnavailable(last_chain_error() or "empty response")
+    return chain
 
 
 def _market_open(now: datetime) -> bool:
@@ -288,9 +303,13 @@ def requote_entry(entry: dict, now: datetime = None, chain_fn=None) -> dict:
     if not _market_open(now):
         return {"ok": False, "legs": None, "quote_ts": None, "reason": "market closed at approval"}
     spread = entry["spread"]
-    chain = (chain_fn or _default_chain)(entry["ticker"], spread["expiry"])
+    try:
+        chain, why = (chain_fn or _default_chain)(entry["ticker"], spread["expiry"]), None
+    except ChainUnavailable as exc:
+        chain, why = None, str(exc)
     if not chain:
-        return {"ok": False, "legs": None, "quote_ts": None, "reason": "option chain unavailable"}
+        return {"ok": False, "legs": None, "quote_ts": None,
+                "reason": "option chain unavailable" + (f" ({why})" if why else "")}
     legs = []
     for leg in spread["legs"]:
         price, why = crossed_open_price(leg, leg_quote(chain, leg))

@@ -520,6 +520,11 @@ def _daily_breaker_check(conn) -> dict:
 
 ENTRY_HALT_CHECKS = (_risk_of_ruin_check, _daily_breaker_check)
 
+# An entry that already holds its lock is approved again with this reason
+# (the approval-time re-judgement of a proposal-time lock). One constant:
+# the shadow judge's log reads it to print each lock once, when taken.
+HELD_LOCK_REASON = "margin already locked for this entry"
+
 
 def request_entry(conn, journal_ref: str, required_margin: float,
                   dry_run: bool = False) -> dict:
@@ -541,7 +546,7 @@ def request_entry(conn, journal_ref: str, required_margin: float,
     active = conn.execute("SELECT 1 FROM margin_locks WHERE journal_ref = ? "
                           "AND released_at IS NULL", (journal_ref,)).fetchone()
     if active:
-        return {"approved": True, "reason": "margin already locked for this entry"}
+        return {"approved": True, "reason": HELD_LOCK_REASON}
     # A released row for this ref: only a pending lock that EXPIRED unapproved
     # (D7) may be taken again — at approval, judged on today's cash below.
     # Anything else was settled, and a settled ref is never re-locked (it
@@ -1104,7 +1109,7 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
                           "journal_ref = ? AND released_at IS NULL",
                           (account, journal_ref)).fetchone()
     if active:
-        return {"approved": True, "reason": "margin already locked for this entry"}
+        return {"approved": True, "reason": HELD_LOCK_REASON}
     # same rule as request_entry: only a D7-expired pending lock is renewed
     prior = conn.execute("SELECT 1 FROM paper_margin_locks WHERE account_id = ? AND "
                          "journal_ref = ?", (account, journal_ref)).fetchone()
@@ -1434,7 +1439,7 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                 held = _active_shadow_lock(conn, account, journal_ref)
                 if held is not None:
                     out[account] = {"status": "approved", "lots": held[1], "margin_rs": held[0],
-                                    "reason": "margin already locked for this entry"}
+                                    "reason": HELD_LOCK_REASON}
                     continue
                 if account in LIVE_ACCOUNTS and not _legs_all_quoted(spread):
                     paper_log_event(conn, account, "sizing_refused", journal_ref,

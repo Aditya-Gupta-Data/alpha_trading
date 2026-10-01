@@ -196,6 +196,70 @@ def test_execute_paper_entry_requotes_the_live_arm_and_refuses_when_closed(world
     assert "market closed" in ev and "released at zero" in ev
 
 
+def _door_answers_nothing(monkeypatch, why="rate limit (DH-904: Too many requests)"):
+    """Reach the REAL default door (un-muzzled) with its Dhan call faked to
+    return no chain and name `why` — no network, no token."""
+    from src import dhan_client as dc
+    monkeypatch.setattr(lp, "_is_test_env", lambda: False)
+    monkeypatch.setattr(dc, "get_option_chain", lambda t, x: None)
+    monkeypatch.setattr(dc, "last_chain_error", lambda: why)
+
+
+def test_a_no_chain_refusal_names_the_doors_reason_in_the_log_and_the_event(world, monkeypatch, capsys):
+    # 2026-10-01: ICICIBANK 1c0d04d0 was refused "option chain unavailable"
+    # with nothing to say why. The door's reason now rides the refusal.
+    from src import options_proposer as op
+    c = world
+    monkeypatch.setattr(brain_map, "connect", lambda *a, **k: c)
+    monkeypatch.setattr(op, "_PAPER_VENUE_KEEP_CONN", True)
+    _door_answers_nothing(monkeypatch)
+    e = _entry("lv0005")
+    pm.request_entry(c, "lv0005", 17550.0)
+    for acct in (TWO_L, LIVE):
+        pm.paper_request_entry(c, acct, "lv0005", 17550.0, lots=1, primary_lots=1)
+    rq = lp.requote_entry(e, now=OPEN)                     # the prefetch: a dict, never a raise
+    assert not rq["ok"] and rq["reason"] == "option chain unavailable (rate limit (DH-904: Too many requests))"
+    op._execute_paper_entry(e, live_requote=rq)
+    assert "REFUSED at approval — option chain unavailable (rate limit (DH-904: Too many requests))" \
+        in capsys.readouterr().out
+    ev = c.execute("SELECT detail FROM paper_account_events WHERE account_id = ? AND event_type = 'live_entry_refused'",
+                   (LIVE,)).fetchone()[0]
+    assert ev == "option chain unavailable (rate limit (DH-904: Too many requests)) — lock released at zero"
+    assert pm._active_shadow_lock(c, LIVE, "lv0005") is None and pm._active_shadow_lock(c, TWO_L, "lv0005") is not None
+
+
+def test_a_failed_tick_fetch_is_logged_with_the_doors_reason(world, monkeypatch, capsys):
+    c = world
+    _open(c)
+    lp.reset_cache()
+    _door_answers_nothing(monkeypatch, why="transport error: reset by peer")
+    clock = {"t": 1000.0}
+    t = lp.tick(now=OPEN, conn=c, sleep_fn=lambda s: clock.__setitem__("t", clock["t"] + s),
+                now_epoch_fn=lambda: clock["t"])
+    assert t["fetched"] == 1 and t["marked"] == 0 and t["abstained"] == 1
+    assert "(live account: chain NIFTY 50 2026-10-28 failed: transport error: reset by peer)" \
+        in capsys.readouterr().out
+
+
+def test_each_shadow_lock_prints_approved_once_not_again_at_approval(world, monkeypatch, capsys):
+    # 2026-10-01 log: every shadow account printed "approved 1 lot(s)" twice
+    # per trade — once when its lock was taken at proposal, again when
+    # approval re-confirmed the same lock. One lock, one line.
+    from src import options_proposer as op
+    c = world
+    monkeypatch.setattr(brain_map, "connect", lambda *a, **k: c)
+    monkeypatch.setattr(op, "_PAPER_VENUE_KEEP_CONN", True)
+    p = {"spread": _bull_call(), "lots": 1, "vix": 13.0}
+    first = op._judge_shadow_accounts("lv0006", p)                       # proposal: locks taken
+    second = op._judge_shadow_accounts("lv0006", p, allow_rotation=True)  # approval: same locks held
+    assert {a: v["status"] for a, v in first.items()} == {TWO_L: "approved", LIVE: "approved"}
+    assert {a: (v["status"], v["reason"]) for a, v in second.items()} == {
+        TWO_L: ("approved", pm.HELD_LOCK_REASON), LIVE: ("approved", pm.HELD_LOCK_REASON)}
+    out = capsys.readouterr().out
+    for acct in (TWO_L, LIVE):
+        assert out.count(f"[{acct}] lv0006: approved") == 1, out
+
+
 # ------------------------------------------------------------- marks
 
 def test_marks_cross_the_spread_abstain_on_bad_quotes_and_tolerate_a_zero_bid_long(world):

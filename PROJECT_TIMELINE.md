@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-01 · 6 commits · 24 files touched
+### 2026-10-01 · 9 commits · 32 files touched
 
+- `3ca2e62` docs: #123 + Issue 40 deployed (VM 0f978eb, 19:01 IST) — HANDOVER deploy block, ledger Issue 40 status
+- `7ac1226` docs: HANDOVER — PAPER_2L_LIVE sweep paused at the 85% usage guardrail; resume state in .claude/audit_state (git-ignored)
+- `0f978eb` fix(execution): Issue 40 — host-wide chain lane, named live-arm refusals, one "approved" line per lock
 - `7511c61` docs: audit Chunk 1 Batch D + leftovers (#123) — DECISIONS #123, the four Batch D panel rounds in the audit doc, HANDOVER (built + pushed; VM deploy left to the owner this evening; Chunk 2 OMS & Execution scope)
 - `7ebda95` fix(ledger): Batch D panel round 4 — the primary recon expiry fold is pinned through a revival and settlement; MODULES names the reverse sweep's era cutoff and exited-entry scope
 - `95c053f` fix(ledger): Batch D panel round 3 — the reverse sweep also corrects an EXITED lockless funded entry (from the ledger-before-lock era only; Mac-era rows untouched), recon folds the D7-expiry check into one query per table; tests pin the write lock across a curve point's read (fails on a mutant), the unknown-lock fail-safe, the unclean-ledger reverse sweep and daily re-fire, the shadow expiry branch, the ruin-halt projection and the atomic portfolio save

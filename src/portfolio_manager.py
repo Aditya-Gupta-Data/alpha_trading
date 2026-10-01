@@ -281,14 +281,26 @@ def log_event(conn, event_type: str, detail: str = "") -> None:
     conn.commit()
 
 
+_CURVE_POINT_FROM_STATE = (
+    "SELECT ?, round(starting_capital + realized_pnl, 2), peak_equity, "
+    "CASE WHEN peak_equity > 0 THEN round(max(0.0, (peak_equity - "
+    "round(starting_capital + realized_pnl, 2)) / peak_equity * 100), 4) ELSE 0.0 END ")
+
+
 def _snapshot_equity(conn) -> dict:
-    """Append one equity-curve point (after any realized P&L change)."""
-    eq, dd = equity(conn), drawdown_pct(conn)
-    peak = float(get_account(conn)["peak_equity"])
-    conn.execute("INSERT INTO equity_curve (ts, equity, peak_equity, "
-                 "drawdown_pct) VALUES (?, ?, ?, ?)", (_now_iso(), eq, peak, dd))
+    """Append one equity-curve point (after any realized P&L change).
+
+    D12 (#123 panel): the point is computed INSIDE its own INSERT from the
+    account row as committed at that instant — a separate read first could
+    write a stale equity with a later row id when another process settled
+    in between, and same-second readers take the later row id."""
+    get_account(conn)
+    conn.execute("INSERT INTO equity_curve (ts, equity, peak_equity, drawdown_pct) "
+                 + _CURVE_POINT_FROM_STATE + "FROM account_state WHERE id = 1", (_now_iso(),))
     conn.commit()
-    return {"equity": eq, "peak_equity": peak, "drawdown_pct": dd}
+    row = conn.execute("SELECT equity, peak_equity, drawdown_pct FROM equity_curve "
+                       "ORDER BY rowid DESC LIMIT 1").fetchone()
+    return {"equity": float(row[0]), "peak_equity": float(row[1]), "drawdown_pct": float(row[2])}
 
 
 def required_margin_for(proposal: dict, vix: float = None) -> float:
@@ -1131,12 +1143,15 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
 
 
 def _paper_snapshot(conn, account: str) -> dict:
-    eq, dd = paper_equity(conn, account), paper_drawdown_pct(conn, account)
-    peak = float(get_paper_account(conn, account)["peak_equity"])
-    conn.execute("INSERT INTO paper_equity_curve (account_id, ts, equity, peak_equity, "
-                 "drawdown_pct) VALUES (?, ?, ?, ?, ?)", (account, _now_iso(), eq, peak, dd))
+    """One paper_equity_curve point, computed inside its INSERT (D12, #123)."""
+    get_paper_account(conn, account)
+    conn.execute("INSERT INTO paper_equity_curve (account_id, ts, equity, peak_equity, drawdown_pct) "
+                 "SELECT account_id, " + _CURVE_POINT_FROM_STATE[len("SELECT "):]
+                 + "FROM paper_accounts WHERE account_id = ?", (_now_iso(), account))
     conn.commit()
-    return {"equity": eq, "peak_equity": peak, "drawdown_pct": dd}
+    row = conn.execute("SELECT equity, peak_equity, drawdown_pct FROM paper_equity_curve "
+                       "WHERE account_id = ? ORDER BY rowid DESC LIMIT 1", (account,)).fetchone()
+    return {"equity": float(row[0]), "peak_equity": float(row[1]), "drawdown_pct": float(row[2])}
 
 
 def paper_release_margin(conn, account: str, journal_ref: str, pnl_net: float = 0.0) -> dict:

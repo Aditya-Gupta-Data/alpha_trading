@@ -12,9 +12,21 @@ ZONE="us-central1-a"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$HERE/data/vm_mirror"
 mkdir -p "$DEST"
-for f in data/brain_map.db data/journal.jsonl logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl data/dashboard_benchmarks.json; do
+# #123 (audit D10): brain_map.db and journal.jsonl are copied from a
+# CONSISTENT SNAPSHOT taken on the VM first (sqlite backup / under the
+# journal lock), never the live files mid-commit.
+SNAP=/tmp/pull_dashboard_snapshot
+REMOTE=('alpha_trading/logs/equity_shadow_journal.jsonl' 'alpha_trading/data/market_snapshot.json'
+        'alpha_trading/logs/recon.jsonl' 'alpha_trading/data/dashboard_benchmarks.json')
+if gcloud compute ssh "${VM}" --project="${PROJECT}" --zone="${ZONE}" --quiet \
+      --command "rm -rf ${SNAP} && cd ~/alpha_trading && venv/bin/python -m src.dashboard.mirror_snapshot ${SNAP}" >/dev/null 2>&1; then
+  REMOTE=("${SNAP}/brain_map.db" "${SNAP}/journal.jsonl" "${REMOTE[@]}")
+else
+  echo "[pull] snapshot on the VM failed — brain_map.db/journal.jsonl NOT pulled (previous copies kept)"
+fi
+for f in "${REMOTE[@]}"; do
   base="$(basename "$f")"
-  if gcloud compute scp "${VM}:~/alpha_trading/${f}" "${DEST}/${base}.tmp" \
+  if gcloud compute scp "${VM}:${f}" "${DEST}/${base}.tmp" \
         --project="${PROJECT}" --zone="${ZONE}" --quiet 2>/dev/null; then
     mv "${DEST}/${base}.tmp" "${DEST}/${base}"
     echo "[pull] ${base} ok"

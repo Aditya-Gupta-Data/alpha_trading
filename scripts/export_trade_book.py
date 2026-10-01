@@ -330,7 +330,7 @@ def pair_equity_events(path):
     sharing an `id`. Unpaired entries are open positions. An exit with no
     entry is reported, never silently dropped — it would mean the ledger
     lost a line."""
-    entries, exits = {}, {}
+    entries, exits, revoked = {}, {}, {}
     order = {}
     for line_no, ev in read_journal(path):
         ev_id = ev.get("id")
@@ -342,10 +342,18 @@ def pair_equity_events(path):
             order.setdefault(ev_id, line_no)
         elif ev.get("event") == "exit":
             exits[ev_id] = ev
+        elif ev.get("event") == "funding_revoked":
+            revoked[ev_id] = ev               # #123: applied to its entry below
         else:
             print(f"  ! equity line {line_no}: unknown event type "
                   f"{ev.get('event')!r}, skipped", file=sys.stderr)
 
+    if revoked:                               # the ledger's correction (#123)
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from src.knowledge_graph_logger import apply_corrections
+        fixed = apply_corrections(list(entries.values()) + list(revoked.values()))
+        entries = {e.get("id"): e for e in fixed if e.get("event") == "entry"}
     orphans = set(exits) - set(entries)
     for ev_id in sorted(orphans):
         print(f"  ! equity exit {ev_id} has no matching entry — ledger gap, skipped",

@@ -341,7 +341,8 @@ def render(journal_path=None, equity_path=None, db_path=None, today=None,
     acct = read_account(db_path)
     locks = acct["locks"]
     entries = _read_jsonl(journal_path or DEFAULT_JOURNAL)
-    events = _read_jsonl(equity_path or DEFAULT_EQUITY_JOURNAL)
+    from src.knowledge_graph_logger import apply_corrections
+    events = apply_corrections(_read_jsonl(equity_path or DEFAULT_EQUITY_JOURNAL))   # #123
 
     opt_open, opt_res = options_rows(entries, locks, today)
     eq_open, eq_res, tele_open, tele_res = equity_rows(events, locks, today)

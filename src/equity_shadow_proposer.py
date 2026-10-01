@@ -58,7 +58,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 MODE = "PAPER_TELEMETRY"
 CAPITAL_MODE = "PAPER_CAPITAL"   # darling entries the equity desk funds
-FUNDING_REVOKED_EVENT = "funding_revoked"   # #123: logged as funded, lock then refused
+FUNDING_REVOKED_EVENT = kg.FUNDING_REVOKED_EVENT   # #123: logged as funded, lock then refused
 PULLBACK_BAND_PCT = 5.0   # entry zone: floor .. floor*(1+5%)
 STOP_PCT = 2.0            # stop 2% below the block-VWAP floor
 REWARD_RISK = 2.0         # target = entry + 2 * (entry - stop)

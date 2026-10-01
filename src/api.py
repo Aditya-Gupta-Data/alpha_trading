@@ -716,6 +716,7 @@ def decision(req: DecisionRequest):
 
     proposal = _decision_to_proposal(req)
     executed = False
+    book = None
 
     if decision_kind == "PAPER_TRADE":
         # D9 (#123): load, check, mutate and save the book under ONE lock
@@ -763,7 +764,9 @@ def decision(req: DecisionRequest):
         "decision": journal_decision,
         "executed_on_paper": executed,
         "entry": entry,
-        "portfolio": {"cash": round(book["cash"], 2), "holdings": book["holdings"]},
+        # DISMISS never touched the book: a plain read for the response (#123 panel)
+        "portfolio": {"cash": round((book or pf.load())["cash"], 2),
+                      "holdings": (book or pf.load())["holdings"]},
     }
 
 

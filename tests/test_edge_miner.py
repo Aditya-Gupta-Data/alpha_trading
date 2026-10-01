@@ -123,17 +123,20 @@ def test_full_cycle_pull_mine_apply_refresh():
         # command sequence: pull scp, ship-edges+applier scp, remote
         # apply ssh, refresh scp
         kinds = ["ssh" if "ssh" in c else "scp" for c in calls]
-        assert kinds == ["scp", "scp", "ssh", "scp"]
-        ship_cmd = calls[1]
+        # #123: each pull is preceded by a consistent snapshot on the VM
+        assert kinds == ["ssh", "scp", "scp", "ssh", "ssh", "scp"]
+        assert "mirror_snapshot" in calls[0][-1] and "mirror_snapshot" in calls[4][-1]
+        assert all("/data/brain_map.db" not in " ".join(c) for c in calls)   # never the live file
+        ship_cmd = calls[2]
         # BOTH files travel in one scp: the payload AND the applier
         # script (multi-line python via ssh --command gets newline-
         # mangled by the remote shell — the applier must be a file)
         assert any("new_edges.json" in c for c in ship_cmd)
         assert any("apply_edges.py" in c for c in ship_cmd)
-        apply_cmd = calls[2][-1]
+        apply_cmd = calls[3][-1]
         assert "/tmp/apply_edges.py" in apply_cmd
         assert "/tmp/new_edges.json" in apply_cmd
-        assert "-c" not in calls[2]        # never inline python over ssh
+        assert "-c" not in calls[3]        # never inline python over ssh
 
 
 def test_no_new_edges_means_no_apply_call():
@@ -160,7 +163,7 @@ def test_no_new_edges_means_no_apply_call():
         assert result["status"] == "ok"
         assert result["new_edges_applied_to_vm"] == 0
         kinds = ["ssh" if "ssh" in c else "scp" for c in calls]
-        assert kinds == ["scp", "scp"]              # pull + refresh only
+        assert kinds == ["ssh", "scp", "ssh", "scp"]   # snapshot+pull, snapshot+refresh only
 
 
 def test_failed_pull_reports_and_writes_no_state():

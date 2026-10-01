@@ -77,15 +77,40 @@ def log_event(event: dict, path=None) -> dict:
     return event
 
 
-def read_events(path=None) -> list:
-    """Every parseable event, in file order. Missing file / junk lines
-    degrade to fewer events, never an exception."""
+FUNDING_REVOKED_EVENT = "funding_revoked"
+TELEMETRY_MODE = "PAPER_TELEMETRY"
+
+
+def apply_corrections(events: list) -> list:
+    """The append-only ledger's CORRECTIONS, applied on read (decision #123,
+    audit D11): an entry whose id later carries a `funding_revoked` event was
+    logged as funded but its lock was never taken (refused, or a crash
+    between the append and the lock) — every reader sees it as the
+    zero-capital telemetry row it really is. The lines on disk never change."""
+    revoked = {e.get("id"): e for e in events if e.get("event") == FUNDING_REVOKED_EVENT}
+    if not revoked:
+        return events
+    out = []
+    for e in events:
+        if e.get("event") == "entry" and e.get("id") in revoked:
+            why = revoked[e["id"]].get("reason")
+            e = dict(e, mode=TELEMETRY_MODE, capital_allocated=0,
+                     funding=dict(e.get("funding") or {}, funded=False,
+                                  reason=f"revoked: {why}" if why else "revoked"))
+        out.append(e)
+    return out
+
+
+def read_events_strict(path=None) -> tuple:
+    """(events, clean) — clean is False when the file is missing or
+    unreadable, or ANY line failed to parse. For a caller that must not act
+    on a degraded read (the desk's no-entry orphan sweep)."""
     p = Path(path) if path else DEFAULT_PATH
     try:
         text = p.read_text()
     except OSError:
-        return []
-    out = []
+        return [], False
+    out, clean = [], True
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -93,8 +118,14 @@ def read_events(path=None) -> list:
         try:
             out.append(json.loads(line))
         except ValueError:
-            continue
-    return out
+            clean = False
+    return apply_corrections(out), clean
+
+
+def read_events(path=None) -> list:
+    """Every parseable event, in file order, corrections applied. Missing
+    file / junk lines degrade to fewer events, never an exception."""
+    return read_events_strict(path)[0]
 
 
 def open_positions(events=None, path=None) -> dict:

@@ -186,22 +186,77 @@ def test_a_lock_refused_after_logging_is_named_on_the_ledger(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM margin_locks").fetchone()[0] == 0
 
 
-def test_an_eqd_lock_with_no_ledger_entry_is_swept_after_the_grace(tmp_path):
+def _aged_lock(conn, ref, minutes, now):
+    assert pm.request_entry(conn, ref, 1000.0)["approved"]
+    conn.execute("UPDATE margin_locks SET locked_at = ? WHERE journal_ref = ?",
+                 ((now - timedelta(minutes=minutes)).replace(tzinfo=None).isoformat(), ref))
+    conn.commit()
+
+
+def test_an_eqd_lock_with_no_ledger_entry_is_swept_only_on_a_clean_read(tmp_path):
+    """The no-entry release is irreversible, so it runs only when the
+    ledger read is known good (file read, every line parsed, entries seen),
+    and on ONE lock per pass (#123 panel: a degraded read used to look like
+    'no entries' and would have released the whole open desk book)."""
     desk, conn = _desk_world(tmp_path)
     ledger = tmp_path / "shadow.jsonl"
-    ledger.write_text("")
     now = datetime(2026, 10, 1, 12, 0, tzinfo=IST)
-    for ref, minutes in (("eqd:old00001", 90), ("eqd:new00001", 5)):
-        assert pm.request_entry(conn, ref, 1000.0)["approved"]
-        conn.execute("UPDATE margin_locks SET locked_at = ? WHERE journal_ref = ?",
-                     ((now - timedelta(minutes=minutes)).replace(tzinfo=None).isoformat(), ref))
-    conn.commit()
+    for ref, minutes in (("eqd:old00001", 90), ("eqd:old00002", 95), ("eqd:new00001", 5)):
+        _aged_lock(conn, ref, minutes, now)
+    # missing / empty / junk ledger -> abstain entirely
+    assert desk.sweep_orphan_locks(ledger_path=tmp_path / "absent.jsonl", conn=conn, now=now) == []
+    ledger.write_text("")
+    assert desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now) == []
+    ledger.write_text(json.dumps({"event": "entry", "id": "other001", "ticker": "X.NS",
+                                  "ts": now.isoformat()}) + "\n{torn line\n")
+    assert desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now) == []
+    assert pm.locked_margin(conn) == 3000.0
+    # a clean ledger with entries -> one old orphan released per pass, young one kept
+    ledger.write_text(json.dumps({"event": "entry", "id": "other001", "ticker": "X.NS",
+                                  "ts": now.isoformat()}) + "\n")
     out = desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now)
-    assert [s["lock_ref"] for s in out] == ["eqd:old00001"]
+    assert len(out) == 1 and out[0]["lock_ref"].startswith("eqd:old")
+    out2 = desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now)
+    assert len(out2) == 1 and out2[0]["lock_ref"].startswith("eqd:old")
     active = {r[0] for r in conn.execute("SELECT journal_ref FROM margin_locks WHERE released_at IS NULL")}
     assert active == {"eqd:new00001"}
     assert conn.execute("SELECT COUNT(*) FROM account_events WHERE event_type = "
-                        "'equity_orphan_lock_released'").fetchone()[0] == 1
+                        "'equity_orphan_lock_released'").fetchone()[0] == 2
+
+
+def test_an_entry_logged_funded_with_no_lock_is_revoked_on_the_ledger(tmp_path):
+    """The reverse orphan (#123 panel): a stop between the ledger append and
+    the lock leaves a 'funded' entry no lock backs. The sweep appends a
+    funding_revoked correction, and every reader then sees telemetry."""
+    desk, conn = _desk_world(tmp_path)
+    ledger = tmp_path / "shadow.jsonl"
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=IST)
+    old = (now - timedelta(hours=2)).isoformat()
+    ledger.write_text(json.dumps({"event": "entry", "id": "dead0001", "ticker": "TCS.NS", "ts": old,
+                                  "mode": "PAPER_CAPITAL", "capital_allocated": 40000,
+                                  "funding": {"funded": True, "lock_ref": "eqd:dead0001"}}) + "\n")
+    out = desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now)
+    assert [o["lock_ref"] for o in out] == ["eqd:dead0001"]
+    [e] = [x for x in kg.read_events(ledger) if x.get("event") == "entry"]
+    assert e["funding"]["funded"] is False and e["mode"] == "PAPER_TELEMETRY" and e["capital_allocated"] == 0
+    assert kg.open_positions(path=ledger)["TCS.NS"]["funding"]["funded"] is False
+    assert desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now) == []      # idempotent
+
+
+def test_every_ledger_reader_sees_a_revoked_entry_as_unfunded(tmp_path):
+    from src.reporting import markdown_ledger as ml
+    from src.dashboard import data as dash
+    ledger = tmp_path / "shadow.jsonl"
+    lines = [{"event": "entry", "id": "rv000001", "ticker": "TCS.NS", "ts": "2026-10-01T10:00:00+05:30",
+              "mode": "PAPER_CAPITAL", "capital_allocated": 40000,
+              "funding": {"funded": True, "lock_ref": "eqd:rv000001"}},
+             {"event": "funding_revoked", "id": "rv000001", "reason": "cash taken"}]
+    ledger.write_text("".join(json.dumps(l) + "\n" for l in lines))
+    [e] = [x for x in kg.read_events(ledger) if x.get("event") == "entry"]
+    assert e["funding"]["funded"] is False and "cash taken" in e["funding"]["reason"]
+    assert kg.apply_corrections(ml._read_jsonl(ledger))[0]["funding"]["funded"] is False
+    import inspect
+    assert "apply_corrections" in inspect.getsource(dash)            # the dashboard's open-book reader
 
 
 # ==================================================================== D12
@@ -235,8 +290,11 @@ def test_recon_drops_ticket_only_rows_the_journal_has_settled(tmp_path):
                            ("t5", "eqd:x1", "PAPER_10L"), ("t6", "eqd:x2", "PAPER_10L")):
         c.execute("INSERT INTO trade_tickets VALUES (?, ?, 'NIFTY', 'FILLED', 'ENTRY', ?)", (tid, ref, acct))
     c.execute("INSERT INTO paper_live_positions VALUES ('PAPER_2L_LIVE', 'live0001', 'closed')")
+    c.execute("INSERT INTO trade_tickets VALUES ('t7', 'open0001', 'NIFTY', 'FILLED', 'ENTRY', 'PAPER_2L_ROT')")
     c.commit()
     pm.request_entry(c, "eqd:x2", 1000.0)                   # the desk still holds x2
+    pm.paper_request_entry(c, "PAPER_2L_ROT", "open0001", 1000.0)   # ROT's slice was evicted:
+    pm.paper_release_margin(c, "PAPER_2L_ROT", "open0001", 120.0)   # its lock is released
     rows = [{"short_id": "open0001", "decision": "approved", "outcome": None},
             {"short_id": "setl0001", "decision": "approved", "outcome": {"resolution": "expiry_backstop"}},
             {"short_id": "rejd0001", "decision": "rejected", "outcome": None},
@@ -305,3 +363,66 @@ def test_the_eviction_quotes_are_fetched_outside_the_journal_lock(monkeypatch):
     # inside the lock the eviction sees ONLY these — no network seam is called
     marks_fn, evict_fn = op._rotation_fns(got)
     assert marks_fn(["held0001", "other"]) == {"held0001": 0.1}
+
+
+def test_the_decision_endpoint_answers_dismiss_and_paper_trade(monkeypatch):
+    """#123 panel: the D9 rework left `book` unbound on DISMISS — a 500
+    after the rejected row was already journaled."""
+    from fastapi.testclient import TestClient
+    from src import api
+    monkeypatch.delenv("API_KEY", raising=False)
+    pf.save({"cash": 100000.0, "holdings": {}})
+    client = TestClient(api.app)
+    r = client.post("/api/decision", json={"ticker": "TCS.NS", "decision": "DISMISS", "entry": 100.0})
+    assert r.status_code == 200 and r.json()["portfolio"]["cash"] == 100000.0
+    r = client.post("/api/decision", json={"ticker": "TCS.NS", "decision": "PAPER_TRADE",
+                                           "entry": 100.0, "position_size": 5})
+    assert r.status_code == 200, r.text
+    assert pf.load()["holdings"]["TCS.NS"]["shares"] >= 1
+    assert [e["decision"] for e in journal.read_all()] == ["rejected", "approved"]
+
+
+def test_an_approval_eviction_makes_no_network_call_under_the_journal_lock(monkeypatch):
+    """#123 panel: drive decide_pending itself. The rotation marks and the
+    candidate's chain quotes are fetched before the lock, and the eviction
+    inside the lock re-verifies on exactly those quotes."""
+    from src import options_proposer as op, plan_tracker as pt
+    import src.live_bridge as lb
+    net, evicted = [], {}
+    monkeypatch.setattr(op, "journal", journal)
+    monkeypatch.setattr(pm, "PAPER_2L_ACCOUNT_ENABLED", True)
+    monkeypatch.setattr(pm, "CAPITAL_ROTATION_ENABLED", True)
+    monkeypatch.setattr(pm, "evaluate_eviction", lambda *a, **k: {"evict": True,
+                                                                  "weakest": {"journal_ref": "held0001"}})
+    monkeypatch.setattr(pt, "rotation_marks", lambda refs, **k: net.append(("marks", journal.lock_held()))
+                        or {r: 0.1 for r in refs})
+    monkeypatch.setattr(lb, "_leg_quotes_for", lambda e: net.append(("quotes", journal.lock_held()))
+                        or {(1.0, "CE"): 9.5})
+
+    def fake_evict(conn, account, ref, lots, max_rr_left=None, reason="", need_rs=None,
+                   quotes_fn=None, **k):
+        evicted.update(ref=ref, held=journal.lock_held(), quotes=quotes_fn({"short_id": ref}))
+        return {"status": "evicted"}
+    monkeypatch.setattr(pt, "evict_for_rotation", fake_evict)
+
+    def fake_shadow(ref, proposal, conn=None, risk_pct=None, marks_fn=None, evict_fn=None,
+                    allow_rotation=False):
+        assert allow_rotation and marks_fn(["held0001"]) == {"held0001": 0.1}
+        evict_fn(None, pm.ACCOUNT_PAPER_2L_ROT, "held0001", 1, 1.0, "test", need_rs=1.0)
+        return {}
+    monkeypatch.setattr(pm, "evaluate_shadow_accounts", fake_shadow)
+    monkeypatch.setattr(pm, "gate_headless_entry", lambda ref, req, conn=None: (True, "ok"))
+    monkeypatch.setattr(op, "_execute_paper_entry", lambda e, **k: {"mode": "legacy_instant"})
+    monkeypatch.setattr(op, "_notify_discord", lambda *a, **k: None)
+    monkeypatch.setattr("src.notifier.fire_broadcast", lambda *a, **k: None)
+    journal.log({"short_id": "pend0001", "decision": "pending_approval", "outcome": None, "ticker": "X",
+                 "spread": {"legs": [{"strike": 1}], "lot_size": 1, "lots": 1, "max_profit": 1,
+                            "max_loss": 1, "margin": {"total_margin": 1.0}}})
+    journal.log({"short_id": "held0001", "decision": "approved", "outcome": None, "spread": {"legs": []}})
+    c = brain_map.connect()
+    pm.ensure_accounts_schema(c)
+    pm.paper_request_entry(c, pm.ACCOUNT_PAPER_2L_ROT, "held0001", 100.0)
+    c.close()
+    assert op.decide_pending("pend0001", approve=True, human=False)["status"] == "approved"
+    assert net == [("marks", False), ("quotes", False)]                 # both before the lock
+    assert evicted == {"ref": "held0001", "held": True, "quotes": {(1.0, "CE"): 9.5}}

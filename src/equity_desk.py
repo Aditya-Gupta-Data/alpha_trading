@@ -357,9 +357,16 @@ def sweep_orphan_locks(ledger_path=None, conn=None, now=None) -> list:
     event. Since #123 the entry is logged before the lock is taken, so this
     only ever cleans up the old order's leftovers."""
     from src import knowledge_graph_logger as kg
-    events = kg.read_events(ledger_path)
+    events, clean = kg.read_events_strict(ledger_path)
     entries = {e.get("id"): e for e in events if e.get("event") == "entry"}
     exits = {e.get("id"): e for e in events if e.get("event") == "exit"}
+    # The no-entry release is IRREVERSIBLE (a settled ref is never re-locked),
+    # so it acts only on a ledger read that is known good — the file read,
+    # every line parsed, at least one entry seen — and on ONE lock per pass
+    # (#123 panel: a degraded read returned [] and would have released the
+    # whole open desk book at zero).
+    no_entry_ok = clean and bool(entries)
+    no_entry_budget = 1
     conn, owns = _connect(conn)
     try:
         active = conn.execute(
@@ -373,13 +380,14 @@ def sweep_orphan_locks(ledger_path=None, conn=None, now=None) -> list:
                 s = settle_exit(entries[eid], exits[eid], conn=conn)
                 if s:
                     settled.append(s)
-            elif eid not in entries:
+            elif eid not in entries and no_entry_ok and no_entry_budget > 0:
                 try:
                     age = (now_naive - datetime.fromisoformat(str(locked_at))).total_seconds()
                 except (TypeError, ValueError):
                     continue
                 if age < ORPHAN_NO_ENTRY_GRACE_MINUTES * 60:
                     continue
+                no_entry_budget -= 1
                 rel = pm.release_margin(conn, ref, 0.0)
                 if rel.get("released"):
                     pm.log_event(conn, "equity_orphan_lock_released",
@@ -387,6 +395,33 @@ def sweep_orphan_locks(ledger_path=None, conn=None, now=None) -> list:
                                  "— released at zero")
                     settled.append({"ticker": ref, "lock_ref": ref, "pnl_net": 0.0,
                                     "reason": "orphan lock, no ledger entry"})
+        # The reverse orphan (#123 panel): an entry logged as FUNDED whose
+        # lock was never taken — a crash between the append and the lock —
+        # is corrected on the ledger with a funding_revoked event (no money
+        # moves: nothing was locked). Only on a clean read, after the grace.
+        if clean:
+            ever_locked = {r[0] for r in conn.execute(
+                "SELECT journal_ref FROM margin_locks WHERE journal_ref LIKE ?",
+                (LOCK_PREFIX + "%",)).fetchall()}
+            for eid, e in entries.items():
+                if (not (e.get("funding") or {}).get("funded") or eid in exits
+                        or LOCK_PREFIX + str(eid) in ever_locked):
+                    continue
+                try:
+                    ts = datetime.fromisoformat(str(e.get("ts")))
+                    ts = ts.astimezone(IST).replace(tzinfo=None) if ts.tzinfo else ts
+                    age = (now_naive - ts).total_seconds()
+                except (TypeError, ValueError):
+                    continue
+                if age < ORPHAN_NO_ENTRY_GRACE_MINUTES * 60:
+                    continue
+                kg.log_event({"event": kg.FUNDING_REVOKED_EVENT, "id": eid,
+                              "ticker": e.get("ticker"), "lock_ref": LOCK_PREFIX + str(eid),
+                              "reason": "logged as funded but no lock was ever taken "
+                                        "(a stop between the ledger append and the lock)"},
+                             path=ledger_path)
+                settled.append({"ticker": e.get("ticker"), "lock_ref": LOCK_PREFIX + str(eid),
+                                "pnl_net": 0.0, "reason": "funding revoked, no lock"})
         return settled
     finally:
         if owns:

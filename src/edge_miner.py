@@ -62,6 +62,10 @@ GCP_PROJECT = "project-37632031-10d0-47dd-b6f"
 GCP_ZONE = "us-central1-a"
 VM = "adigupta1998@alpha-trading-vm"
 VM_REPO = "~/alpha_trading"
+# consistent copies of the VM's live files (src.dashboard.mirror_snapshot, #123)
+SNAPSHOT_DIR = "/tmp/edge_miner_snapshot"
+SNAPSHOT_CMD = (f"rm -rf {SNAPSHOT_DIR} && cd {VM_REPO} && venv/bin/python -m "
+                f"src.dashboard.mirror_snapshot {SNAPSHOT_DIR} && test -s {SNAPSHOT_DIR}/brain_map.db")
 
 # The remote applier: replays mined triples through the VM's own
 # idempotent writer. Runs with cwd=~/alpha_trading under venv python.
@@ -326,11 +330,18 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
         tmp = Path(tmp)
         pulled = tmp / "brain_map.db"
 
-        # 2. PULL the live DB
+        # 2. PULL a CONSISTENT SNAPSHOT of the live DB (#123, audit D10): the
+        # VM's three processes commit to brain_map.db continuously, so the
+        # live file is never copied — sqlite's backup API writes a snapshot
+        # on the VM first, and that is what travels.
+        snap = run_resilient(runner, ssh_base + [SNAPSHOT_CMD], "snapshot VM brain_map.db")
+        if getattr(snap, "returncode", 1) != 0:
+            return {"status": "failed", "reason": "could not pull a consistent snapshot of the VM DB",
+                    "detail": (getattr(snap, "stderr", "") or "")[-300:]}
         # Retry-safe: a read-only pull of a 3.6MB file. This is the hop
         # that failed on 08-02/08-03 and killed the whole cycle each time.
         res = run_resilient(runner, scp_base +
-                            [f"{VM}:{VM_REPO}/data/brain_map.db", str(pulled)],
+                            [f"{VM}:{SNAPSHOT_DIR}/brain_map.db", str(pulled)],
                             "pull VM brain_map.db")
         if res.returncode != 0 or not pulled.exists():
             return {"status": "failed", "reason": "could not pull VM DB",
@@ -383,11 +394,12 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
         # while the run still reported "ok" — the same silent-failure family
         # as the ship bug. Now it is checked and named (still non-fatal: the
         # mining above already succeeded and is applied on the VM).
-        refresh = run_resilient(
-            runner, scp_base + [f"{VM}:{VM_REPO}/data/brain_map.db",
-                                f"{VM}:{VM_REPO}/data/journal.jsonl",
+        snap = run_resilient(runner, ssh_base + [SNAPSHOT_CMD], "snapshot VM files")
+        refresh = (run_resilient(
+            runner, scp_base + [f"{VM}:{SNAPSHOT_DIR}/brain_map.db",
+                                f"{VM}:{SNAPSHOT_DIR}/journal.jsonl",
                                 str(DATA_DIR) + "/"],
-            "refresh Mac copies")
+            "refresh Mac copies") if getattr(snap, "returncode", 1) == 0 else snap)
         refreshed = getattr(refresh, "returncode", 1) == 0
         if not refreshed:
             print("  (edge_miner: LOCAL COPIES NOT REFRESHED — the Mac's "

@@ -347,7 +347,8 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                                        else "static 65% take")),
                      "sizing": ((e.get("sizing") or {}).get("reason") or None)})
     entries = {}
-    for x in _jsonl(equity_ledger_path or EQUITY_LEDGER_PATH):
+    from src.knowledge_graph_logger import apply_corrections       # funding_revoked (#123)
+    for x in apply_corrections(_jsonl(equity_ledger_path or EQUITY_LEDGER_PATH)):
         if x.get("event") == "entry" and (x.get("funding") or {}).get("funded"):
             entries[x.get("id")] = x
         elif x.get("event") == "exit":

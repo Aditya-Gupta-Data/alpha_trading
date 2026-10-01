@@ -279,13 +279,24 @@ def read_paper_book(conn: sqlite3.Connection = None, db_path=None,
                 except Exception:
                     journal_refs = None
             locked_refs = {r["ref"] for r in rows.values() if r["source"] != "oms_ticket"}
+            # an account whose OWN lock on the ref is released has settled
+            # its slice (e.g. a rotation eviction on the model path, no exit
+            # ticket) even while the primary still holds the trade (#123 panel)
+            released_keys = set()
+            if "margin_locks" in tables:
+                released_keys |= {(r[0], "PAPER_10L") for r in conn.execute(
+                    "SELECT journal_ref FROM margin_locks WHERE released_at IS NOT NULL")}
+            if "paper_margin_locks" in tables:
+                released_keys |= {(r[0], r[1]) for r in conn.execute(
+                    "SELECT journal_ref, account_id FROM paper_margin_locks "
+                    "WHERE released_at IS NOT NULL")}
             live_closed = set()
             if "paper_live_positions" in tables:
                 live_closed = {(r[0], r[1]) for r in conn.execute(
                     "SELECT journal_ref, account_id FROM paper_live_positions WHERE state = 'closed'")}
             for key in [k for k, r in rows.items() if r["source"] == "oms_ticket"]:
                 ref = rows[key]["ref"]
-                if (ref in settled or key in live_closed
+                if (ref in settled or key in live_closed or key in released_keys
                         or (journal_refs is not None and ref not in journal_refs
                             and ref not in locked_refs)):
                     del rows[key]

@@ -7,8 +7,10 @@ Flattens `data/journal.jsonl` — the ledger of record for every trade this
 system has taken — into one wide CSV for external P&L audit.
 
 READ-ONLY, by construction: it opens the journal for reading, writes exactly
-one CSV to a path you name, and imports nothing from `src/`. It cannot append
-to the journal, cannot touch `brain_map.db`, and is on no execution path.
+one CSV to a path you name, and imports from `src/` only the equity ledger's
+read-side correction (`knowledge_graph_logger.apply_corrections`, #123, a
+pure function). It cannot append to the journal, cannot touch
+`brain_map.db`, and is on no execution path.
 
 WHAT IS AND ISN'T A TRADE (the honesty rules this export inherits):
 
@@ -306,7 +308,7 @@ def flatten_equity(entry_ev, exit_ev, line_no):
         "exit_price": exit_price,
         "max_risk_rs": max_risk,
         "max_profit_rs": None,
-        "margin_blocked_rs": funding.get("notional"),
+        "margin_blocked_rs": funding.get("notional") if funded else None,   # a revoked row locked nothing (#123)
         "realized_pnl_rs": pnl,
         "r_multiple": autopsy.get("r_multiple"),
         "pct_of_max": None,

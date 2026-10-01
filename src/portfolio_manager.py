@@ -281,26 +281,34 @@ def log_event(conn, event_type: str, detail: str = "") -> None:
     conn.commit()
 
 
-_CURVE_POINT_FROM_STATE = (
-    "SELECT ?, round(starting_capital + realized_pnl, 2), peak_equity, "
-    "CASE WHEN peak_equity > 0 THEN round(max(0.0, (peak_equity - "
-    "round(starting_capital + realized_pnl, 2)) / peak_equity * 100), 4) ELSE 0.0 END ")
+def _curve_point(conn, select_sql: str, params: tuple, insert_sql: str, insert_prefix: tuple) -> dict:
+    """D12 (#123 panel): one curve point that is ALWAYS the state at its own
+    write — the write lock is taken first (BEGIN IMMEDIATE), the account
+    row read and rounded exactly as equity()/drawdown_pct() round it, the
+    point inserted, then one commit; the values returned are the ones
+    written (no read-back of a row another process may have added)."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        sc, rp, peak = conn.execute(select_sql, params).fetchone()
+        eq = round(float(sc) + float(rp), 2)
+        peak = float(peak)
+        dd = round(max(0.0, (peak - eq) / peak * 100), 4) if peak > 0 else 0.0
+        conn.execute(insert_sql, insert_prefix + (_now_iso(), eq, peak, dd))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"equity": eq, "peak_equity": peak, "drawdown_pct": dd}
 
 
 def _snapshot_equity(conn) -> dict:
-    """Append one equity-curve point (after any realized P&L change).
-
-    D12 (#123 panel): the point is computed INSIDE its own INSERT from the
-    account row as committed at that instant — a separate read first could
-    write a stale equity with a later row id when another process settled
-    in between, and same-second readers take the later row id."""
+    """Append one equity-curve point (after any realized P&L change)."""
     get_account(conn)
-    conn.execute("INSERT INTO equity_curve (ts, equity, peak_equity, drawdown_pct) "
-                 + _CURVE_POINT_FROM_STATE + "FROM account_state WHERE id = 1", (_now_iso(),))
-    conn.commit()
-    row = conn.execute("SELECT equity, peak_equity, drawdown_pct FROM equity_curve "
-                       "ORDER BY rowid DESC LIMIT 1").fetchone()
-    return {"equity": float(row[0]), "peak_equity": float(row[1]), "drawdown_pct": float(row[2])}
+    return _curve_point(conn, "SELECT starting_capital, realized_pnl, peak_equity FROM account_state "
+                              "WHERE id = 1", (),
+                        "INSERT INTO equity_curve (ts, equity, peak_equity, drawdown_pct) "
+                        "VALUES (?, ?, ?, ?)", ())
 
 
 def required_margin_for(proposal: dict, vix: float = None) -> float:
@@ -1143,15 +1151,12 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
 
 
 def _paper_snapshot(conn, account: str) -> dict:
-    """One paper_equity_curve point, computed inside its INSERT (D12, #123)."""
+    """One paper_equity_curve point, the state at its own write (D12, #123)."""
     get_paper_account(conn, account)
-    conn.execute("INSERT INTO paper_equity_curve (account_id, ts, equity, peak_equity, drawdown_pct) "
-                 "SELECT account_id, " + _CURVE_POINT_FROM_STATE[len("SELECT "):]
-                 + "FROM paper_accounts WHERE account_id = ?", (_now_iso(), account))
-    conn.commit()
-    row = conn.execute("SELECT equity, peak_equity, drawdown_pct FROM paper_equity_curve "
-                       "WHERE account_id = ? ORDER BY rowid DESC LIMIT 1", (account,)).fetchone()
-    return {"equity": float(row[0]), "peak_equity": float(row[1]), "drawdown_pct": float(row[2])}
+    return _curve_point(conn, "SELECT starting_capital, realized_pnl, peak_equity FROM paper_accounts "
+                              "WHERE account_id = ?", (account,),
+                        "INSERT INTO paper_equity_curve (account_id, ts, equity, peak_equity, "
+                        "drawdown_pct) VALUES (?, ?, ?, ?, ?)", (account,))
 
 
 def paper_release_margin(conn, account: str, journal_ref: str, pnl_net: float = 0.0) -> dict:

@@ -290,6 +290,15 @@ def read_paper_book(conn: sqlite3.Connection = None, db_path=None,
                 released_keys |= {(r[0], r[1]) for r in conn.execute(
                     "SELECT journal_ref, account_id FROM paper_margin_locks "
                     "WHERE released_at IS NOT NULL")}
+            # ...but a D7 EXPIRY (a pending lock released unapproved) is not a
+            # settlement: an entry approved later while the gate failed open
+            # can hold a filled position on an expired lock (#123 panel)
+            try:
+                from src import portfolio_manager as pm
+                released_keys = {k for k in released_keys
+                                 if not pm._lock_expired_unapproved(conn, k[1], k[0])}
+            except Exception:
+                released_keys = set()
             live_closed = set()
             if "paper_live_positions" in tables:
                 live_closed = {(r[0], r[1]) for r in conn.execute(

@@ -717,6 +717,13 @@ def decision(req: DecisionRequest):
     proposal = _decision_to_proposal(req)
     executed = False
     book = None
+    if decision_kind != "PAPER_TRADE":
+        # read BEFORE journaling: a failed read must not 500 after the row is
+        # written (#123 panel); a DISMISS never needs the book for anything else
+        try:
+            book = pf.load()
+        except Exception:
+            book = None
 
     if decision_kind == "PAPER_TRADE":
         # D9 (#123): load, check, mutate and save the book under ONE lock
@@ -764,9 +771,8 @@ def decision(req: DecisionRequest):
         "decision": journal_decision,
         "executed_on_paper": executed,
         "entry": entry,
-        # DISMISS never touched the book: a plain read for the response (#123 panel)
-        "portfolio": {"cash": round((book or pf.load())["cash"], 2),
-                      "holdings": (book or pf.load())["holdings"]},
+        "portfolio": ({"cash": round(book["cash"], 2), "holdings": book["holdings"]}
+                      if book is not None else None),
     }
 
 

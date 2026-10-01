@@ -345,6 +345,64 @@ def settle_exit(entry: dict, exit_event: dict, conn=None):
 ORPHAN_NO_ENTRY_GRACE_MINUTES = 30
 
 
+def _ever_locked(conn, entry_id) -> bool:
+    """True when the firm ever took an eqd: lock for this ledger entry
+    (unknown state counts as locked — never revoke on a failed read)."""
+    try:
+        conn, owns = _connect(conn)
+        try:
+            pm.ensure_schema(conn)
+            return conn.execute("SELECT 1 FROM margin_locks WHERE journal_ref = ?",
+                                (LOCK_PREFIX + str(entry_id),)).fetchone() is not None
+        finally:
+            if owns:
+                conn.close()
+    except Exception:
+        return True
+
+
+def _revoke_unlocked(entry: dict, ledger_path, why: str):
+    """Append the ledger's funding_revoked correction for an entry logged as
+    funded with no lock behind it. The cycle-result item (flagged `revoked`,
+    rendered as FUNDING REVOKED, never as an EXIT) only when the line was
+    actually written — an unwritable ledger is retried next pass, quietly."""
+    from src import knowledge_graph_logger as kg
+    row = kg.log_event({"event": kg.FUNDING_REVOKED_EVENT, "id": entry.get("id"),
+                        "ticker": entry.get("ticker"),
+                        "lock_ref": LOCK_PREFIX + str(entry.get("id")),
+                        "reason": f"logged as funded but no lock was ever taken ({why})"},
+                       path=ledger_path)
+    if row.get("_persisted") is False:
+        print(f"  (funding revocation for {entry.get('ticker')} not written — retried next pass)")
+        return None
+    return {"ticker": entry.get("ticker"), "lock_ref": LOCK_PREFIX + str(entry.get("id")),
+            "pnl_net": 0.0, "reason": "funding revoked, no lock", "revoked": True}
+
+
+def _unclean_ledger_notice(conn, ledger_path) -> None:
+    """The no-entry release abstains on a ledger with an unparseable line
+    (#123); say so once per IST day — an account_event and one review card —
+    so a torn line cannot silently switch the sweep off for good."""
+    try:
+        today = datetime.now(IST).date().isoformat()
+        seen = conn.execute("SELECT 1 FROM account_events WHERE event_type = "
+                            "'equity_sweep_skipped_unclean_ledger' AND ts LIKE ?",
+                            (f"{today}%",)).fetchone()
+        if seen:
+            return
+        pm.log_event(conn, "equity_sweep_skipped_unclean_ledger",
+                     f"{ledger_path or 'equity ledger'} has an unparseable line — the orphan-lock "
+                     "release abstains until it is repaired")
+        from src.notifier import fire_broadcast
+        fire_broadcast({"event": "equity_desk", "ticker": "EQUITY DESK", "date": today,
+                        "description": ("⚠️ Equity desk ledger has an unparseable line "
+                                        f"({ledger_path or 'logs/equity_shadow_journal.jsonl'}). "
+                                        "Positions are still managed; only the orphan-lock "
+                                        "release is paused until the line is repaired.")})
+    except Exception as exc:
+        print(f"  (unclean-ledger notice skipped: {exc})")
+
+
 def sweep_orphan_locks(ledger_path=None, conn=None, now=None) -> list:
     """Reconciler: a settle that crashed mid-run leaves an exited position
     still locked. Re-drive settlement for every active eqd: lock whose
@@ -397,31 +455,26 @@ def sweep_orphan_locks(ledger_path=None, conn=None, now=None) -> list:
                                     "reason": "orphan lock, no ledger entry"})
         # The reverse orphan (#123 panel): an entry logged as FUNDED whose
         # lock was never taken — a crash between the append and the lock —
-        # is corrected on the ledger with a funding_revoked event (no money
-        # moves: nothing was locked). Only on a clean read, after the grace.
-        if clean:
-            ever_locked = {r[0] for r in conn.execute(
-                "SELECT journal_ref FROM margin_locks WHERE journal_ref LIKE ?",
-                (LOCK_PREFIX + "%",)).fetchall()}
-            for eid, e in entries.items():
-                if (not (e.get("funding") or {}).get("funded") or eid in exits
-                        or LOCK_PREFIX + str(eid) in ever_locked):
-                    continue
-                try:
-                    ts = datetime.fromisoformat(str(e.get("ts")))
-                    ts = ts.astimezone(IST).replace(tzinfo=None) if ts.tzinfo else ts
-                    age = (now_naive - ts).total_seconds()
-                except (TypeError, ValueError):
-                    continue
-                if age < ORPHAN_NO_ENTRY_GRACE_MINUTES * 60:
-                    continue
-                kg.log_event({"event": kg.FUNDING_REVOKED_EVENT, "id": eid,
-                              "ticker": e.get("ticker"), "lock_ref": LOCK_PREFIX + str(eid),
-                              "reason": "logged as funded but no lock was ever taken "
-                                        "(a stop between the ledger append and the lock)"},
-                             path=ledger_path)
-                settled.append({"ticker": e.get("ticker"), "lock_ref": LOCK_PREFIX + str(eid),
-                                "pnl_net": 0.0, "reason": "funding revoked, no lock"})
+        # is corrected on the ledger with a funding_revoked event. No money
+        # moves (nothing was locked), so this runs on ANY readable ledger: a
+        # junk line can only hide an entry, never fake a lockless one.
+        for eid, e in entries.items():
+            if (not (e.get("funding") or {}).get("funded") or eid in exits
+                    or _ever_locked(conn, eid)):
+                continue
+            try:
+                ts = datetime.fromisoformat(str(e.get("ts")))
+                ts = ts.astimezone(IST).replace(tzinfo=None) if ts.tzinfo else ts
+                age = (now_naive - ts).total_seconds()
+            except (TypeError, ValueError):
+                continue
+            if age < ORPHAN_NO_ENTRY_GRACE_MINUTES * 60:
+                continue
+            rv = _revoke_unlocked(e, ledger_path, "a stop between the ledger append and the lock")
+            if rv:
+                settled.append(rv)
+        if not clean and events:
+            _unclean_ledger_notice(conn, ledger_path)
         return settled
     finally:
         if owns:
@@ -538,6 +591,14 @@ def run_darling_live_cycle(tiers_path=None, levels_path=None, path=None,
             host = hosts.get(x.get("id"))
             if not host or not (host.get("funding") or {}).get("funded"):
                 continue
+            if not _ever_locked(conn, host.get("id")):
+                # logged as funded but no lock was ever taken (#123 panel):
+                # no OMS exit for shares the firm never bought — correct the
+                # ledger instead
+                rv = _revoke_unlocked(host, path, "exited before the reverse sweep reached it")
+                if rv:
+                    settlements.append(rv)
+                continue
             try:
                 # decision #107: the exit goes through the OMS first (EXIT
                 # ticket, venue fill); the settlement books the venue's fill.
@@ -595,6 +656,10 @@ def broadcast_activity(cycle: dict, conn=None, broadcast_fn=None) -> bool:
             lines.append(f"BUY {e['ticker']}: {f['qty']} sh "
                          f"≈ Rs.{f['notional']:,.0f} (live fill)")
         for s in settlements:
+            if s.get("revoked"):
+                lines.append(f"FUNDING REVOKED {s['ticker']}: logged as funded, no lock was "
+                             "taken — now tracked as zero-capital telemetry (no money moved)")
+                continue
             sign = "+" if s["pnl_net"] >= 0 else ""
             lines.append(f"EXIT {s['ticker']} ({s['reason']}): "
                          f"{sign}Rs.{s['pnl_net']:,.2f} net")

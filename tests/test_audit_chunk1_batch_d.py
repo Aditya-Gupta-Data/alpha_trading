@@ -244,19 +244,87 @@ def test_an_entry_logged_funded_with_no_lock_is_revoked_on_the_ledger(tmp_path):
 
 
 def test_every_ledger_reader_sees_a_revoked_entry_as_unfunded(tmp_path):
+    """Drive the REAL readers (#123 panel round 2: the first version of this
+    test called apply_corrections itself and grepped the dashboard source)."""
+    import importlib.util
     from src.reporting import markdown_ledger as ml
     from src.dashboard import data as dash
     ledger = tmp_path / "shadow.jsonl"
     lines = [{"event": "entry", "id": "rv000001", "ticker": "TCS.NS", "ts": "2026-10-01T10:00:00+05:30",
               "mode": "PAPER_CAPITAL", "capital_allocated": 40000,
-              "funding": {"funded": True, "lock_ref": "eqd:rv000001"}},
+              "kya_kara_action": {"entry_price": 2250.0, "qty": 17},
+              "funding": {"funded": True, "lock_ref": "eqd:rv000001", "notional": 40000, "qty": 17}},
              {"event": "funding_revoked", "id": "rv000001", "reason": "cash taken"}]
     ledger.write_text("".join(json.dumps(l) + "\n" for l in lines))
     [e] = [x for x in kg.read_events(ledger) if x.get("event") == "entry"]
     assert e["funding"]["funded"] is False and "cash taken" in e["funding"]["reason"]
-    assert kg.apply_corrections(ml._read_jsonl(ledger))[0]["funding"]["funded"] is False
-    import inspect
-    assert "apply_corrections" in inspect.getsource(dash)            # the dashboard's open-book reader
+    assert kg.open_positions(path=ledger)["TCS.NS"]["mode"] == "PAPER_TELEMETRY"
+    empty = tmp_path / "journal.jsonl"
+    empty.write_text("")
+    text = ml.render(journal_path=empty, equity_path=ledger, db_path=tmp_path / "none.db",
+                     today="2026-10-01")
+    assert "TCS.NS" not in text                                    # not an open desk trade
+    assert [r for r in dash.open_trades(journal_path=empty, equity_ledger_path=ledger,
+                                        snapshot_marks={}) if "TCS" in str(r.get("symbol"))] == []
+    spec = importlib.util.spec_from_file_location(
+        "etb", Path(__file__).resolve().parents[1] / "scripts" / "export_trade_book.py")
+    etb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(etb)
+    [row] = etb.pair_equity_events(ledger)
+    assert row["capital_at_risk"] == "FALSE" and row["margin_blocked_rs"] is None
+
+
+def test_a_revocation_is_written_once_and_never_shown_as_an_exit(tmp_path, monkeypatch):
+    desk, conn = _desk_world(tmp_path)
+    ledger = tmp_path / "shadow.jsonl"
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=IST)
+    ledger.write_text(json.dumps({"event": "entry", "id": "dead0002", "ticker": "INFY.NS",
+                                  "ts": (now - timedelta(hours=2)).isoformat(),
+                                  "mode": "PAPER_CAPITAL", "funding": {"funded": True}}) + "\n")
+    real_log = kg.log_event
+    monkeypatch.setattr(kg, "log_event", lambda ev, path=None: dict(ev, _persisted=False))
+    assert desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now) == []   # unwritable: no item
+    monkeypatch.setattr(kg, "log_event", real_log)
+    [item] = desk.sweep_orphan_locks(ledger_path=ledger, conn=conn, now=now)
+    assert item["revoked"] is True
+    cards = []
+    assert desk.broadcast_activity({"entries": [], "settlements": [item]}, conn=conn,
+                                   broadcast_fn=cards.append)
+    assert "FUNDING REVOKED INFY.NS" in cards[0]["description"] and "EXIT" not in cards[0]["description"]
+
+
+def test_an_unclean_ledger_is_reported_once_a_day(tmp_path, monkeypatch):
+    desk, conn = _desk_world(tmp_path)
+    ledger = tmp_path / "shadow.jsonl"
+    ledger.write_text(json.dumps({"event": "entry", "id": "x1", "ticker": "X.NS"}) + "\n{torn\n")
+    cards = []
+    monkeypatch.setattr("src.notifier.fire_broadcast", cards.append)
+    desk.sweep_orphan_locks(ledger_path=ledger, conn=conn)
+    desk.sweep_orphan_locks(ledger_path=ledger, conn=conn)
+    assert len(cards) == 1 and "unparseable" in cards[0]["description"]
+    assert conn.execute("SELECT COUNT(*) FROM account_events WHERE event_type = "
+                        "'equity_sweep_skipped_unclean_ledger'").fetchone()[0] == 1
+
+
+def test_a_funded_entry_that_was_never_locked_gets_no_oms_exit(tmp_path, monkeypatch):
+    """#123 panel round 2: a phantom-funded entry that exits before the
+    reverse sweep reaches it must not send a SELL for shares never bought."""
+    desk, conn = _desk_world(tmp_path)
+    import src.equity_shadow_proposer as sp
+    ledger = tmp_path / "shadow.jsonl"
+    ledger.write_text(json.dumps({"event": "entry", "id": "ph000001", "ticker": "TCS.NS",
+                                  "ts": datetime.now(IST).isoformat(), "mode": "PAPER_CAPITAL",
+                                  "funding": {"funded": True, "lock_ref": "eqd:ph000001"}}) + "\n")
+    monkeypatch.setattr(sp, "track_open_shadows", lambda **k: [{"id": "ph000001", "ticker": "TCS.NS",
+                                                                "event": "exit", "reason": "stop_loss"}])
+    monkeypatch.setattr(desk, "_tiers_fresh", lambda *a, **k: False)
+    oms_calls = []
+    monkeypatch.setattr(desk, "_execute_equity_exit", lambda *a, **k: oms_calls.append(a) or {})
+    res = desk.run_darling_live_cycle(path=ledger, conn=conn, quote_fn=lambda t: 2000.0,
+                                      broadcast_fn=lambda c: None)
+    assert oms_calls == []
+    assert [s.get("revoked") for s in res["settlements"]] == [True]
+    assert [e["event"] for e in kg.read_events(ledger)] == ["entry", "funding_revoked"]
 
 
 # ==================================================================== D12
@@ -426,3 +494,43 @@ def test_an_approval_eviction_makes_no_network_call_under_the_journal_lock(monke
     assert op.decide_pending("pend0001", approve=True, human=False)["status"] == "approved"
     assert net == [("marks", False), ("quotes", False)]                 # both before the lock
     assert evicted == {"ref": "held0001", "held": True, "quotes": {(1.0, "CE"): 9.5}}
+
+
+
+def test_curve_points_round_exactly_like_the_account_reads():
+    c = brain_map.connect(":memory:")
+    pm.ensure_accounts_schema(c)
+    pm.get_account(c)
+    pm.request_entry(c, "a", 100.0)
+    assert pm.release_margin(c, "a", -1155.5)["drawdown_pct"] == pm.drawdown_pct(c) == 0.1155
+    pm.get_paper_account(c, "PAPER_2L")
+    pm.paper_request_entry(c, "PAPER_2L", "b", 10.0)
+    r = pm.paper_release_margin(c, "PAPER_2L", "b", -812.5)
+    assert r["drawdown_pct"] == pm.paper_drawdown_pct(c, "PAPER_2L") == 0.4062
+    assert not c.in_transaction
+
+
+def test_recon_does_not_treat_a_d7_expiry_as_a_settlement(tmp_path):
+    c = sqlite3.connect(tmp_path / "bm.db")
+    pm.ensure_accounts_schema(c)
+    c.execute("CREATE TABLE trade_tickets (ticket_id TEXT, journal_ref TEXT, underlying TEXT, "
+              "status TEXT, kind TEXT, account_id TEXT)")
+    c.execute("INSERT INTO trade_tickets VALUES ('t1', 'late0001', 'NIFTY', 'FILLED', 'ENTRY', 'PAPER_10L')")
+    c.commit()
+    pm.request_entry(c, "late0001", 1000.0)
+    pm.expire_pending_lock(c, "late0001")              # expired, then approved with the gate failing open
+    rows = [{"short_id": "late0001", "decision": "approved", "outcome": None}]
+    keys = {(r["ref"], r["account"]) for r in recon.read_paper_book(conn=c, journal_rows=rows)}
+    assert keys == {("late0001", "PAPER_10L")}
+    c.close()
+
+
+def test_dismiss_survives_an_unreadable_book_without_a_second_row(monkeypatch):
+    from fastapi.testclient import TestClient
+    from src import api
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setattr(pf, "load", lambda: (_ for _ in ()).throw(ValueError("torn json")))
+    r = TestClient(api.app).post("/api/decision", json={"ticker": "TCS.NS", "decision": "DISMISS",
+                                                         "entry": 100.0})
+    assert r.status_code == 200 and r.json()["portfolio"] is None
+    assert [e["decision"] for e in journal.read_all()] == ["rejected"]

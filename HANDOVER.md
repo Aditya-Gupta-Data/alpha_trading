@@ -42,6 +42,18 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-01 (~14:25) — PAPER_2L_LIVE adversarial sweep PAUSED at the 85% usage guardrail (weekly 86%); no code changed
+
+**What is done:**
+- The read-only VM checks are clean.
+  - No live-arm errors in today's logs.
+  - No orphan locks, no rows stuck in `exiting`, and lots match.
+  - The intraday tracker never touches the live arm.
+- 2 of 7 finder lenses ran (`illiquidity`, `mid_exit_failure`), with 8 UNVERIFIED candidate findings (F01–F08).
+- One observation, not yet verified: the primary book's ratchet on `24f931bb` peaked at 96.87% capture, while the crossed book never showed more than 29%.
+
+**State + exact resume steps:** `.claude/audit_state/paper_2l_live_sweep/STATE.md`. The folder is git-ignored. Resume after the weekly limit resets (2026-10-04 04:00 UTC); check usage before every batch. Nothing from the sweep blocks tonight's deploy of #123 + Issue 40.
+
 ## 2026-10-01 (afternoon) — Issue 40 fix (PAPER_2L_LIVE chain collision + refusal reasons) BUILT + PUSHED; deploy it WITH #123 tonight
 
 **State.** `origin/main` now carries the Issue 40 commit on top of #123. The

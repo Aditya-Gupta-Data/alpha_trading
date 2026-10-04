@@ -235,6 +235,14 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-04 · 4 commits · 20 files touched
+
+- `ae8baf5` docs: 10-04 evening — 7f4a4897 voided, #124 calendar + #125 desk latch deployed (VM 5cadb5f); ledger Issues 41-43 status, HANDOVER
+- `5cadb5f` feat(calendar,risk,ops): NSE holiday calendar (#124), equity-desk ruin halt latch (#125), MCX roll, ops-sweep null-error scrub
+- `c82831e` feat(repair): void_phantom_trade.py — void one approved, still-open spread at zero in every account (ledger Issue 41)
+- `845b18e` docs: ops triage 10-01..10-04 — ledger Issues 41 (closed-market session 10-02, phantom 7f4a4897), 42 (desk ruin halt not latched), 43 (overnight DH-906/902 burst); HANDOVER next steps
+
+
 ### 2026-10-01 · 9 commits · 32 files touched
 
 - `3ca2e62` docs: #123 + Issue 40 deployed (VM 0f978eb, 19:01 IST) — HANDOVER deploy block, ledger Issue 40 status

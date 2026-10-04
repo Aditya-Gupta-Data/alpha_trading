@@ -2162,3 +2162,58 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   - Chain calls now queue up to 3.5 s behind each other. A market-loop
     cycle that fetches nine chains takes about 30 s longer at most.
 - **Deployed 2026-10-01 19:01 IST** with #123: the VM is at `0f978eb`, and both services restarted clean. The cause stays unconfirmed until the next refusal or failed fetch logs its reason.
+
+## Issue 41 — the engine traded a CLOSED market: Fri 2026-10-02 (Gandhi Jayanti) ran as a full session; phantom entry `7f4a4897` filled in 3 accounts (found 2026-10-04 by the read-only ops triage; NOT fixed)
+
+- **Evidence that the market was closed (VM bundle extracted 2026-10-04 17:33 IST, read-only):**
+  - Dhan has no 10-02 daily bar. Hourly Auto-Sync runs return DH-907 "no data present" for `2026-10-02->2026-10-03`, and still for `->2026-10-04` at 10-04 16:45 (37 lines).
+  - `macro_nightly` 10-02 logged "Indices: OK (no file — holiday?)".
+  - The flows tracker reported "FL-STALE — source served 2026-10-01 for expected session 2026-10-02".
+  - All 18 market-loop cycles on 10-02 printed the identical NIFTY MID SELECT R:R line ("pays Rs.6,654 against Rs.5,346 (R:R 1.24)").
+  - The 10-02 15:35 `src.main` run shows every watchlist price at +0.00% against 10-01.
+- **Cause (verified in code):** no NSE trading-holiday calendar exists on any execution or capture path.
+  - The `src/market_loop.py:83-84` docstring says a holiday "proposes nothing". That is false: Dhan kept serving frozen chains, and the legs priced off last-price.
+- **What happened:**
+  - **NIFTY FIN SERVICE bear put `7f4a4897` was proposed, auto-approved and FILLED** on frozen data at about 45/share debit on a 200-wide spread (R:R 3.44). On 10-01 the same structure's best R:R was 1.49. Open locks:
+    - PAPER_10L: 5 lots, Rs.73,500
+    - PAPER_2L: 1 lot, Rs.14,700
+    - PAPER_2L_ROT: 1 lot, Rs.14,700
+  - PAPER_2L_LIVE refused it correctly: "no live bid/ask at proposal — a leg priced off last-price".
+  - The equity desk tried 4 entries (GALAXYSURF, WELCORP, VOLTAMP, POLYCAB). Only its ruin halt blocked them (see Issue 42).
+  - The live arm marked `24f931bb` on frozen chains until 15:28.
+  - The chain archiver and `darlings_daily` wrote 10-02 partitions.
+  - The 15:42 recon certified the book as PARITY.
+- **Owner ruling needed before Mon 10-05 09:15:** void `7f4a4897` at zero across the three accounts (backup + named events, Issue 39 style), or keep it annotated. Until then it holds Rs.1,02,900 of margin. It also blocks bearish FIN SERVICE entries via the exposure gate.
+- **Fix (not built):** an NSE holiday calendar, from NSE's 2026 circular, consulted by:
+  - `market_loop`, `master_scheduler` and `live_bridge`/`live_pricer` market-open checks
+  - the equity desk
+  - the capture jobs
+  - recon
+
+## Issue 42 — the equity desk's ruin halt is not latched: a treasury raise can lift it silently (found 2026-10-04; NOT fixed; Dept 3 ruling needed)
+
+- **Cause (verified in code):** `equity_desk.desk_state` recomputes `ruin_halted = realized <= -10% × budget` on every read, against the treasury's moving budget. `firm_treasury` has no halt input.
+- **Live state:**
+  - Desk realized Rs.-31,239.74; halted since 09-30.
+  - On 10-01 19:56 the treasury raised the equity budget Rs.2L → Rs.3L (`treasury_rotation` "raise").
+  - At Rs.3L the threshold is Rs.-30,000, so the halt holds by only Rs.1,239.74. Any budget above Rs.3,12,397.40 lifts it, with no event and no human.
+  - The Rs.1L moved sits idle in a desk that cannot enter.
+- Decision #92 latched the firm-level halt for exactly this "dilution trap". The desk halt was never brought under it.
+- **Watch:** `logs/firm_treasury.log` after each 19:56 rotation.
+
+## Issue 43 — overnight Dhan refusal 10-01 23:25 → 10-02 08:17 (DH-906, then DH-902/HTTP 451) and a RED "renew the plan" card that was probably false; the "high volume" of sweep lines is mostly this (found 2026-10-04; cause UNKNOWN; cleared without a fix)
+
+- **API server (`journalctl -u alpha-trading`):**
+  - Clean Auto-Sync cycles at 20:06, 21:12 and 22:19 after the 19:01 deploy.
+  - Then DH-906 "Invalid Token" every cycle 23:25–06:04 (111 lines), and DH-902 "HTTP Status 451 … not subscribed to Data APIs" at 07:11 and 08:17 (32 lines).
+  - First clean cycle 09:28.
+  - `suggest.log`'s 08:00 run logged DH-902 ×168. The 10-02 20:30 ops card: 1 RED "AUTH/DATA ACCESS … renew the plan", 204 problem lines.
+- **Not caused by the deploy:** the same API process ran clean before and after, with no restart.
+- **Effects:** TCS `dc4c2925` settled at 09:18 on the holiday instead of about 05:35. No other trade impact found.
+- **The sweep's volume is a counting artefact.** 235 of the 244 problem lines for 10-01 → 10-03 come from two sources:
+  - this DH-902 burst
+  - a standing ops_monitor false positive: every dashboard-mirror `[link]` status line contains `"error": null`
+  Each raw line counts as a distinct problem, and the API server logs only to journald, which the sweep never reads.
+- **Watch:**
+  - The Dhan Data plan's recorded expiry is 2026-10-10 (Issue 26; not re-verified).
+  - `renew_token.log` and the first Auto-Sync cycles on Mon 10-05.

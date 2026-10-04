@@ -42,6 +42,37 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-04 — read-only ops triage of 10-01..10-04: the engine TRADED A CLOSED MARKET on Fri 10-02 (Issue 41); ledgers, locks and recon otherwise clean
+
+**State.** The VM is at `0f978eb`. Services are up since the 10-01 19:01 deploy with NRestarts=0. No code changed in this triage. A 58-agent workflow verified each incident from a read-only VM extract; details are in the observation ledger, Issues 41–43.
+
+**What is wrong:**
+- **Issue 41 (major, systemic).** There is no NSE holiday calendar, so 10-02 ran as a full session on frozen data.
+  - Phantom NIFTY FIN SERVICE bear put `7f4a4897` FILLED in PAPER_10L (5 lots, Rs.73,500), PAPER_2L and PAPER_2L_ROT (Rs.14,700 each).
+  - PAPER_2L_LIVE refused it correctly.
+- **Issue 42.** The equity-desk ruin halt is not latched. It holds by Rs.1,239.74 after the 10-01 treasury raise to Rs.3L, and any further raise lifts it silently.
+- **Issue 43.** An overnight Dhan DH-906/DH-902 burst produced a probably-false RED "renew the plan" card, plus about 168 of the "high volume" sweep lines.
+
+**What is fine:**
+- No orphan locks or margin desyncs: 29 open locks, matching recon's 29 rows.
+- PAPER_2L_LIVE's one lock (`24f931bb`, Rs.16,764) matches its one open position.
+- Recon reported PARITY on 09-29 through 10-02.
+- No tracebacks.
+- Issue 40 was NOT exercised: no named refusal fired, and no live fetch failed.
+
+**Corrections to earlier notes:**
+- Settlement is NOT a 15:35 job. It is the API server's hourly Auto-Sync, the morning after the close (about 05:35). `src.main` at 15:35 is the watchlist checker.
+- `24f931bb` did not settle at the 10-01 close: the model close capture of 100% stayed above its 70% lock. The 63% intraday reading was also a model value. So the PAPER_2L_LIVE keep-the-lock path is still untested in production.
+
+**Do first, in order:**
+1. **Before Mon 09:15, owner ruling on `7f4a4897`:** void at zero (backup + named events) or keep it annotated.
+2. **Dept 3 ruling on Issue 42:** latch the desk halt, or freeze treasury raises while the desk is halted. Check `firm_treasury.log` after the 19:56 rotation.
+3. **Build and deploy the holiday calendar off-hours,** before the next NSE weekday holiday. Check the NSE 2026 circular.
+4. **Dhan Data plan expiry 10-10** (Issue 26): confirm or renew.
+5. **Roll the MCX macro ids:** GOLD expires 10-05; COPPER, ALUMINIUM and ZINC have been dead since 09-30.
+6. **ops_monitor:** exclude the mirror `[link]` lines, count by signature, and read the API journal.
+7. **After Monday's session:** check the Issue 40 grep, `24f931bb`'s LIVE lock, and cycle cadence. Then resume the paused PAPER_2L_LIVE sweep (`.claude/audit_state/paper_2l_live_sweep/STATE.md`).
+
 ## 2026-10-01 19:01 IST — #123 (Batch D + leftovers) and Issue 40 DEPLOYED; VM at `0f978eb`
 
 **Deploy:** 19:00–19:01 IST, market closed.

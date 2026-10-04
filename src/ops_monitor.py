@@ -42,6 +42,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from src import nse_calendar
+
 ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR = ROOT / "logs"
 STATE_PATH = LOGS_DIR / ".ops_monitor_state.json"
@@ -85,11 +87,22 @@ PROBLEM_PATTERNS = re.compile(
 # reached the CEO brief as "problems". A non-empty list ('"failed":
 # ["TCS.NS"]') still fires because only the literal empty brackets are
 # scrubbed.
+#
+# FOURTH SHAPE (2026-10-04, ledger Issue 43): a NULL error field. The
+# dashboard mirror ends every clean publish with
+#   [link] {"announced": false, "changed": false, "error": null, ...}
+# and each one counted as a problem — 67 of the 244 "problem lines" swept
+# for 10-01..10-03, the top slot on every weekday card. `null` (JSON) and
+# `None` (a printed dict) are scrubbed — only as a QUOTED key inside a dict
+# (followed by `,` or `}`), so prose like "error: None of the feeds answered"
+# and '"error": "tunnel down"' still fire.
 ZERO_STAT_PATTERNS = re.compile(
     r"(?i)(?:"
     r"['\"]?(?:failed|errors?|failures?)['\"]?\s*[:=]\s*0\b"
     r"|"
     r"['\"]?(?:failed|errors?|failures?)['\"]?\s*[:=]\s*\[\s*\]"
+    r"|"
+    r"['\"](?:failed|errors?|failures?)['\"]\s*:\s*(?:null|None)(?=\s*[,}])"
     r"|"
     r"\b0\s+(?:[\w()\-]+\s+)?(?:failed|failures?|errors?)\b"
     r")")
@@ -224,6 +237,17 @@ def memory_alarm(telemetry: dict) -> dict | None:
                      f"the VM hung at this level on 2026-09-09")}
 
 
+def calendar_alarm(now: datetime = None) -> dict | None:
+    """The NSE holiday list is missing or provisional for this year (or,
+    from 15 December, the next): the engine trades exchange holidays it
+    does not know about (ledger Issue 41). A MISSING year is RED."""
+    text = nse_calendar.calendar_warning(now or datetime.now())
+    if not text:
+        return None
+    red = "UNAVAILABLE" in text
+    return {"kind": "nse_calendar", "red": red, "text": ("🔴 " if red else "⚠️ ") + text}
+
+
 def collect_alarms(problems: list, telemetry: dict, logs_dir: Path = LOGS_DIR,
                    now: datetime = None) -> list:
     """All red/amber alarms for one sweep, in card order. Fail-open per
@@ -231,7 +255,8 @@ def collect_alarms(problems: list, telemetry: dict, logs_dir: Path = LOGS_DIR,
     alarms = []
     for fn in (lambda: auth_alarms(problems),
                lambda: [a for a in [capture_alarm(capture_blindness(logs_dir, now))] if a],
-               lambda: [a for a in [memory_alarm(telemetry)] if a]):
+               lambda: [a for a in [memory_alarm(telemetry)] if a],
+               lambda: [a for a in [calendar_alarm(now)] if a]):
         try:
             alarms.extend(fn())
         except Exception as e:                      # pragma: no cover - defensive
@@ -466,13 +491,15 @@ def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None,
 def check_heartbeats(logs_dir: Path = LOGS_DIR, now: datetime = None,
                      expected: dict = None) -> list:
     """Which scheduled jobs did NOT touch their log today? Weekday-only
-    jobs are excused on weekends. Returns a list of human lines."""
+    jobs are excused on weekends and on NSE holidays (src/nse_calendar —
+    they sleep on a holiday by design since Issue 41). Returns a list of
+    human lines."""
     now = now or datetime.now()
     today = now.date()
     missing = []
     for name, weekdays_only in (expected or _expected_jobs_from_env()
                                 or EXPECTED_JOBS).items():
-        if weekdays_only and today.weekday() >= 5:
+        if weekdays_only and not nse_calendar.is_trading_day(today):
             continue
         path = Path(logs_dir) / name
         try:

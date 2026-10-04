@@ -365,6 +365,12 @@ def capture_darlings(price_fn=None, clock=None, tickers=None, out_path=None,
     pass, same as the 15-minute sweep. Append-only."""
     from src.market_loop import ist_now
     now = (clock or ist_now)()
+    if not force and now.weekday() < 5:
+        from src import nse_calendar
+        holiday = nse_calendar.holiday_name(now)
+        if holiday:                       # no session: nothing real to capture (Issue 41)
+            return {"skipped": f"nse_holiday: {holiday}", "ts": now.isoformat(),
+                    "captured": 0, "failed": 0}
     if not force and now.weekday() >= 5:
         return {"skipped": "weekend", "ts": now.isoformat(),
                 "captured": 0, "failed": 0}

@@ -119,6 +119,17 @@ def test_a_voided_row_is_invisible_to_the_tracker_the_stats_and_recon(world):
     assert real is False
 
 
+def test_the_api_scorecard_neither_scores_nor_lists_a_voided_row(world, monkeypatch, tmp_path):
+    from src import api, portfolio as pf
+    monkeypatch.setattr(pf, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(pf, "PORTFOLIO_PATH", tmp_path / "portfolio.json")
+    c, archive = world
+    vt.void_trade(c, REF, "NSE closed", "t", archive, now=NOW)
+    card = api.scorecard()
+    assert card["summary"]["scored"] == 0 and card["summary"]["flat"] == 0
+    assert card["executed_trades"] == [] and card["skipped_trades"] == [] and card["archetype_stats"] == []
+
+
 def test_a_second_run_does_nothing(world):
     c, archive = world
     assert vt.void_trade(c, REF, "NSE closed", "t", archive, now=NOW)["voided"]

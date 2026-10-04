@@ -872,7 +872,10 @@ def scorecard():
     totals, per-archetype win-rate and average R-multiple, plus the executed
     and skipped trade rows the ledger tables render. Read-only."""
     entries = journal.read_all()
-    scored = [e for e in entries if e.get("outcome")]
+    # A VOIDED row (scripts/void_phantom_trade.py, ledger Issue 41) carries an
+    # outcome so the tracker stops tracking it, but it was never a trade:
+    # it is neither scored nor listed as executed or skipped.
+    scored = [e for e in entries if e.get("outcome") and e.get("decision") != "voided"]
 
     executed_trades, skipped_trades = [], []
     for i, e in enumerate(entries):
@@ -1502,7 +1505,8 @@ def _silent_jobs_intraday(now: datetime = None, logs_dir: Path = None,
         if now.hour < 20:
             accountable -= timedelta(days=1)
         if weekdays_only:
-            while accountable.weekday() >= 5:
+            from src import nse_calendar
+            while not nse_calendar.is_trading_day(accountable):   # weekend or NSE holiday
                 accountable -= timedelta(days=1)
         try:
             mtime = datetime.fromtimestamp(

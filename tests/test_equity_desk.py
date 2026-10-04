@@ -395,5 +395,109 @@ def test_proposer_import_contract_still_holds():
         assert not hits, f"proposer must not import {forbidden}: {hits}"
 
 
+# ----------------------------------------------- the ruin-halt LATCH (Issue 42)
+
+def _breached_desk(budget=200000.0, loss=-31239.74):
+    """The live shape on 2026-10-01: realized Rs.-31,239.74 on a Rs.2L budget."""
+    conn = _firm_conn()
+    ft.set_budget(conn, budget, "test")
+    pm.request_entry(conn, "eqd:lost", 1000.0)
+    pm.release_margin(conn, "eqd:lost", loss)
+    return conn
+
+
+def _events(conn, kind):
+    return [r[0] for r in conn.execute(
+        "SELECT detail FROM account_events WHERE event_type = ? ORDER BY rowid", (kind,)).fetchall()]
+
+
+def test_a_breach_latches_the_desk_halt_once():
+    conn = _breached_desk()
+    assert not desk.desk_halt_latched(conn)
+    assert desk.desk_state(conn)["ruin_halted"]              # the read that sees the breach arms it
+    assert desk.desk_halt_latched(conn)
+    assert desk.desk_state(conn)["ruin_halted"] and desk.desk_state(conn)["ruin_halted"]
+    latched = _events(conn, desk.DESK_HALT_LATCH_EVENT)
+    assert len(latched) == 1 and "Rs.-31,239.74" in latched[0] and "Rs.200,000 budget" in latched[0]
+    conn.close()
+
+
+def test_a_treasury_raise_never_releases_a_latched_desk_halt():
+    # 2026-10-01: the raise Rs.2L -> Rs.3L left the halt holding by Rs.1,239.74;
+    # the next raise (any budget above Rs.3,12,397.40) would have lifted it silently.
+    conn = _breached_desk()
+    assert desk.desk_state(conn)["ruin_halted"]
+    for budget, still_breached in ((300000.0, True), (400000.0, False), (900000.0, False)):
+        ft.set_budget(conn, budget, "raise")
+        s = desk.desk_state(conn)
+        assert (s["realized"] <= -0.10 * s["budget"]) is still_breached     # the percentage dilutes...
+        assert s["ruin_halted"], f"...the latch must hold at a Rs.{budget:,.0f} budget"
+    f = desk.fund_entry(_entry("INFY"), conn=conn)
+    assert not f["funded"] and f["reason"] == "equity desk ruin halt"
+    assert "LATCHED" in _events(conn, "equity_desk_ruin_halt")[-1]
+    assert _events(conn, desk.DESK_HALT_CLEAR_EVENT) == []
+    conn.close()
+
+
+def test_only_a_stated_human_clear_releases_it_and_a_live_breach_relatches():
+    conn = _breached_desk()
+    desk.desk_state(conn)
+    assert desk.clear_desk_halt(conn, why="  ")["cleared"] is False               # no reason, no clear
+    assert desk.desk_halt_latched(conn)
+    # still past the limit (Rs.-31,239.74 vs -10% of Rs.2L): the clear is recorded, the latch re-arms
+    out = desk.clear_desk_halt(conn, why="reviewed", who="owner (test)")
+    assert out["cleared"] and out["halted"] and "re-armed" in out["reason"]
+    assert desk.desk_halt_latched(conn) and len(_events(conn, desk.DESK_HALT_LATCH_EVENT)) == 2
+    # the budget is raised AND a human clears: only now do entries resume
+    ft.set_budget(conn, 900000.0, "raise")
+    assert desk.desk_state(conn)["ruin_halted"]
+    out = desk.clear_desk_halt(conn, why="strategy reviewed; resume", who="owner (test)")
+    assert out["cleared"] and not out["halted"] and out["reason"] == "cleared; desk entries are live again"
+    assert not desk.desk_state(conn)["ruin_halted"] and not desk.desk_halt_latched(conn)
+    cleared = _events(conn, desk.DESK_HALT_CLEAR_EVENT)
+    assert len(cleared) == 2 and "owner (test)" in cleared[-1] and "strategy reviewed; resume" in cleared[-1]
+    assert desk.clear_desk_halt(conn, why="again")["reason"] == "no latched desk halt to clear"
+    conn.close()
+
+
+def test_the_latch_fails_open_on_a_read_only_connection(tmp_path):
+    path = tmp_path / "firm.db"
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    pm.get_account(conn)
+    ft.set_budget(conn, 200000.0, "test")
+    pm.request_entry(conn, "eqd:lost", 1000.0)
+    pm.release_margin(conn, "eqd:lost", -31239.74)
+    conn.close()
+    ro = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    ro.row_factory = sqlite3.Row
+    assert desk.desk_state(ro)["ruin_halted"]                # the verdict is HALTED; only the record is lost
+    assert ro.execute("SELECT COUNT(*) FROM account_events WHERE event_type = ?",
+                      (desk.DESK_HALT_LATCH_EVENT,)).fetchone()[0] == 0
+    ro.close()
+
+
+def test_the_reset_halt_cli_needs_a_why_and_a_yes(monkeypatch, capsys):
+    conn = _breached_desk()
+    desk.desk_state(conn)
+    ft.set_budget(conn, 900000.0, "raise")
+
+    class _Keep:                                             # the CLI closes its connection; keep ours
+        def __getattr__(self, name):
+            return getattr(conn, name)
+
+        def close(self):
+            pass
+    monkeypatch.setattr(desk, "_connect", lambda c: (_Keep(), True))
+    assert desk._reset_halt_cli(["--reset-halt"]) == 1
+    assert desk._reset_halt_cli(["--reset-halt", "--why", "reviewed"]) == 1
+    assert desk.desk_halt_latched(conn)
+    assert desk._reset_halt_cli(["--reset-halt", "--why", "reviewed", "--yes"]) == 0
+    assert not desk.desk_halt_latched(conn)
+    out = capsys.readouterr().out
+    assert "without --why" in out and "without --yes" in out and '"cleared": true' in out
+    conn.close()
+
+
 if __name__ == "__main__":
     print("Run via pytest: python -m pytest tests/test_equity_desk.py")

@@ -74,7 +74,8 @@ def test_build_darling_ids_carries_a_separate_commodities_block(tmp_path):
     csv = "\n".join([HEADER] + [",".join(r) for r in ROWS]) + "\n"
     out = SM.build_darling_ids(symbols=["TCS"], fetch_fn=lambda u: csv,
                                out_path=tmp_path / "ids.json",
-                               commodity_symbols=["GOLD", "SILVER"])
+                               commodity_symbols=["GOLD", "SILVER"],
+                               today=date(2026, 9, 23))    # pinned: the fixture's GOLD OCT contract expires 2026-10-05
     assert out["ids"] == {"TCS": {"id": "11536", "master_symbol": "TCS", "series": "EQ"}}
     assert out["commodities"]["GOLD"]["id"] == "483079" and "SILVER" not in out["commodities"]
     assert out["commodity_unresolved"] == {"SILVER": "no live MCX FUTCOM contract in the master"}

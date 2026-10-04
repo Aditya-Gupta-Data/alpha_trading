@@ -10,7 +10,9 @@ lives here):
     python3 -m src.master_scheduler
 
 `run_trading_session()` runs strictly inside NSE market hours (Mon-Fri
-09:15-15:30 IST, via the project's own IST clock in market_loop):
+09:15-15:30 IST, via the project's own IST clock in market_loop) and
+only on NSE trading days (src/nse_calendar — on an exchange holiday it
+logs the holiday's name and exits without arming anything):
 
   * launched early (the 09:10 cron), it sleeps until the open;
   * launched after the close (a misfire), it exits immediately;
@@ -65,6 +67,7 @@ from datetime import datetime, timedelta
 
 from src import live_bridge
 from src import market_loop
+from src import nse_calendar
 from src.market_loop import MARKET_CLOSE, MARKET_OPEN, UNDERLYINGS, ist_now
 
 SESSION_POLL_SECONDS = 30    # how often the supervisor rechecks the clock
@@ -115,9 +118,9 @@ def seconds_until_open(now: datetime) -> float:
 
 
 def session_over(now: datetime) -> bool:
-    """True once today's session cannot run/continue: past 15:30 IST or
-    a weekend day."""
-    if now.weekday() >= 5:
+    """True once today's session cannot run/continue: past 15:30 IST, a
+    weekend day, or an NSE holiday (src/nse_calendar — ledger Issue 41)."""
+    if not nse_calendar.is_trading_day(now):
         return True
     return now.time() > MARKET_CLOSE
 
@@ -248,6 +251,13 @@ async def run_trading_session(underlyings=UNDERLYINGS, *, now_fn=ist_now,
     stop_event = stop_event or asyncio.Event()
     now = now_fn()
     if session_over(now):
+        holiday = nse_calendar.holiday_name(now)
+        if holiday and now.weekday() < 5:
+            # Named, so the log says WHY the day was skipped (Issue 41).
+            print(f"[Scheduler] {now:%Y-%m-%d} is an NSE holiday ({holiday}) — "
+                  "no session today; nothing armed.", flush=True)
+            return {"status": "market_closed", "reason": f"NSE holiday: {holiday}",
+                    "started": None, "ended": None}
         print(f"[Scheduler] {now:%Y-%m-%d %H:%M} IST — market day over; "
               "nothing to run.", flush=True)
         return {"status": "market_closed", "started": None, "ended": None}

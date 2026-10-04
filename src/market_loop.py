@@ -32,6 +32,7 @@ Run as a daemon from the project folder:
 import asyncio
 from datetime import datetime, time as dtime, timedelta, timezone
 
+from src import nse_calendar
 from src import options_proposer as proposer
 from src.dhan_client import get_india_vix
 from src.suggestions import analyze
@@ -80,10 +81,17 @@ def ist_now() -> datetime:
 
 
 def is_market_open(now: datetime = None) -> bool:
-    """Mon-Fri, 09:15-15:30 IST inclusive. (NSE holidays are not modeled —
-    a holiday cycle just finds no fresh data and proposes nothing.)"""
+    """An NSE trading day (Mon-Fri and not a listed exchange holiday —
+    src/nse_calendar), 09:15-15:30 IST inclusive.
+
+    Holidays were not modelled before 2026-10-04, on the belief that "a
+    holiday cycle just finds no fresh data and proposes nothing". It does
+    not: Dhan keeps serving the last session's chains, and on 2026-10-02 the
+    loop filled a phantom trade on them (ledger Issue 41). Every caller —
+    the entry loop, the live bridge, the live pricer, the 15-minute tracker,
+    the report cards — sleeps on a holiday through this one function."""
     now = now or ist_now()
-    if now.weekday() >= 5:  # Sat/Sun
+    if not nse_calendar.is_trading_day(now):
         return False
     return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 

@@ -216,6 +216,17 @@ def _is_weekday(day: date) -> bool:
     return day.weekday() < 5
 
 
+def _skip_reason(day: date) -> str | None:
+    """Why `day` has nothing to capture: 'weekend', or the NSE holiday's
+    name (src/nse_calendar — on 2026-10-02 the archiver wrote a partition
+    of frozen holiday chains, ledger Issue 41); None on a trading day."""
+    if not _is_weekday(day):
+        return "weekend"
+    from src import nse_calendar
+    name = nse_calendar.holiday_name(day)
+    return f"NSE holiday: {name}" if name else None
+
+
 def expiries_wanted(underlying: str) -> int:
     """How many expiries are worth capturing for this underlying — 4 for
     the only index still carrying weeklies, 2 for the monthly-only rest."""
@@ -293,9 +304,10 @@ def run(today: date = None, lake_root=None, force: bool = False,
     today = today or date.today()
     summary = {"date": today.isoformat(), "captured": {}, "skipped": None,
                "empty": []}
-    if not _is_weekday(today) and not force:
-        summary["skipped"] = "weekend"
-        print(f"(chain archiver: {today} is a weekend — nothing to capture)")
+    skip = None if force else _skip_reason(today)
+    if skip:
+        summary["skipped"] = skip
+        print(f"(chain archiver: {today} is {'a weekend' if skip == 'weekend' else 'an ' + skip} — nothing to capture)")
         return summary
     sleep_fn = fetchers.get("sleep_fn") or time.sleep
     # the tier-1 extension's seams (#100) are split off so the core capture

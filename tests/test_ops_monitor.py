@@ -493,3 +493,16 @@ def test_health_verdict_counts_auth_codes_only_since_the_last_sweep():
         assert "AUTH/DATA ACCESS: DH-902 x1" in text
         assert not state.read_text().startswith("{}")        # never rewritten
         assert json.loads(state.read_text()) == {"master_scheduler.log": log.stat().st_size - len(DH902_LINE) - 1}
+
+
+def test_a_null_error_field_in_a_healthy_status_dict_is_not_a_problem():
+    # ledger Issue 43: every clean dashboard-mirror publish ended with this
+    # line and was swept as a problem (67 of 244 lines for 10-01..10-03).
+    clean = ('[link] {"announced": false, "changed": false, "error": null, "previous": '
+             '"https://x.trycloudflare.com", "url": "https://x.trycloudflare.com"}')
+    assert not om.is_problem_line(clean)
+    assert not om.is_problem_line("{'ok': True, 'error': None}")
+    # a real error value, prose, and an unquoted key all still fire
+    assert om.is_problem_line('[link] {"announced": false, "error": "tunnel journal unreadable", "url": null}')
+    assert om.is_problem_line("error: None of the feeds answered")
+    assert om.is_problem_line('{"error": null} but the upload failed')

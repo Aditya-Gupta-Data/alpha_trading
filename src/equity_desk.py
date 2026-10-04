@@ -26,7 +26,13 @@ sat on different machines):
     capital = budget + desk realized P&L; entries must fit inside it.
   * DESK RUIN HALT (the #79-era per-desk protection, kept): desk
     realized P&L at or below −10% of the budget blocks NEW desk entries
-    (`equity_desk_ruin_halt` event) while options trade on.
+    (`equity_desk_ruin_halt` event) while options trade on. LATCHED since
+    2026-10-04 (Dept 3 ruling, ledger Issue 42, the #92 rule brought to the
+    desk): the breach arms `equity_desk_ruin_halt_latched`, and from then on
+    the LATCH — not the live percentage — keeps the desk frozen. A treasury
+    budget raise dilutes the percentage; it no longer lifts the brake. The
+    only door out is `clear_desk_halt` (CLI `--reset-halt --why "…" --yes`),
+    a named, timestamped `equity_desk_ruin_halt_cleared` row.
 
 LIVE TRADING (`run_darling_live_cycle`, wired into the VM market loop at
 master_scheduler's composition root): exits first — open shadows marked
@@ -51,6 +57,7 @@ zero-capital row ("log the false positives" survives every migration);
 CLI:
     python3 -m src.equity_desk            # desk state + open book
     python3 -m src.equity_desk --sweep    # reconcile orphan locks
+    python3 -m src.equity_desk --reset-halt --why "…" --yes   # clear the latched desk ruin halt
 """
 import json
 from datetime import datetime, timedelta, timezone
@@ -77,6 +84,8 @@ DP_CHARGE_SELL = 16.0              # flat depository debit per sell
 
 LOCK_PREFIX = "eqd:"
 DESK_RUIN_PCT = 10.0               # mirrors pm.MAX_DRAWDOWN_PCT, per desk
+DESK_HALT_LATCH_EVENT = "equity_desk_ruin_halt_latched"   # the state of the brake
+DESK_HALT_CLEAR_EVENT = "equity_desk_ruin_halt_cleared"   # (admin-only: clear_desk_halt)
 TIERS_MAX_AGE_DAYS = 3             # stale analysis = no NEW entries
 IDS_MAX_AGE_DAYS = 14              # stale id file = unmarked, never guessed
 
@@ -90,10 +99,85 @@ def _connect(conn):
     return brain_map.connect(), True
 
 
+# ------------------------------------------------------- the ruin latch
+
+def desk_halt_latched(conn) -> bool:
+    """True while the desk's ruin halt is LATCHED and not since cleared: the
+    LAST of an `equity_desk_ruin_halt_latched` / `_cleared` pair in the
+    firm's append-only `account_events` (the pm.halt_latched pattern, #92).
+    Its own event types, not the `equity_desk_ruin_halt` rows fund_entry
+    writes per blocked entry — those record a refusal, these the brake."""
+    pm.ensure_schema(conn)
+    row = conn.execute(
+        "SELECT event_type FROM account_events WHERE event_type IN (?, ?) "
+        "ORDER BY ts DESC, rowid DESC LIMIT 1",
+        (DESK_HALT_LATCH_EVENT, DESK_HALT_CLEAR_EVENT)).fetchone()
+    return bool(row) and row[0] == DESK_HALT_LATCH_EVENT
+
+
+def latch_desk_halt(conn, why: str = "") -> bool:
+    """Arm the latch (idempotent; True if this call armed it). Fail-open on
+    a read-only connection, like pm.latch_halt: the verdict is still HALTED
+    — only the record is lost, and the next writer re-arms it."""
+    try:
+        if desk_halt_latched(conn):
+            return False
+        pm.log_event(conn, DESK_HALT_LATCH_EVENT, why or "desk ruin threshold breached")
+        return True
+    except Exception as e:
+        print(f"  (equity desk halt latch not persisted — {e})")
+        return False
+
+
+def _desk_ruin_halted(conn, realized: float, budget: float) -> bool:
+    """LATCHING (Dept 3 ruling 2026-10-04, ledger Issue 42). The breach test
+    is unchanged — realized at or below −DESK_RUIN_PCT% of the budget — but
+    a breach now ARMS a latch, and the latch keeps the desk halted whatever
+    the budget later becomes. Before this the halt was recomputed on every
+    read against the treasury's MOVING budget: on 2026-10-01 a routine raise
+    (Rs.2L -> Rs.3L) left it holding by Rs.1,239.74, and the next raise
+    would have lifted it with no human and no event — the #92 dilution
+    trap ("the one thing a brake must never do is release itself")."""
+    if desk_halt_latched(conn):
+        return True
+    if realized <= -(DESK_RUIN_PCT / 100.0) * budget:
+        latch_desk_halt(conn, f"desk realized Rs.{realized:,.2f} is at or below "
+                              f"-{DESK_RUIN_PCT:g}% of the Rs.{budget:,.0f} budget")
+        return True
+    return False
+
+
+def clear_desk_halt(conn, why: str = "", who: str = "owner") -> dict:
+    """THE ONLY DOOR OUT of a latched desk halt — a deliberate, recorded
+    human act (the pm.clear_halt contract). Refuses an empty `why`. If the
+    desk is still past its threshold the latch re-arms on the spot: clearing
+    is a decision that the desk may trade again, not a way around the limit."""
+    pm.ensure_schema(conn)
+    if not why or not str(why).strip():
+        return {"cleared": False,
+                "reason": "refused: clearing the desk ruin halt requires a stated why"}
+    if not desk_halt_latched(conn):
+        return {"cleared": False, "reason": "no latched desk halt to clear",
+                "halted": desk_state(conn)["ruin_halted"]}
+    before = desk_state(conn)
+    limit = -(DESK_RUIN_PCT / 100.0) * before["budget"]
+    pm.log_event(conn, DESK_HALT_CLEAR_EVENT,
+                 f"latched desk ruin halt cleared by {who} at desk realized "
+                 f"Rs.{before['realized']:,.2f} (limit Rs.{limit:,.2f} on a "
+                 f"Rs.{before['budget']:,.0f} budget) — {why}")
+    still = desk_state(conn)["ruin_halted"]      # re-latches instantly if still breached
+    return {"cleared": True, "why": why, "who": who, "realized": before["realized"],
+            "budget": before["budget"], "limit": round(limit, 2), "halted": still,
+            "reason": ("cleared, but desk realized is still past the limit — the latch "
+                       "re-armed immediately" if still
+                       else "cleared; desk entries are live again")}
+
+
 # ------------------------------------------------------------ desk views
 
 def desk_state(conn=None) -> dict:
-    """The desk's books as a VIEW over the firm account's tagged locks."""
+    """The desk's books as a VIEW over the firm account's tagged locks.
+    `ruin_halted` is the LATCHED brake (see _desk_ruin_halted)."""
     conn, owns = _connect(conn)
     try:
         pm.ensure_schema(conn)
@@ -115,7 +199,7 @@ def desk_state(conn=None) -> dict:
                 "realized": round(realized, 2), "capital": capital,
                 "available": round(capital - deployed, 2),
                 "open_locks": open_locks,
-                "ruin_halted": realized <= -(DESK_RUIN_PCT / 100.0) * budget,
+                "ruin_halted": _desk_ruin_halted(conn, realized, budget),
                 "firm_halted": pm.trading_halted(conn)}
     finally:
         if owns:
@@ -195,9 +279,9 @@ def fund_entry(entry: dict, conn=None, commit: bool = True) -> dict:
             if state["ruin_halted"]:
                 pm.log_event(conn, "equity_desk_ruin_halt",
                              f"{entry.get('ticker')}: desk realized "
-                             f"Rs.{state['realized']:,.2f} breaches "
-                             f"{DESK_RUIN_PCT:g}% of budget — desk entries "
-                             f"blocked")
+                             f"Rs.{state['realized']:,.2f} — ruin halt "
+                             f"LATCHED ({DESK_RUIN_PCT:g}% of budget) — desk "
+                             f"entries blocked until a human clears it")
                 return {"funded": False, "reason": "equity desk ruin halt"}
             sized = size_entry(price, stop, state["capital"],
                                risk_pct=EQUITY_DESK_RISK_PER_TRADE_PCT * mult)
@@ -744,8 +828,34 @@ def render_book_lines(conn=None, path=None, quote_fn=None) -> str:
         return f"EQUITY DESK: view unavailable ({exc})"
 
 
+def _reset_halt_cli(argv: list) -> int:
+    """`--reset-halt --why "…" --yes` — the audited human command."""
+    why = ""
+    if "--why" in argv and argv.index("--why") + 1 < len(argv):
+        why = argv[argv.index("--why") + 1]
+    conn, _ = _connect(None)
+    try:
+        if not why.strip():
+            print("Refusing to clear the desk ruin halt without --why.")
+            print('e.g. --why "reviewed the losing darling entries; the stop rule was tightened"')
+            return 1
+        if "--yes" not in argv:
+            s = desk_state(conn)
+            print("Refusing to clear the desk ruin halt without --yes.")
+            print(f"latched: {desk_halt_latched(conn)} · desk realized Rs.{s['realized']:,.2f} · "
+                  f"budget Rs.{s['budget']:,.0f} (limit {DESK_RUIN_PCT:g}%). Re-run with --yes.")
+            return 1
+        outcome = clear_desk_halt(conn, why=why, who="owner (CLI)")
+        print(json.dumps(outcome, indent=2))
+        return 0 if outcome["cleared"] else 1
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     import sys
+    if "--reset-halt" in sys.argv:
+        sys.exit(_reset_halt_cli(sys.argv))
     if "--sweep" in sys.argv:
         swept = sweep_orphan_locks()
         print(f"swept {len(swept)} orphan lock(s)")

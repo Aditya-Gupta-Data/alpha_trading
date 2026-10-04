@@ -473,7 +473,7 @@ def _tier1_fo_symbols(fo_path=None) -> set:
 
 def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
                       tiers_path=None, journal_path=None,
-                      commodity_symbols=None) -> dict:
+                      commodity_symbols=None, today=None) -> dict:
     """The VM desk's quote ids (decision #83): darlings are non-F&O names
     outside SECURITY_ID_MAP, so their ids come from Dhan's PUBLIC scrip
     master — exact name match only, EQ series preferred, anything
@@ -500,7 +500,7 @@ def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
     # `ids[sym]` can ever be handed a futures contract by mistake.
     commodities = lookup_commodities(list(commodity_symbols
                                           if commodity_symbols is not None
-                                          else COMMODITY_SYMBOLS), master)
+                                          else COMMODITY_SYMBOLS), master, today=today)
     commodity_unresolved = {s: "no live MCX FUTCOM contract in the master"
                             for s in (commodity_symbols if commodity_symbols is not None
                                       else COMMODITY_SYMBOLS) if s not in commodities}

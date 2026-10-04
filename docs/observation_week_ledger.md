@@ -2257,3 +2257,20 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   - The sweep counts raw lines rather than signatures.
   - The API server's journal is not swept.
   - The cause of the overnight DH-906 / DH-902 burst is unknown.
+
+### Issue 41 — holiday price data PURGED from the lake (2026-10-04 19:12 IST; owner ruling: purge, do not label)
+
+- **Tool:** `scripts/purge_holiday_lake_data.py --dates 2026-09-14 2026-10-02 --yes`, run on the VM with the market closed, after a dry run.
+- **Deleted on the VM:** 57 partitions (57 files, 1.05 MB) and 330 rows.
+  - `chains`: 9 partitions for 09-14 and 35 for 10-02.
+  - `candles`: 9 partitions for 10-02.
+  - `intraday_15m` and `darlings_daily`: both dates. The 09-14 partitions were empty files.
+  - `pricer_journal.jsonl`: 218 rows dated 09-14 and 112 dated 10-02. All 330 carried a close identical to the prior session's close.
+- **Archive (outside the lake):** `data/purged_holiday_data/holiday_lake_purge_20261004-191204.tar.gz`, 59 files, member count checked before the delete.
+- **Verified afterwards:**
+  - 0 holiday paths are left in those four datasets.
+  - 0 holiday rows are left in the pricer journal (4,069 rows remain, down from 4,399).
+  - The 10-01 partitions are intact.
+- **Mac lake copy:** 330 `pricer_journal.jsonl` rows dated 09-14 were removed the same way. The archive is in the Mac's `data/purged_holiday_data/`.
+- **Kept on purpose (not NSE session prices):** `cross_asset` 09-14 (a real MCX bar with volume), `macro_daily` (a calendar-day snapshot), and `news_daily`, `events`, `earnings*`, `deals_*`.
+- **Not touched:** holiday-session rows in ledgers outside the lake (`data/proposal_ledger.jsonl`, `logs/exposure_blocks.jsonl`, `logs/sizing_adjustments.jsonl`, `logs/greeks_snapshots.jsonl`), and the append-only macro ledgers.

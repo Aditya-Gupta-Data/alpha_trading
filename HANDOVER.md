@@ -66,7 +66,7 @@ the agent's job under the Session Wrap rule above.
 - **`logs/firm_treasury.log` after 19:56:** the desk must stay halted whatever the budget does.
 
 **Open, in order:**
-1. **Owner ruling:** the lake partitions written on the holidays 09-14 and 10-02 (`intraday_15m`, `darlings_daily`) hold frozen prices. Delete them or annotate them. Mon 09-14 also ran as a full session; no phantom trade was found for it.
+1. **DONE 10-04 19:12 — holiday price data purged** (owner ruling): 57 partitions and 330 pricer rows for 09-14 and 10-02, archived first to `data/purged_holiday_data/` (ledger Issue 41). Holiday-session rows in ledgers OUTSIDE the lake (`proposal_ledger.jsonl`, `exposure_blocks.jsonl`, `sizing_adjustments.jsonl`, `greeks_snapshots.jsonl`) were not touched.
 2. **Dhan Data plan:** recorded expiry 2026-10-10 (Issue 26, not re-verified). Confirm or renew.
 3. **Resume the paused PAPER_2L_LIVE adversarial sweep:** `.claude/audit_state/paper_2l_live_sweep/STATE.md`. Then Chunk 2 (OMS & Execution), which should include a data-driven closed-market detector.
 4. **Next MCX rolls:** CRUDE 10-19 → 573422; metals 10-30 → 578634 / 578633 / 578638.

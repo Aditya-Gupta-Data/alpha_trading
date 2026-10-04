@@ -2217,3 +2217,43 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Watch:**
   - The Dhan Data plan's recorded expiry is 2026-10-10 (Issue 26; not re-verified).
   - `renew_token.log` and the first Auto-Sync cycles on Mon 10-05.
+
+### Issue 41 — REPAIRED and FIXED (2026-10-04 evening; decision #124)
+
+- **Void (owner ruling 2026-10-04).** `scripts/void_phantom_trade.py --ref 7f4a4897 … --yes` ran on the VM at 18:47:29 IST, market closed, after a rehearsal on a copy of the database and journal.
+  - **Backups:** `data/brain_map.db.bak-void-20261004-184729` (sqlite online backup, integrity-checked) and `data/journal.jsonl.bak-void-20261004-184729`. The touched rows are archived verbatim in `data/voided_trades.jsonl`.
+  - **Locks released at pnl 0:** PAPER_10L Rs.73,500; PAPER_2L Rs.14,700; PAPER_2L_ROT Rs.14,700. Total Rs.1,02,900.
+  - **Verified read-only afterwards:**
+    - Open locks went 17 → 16 (primary) and 12 → 10 (paper).
+    - Realized P&L is unchanged in every account: Rs.114,289.50 / Rs.3,073.65 / Rs.-1,757.38 / Rs.0.00.
+    - The journal row reads `decision: voided` with a hypothetical, no-P&L outcome.
+    - There is one `trade_voided` event per account that held a lock.
+    - There is no Brain Map outcomes row for the ref.
+    - `quick_check` returns ok.
+  - The three FILLED entry tickets were left as they are.
+- **Calendar fix, deployed 19:01 IST (VM at `5cadb5f`).** `src/nse_calendar.py` is consulted by `market_loop.is_market_open` and `master_scheduler.session_over`.
+  - **Checked on the VM:** Mon 10-05 is open; Tue 10-20 (Dussehra) is closed for the entry loop, the live pricer and the scheduler.
+  - **Source of the 2026 list:** NSE circular NSE/CMTR/71775 as reproduced by two agreeing secondary sources. The circular PDF itself could not be fetched.
+  - **Corroboration from the VM's own NSE-sourced data:** the `flows` lake has no partition on 2026-09-14 or 2026-10-02, the two listed holidays inside its range.
+  - **2027 is PROVISIONAL.** NSE's circular is due in December 2026; the ops card nags from 12-15.
+- **Also found: Mon 2026-09-14 (Ganesh Chaturthi) ran as a full session too.** `master_scheduler.log` shows `started 2026-09-14T09:15 … ended 15:30`.
+  - No journal row is dated 09-14, no equity-desk entry was funded that day, and no settlement has an exit date on a holiday. So `7f4a4897` is the only phantom trade found.
+- **Not done:**
+  - The lake partitions written on 09-14 and 10-02 (`intraday_15m`, `darlings_daily`; the chain archive was not checked) hold frozen prices. They were NOT removed. That needs an owner ruling.
+  - There is no data-driven closed-market detector for ad-hoc closures the calendar cannot know. Queued for the Chunk 2 audit.
+
+### Issue 42 — FIXED (2026-10-04; decision #125, Dept 3 ruling: latch the halt)
+
+- `equity_desk` now latches its ruin halt. Deployed 19:01 IST.
+- At 19:02:56 the first read on the VM armed it: event `equity_desk_ruin_halt_latched`, "desk realized Rs.-31,239.74 is at or below -10% of the Rs.300,000 budget".
+- Checked on the VM: at a Rs.4L budget the old rule would have released the halt; the latched rule holds.
+- The only way out is `venv/bin/python -m src.equity_desk --reset-halt --why "…" --yes`.
+- `firm_treasury` is unchanged: it can still raise a halted desk's budget, and that money sits idle.
+
+### Issue 43 — the mirror false positive FIXED (2026-10-04); the rest is open
+
+- `ops_monitor` no longer counts a null `"error"` field in a status dict as a problem. On the VM, 0 of the last 133 mirror `[link]` lines are flagged.
+- **Still open:**
+  - The sweep counts raw lines rather than signatures.
+  - The API server's journal is not swept.
+  - The cause of the overnight DH-906 / DH-902 burst is unknown.

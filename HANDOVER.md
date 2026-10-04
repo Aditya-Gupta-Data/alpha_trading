@@ -42,6 +42,37 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-04 19:05 IST — phantom trade VOIDED, NSE holiday calendar + desk-halt latch DEPLOYED (VM at `5cadb5f`); ready for Mon 10-05
+
+**State.** `origin/main` and the VM are at `5cadb5f`, apart from docs commits after it. Services were restarted at 19:01 IST and are active with NRestarts=0; `/api/health` is ok. Suite: 2,533 passed. Details: ledger Issues 41–43 (the "REPAIRED and FIXED" blocks) and DECISIONS #124 / #125.
+
+**Done tonight:**
+- **`7f4a4897` voided at zero** (owner ruling) with `scripts/void_phantom_trade.py`, at 18:47 IST.
+  - Rs.1,02,900 of margin released: PAPER_10L Rs.73,500, PAPER_2L Rs.14,700, PAPER_2L_ROT Rs.14,700.
+  - Realized P&L is unchanged everywhere.
+  - Backups: `data/brain_map.db.bak-void-20261004-184729` and `data/journal.jsonl.bak-void-20261004-184729`. Archive: `data/voided_trades.jsonl`.
+- **NSE holiday calendar (#124).** `src/nse_calendar.py`, wired through `market_loop.is_market_open` and `master_scheduler.session_over`.
+  - On a holiday the scheduler logs the holiday's name and arms nothing.
+  - 2026 is verified from secondary sources. **2027 is PROVISIONAL**: replace it when NSE publishes its circular in December. The ops card nags from 12-15.
+- **Desk ruin halt latched (#125, Dept 3 ruling).** Armed on the VM at 19:02:56. Clear it only with `venv/bin/python -m src.equity_desk --reset-halt --why "…" --yes`.
+- **MCX ids rolled** and verified against the 10-04 scrip master: GOLD → 495213 (exp 12-04); COPPER → 574829, ALUMINIUM → 574828, ZINC → 574834 (exp 10-30). All six instruments returned bars on the VM.
+- **Ops sweep:** the mirror `[link] … "error": null` line is no longer a problem line.
+
+**Check first on Mon 10-05:**
+- `logs/master_scheduler.log` shows a normal session start. 10-05 is a trading day.
+- Bearish NIFTY FIN SERVICE entries are no longer blocked by `7f4a4897`.
+- **Issue 40 (first real test):** run `grep -n "live account: chain\|option chain unavailable (" logs/master_scheduler.log`.
+- **`24f931bb`:** when the primary settles it, PAPER_2L_LIVE must keep its own lock and position.
+- **`logs/firm_treasury.log` after 19:56:** the desk must stay halted whatever the budget does.
+
+**Open, in order:**
+1. **Owner ruling:** the lake partitions written on the holidays 09-14 and 10-02 (`intraday_15m`, `darlings_daily`) hold frozen prices. Delete them or annotate them. Mon 09-14 also ran as a full session; no phantom trade was found for it.
+2. **Dhan Data plan:** recorded expiry 2026-10-10 (Issue 26, not re-verified). Confirm or renew.
+3. **Resume the paused PAPER_2L_LIVE adversarial sweep:** `.claude/audit_state/paper_2l_live_sweep/STATE.md`. Then Chunk 2 (OMS & Execution), which should include a data-driven closed-market detector.
+4. **Next MCX rolls:** CRUDE 10-19 → 573422; metals 10-30 → 578634 / 578633 / 578638.
+5. **`ops_monitor`:** count by signature; sweep the API server's journal.
+6. **Dept 3, optional:** should the treasury stop raising the budget of a halted desk? Rs.1L sits idle.
+
 ## 2026-10-04 — read-only ops triage of 10-01..10-04: the engine TRADED A CLOSED MARKET on Fri 10-02 (Issue 41); ledgers, locks and recon otherwise clean
 
 **State.** The VM is at `0f978eb`. Services are up since the 10-01 19:01 deploy with NRestarts=0. No code changed in this triage. A 58-agent workflow verified each incident from a read-only VM extract; details are in the observation ledger, Issues 41–43.

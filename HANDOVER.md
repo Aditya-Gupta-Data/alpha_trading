@@ -42,6 +42,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-04 ~19:45 IST — PAPER_2L_LIVE sweep resumed, then PAUSED at the usage guardrail (5-hour window 96%); no code changed
+
+- **Done:** 4 of 7 finder lenses (`illiquidity`, `mid_exit_failure`, `boundaries`, `lifecycle`). 17 raw findings, none verified by the panel yet.
+- **One lead checked directly:** `live_bridge._leg_quotes_for` imports `_premium` from `options_proposer`, and that name does not exist. The ImportError is swallowed and the function returns None. If the lifecycle lens is right, the primary's intraday real-quote square-off has never been able to price an exit. That consequence is still UNVERIFIED; verify it first when the sweep resumes.
+- **Resume:** `.claude/audit_state/paper_2l_live_sweep/STATE.md` (one batch at a time; each costs about 10% of a 5-hour window). The window resets at 22:30 IST on 10-04; weekly usage is 13%.
+
 ## 2026-10-04 19:05 IST — phantom trade VOIDED, NSE holiday calendar + desk-halt latch DEPLOYED (VM at `5cadb5f`); ready for Mon 10-05
 
 **State.** `origin/main` and the VM are at `5cadb5f`, apart from docs commits after it. Services were restarted at 19:01 IST and are active with NRestarts=0; `/api/health` is ok. Suite: 2,533 passed. Details: ledger Issues 41–43 (the "REPAIRED and FIXED" blocks) and DECISIONS #124 / #125.

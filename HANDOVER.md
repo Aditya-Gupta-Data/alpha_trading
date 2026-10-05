@@ -42,6 +42,32 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-05 ~18:55 IST — Chunk 2 fixes A–D DONE and pushed; E–F PAUSED at the usage guardrail; NOTHING deployed
+
+**State.** `origin/main` is at `96feb2a` plus docs. Suite: 2,621 passed. The VM is still at `5cadb5f`. Not yet deployed: `e97f3b0` (Issue 44) and all of the fixes below.
+
+**Done.** Each fix had an implementer, 3 adversarial reviewers, and a fix-up pass where a review found a blocking issue. Mutants were killed in every case.
+- **A (#126, ruling 1), `224c07f`:** intraday exits cross the bid/ask.
+- **B (#127, ruling 2, F09), `1102c8b` + `53bcc0d`:** the #68 gate is firm-wide.
+- **C (F01), `e589411`:** an impossible mark abstains, and a new ratchet rung needs a second, independently fetched chain to arm.
+- **D (F02 + F21), `cf09e52` + `96feb2a`:**
+  - Live tick outcomes are logged, de-duplicated per row every 30 min.
+  - `live_exit_held` and `live_mark_abstained` events are written once per row per day.
+  - The dashboard shows the live mark's age and a stale flag.
+  - `run_tracker` names `eod_sweep` waits and errors.
+
+**Pending:** E (F22 + F23: settle the expiry backstop on the expiry session's own bar; the pre-expiry exit also fires on the last trading session before expiry), then F (F17 + F18: equity entry floor 12 days; no approval inside the forced-exit window). Resume from `.claude/audit_state/chunk2_fixes/STATE.md`; the 5-hour window resets at 19:40 IST.
+
+**Before any deploy.** The open-book dry-run on the VM (Issue 31 rule) must now cover:
+- `e97f3b0` + A: crossed intraday square-offs and ROT evictions switch on.
+- C: the live arm's existing locks are kept, and new rungs need confirmation.
+- B: new proposals can now be blocked by PAPER_2L_LIVE positions.
+
+**Open owner questions:**
+1. With crossing, `ratchet_hit` is easier to confirm (#126 note).
+2. #68 is not re-checked at approval time (#127 note).
+3. A worktree `.claude/worktrees/sharp-kalam-d5aaee` (branch `claude/sharp-kalam-d5aaee`) exists and is NOT from this session. It was left untouched.
+
 ## 2026-10-05 ~17:30 IST — Issue 44 FIXED in code (not deployed); PAPER_2L_LIVE sweep COMPLETED (24 confirmed findings)
 
 **State.**

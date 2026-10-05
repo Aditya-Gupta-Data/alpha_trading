@@ -1014,6 +1014,11 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     # Decision #68: one open position per underlying+direction. Sits
     # BEFORE enrichment, the evidence stamp and the margin gate — a
     # blocked duplicate costs nothing downstream and never locks margin.
+    # FIRM-WIDE since 10-05 (Architect ruling 2, audit F09): with no
+    # entries/conn injected the gate reads the journal AND brain_map.db
+    # (mode=ro), so a PAPER_2L_LIVE position or an orphaned shadow lock
+    # that outlived its primary still fills the slot. This is the gate's
+    # only caller (market_loop reaches it through run_headless).
     # Sandbox books (simulator / tests / what-ifs) are their own worlds —
     # exempt, same rule as the margin gate below. Fail-OPEN by hard rule.
     if "book" not in state:

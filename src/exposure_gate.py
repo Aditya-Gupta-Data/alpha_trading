@@ -12,8 +12,13 @@ human tap's job, and nothing replaced it.
 
 Two features, one open-positions vocabulary:
 
-  gate_entry(proposal)        ONE open spread per underlying+direction.
-                              Called by options_proposer.run_headless
+  gate_entry(proposal)        ONE open spread per underlying+direction,
+                              FIRM-WIDE (Architect ruling 2, 2026-10-05,
+                              audit F09): a position held by ANY paper
+                              account — PAPER_10L, PAPER_2L, PAPER_2L_ROT,
+                              PAPER_2L_LIVE — fills the slot, not only the
+                              primary journal's. Called by
+                              options_proposer.run_headless
                               BEFORE the margin gate (a blocked duplicate
                               must never lock margin) and only for the
                               real paper book — injected sandbox books
@@ -42,10 +47,13 @@ DOCTRINE: both features are binary verdicts (block / advise), never
 scores (#63 composition law). Both fail OPEN — an unreadable journal, a
 dead quote feed, a broken ledger write can only ever mean "behave as if
 this module didn't exist", never "block a proposal" or "kill a cycle".
+(An unreadable brain_map.db removes only the firm-wide part of the slot:
+the gate then judges on the primary journal alone, as before 10-05.)
 """
 
 import json
 import os
+import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -80,24 +88,164 @@ def direction_of(spread_or_position: dict) -> str | None:
 
 # --------------------------------------------------- feature 1: entry gate
 
-def conflicting_positions(ticker: str, direction: str,
-                          entries: list = None, today: date = None) -> list:
-    """Open spread positions (positions.active_positions — the tracker's
-    own predicates, approved + unresolved only) on `ticker` whose
-    direction matches. Unclassifiable directions are skipped."""
-    from src import positions
-    return [p for p in positions.active_positions(entries, today)
-            if p.get("kind") == "spread"
-            and p.get("ticker") == ticker
-            and direction_of(p) == direction]
+# Architect ruling 2 (2026-10-05, audit F09): the slot is FIRM-WIDE. Until
+# then the gate read only the primary journal's approved + unresolved rows,
+# and two kinds of position outlive that row:
+#   * a PAPER_2L_LIVE position settles itself on live quotes (#120), so
+#     release_shadow_locks keeps its lock while live_pricer.has_open_position
+#     — the moment the primary settled, the slot looked empty and the next
+#     same-direction signal stacked a second position on one thesis in LIVE;
+#   * any shadow lock whose release failed (margin_release_error) stays
+#     ACTIVE until reconcile_orphan_locks retries it on the hour.
+# Both are read here, from ONE read-only snapshot of brain_map.db.
+_FIRM_TABLES = ("paper_live_positions", "paper_margin_locks")
+
+
+def _firm_holdings(conn=None) -> tuple:
+    """([holding, ...], unavailable) — what the SHADOW side of the firm
+    still holds, in one read-only snapshot:
+
+      source "live"  every paper_live_positions row that is not CLOSED
+                     (open or exiting: live_pricer.has_open_position's own
+                     predicate), in any LIVE account — it carries its own
+                     ticker / strategy / direction / expiry;
+      source "lock"  every ACTIVE (released_at IS NULL) paper_margin_locks
+                     row, in any shadow account — the caller maps its
+                     journal_ref to a ticker/direction through the journal.
+
+    `conn` is injectable (tests). By default brain_map.db is opened
+    `mode=ro`: this gate never writes a money table. A missing file or a
+    missing table is a FACT — that book never held anything — so it reads
+    as empty. Any other failure (locked past the timeout, corrupt,
+    unreadable) returns ([], reason): the caller fails OPEN on it, exactly
+    as the gate does for an unreadable journal."""
+    from src.execution.live_pricer import STATE_CLOSED
+    own = conn is None
+    try:
+        if own:
+            from src import brain_map
+            path = Path(brain_map.DEFAULT_DB_PATH)
+            if not path.exists():
+                return [], None
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        present = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name IN (?, ?)", _FIRM_TABLES)}
+        parts, args = [], []
+        if "paper_live_positions" in present:
+            parts.append("SELECT 'live', account_id, journal_ref, ticker, "
+                         "strategy, direction, expiry "
+                         "FROM paper_live_positions WHERE state != ?")
+            args.append(STATE_CLOSED)
+        if "paper_margin_locks" in present:
+            parts.append("SELECT 'lock', account_id, journal_ref, NULL, NULL, "
+                         "NULL, NULL "
+                         "FROM paper_margin_locks WHERE released_at IS NULL")
+        if not parts:
+            return [], None
+        cols = ("source", "account_id", "journal_ref", "ticker", "strategy",
+                "direction", "expiry")
+        rows = conn.execute(" UNION ALL ".join(parts), args).fetchall()
+        return [dict(zip(cols, tuple(r))) for r in rows], None
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+    finally:
+        if own and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _firm_conflicts(ticker: str, direction: str, entries: list = None,
+                    today: date = None, conn=None) -> tuple:
+    """(conflicts, unavailable). One dict per conflicting journal ref, each
+    with `held_by` = the account(s) holding it (PAPER_10L first, then the
+    shadow accounts in portfolio_manager.PAPER_ACCOUNTS order):
+
+      (a) the primary's open spreads — positions.active_positions, the
+          tracker's own predicates (approved + unresolved), as before;
+      (b) every LIVE row still open/exiting on `ticker` whose direction
+          matches;
+      (c) every ACTIVE shadow lock whose journal row is APPROVED and on
+          `ticker` + `direction`.
+
+    The journal is read ONCE (here, when not injected) and serves both
+    (a) and the ref -> ticker/direction mapping of (c). A ref held by the
+    primary and by shadows is ONE position with several holders, never
+    several positions. `unavailable` is the firm-wide read's failure
+    reason (None when it read cleanly)."""
+    from src import journal, positions
+    from src import portfolio_manager as pm
+    if entries is None:
+        entries = journal.read_all()
+    primary = pm.ACCOUNT_PAPER_10L
+    conflicts, by_ref = [], {}
+    for p in positions.active_positions(entries, today):
+        if (p.get("kind") == "spread" and p.get("ticker") == ticker
+                and direction_of(p) == direction):
+            c = dict(p, held_by=[primary])
+            conflicts.append(c)
+            if p.get("trade_id"):
+                by_ref[str(p["trade_id"])] = c
+
+    holdings, unavailable = _firm_holdings(conn)
+    if holdings:
+        rows = {journal.row_key(e): e for e in entries if isinstance(e, dict)}
+        for h in holdings:
+            ref = str(h.get("journal_ref") or "")
+            if h["source"] == "live":
+                pos = {k: h.get(k) for k in
+                       ("ticker", "strategy", "direction", "expiry")}
+            else:
+                e = rows.get(ref)
+                # A shadow lock is a POSITION only once its trade was
+                # approved. A pending entry's proposal-time lock is a
+                # reservation (the gate has never counted pending rows),
+                # and a rejected entry never opened anything. A ref with no
+                # journal row (an eqd: lock, a lost line) cannot be
+                # classified — and an unclassifiable position never blocks.
+                if e is None or e.get("decision") != "approved":
+                    continue
+                s = e.get("spread") or {}
+                pos = {"ticker": e.get("ticker"), "strategy": s.get("strategy"),
+                       "direction": s.get("direction"), "expiry": s.get("expiry")}
+            if pos["ticker"] != ticker or direction_of(pos) != direction:
+                continue
+            c = by_ref.get(ref)
+            if c is None:
+                c = dict(pos, kind="spread", trade_id=ref, direction=direction,
+                         held_by=[])
+                conflicts.append(c)
+                by_ref[ref] = c
+            if h["account_id"] not in c["held_by"]:
+                c["held_by"].append(h["account_id"])
+        order = (primary,) + tuple(pm.PAPER_ACCOUNTS)
+        for c in conflicts:
+            c["held_by"].sort(key=lambda a: (order.index(a) if a in order
+                                             else len(order), str(a)))
+    return conflicts, unavailable
+
+
+def conflicting_positions(ticker: str, direction: str, entries: list = None,
+                          today: date = None, conn=None) -> list:
+    """Every open position on `ticker` whose direction matches, FIRM-WIDE
+    (Architect ruling 2) — see _firm_conflicts. Unclassifiable directions
+    are skipped."""
+    return _firm_conflicts(ticker, direction, entries, today, conn)[0]
 
 
 def gate_entry(proposal: dict, entries: list = None,
-               today: date = None, notify_fn=None, record_fn=None) -> tuple:
+               today: date = None, notify_fn=None, record_fn=None,
+               conn=None) -> tuple:
     """(allowed, reason). ONE open position per underlying+direction —
-    bullish, bearish and neutral each get one slot per index. Fail-OPEN
-    by hard rule: ANY failure returns (True, ...) with a printed note,
-    the margin gate's exact contract."""
+    bullish, bearish and neutral each get one slot per index, and the slot
+    is FIRM-WIDE: a position any paper account still holds fills it
+    (Architect ruling 2, 2026-10-05). Fail-OPEN by hard rule: ANY failure
+    returns (True, ...) with a printed note, the margin gate's exact
+    contract — and an unreadable firm-wide read (brain_map.db) fails open
+    the same way an unreadable journal does: it adds no conflict, the
+    primary journal's own conflicts still count, and the note names it."""
     try:
         spread = proposal.get("spread") or {}
         direction = direction_of(spread)
@@ -107,22 +255,40 @@ def gate_entry(proposal: dict, entries: list = None,
         if not ticker or direction is None:
             return True, "allowed (unclassifiable proposal — gate skipped)"
 
-        conflicts = conflicting_positions(ticker, direction, entries, today)
+        conflicts, firm_unavailable = _firm_conflicts(
+            ticker, direction, entries, today, conn)
+        if firm_unavailable:
+            print(f"  (exposure gate: firm-wide view unavailable — judged on "
+                  f"the primary journal only: {firm_unavailable})")
         if not conflicts:
             # (The #109 book-wide correlation cap lived here for one day and
             # was withdrawn by #110: entries are not throttled by thesis.)
+            if firm_unavailable:
+                return True, ("allowed (primary journal only — firm-wide "
+                              f"view unavailable: {firm_unavailable})")
             return True, "allowed"
 
         ids = [str(p.get("trade_id") or "?") for p in conflicts]
+        held = "; ".join(f"`{i}` {', '.join(p.get('held_by') or ['?'])}"
+                         for i, p in zip(ids, conflicts))
         _log_block(ticker, direction, spread.get("strategy"),
                    ids, proposal.get("view"), today=today,
-                   notify_fn=notify_fn, conflicts=conflicts)
-        _record_opportunity_cost(ticker, direction, conflicts, today=today,
+                   notify_fn=notify_fn, conflicts=conflicts,
+                   firm_unavailable=firm_unavailable)
+        # The opportunity-cost row inherits its HOST's outcome, so only a
+        # trade the PRIMARY still holds can host it: a primary row that
+        # already resolved (the LIVE / orphan-lock case) closed before this
+        # block, and its outcome would answer a different window. No such
+        # host = no row (the "no ghost" rule below).
+        from src import portfolio_manager as pm
+        hosts = [p for p in conflicts
+                 if pm.ACCOUNT_PAPER_10L in (p.get("held_by") or [])]
+        _record_opportunity_cost(ticker, direction, hosts, today=today,
                                  record_fn=record_fn)
         return False, (
             f"exposure gate: {len(conflicts)} open {direction} "
-            f"position(s) on {ticker} already (`{'`, `'.join(ids)}`) — "
-            "max one per underlying+direction (decision #68)")
+            f"position(s) on {ticker} already ({held}) — "
+            "max one per underlying+direction, firm-wide (decision #68)")
     except Exception as e:
         print(f"  (exposure gate unavailable — failing open: {e})")
         return True, f"exposure gate unavailable ({e})"
@@ -181,12 +347,19 @@ def _record_opportunity_cost(ticker, direction, conflicts, *, today=None,
 
 
 def _log_block(ticker, direction, strategy, blocked_by, view, *,
-               today=None, notify_fn=None, conflicts=None) -> None:
+               today=None, notify_fn=None, conflicts=None,
+               firm_unavailable=None) -> None:
     """Ledger line for every block + at most ONE Discord note per
     (ticker, direction) per IST day. The ledger doubles as the
     once-per-day memory, so a restart can't re-announce. Every failure
-    in here is swallowed — bookkeeping never changes the verdict."""
+    in here is swallowed — bookkeeping never changes the verdict.
+
+    Since the slot went firm-wide (Architect ruling 2) a block can come
+    from an account the primary journal no longer shows, so both the line
+    (`held_by`: ref -> accounts) and the note name WHO holds the slot."""
     day = (today or datetime.now(IST).date()).isoformat()
+    held_by = {str(c.get("trade_id") or "?"): list(c.get("held_by") or [])
+               for c in (conflicts or [])}
     noted_today = False
     try:
         if LEDGER_PATH.exists():
@@ -211,21 +384,25 @@ def _log_block(ticker, direction, strategy, blocked_by, view, *,
                 "ts": f"{day}T{datetime.now(IST).time().isoformat(timespec='seconds')}",
                 "ticker": ticker, "direction": direction,
                 "strategy": strategy, "blocked_by": blocked_by,
-                "view": view}) + "\n")
+                "held_by": held_by, "view": view,
+                **({"firm_view_unavailable": firm_unavailable}
+                   if firm_unavailable else {})}) + "\n")
     except OSError:
         pass
     if notify_fn and not noted_today:
         rep = (conflicts or [{}])[0]
+        holders = ", ".join(rep.get("held_by") or [])
+        held_note = f" held by {holders}" if holders else ""
         try:
             notify_fn(
                 f"🧱 **Exposure gate — {ticker}**: suppressed a duplicate "
                 f"{direction} spread proposal.\n"
                 f"{len(blocked_by)} open {direction} position(s) already "
-                f"(`{blocked_by[0]}`, "
+                f"(`{blocked_by[0]}`{held_note}, "
                 f"{(rep.get('strategy') or 'spread').replace('_', ' ')}, "
                 f"exp {rep.get('expiry') or '?'}).\n"
                 f"Further {direction} {ticker} duplicates today are "
-                "blocked silently (decision #68).")
+                "blocked silently (decision #68, firm-wide).")
         except Exception:
             pass
 

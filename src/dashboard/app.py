@@ -117,13 +117,21 @@ def _body():
                         (f"{a['rejections']} refusal(s)" if a.get("rejections") is not None else None))
               if acct in d.LIVE_ACCOUNTS:
                   # audit F02: this arm prices itself; its mark can sit unchanged
-                  # for days while it abstains or holds — say how old it is
+                  # for days while it abstains or holds — say how old it is.
+                  # Judged as of when this copy of the data was taken (the box
+                  # reads a 15-min mirror), and the warning names no cause: the
+                  # page cannot tell an abstaining arm from a stopped loop.
+                  checked = a.get("mark_stale_as_of") or "n/a"
                   if a.get("marks_as_of"):
-                      st.caption(f"Marks: this arm's own crossed bid/ask marks, oldest as of {a['marks_as_of']}.")
+                      st.caption(f"Marks: this arm's own crossed bid/ask marks, oldest as of {a['marks_as_of']} "
+                                 f"(checked against the data captured at {checked}).")
                   if a.get("mark_stale"):
-                      st.warning("Stale mark — an open position has not been re-marked on a fresh chain "
-                                 "recently (the arm is abstaining, holding or not ticking). The unrealized "
-                                 "figure is that older mark, not a current price.")
+                      limit = a.get("mark_stale_after_s")
+                      limit = f"{limit / 60:.0f} minutes" if limit else "two quote intervals"
+                      st.warning(f"Stale mark — in the data captured at {checked}, an open position's mark "
+                                 f"(oldest {a.get('marks_as_of') or 'never marked'}) or the chain quotes under it "
+                                 f"was more than {limit} of market time old. The unrealized figure is that older "
+                                 "mark, not a current price.")
               elif a.get("marks_as_of"):
                   st.caption(f"Marks: the engine's snapshot as of {a['marks_as_of']} — never a fresh quote.")
           curve = T.get("equity_curve") or []

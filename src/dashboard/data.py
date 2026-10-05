@@ -161,24 +161,44 @@ def capital_events(conn) -> list:
 MARKET_OPEN_HM, MARKET_CLOSE_HM = (9, 15), (15, 30)     # market_loop's session (not imported: execution path)
 
 
-def _session_reference(now: datetime) -> datetime:
-    """The moment a live mark should be current AS OF: `now` inside a
-    session; outside one, the close of the last session (an evening view of
-    a 15:29 mark is not stale; a mark that stopped at 11:00 is)."""
+def _market_seconds(start: datetime, end: datetime, cap: float) -> float:
+    """Seconds of NSE session time (MARKET_OPEN_HM-MARKET_CLOSE_HM on a
+    trading day) from `start` to `end`, naive IST — counted only until it
+    passes `cap`, which is all a staleness check needs (a years-old stamp is
+    never walked day by day). Nights, weekends and holidays add nothing: a
+    15:29 mark is one market-minute old at 20:00 and at 09:15 the next
+    session, sixteen at 09:30 — so the open's first push is not flagged for
+    the overnight gap (review of Fix D), while a mark that stopped at 11:00
+    still is in the evening."""
     from src import nse_calendar
-    hm = (now.hour, now.minute)
-    if nse_calendar.is_trading_day(now) and MARKET_OPEN_HM <= hm <= MARKET_CLOSE_HM:
-        return now
-    day = now.date() if (nse_calendar.is_trading_day(now) and hm > MARKET_CLOSE_HM) \
-        else nse_calendar.previous_trading_day(now)
-    return datetime(day.year, day.month, day.day, *MARKET_CLOSE_HM)
+    total, day = 0.0, start.date()
+    while day <= end.date() and total <= cap:
+        if nse_calendar.is_trading_day(day):
+            lo = max(start, datetime(day.year, day.month, day.day, *MARKET_OPEN_HM))
+            hi = min(end, datetime(day.year, day.month, day.day, *MARKET_CLOSE_HM))
+            total += max(0.0, (hi - lo).total_seconds())
+        day += timedelta(days=1)
+    return total
+
+
+def _captured_at(db_path):
+    """When the brain_map copy being read was taken, naive IST: its file
+    mtime. On the dashboard box that is the moment cron #33's
+    mirror_snapshot made the copy (rsync -a keeps it); on a Mac pull, the
+    pull; on a live file, its last commit. None when unreadable — staleness
+    is then judged on the viewer's clock (the side that flags, not hides)."""
+    try:
+        return datetime.fromtimestamp(Path(db_path).stat().st_mtime, tz=IST).replace(tzinfo=None)
+    except (OSError, ValueError, OverflowError, TypeError):
+        return None
 
 
 def _live_mark_stale(r, ref: datetime, max_age_s: float):
     """True when the row's mark — or the chain quotes it was priced on, which
     a failing chain door can leave hours old under a fresh mark time (audit
-    F19) — is older than `max_age_s` at `ref`; a row never marked ages from
-    its open. None when no time parses (unknown, never guessed)."""
+    F19) — is more than `max_age_s` of MARKET time old at `ref`; a row never
+    marked ages from its open. None when no time parses (unknown, never
+    guessed)."""
     stamps = []
     for k in (("last_mark_ts", "quote_ts") if r["last_mark_ts"] else ("opened_at",)):
         try:
@@ -187,10 +207,11 @@ def _live_mark_stale(r, ref: datetime, max_age_s: float):
             continue
     if not stamps:
         return None
-    return (ref - min(stamps)).total_seconds() > max_age_s
+    return _market_seconds(min(stamps), ref, max_age_s) > max_age_s
 
 
-def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: datetime = None) -> dict:
+def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: datetime = None,
+                          captured_at: datetime = None) -> dict:
     """{account: {unrealized_pnl, marked_positions, open_positions}} from the
     ENGINE'S published marks (`market_snapshot.json` — the same marks the
     Discord card's ladder reads first). Never a fresh quote. The primary sums
@@ -202,8 +223,17 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
     The live-quote arm (#120) prices itself, so its account also carries
     `last_mark_ts` (its OLDEST open mark) and `mark_stale` (audit F02): True
     when any open row's mark is older than 2 x LIVE_QUOTE_INTERVAL_SECONDS
-    of market time — the arm abstains or holds in silence for days while its
-    last mark keeps being added here as if it were current. None = unknown."""
+    (`mark_stale_after_s`) of market time — the arm abstains or holds in
+    silence for days while its last mark keeps being added here as if it
+    were current. None = unknown.
+
+    The age is judged AS OF `mark_stale_as_of` = the earlier of `now` and
+    `captured_at`, the moment this copy of the data was taken (treasury()
+    passes the database file's mtime). The deployed page reads a mirror
+    pushed every 15 minutes (cron #33); judged on the viewer's clock a
+    healthy arm went stale for ~8 of every 15 minutes between pushes
+    (review of Fix D). A dead loop is still caught: the pushes go on, the
+    marks in them do not."""
     snap = _snapshot() if snapshot is None else snapshot
     marks = {m.get("short_id"): m for m in (snap or {}).get("marks") or [] if isinstance(m, dict)}
     rows = open_trades(snapshot_marks=marks) if rows is None else rows
@@ -233,7 +263,9 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
         max_age_s = 2.0 * float(LIVE_QUOTE_INTERVAL_SECONDS)
     except Exception:
         max_age_s = None                # unknown interval -> staleness unknown, never guessed
-    ref = _session_reference((now or datetime.now(IST)).replace(tzinfo=None))
+    ref = _as_naive_ist(now or datetime.now(IST))
+    if captured_at is not None:
+        ref = min(ref, _as_naive_ist(captured_at))
     flags, oldest = {}, {}
     for r in (live if isinstance(live, list) else []):
         a = out.setdefault(r["account_id"], {"unrealized_pnl": None, "marked_positions": 0,
@@ -252,7 +284,15 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
         f = flags.get(acct, [])
         out[acct]["last_mark_ts"] = oldest.get(acct)
         out[acct]["mark_stale"] = True if True in f else (None if None in f else False)
+        out[acct]["mark_stale_as_of"] = ref.isoformat(timespec="seconds")
+        out[acct]["mark_stale_after_s"] = max_age_s
     return out
+
+
+def _as_naive_ist(t: datetime) -> datetime:
+    """An aware time converted to IST, then naive — the engine stamps its
+    marks in naive IST; a naive time is taken as IST already."""
+    return t.astimezone(IST).replace(tzinfo=None) if t.tzinfo else t
 
 
 def _snapshot() -> dict:
@@ -272,9 +312,10 @@ def _with_mtm(acct: dict, u: dict | None, as_of) -> dict:
     return acct
 
 
-def treasury(db_path=None) -> dict:
+def treasury(db_path=None, now: datetime = None) -> dict:
     """{'PAPER_10L': {...}, 'PAPER_2L': {...}, 'error'?} — equity, realized,
-    drawdown, locks per account, straight from the account tables."""
+    drawdown, locks per account, straight from the account tables. `now`
+    defaults to the wall clock (tests inject it)."""
     conn = connect_ro(db_path)
     if conn is None:
         return {"error": f"database unavailable or locked: {db_path or DB_PATH}"}
@@ -353,7 +394,9 @@ def treasury(db_path=None) -> dict:
         # unrealized P&L + True Net Equity per account (engine snapshot marks)
         try:
             snap = _snapshot()
-            u = unrealized_by_account(conn, snap)
+            # the live arm's mark is judged as of when THIS copy was taken
+            # (review of Fix D: the box's 15-min mirror), not the viewer's clock
+            u = unrealized_by_account(conn, snap, now=now, captured_at=_captured_at(db_path or DB_PATH))
         except Exception:
             snap, u = {}, {}
         for acct in [k for k in out if k.startswith("PAPER_")]:

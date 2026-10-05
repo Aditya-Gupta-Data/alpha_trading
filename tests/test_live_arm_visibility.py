@@ -14,7 +14,9 @@ kept adding its days-old mark as live MTM. Now:
      always print;
   3. a held exit and an abstention inside the forced-exit window write ONE
      paper_account_events row per position per day (no Discord card);
-  4. the dashboard exposes the live row's last_mark_ts and mark_stale.
+  4. the dashboard exposes the live row's last_mark_ts and mark_stale,
+     judged in market time as of when the copy being read was taken (the
+     box reads a 15-min mirror — review of Fix D).
 F21: run_tracker prints every eod_sweep row that errored or is waiting for
 bars, with its ref and reason.
 
@@ -22,8 +24,9 @@ Hermetic: the `world` fixture of tests/test_live_account.py (sqlite
 ':memory:', chains injected, the clock injected); the dashboard reads a
 tmp_path database through its own read-only connection.
 """
+import os
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -293,6 +296,30 @@ def test_the_repro_an_unmarkable_structure_in_its_window_is_now_visible_end_to_e
     assert u[LIVE]["unrealized_pnl"] == pytest.approx(15.0 * 65)                        # shown, but flagged
 
 
+# the ROW in both de-dup keys (review of Fix D): the arm normally holds
+# several positions; one row's line or day-event must never silence another's
+
+def test_two_rows_abstaining_for_the_same_reason_are_both_printed_and_both_get_an_event(world, ist_clock,
+                                                                                       capsys):
+    _open(world, "lvA")
+    _open(world, "lvB")
+    ist_clock["now"] = now = datetime(2026, 10, 27, 10, 0)     # 1 day left: inside the forced-exit window
+    _cycle(world, now, NO_ASK, 3_000_000.0, lb.LiveTickLog())
+    out = capsys.readouterr().out
+    assert "lvA abstained" in out and "lvB abstained" in out
+    assert sorted(e[1] for e in _events(world, "live_mark_abstained")) == ["lvA", "lvB"]
+
+
+def test_two_held_rows_are_both_printed_and_both_get_an_event(world, ist_clock, capsys):
+    _open(world, "lvA")
+    _open(world, "lvB")
+    ist_clock["now"] = now = datetime(2026, 10, 27, 10, 0)
+    _cycle(world, now, DEAD, 3_000_000.0, lb.LiveTickLog())
+    out = capsys.readouterr().out
+    assert "lvA pre_expiry_exit exit HELD" in out and "lvB pre_expiry_exit exit HELD" in out
+    assert sorted(e[1] for e in _events(world, "live_exit_held")) == ["lvA", "lvB"]
+
+
 # ------------------------------------------------------------- 4. the dashboard
 
 def _live_db(tmp_path, rows, name="bm.db"):
@@ -321,6 +348,7 @@ def _live_db(tmp_path, rows, name="bm.db"):
     (datetime(2026, 10, 24, 12, 0), "2026-10-23T15:28:00", "2026-10-23T15:22:00", False),   # Saturday -> Fri close
     (datetime(2026, 10, 20, 12, 0), "2026-10-19T15:28:00", "2026-10-19T15:22:00", False),   # Dussehra -> Mon close
     (datetime(2026, 10, 21, 9, 30), "2026-10-19T15:28:00", "2026-10-19T15:22:00", True),    # next session open
+    (datetime(2026, 10, 27, 9, 20), "2026-10-26T15:29:00", "2026-10-26T15:26:00", False),   # 9 market-minutes
 ])
 def test_the_live_mark_carries_its_age_and_a_stale_flag(tmp_path, now, mark_ts, quote_ts, stale):
     p = _live_db(tmp_path, [(mark_ts, quote_ts, "2026-10-06T10:00:00", 15.0)])
@@ -378,6 +406,94 @@ def test_treasury_dates_the_live_arms_marks_by_its_own_mark_not_the_snapshot(tmp
     a = T[LIVE]
     assert a["marks_as_of"] == "2026-09-29T11:00:00" and a["last_mark_ts"] == "2026-09-29T11:00:00"
     assert a["mark_stale"] is True and a["unrealized_pnl"] == 975.0          # a week-old mark, flagged
+
+
+# review of Fix D: the deployed page reads a brain_map COPY pushed every 15
+# minutes (cron #33, the Oracle box) — the mark is judged as of the copy
+
+def _as_captured(p, t: datetime):
+    """Stamp the copy's mtime the way rsync -a lands cron #33's push on the box."""
+    ts = t.replace(tzinfo=dash.IST).timestamp()
+    os.utime(p, (ts, ts))
+    return p
+
+
+def _mirror(tmp_path, monkeypatch, mark_ts, quote_ts, captured: datetime):
+    import json
+    p = _live_db(tmp_path, [(mark_ts, quote_ts, "2026-10-06T10:00:00", 15.0)])
+    c = brain_map.connect(str(p))
+    pm.request_entry(c, "lv0", 17550.0)
+    pm.paper_request_entry(c, LIVE, "lv0", 17550.0, lots=1, primary_lots=1)
+    c.close()
+    snap = tmp_path / "market_snapshot.json"
+    snap.write_text(json.dumps({"as_of": f"{mark_ts}+05:30", "marks": []}))
+    monkeypatch.setattr(dash, "SNAPSHOT_PATH", snap)
+    return _as_captured(p, captured)
+
+
+def test_a_healthy_arm_read_from_the_15_min_mirror_is_never_flagged_between_pushes(tmp_path, monkeypatch):
+    """The 10:15 push carries a healthy mark (ticked 10:14:30 on the 10:11:40
+    chain, the normal 5-min refresh). Judged on the viewer's clock it went
+    'stale' from ~10:22 to the next push — 8 of every 15 minutes."""
+    p = _mirror(tmp_path, monkeypatch, "2026-10-27T10:14:30", "2026-10-27T10:11:40",
+                captured=datetime(2026, 10, 27, 10, 15, 2))
+    for m in range(15, 30):
+        a = dash.treasury(p, now=datetime(2026, 10, 27, 10, m, 30))[LIVE]
+        assert a["mark_stale"] is False, f"10:{m}:30"
+        assert a["mark_stale_as_of"] == "2026-10-27T10:15:02" and a["mark_stale_after_s"] == 600.0
+
+
+def test_a_loop_that_stopped_is_still_flagged_because_the_pushes_go_on(tmp_path, monkeypatch):
+    p = _mirror(tmp_path, monkeypatch, "2026-10-27T10:59:30", "2026-10-27T10:58:00",
+                captured=datetime(2026, 10, 27, 11, 0, 2))
+    assert dash.treasury(p, now=datetime(2026, 10, 27, 11, 14))[LIVE]["mark_stale"] is False
+    _as_captured(p, datetime(2026, 10, 27, 11, 15, 2))          # the next push: the same, unmoved marks
+    a = dash.treasury(p, now=datetime(2026, 10, 27, 11, 16))[LIVE]
+    assert a["mark_stale"] is True and a["mark_stale_as_of"] == "2026-10-27T11:15:02"
+
+
+def test_the_opens_first_push_is_not_flagged_for_the_overnight_gap(tmp_path, monkeypatch):
+    # the 09:15 push lands before the arm's first tick: yesterday's 15:29:30 mark on the 15:25 chain
+    p = _mirror(tmp_path, monkeypatch, "2026-10-26T15:29:30", "2026-10-26T15:25:00",
+                captured=datetime(2026, 10, 27, 9, 15, 5))
+    assert dash.treasury(p, now=datetime(2026, 10, 27, 9, 29))[LIVE]["mark_stale"] is False
+    _as_captured(p, datetime(2026, 10, 27, 9, 30, 2))           # 15 market-minutes on, still yesterday's mark
+    assert dash.treasury(p, now=datetime(2026, 10, 27, 9, 31))[LIVE]["mark_stale"] is True
+
+
+def test_the_reference_is_the_earlier_of_now_and_the_capture_in_ist(tmp_path):
+    p = _live_db(tmp_path, [("2026-10-27T10:49:00", "2026-10-27T10:49:00", "2026-10-06T10:00:00", 15.0)])
+    conn = dash.connect_ro(p)
+    utc = timezone.utc
+
+    def u(**kw):
+        return dash.unrealized_by_account(conn, snapshot={}, rows=[], **kw)[LIVE]
+
+    a = u(now=datetime(2026, 10, 27, 5, 30, tzinfo=utc))              # 11:00 IST: 11 market-minutes old
+    assert a["mark_stale"] is True and a["mark_stale_as_of"] == "2026-10-27T11:00:00"
+    a = u(now=datetime(2026, 10, 27, 11, 0), captured_at=datetime(2026, 10, 27, 5, 25, tzinfo=utc))
+    assert a["mark_stale"] is False and a["mark_stale_as_of"] == "2026-10-27T10:55:00"   # 6 min at capture
+    # a copy stamped after the viewer's clock (box behind the VM) never moves the reference forward
+    a = u(now=datetime(2026, 10, 27, 10, 55), captured_at=datetime(2026, 10, 27, 11, 30))
+    assert a["mark_stale_as_of"] == "2026-10-27T10:55:00"
+    conn.close()
+    assert dash._captured_at(tmp_path / "absent.db") is None           # unknown -> the viewer's clock
+
+
+@pytest.fixture
+def utc_process(monkeypatch):
+    """The box (and the VM) may run in UTC; the engine stamps naive IST."""
+    import time
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_a_copys_mtime_is_read_in_ist_whatever_the_box_timezone(tmp_path, utc_process):
+    p = _as_captured(_live_db(tmp_path, []), datetime(2026, 10, 27, 10, 15, 2))
+    assert dash._captured_at(p) == datetime(2026, 10, 27, 10, 15, 2)
 
 
 # ------------------------------------------------------------- F21: the expiry backstop's waits and errors

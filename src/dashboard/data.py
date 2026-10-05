@@ -158,14 +158,52 @@ def capital_events(conn) -> list:
     return out
 
 
-def unrealized_by_account(conn, snapshot: dict = None, rows: list = None) -> dict:
+MARKET_OPEN_HM, MARKET_CLOSE_HM = (9, 15), (15, 30)     # market_loop's session (not imported: execution path)
+
+
+def _session_reference(now: datetime) -> datetime:
+    """The moment a live mark should be current AS OF: `now` inside a
+    session; outside one, the close of the last session (an evening view of
+    a 15:29 mark is not stale; a mark that stopped at 11:00 is)."""
+    from src import nse_calendar
+    hm = (now.hour, now.minute)
+    if nse_calendar.is_trading_day(now) and MARKET_OPEN_HM <= hm <= MARKET_CLOSE_HM:
+        return now
+    day = now.date() if (nse_calendar.is_trading_day(now) and hm > MARKET_CLOSE_HM) \
+        else nse_calendar.previous_trading_day(now)
+    return datetime(day.year, day.month, day.day, *MARKET_CLOSE_HM)
+
+
+def _live_mark_stale(r, ref: datetime, max_age_s: float):
+    """True when the row's mark — or the chain quotes it was priced on, which
+    a failing chain door can leave hours old under a fresh mark time (audit
+    F19) — is older than `max_age_s` at `ref`; a row never marked ages from
+    its open. None when no time parses (unknown, never guessed)."""
+    stamps = []
+    for k in (("last_mark_ts", "quote_ts") if r["last_mark_ts"] else ("opened_at",)):
+        try:
+            stamps.append(datetime.fromisoformat(str(r[k])).replace(tzinfo=None))
+        except (TypeError, ValueError):
+            continue
+    if not stamps:
+        return None
+    return (ref - min(stamps)).total_seconds() > max_age_s
+
+
+def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: datetime = None) -> dict:
     """{account: {unrealized_pnl, marked_positions, open_positions}} from the
     ENGINE'S published marks (`market_snapshot.json` — the same marks the
     Discord card's ladder reads first). Never a fresh quote. The primary sums
     the marked open positions; a shadow account scales each mark by its own
     lots / the primary's lots (the #102 settlement ratio). A position with no
     mark is COUNTED but not priced — `unrealized_pnl` is None when nothing
-    is priced, never a guessed zero."""
+    is priced, never a guessed zero.
+
+    The live-quote arm (#120) prices itself, so its account also carries
+    `last_mark_ts` (its OLDEST open mark) and `mark_stale` (audit F02): True
+    when any open row's mark is older than 2 x LIVE_QUOTE_INTERVAL_SECONDS
+    of market time — the arm abstains or holds in silence for days while its
+    last mark keeps being added here as if it were current. None = unknown."""
     snap = _snapshot() if snapshot is None else snapshot
     marks = {m.get("short_id"): m for m in (snap or {}).get("marks") or [] if isinstance(m, dict)}
     rows = open_trades(snapshot_marks=marks) if rows is None else rows
@@ -188,17 +226,32 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None) -> dic
         a["marked_positions"] += 1
     # decision #120: the live-quote arm marks itself on crossed bid/ask —
     # its unrealized is last_profit_ps x qty from paper_live_positions.
-    live = _q(conn, "SELECT account_id, lots, lot_size, last_profit_ps, last_mark_ts FROM paper_live_positions "
-                    "WHERE state != 'closed'")
+    live = _q(conn, "SELECT account_id, lots, lot_size, last_profit_ps, last_mark_ts, quote_ts, opened_at "
+                    "FROM paper_live_positions WHERE state != 'closed'")
+    try:
+        from src.config import LIVE_QUOTE_INTERVAL_SECONDS
+        max_age_s = 2.0 * float(LIVE_QUOTE_INTERVAL_SECONDS)
+    except Exception:
+        max_age_s = None                # unknown interval -> staleness unknown, never guessed
+    ref = _session_reference((now or datetime.now(IST)).replace(tzinfo=None))
+    flags, oldest = {}, {}
     for r in (live if isinstance(live, list) else []):
         a = out.setdefault(r["account_id"], {"unrealized_pnl": None, "marked_positions": 0,
                                             "open_positions": 0})
         a["open_positions"] += 1
+        flags.setdefault(r["account_id"], []).append(
+            _live_mark_stale(r, ref, max_age_s) if max_age_s is not None else None)
+        if r["last_mark_ts"] and str(r["last_mark_ts"]) < oldest.get(r["account_id"], "~"):
+            oldest[r["account_id"]] = str(r["last_mark_ts"])
         if r["last_profit_ps"] is None:
             continue
         a["unrealized_pnl"] = round((a["unrealized_pnl"] or 0.0)
                                     + float(r["last_profit_ps"]) * int(r["lots"]) * int(r["lot_size"]), 2)
         a["marked_positions"] += 1
+    for acct in [k for k in out if k in LIVE_ACCOUNTS or k in flags]:
+        f = flags.get(acct, [])
+        out[acct]["last_mark_ts"] = oldest.get(acct)
+        out[acct]["mark_stale"] = True if True in f else (None if None in f else False)
     return out
 
 
@@ -304,7 +357,11 @@ def treasury(db_path=None) -> dict:
         except Exception:
             snap, u = {}, {}
         for acct in [k for k in out if k.startswith("PAPER_")]:
-            _with_mtm(out[acct], u.get(acct), snap.get("as_of"))
+            # the live-quote arm is NOT priced from the snapshot: its marks are
+            # as of its own oldest open mark (audit F02 — it used to borrow the
+            # snapshot's fresh timestamp for a mark that could be days old)
+            as_of = (u.get(acct) or {}).get("last_mark_ts") if acct in LIVE_ACCOUNTS else snap.get("as_of")
+            _with_mtm(out[acct], u.get(acct), as_of)
     finally:
         conn.close()
     return out

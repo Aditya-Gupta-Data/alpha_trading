@@ -39,6 +39,7 @@ Run the live loop from the project folder:
 """
 
 import asyncio
+import re
 from datetime import date, datetime, timedelta
 
 from src import journal
@@ -462,13 +463,133 @@ def intraday_square_off(sig: dict, entries=None, quotes_fn=_leg_quotes_for,
                 "reason": str(exc)}
 
 
+# ------------------------------- the live arm's tick, in the log (audit F02)
+
+LIVE_NOTE_REPEAT_SECONDS = 30 * 60
+# Exit outcomes that REPEAT on every 60-s tick while the condition lasts
+# (de-duplicated); every other exit outcome — settled, unfilled, a door
+# error — happens once and always prints.
+_REPEATING_EXIT_STATUSES = ("held_loss_beyond_max", "held_impossible_mark", "held_recent_attempt")
+
+
+def _reason_class(reason) -> str:
+    """A reason with its numbers blanked: 'quote 230 is >50% off last 60'
+    re-priced at 231 on the next chain is the same state, not a new one."""
+    return re.sub(r"\d+(?:[.,]\d+)*", "#", str(reason or ""))
+
+
+def _fmt(v, spec: str = "g") -> str:
+    try:
+        return format(float(v), spec)
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _exit_text(x: dict) -> str:
+    ref, sig, st = x.get("journal_ref"), x.get("signal"), x.get("status")
+    if st == "settled":
+        return (f"{ref} exit SETTLED ({sig}): {_fmt(x.get('capture_pct'), '.0f')}% capture, P&L "
+                f"Rs.{_fmt(x.get('pnl_net'), '+,.2f')} net ({x.get('basis')})")
+    if st == "held_loss_beyond_max":
+        return (f"{ref} {sig} exit HELD: a crossed exit would lose {_fmt(x.get('would_loss_ps'))}/share, "
+                f"beyond the structure's max loss {_fmt(x.get('max_loss_ps'))} — position kept")
+    if st == "held_impossible_mark":
+        return f"{ref} {sig} exit HELD: {x.get('reason')} — position kept"
+    if st == "held_recent_attempt":
+        return f"{ref} {sig} exit waits: the last attempt ({x.get('last')}) is inside the quote interval"
+    if st == "unfilled":
+        return f"{ref} {sig} exit NOT FILLED (ticket {x.get('ticket_id') or '-'}: {x.get('reason')}) — position kept"
+    if st == "exit_error":
+        return f"{ref} {sig} exit door ERROR ({x.get('reason')}) — row left 'exiting' for the next tick's resume"
+    return f"{ref} {sig} exit: {st}" + (f" ({x['reason']})" if x.get("reason") else "")
+
+
+class LiveTickLog:
+    """PAPER_2L_LIVE's tick summary, in the scheduler log (audit F02:
+    live_cycle used to throw it away, so an arm that abstained or held all
+    week and a healthy one both left nothing in master_scheduler.log).
+
+    A routine tick — every open row marked, nothing exited — prints
+    nothing. Otherwise ONE header line with the tick's counts, then one
+    line per row that needs a word, each naming its ref and reason.
+    One-off outcomes (an exit settled, unfilled or erroring, a resumed
+    crash, a repair) always print. REPEATING states — an abstention, a
+    hold, a predicate that could not be re-verified, a tick-level skip —
+    print once per (row, reason) per LIVE_NOTE_REPEAT_SECONDS on the cycle
+    clock, never a line per 60-s tick; when everything a tick has to say
+    is such a repeat, its header is suppressed too. Process memory only:
+    a restart prints each standing state once more (the safe direction)."""
+
+    def __init__(self, repeat_s: float = LIVE_NOTE_REPEAT_SECONDS):
+        self.repeat_s = float(repeat_s)
+        self._last: dict = {}
+
+    def _due(self, key: tuple, now: datetime) -> bool:
+        last = self._last.get(key)
+        if last is not None and (now - last).total_seconds() < self.repeat_s:
+            return False
+        self._last[key] = now
+        return True
+
+    def lines(self, summary, now: datetime) -> list:
+        """The lines to print for one tick summary (empty for a routine one)."""
+        if not isinstance(summary, dict):
+            return []
+        self._last = {k: t for k, t in self._last.items()          # bounded memory
+                      if (now - t).total_seconds() < self.repeat_s}
+        items = []                                                  # (dedup key | None, text)
+        for r in summary.get("resumes") or []:
+            items.append((None, f"{r.get('journal_ref')} crashed exit resumed: {r.get('status')}"))
+        for ref in summary.get("repaired") or []:
+            items.append((None, f"{ref} position row rebuilt from its filled entry ticket"))
+        for ref in summary.get("late_released") or []:
+            items.append((None, f"{ref} lock released late at the row's settled P&L"))
+        for x in summary.get("exits") or []:
+            st = x.get("status")
+            key = (x.get("account_id"), x.get("journal_ref"), "exit", st) \
+                if st in _REPEATING_EXIT_STATUSES else None
+            items.append((key, _exit_text(x)))
+        notes = summary.get("row_notes") or []
+        for n in notes:
+            kind, reason = n.get("kind"), n.get("reason")
+            window = (f" [forced-exit window, {n.get('days_left')}d to expiry]"
+                      if n.get("in_exit_window") else "")
+            last = f"; last mark {n.get('last_mark_ts') or 'never'}" if kind == "abstained" else ""
+            items.append(((n.get("account_id"), n.get("journal_ref"), kind, _reason_class(reason)),
+                          f"{n.get('journal_ref')} {kind}{window}: {reason}{last}"))
+        # a summary that counts more than it names still gets a (deduped) line
+        abst, unconf = int(summary.get("abstained") or 0), int(summary.get("unconfirmed") or 0)
+        if abst > sum(1 for n in notes if n.get("kind") == "abstained") \
+                or unconf > sum(1 for n in notes if n.get("kind") == "unconfirmed"):
+            items.append((("*", "*", "counts", abst, unconf),
+                          f"{abst} abstained / {unconf} unconfirmed (no per-row detail in the summary)"))
+        skipped = summary.get("skipped")
+        if skipped and skipped != "market closed":
+            items.append((("*", "*", "skipped", _reason_class(skipped)), f"tick skipped: {skipped}"))
+        kept = [text for key, text in items if key is None or self._due(key, now)]
+        if not kept:
+            return []
+        parts = [f"{int(summary.get('rows') or 0)} open", f"{int(summary.get('marked') or 0)} marked"]
+        parts += [f"{abst} abstained"] if abst else []
+        parts += [f"{unconf} unconfirmed"] if unconf else []
+        parts += [f"{len(summary['exits'])} exit outcome(s)"] if summary.get("exits") else []
+        parts += [f"{summary['resumed']} resumed"] if summary.get("resumed") else []
+        parts += ["skipped"] if skipped and skipped != "market closed" else []
+        return ([f"[Live Bridge] live account tick: {', '.join(parts)}."]
+                + [f"  (live account: {t})" for t in kept])
+
+
+_LIVE_TICK_LOG = LiveTickLog()      # live_cycle's default when no log is passed
+
+
 def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                aggregators: dict = None, registry: AlertRegistry = None,
                notify_fn=None, now_fn=ist_now,
                publish_snapshot: bool = False,
                candle_sink: "CandleSink" = None,
                flip_registry=None, closes_fn=None,
-               square_off_fn=None, live_account_fn=None) -> list:
+               square_off_fn=None, live_account_fn=None,
+               live_log: "LiveTickLog" = None) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
     push an advisory alert for each NEW exit signal. Returns the alerts
@@ -517,11 +638,19 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
     # quotes. None (offline callers, tests) is a byte-identical no-op; the
     # daemon passes execution.live_pricer.tick. Fail-open: a broken tick
     # can never touch this cycle's alerts or the primary's square-off.
+    # Audit F02: its summary is READ, not dropped — `live_log` prints the
+    # non-routine part of it (de-duplicated; a routine tick prints nothing).
     if live_account_fn is not None:
+        summary = None
         try:
-            live_account_fn(now)
+            summary = live_account_fn(now)
         except Exception as e:
             print(f"  (live account tick skipped: {e})")
+        try:
+            for line in (live_log or _LIVE_TICK_LOG).lines(summary, now):
+                print(line, flush=True)
+        except Exception as e:
+            print(f"  (live account tick summary not printed: {e})", flush=True)
 
     fired = []
     # decision #110: a directional spread that crossed a NEW ratchet rung
@@ -650,6 +779,7 @@ async def run_live_loop(underlyings=UNDERLYINGS,
         print("[Live Bridge] intraday profit-take square-off ARMED "
               "(crossed bid/ask chain quotes, decision #69 + ruling 2026-10-05).", flush=True)
     live_account_fn = None
+    live_log = LiveTickLog()     # audit F02: the arm's tick summary -> this log, de-duplicated
     try:
         from src import portfolio_manager as _pm
         if _pm.live_account_enabled():
@@ -671,7 +801,8 @@ async def run_live_loop(underlyings=UNDERLYINGS,
                 aggregators=aggregators, registry=registry,
                 notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True,
                 candle_sink=candle_sink, flip_registry=flip_registry,
-                square_off_fn=square_off_fn, live_account_fn=live_account_fn)
+                square_off_fn=square_off_fn, live_account_fn=live_account_fn,
+                live_log=live_log)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
                       f"({sig['capture_pct']:.0f}% capture){_square_off_note(sig)}.",

@@ -54,6 +54,17 @@ An exit that would cost more than the structure's max loss, or that is
 priced on an impossible mark, is refused (held) — expiry can never do
 worse.
 
+NOTHING QUIET IS SILENT (audit F02, 2026-10-05). The tick's summary names
+every row it did not mark or exit: `row_notes` carries each abstention
+and each cached-chain predicate it could not re-verify (`unconfirmed`)
+with the row, the reason (the leg is named) and days to expiry; `exits`
+carries each exit outcome, holds included. live_bridge.live_cycle prints
+it (de-duplicated). Two of those states also write ONE
+`paper_account_events` row per position per day, because they are the
+ones that silently cost the pre-expiry exit: a held exit
+(`live_exit_held`) and an abstention inside the forced-exit window
+(`live_mark_abstained`). No Discord card (the #102/#120 telemetry rule).
+
 EXIT EXECUTION: the row is stamped `exiting` FIRST, then ONE EXIT ticket
 for this account alone goes through plan_tracker._execute_paper_exit (the
 file's single OMS exit door), the venue fills at the crossed limits, P&L =
@@ -66,7 +77,9 @@ cancelled, position kept.
 EXPIRY BACKSTOP (`eod_sweep`, from plan_tracker.run_tracker): mirrors the
 primary's `_expiry_backstop` byte-for-byte — intrinsic at the last close
 on/before expiry, or after the grace window with no bars the defined max
-loss at zero frictions.
+loss at zero frictions. A row still waiting for bars is named with its
+reason in `reasons`, and run_tracker prints it and every per-row error
+(audit F21).
 
 Fail-open everywhere: a broken tick prints and returns; the live loop and
 the primary account are never touched.
@@ -91,6 +104,13 @@ EVENT_EXIT, EVENT_ENTRY_REFUSED, EVENT_UNFILLED = "live_exit", "live_entry_refus
 EVENT_LOCK_NO_POSITION = "live_lock_released_no_position"
 EVENT_LOCK_LATE = "live_lock_released_late"
 EVENT_UNRECORDED = "live_position_unrecorded"
+# Audit F02: the two quiet states that cost the pre-expiry / ratchet exit,
+# recorded at most once per position per IST day (`_log_once_a_day`).
+EVENT_EXIT_HELD, EVENT_MARK_ABSTAINED = "live_exit_held", "live_mark_abstained"
+# `_exit` statuses that refuse an exit on its PRICE (the row stays open);
+# held_recent_attempt is only the pause after an unfilled attempt, which
+# already wrote its own live_exit_unfilled event.
+HELD_ON_PRICE = ("held_loss_beyond_max", "held_impossible_mark")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_live_positions (
@@ -274,12 +294,15 @@ def crossed_open_price(leg: dict, q: dict) -> tuple:
 
 
 def crossed_mark(chain: dict, legs: list) -> dict:
-    """{ok, mark_ps, prices: {(strike, type): price}, reason}."""
+    """{ok, mark_ps, prices: {(strike, type): price}, reason}. An abstaining
+    reason names its leg ("SELL 24200CE: no ask ...") — a condor has two
+    short legs, and the log line must say which one (audit F02)."""
     prices, mark = {}, 0.0
     for leg in legs:
         price, why = crossed_close_price(leg, leg_quote(chain, leg))
         if price is None:
-            return {"ok": False, "mark_ps": None, "prices": {}, "reason": why}
+            label = f"{str(leg['side']).upper()} {float(leg['strike']):g}{str(leg['option_type']).upper()}"
+            return {"ok": False, "mark_ps": None, "prices": {}, "reason": f"{label}: {why}"}
         prices[(float(leg["strike"]), str(leg["option_type"]).upper())] = price
         mark += _sign(leg["side"]) * price
     return {"ok": True, "mark_ps": round(mark, 4), "prices": prices, "reason": None}
@@ -825,6 +848,67 @@ def _record_mark(conn, row: dict, ev: dict, quote_ts: str, now: datetime) -> Non
     conn.commit()
 
 
+# ------------------------------------------------------------- visibility (audit F02)
+
+def _exit_window(row: dict, today: date) -> tuple:
+    """(inside the forced-exit window?, days to expiry) — the predicate
+    evaluate's pre_expiry_exit uses (the tracker's own)."""
+    from src import plan_tracker as pt
+    days_left = (date.fromisoformat(row["expiry"]) - today).days
+    return days_left <= pt._forced_exit_days(row["ticker"]), days_left
+
+
+def _log_once_a_day(conn, row: dict, event_type: str, detail: str) -> bool:
+    """Write ONE `paper_account_events` row per (account, position,
+    event_type) per IST day — the day of the stamp pm.paper_log_event
+    writes, so the check and the record share one clock. A held or
+    abstaining row repeats on every 60-s tick; the ledger needs to know
+    that it happened and why, not 375 times a day. No Discord card
+    (#102/#120 telemetry rule). Fail-open: a failed write is printed and
+    the tick carries on — marks and exits never depend on their own
+    telemetry. Returns True when a row was written."""
+    from src import portfolio_manager as pm
+    try:
+        pm.ensure_accounts_schema(conn)
+        day = pm._now_iso()[:10]
+        if conn.execute("SELECT 1 FROM paper_account_events WHERE account_id = ? AND journal_ref = ? "
+                        "AND event_type = ? AND substr(ts, 1, 10) = ? LIMIT 1",
+                        (row["account_id"], row["journal_ref"], event_type, day)).fetchone():
+            return False
+        pm.paper_log_event(conn, row["account_id"], event_type, row["journal_ref"], detail)
+        return True
+    except Exception as exc:
+        print(f"  (live account: {event_type} event for {row.get('journal_ref')} skipped: {exc})")
+        return False
+
+
+def _note_abstained(conn, out: dict, row: dict, reason: str, today: date) -> None:
+    """Count AND name one abstention in the tick summary (audit F02: it
+    used to be a bare counter that live_cycle threw away). Inside the
+    forced-exit window it is also an event: evaluate cannot reach its
+    signal block without a mark, so that abstention is the one that
+    silently costs the pre-expiry exit and leaves the position to the
+    expiry backstop."""
+    out["abstained"] += 1
+    in_window, days_left = _exit_window(row, today)
+    out["row_notes"].append({"account_id": row["account_id"], "journal_ref": row["journal_ref"],
+                             "kind": "abstained", "reason": reason, "days_left": days_left,
+                             "in_exit_window": in_window, "last_mark_ts": row.get("last_mark_ts")})
+    if in_window:
+        _log_once_a_day(conn, row, EVENT_MARK_ABSTAINED,
+                        f"no usable mark inside the forced-exit window ({days_left}d to expiry "
+                        f"{row['expiry']}): {reason} — the pre-expiry exit cannot fire on this chain; "
+                        f"last mark {row.get('last_mark_ts') or 'never'}; the expiry backstop still covers it")
+
+
+def _held_detail(signal: str, res: dict) -> str:
+    if res.get("status") == "held_loss_beyond_max":
+        return (f"{signal} held: a crossed exit would lose {float(res['would_loss_ps']):g}/share, beyond "
+                f"the structure's max loss {float(res['max_loss_ps']):g} — position kept; the expiry "
+                "backstop can never do worse")
+    return f"{signal} held ({res.get('status')}): {res.get('reason')} — position kept"
+
+
 def _fetch(key: tuple, chain_fn, sleep_fn, now_epoch_fn) -> tuple | None:
     """One paced chain fetch; returns (iso, chain) or None."""
     _pace(sleep_fn, now_epoch_fn)
@@ -847,12 +931,15 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
     """One pass: resume half-done exits, refresh due chains (paced, capped,
     never after the cutoff), mark every open row, exit on a predicate
     (re-verified on a fresh chain when the mark came from the cache).
-    Never raises. Returns a summary."""
+    Never raises. Returns a summary: counts, `exits` (every exit outcome
+    with its row, holds included), `row_notes` (every abstention and every
+    unconfirmed cached predicate, with its row and reason — audit F02),
+    `resumes`, `repaired` / `late_released`, `skipped`."""
     from src.config import LIVE_QUOTE_INTERVAL_SECONDS
     now = now or _now()
     interval_s = LIVE_QUOTE_INTERVAL_SECONDS if interval_s is None else int(interval_s)
     out = {"ts": _iso(now), "rows": 0, "fetched": 0, "marked": 0, "abstained": 0, "exits": [],
-           "resumed": 0, "skipped": None}
+           "resumed": 0, "skipped": None, "row_notes": []}
     if require_market_open and not _market_open(now):
         out["skipped"] = "market closed"
         return out
@@ -877,8 +964,10 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
         out["rows"] = len(rows)
         for row in [r for r in rows if r["state"] == STATE_EXITING]:
             try:
-                _resume_exiting(conn, row, now)
+                res = _resume_exiting(conn, row, now)
                 out["resumed"] += 1
+                out.setdefault("resumes", []).append(
+                    {"account_id": row["account_id"], "journal_ref": row["journal_ref"], **res})
             except Exception as exc:
                 print(f"  (live account: resume {row['journal_ref']} failed: {exc})")
         rows = [r for r in open_rows(conn) if r["state"] == STATE_OPEN]
@@ -887,7 +976,7 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
         past_cutoff = (now.hour, now.minute) >= cutoff
         keys = sorted({(r["ticker"], r["expiry"]) for r in rows},
                       key=lambda k: _CHAIN_CACHE.get(k, (0.0,))[0])
-        fresh = set()
+        fresh, failed = set(), set()
         for key in keys:
             age = now_epoch_fn() - _CHAIN_CACHE.get(key, (0.0,))[0]
             if key in _CHAIN_CACHE and age < interval_s:
@@ -897,29 +986,35 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                 break
             if _fetch(key, chain_fn, sleep_fn, now_epoch_fn):
                 fresh.add(key)
+            else:
+                failed.add(key)
             out["fetched"] += 1
         for row in rows:
             try:
                 key = (row["ticker"], row["expiry"])
                 cached = _CHAIN_CACHE.get(key)
                 if not cached:
-                    out["abstained"] += 1
+                    _note_abstained(conn, out, row,
+                                    "no chain: the fetch failed this tick" if key in failed else
+                                    "no chain yet: past the fetch cutoff" if past_cutoff else
+                                    "no chain yet: the per-tick fetch cap or time budget was reached",
+                                    now.date())
                     continue
                 src = cached                 # which fetch this read is on (F01 rung confirmation)
                 _, quote_ts, chain = cached
                 ev = evaluate(row, chain, now.date())
                 if not ev["ok"]:
-                    out["abstained"] += 1
+                    _note_abstained(conn, out, row, ev["reason"], now.date())
                     continue
                 if ev["signal"] != "hold" and key not in fresh:
                     # A predicate that fired on a CACHED chain acts only on a
                     # FRESH one. Past the cutoff, over budget, or with the
                     # fetch failing, the mark is recorded and the signal is
                     # forced to hold — the next tick's fresh chain decides.
-                    got = None
+                    got, attempted = None, False
                     if not past_cutoff and out["fetched"] < max_fetches \
                             and now_epoch_fn() - start + CHAIN_PACE_SECONDS <= budget_s:
-                        got = _fetch(key, chain_fn, sleep_fn, now_epoch_fn)
+                        got, attempted = _fetch(key, chain_fn, sleep_fn, now_epoch_fn), True
                         out["fetched"] += 1
                     if got:
                         fresh.add(key)
@@ -927,10 +1022,19 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                         src = _CHAIN_CACHE.get(key)
                         ev2 = evaluate(row, chain, now.date())
                         if not ev2["ok"]:
-                            out["abstained"] += 1
+                            _note_abstained(conn, out, row, f"re-verify of {ev['signal']}: {ev2['reason']}",
+                                            now.date())
                             continue
                         ev = ev2
                     else:
+                        why = ("past the fetch cutoff" if past_cutoff else
+                               "the re-verify fetch failed" if attempted else
+                               "the per-tick fetch cap or time budget was reached")
+                        out["row_notes"].append(
+                            {"account_id": row["account_id"], "journal_ref": row["journal_ref"],
+                             "kind": "unconfirmed", "days_left": ev.get("days_left"),
+                             "reason": f"{ev['signal']} fired on a cached chain ({quote_ts}) and {why} "
+                                       "— held for the next tick's fresh chain"})
                         ev = dict(ev, signal="hold")
                         out["unconfirmed"] = out.get("unconfirmed", 0) + 1
                 # A new ratchet rung is persisted only on a second, later
@@ -944,7 +1048,12 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                     row = dict(row, ratchet_peak_pct=ev["peak"], ratchet_lock_pct=ev["lock"], quote_ts=quote_ts)
                     res = _exit(conn, row, ev["prices"], ev["signal"], now, venue_mod=venue_mod,
                                 interval_s=interval_s)
-                    out["exits"].append({"journal_ref": row["journal_ref"], "signal": ev["signal"], **res})
+                    out["exits"].append({"account_id": row["account_id"], "journal_ref": row["journal_ref"],
+                                         "signal": ev["signal"], **res})
+                    if res.get("status") in HELD_ON_PRICE:
+                        # Audit F02: a hold repeats every tick and wrote
+                        # nothing; the ledger now gets one row a day.
+                        _log_once_a_day(conn, row, EVENT_EXIT_HELD, _held_detail(ev["signal"], res))
             except Exception as exc:
                 print(f"  (live account: {row.get('journal_ref')} tick failed: {exc})")
         open_keys = {(r["account_id"], r["journal_ref"]) for r in rows}
@@ -986,11 +1095,14 @@ def eod_sweep(conn, today: date = None, bars_fn=None, now: datetime = None) -> d
     """Settle open rows whose expiry has passed, exactly like the primary's
     `_expiry_backstop`: intrinsic at the last close on/before expiry, or —
     past the grace window with no bars — the defined max loss at zero
-    frictions. Never raises."""
+    frictions. Never raises. `errors` holds "<ref>: <exception>" (the row
+    stays open with its lock; the next run retries), `waiting` the refs
+    still inside the grace window, `reasons` {ref: why it waits} — the
+    caller prints both (audit F21)."""
     from src import plan_tracker as pt
     today = today or _now().date()
     now = now or _now()
-    out = {"settled": [], "waiting": [], "errors": []}
+    out = {"settled": [], "waiting": [], "errors": [], "reasons": {}}
     try:
         rows = [r for r in open_rows(conn) if r["state"] == STATE_OPEN and r["expiry"] < today.isoformat()]
     except Exception as exc:
@@ -1006,6 +1118,11 @@ def eod_sweep(conn, today: date = None, bars_fn=None, now: datetime = None) -> d
             res = pt._expiry_backstop(_entry_like(row), bars or [], today)
             if res is None:
                 out["waiting"].append(row["journal_ref"])
+                days = (today - date.fromisoformat(row["expiry"])).days
+                out["reasons"][row["journal_ref"]] = (
+                    f"{row['ticker']} expired {row['expiry']} and no daily close on or before expiry has "
+                    f"arrived yet (day {days} of the {pt.EXPIRY_BACKSTOP_GRACE_DAYS}-day grace window; after "
+                    "it the defined max loss settles at zero frictions)")
                 continue
             resolution, exit_mark_ps, _frac, _day, close, basis, _close_day = res
             if basis == "no_price_data_max_loss":

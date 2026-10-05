@@ -1875,6 +1875,16 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         swept = live_pricer.eod_sweep_standalone(today=_today())
         if swept.get("settled"):
             print(f"Plan tracker: live account settled {len(swept['settled'])} expired position(s).")
+        # Audit F21: a failed settlement (the row stays open with its lock,
+        # retried every hourly run) and a row waiting for bars used to live
+        # only in this return value — one line each now, like the primary's
+        # "no price data ... will retry next run".
+        for err in swept.get("errors") or []:
+            print(f"Plan tracker: live account expiry settlement FAILED — {err}; the row stays open "
+                  "with its lock and is retried next run.")
+        for ref in swept.get("waiting") or []:
+            why = (swept.get("reasons") or {}).get(ref) or "no daily close on or before expiry yet"
+            print(f"Plan tracker: live account {ref} is waiting for bars — {why}; will retry next run.")
     except Exception as e:
         print(f"Plan tracker: live account sweep skipped ({e}).")
     # Audit Chunk 1 (decision #122): the lock housekeeping runs before the

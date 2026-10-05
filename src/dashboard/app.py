@@ -115,7 +115,16 @@ def _body():
               c5.metric("Margin locked", rs(a["locked_margin"]), f"{a['open_locks']} open lock(s)")
               c6.metric("Liquid cash", rs(a["available_cash"]),
                         (f"{a['rejections']} refusal(s)" if a.get("rejections") is not None else None))
-              if a.get("marks_as_of"):
+              if acct in d.LIVE_ACCOUNTS:
+                  # audit F02: this arm prices itself; its mark can sit unchanged
+                  # for days while it abstains or holds — say how old it is
+                  if a.get("marks_as_of"):
+                      st.caption(f"Marks: this arm's own crossed bid/ask marks, oldest as of {a['marks_as_of']}.")
+                  if a.get("mark_stale"):
+                      st.warning("Stale mark — an open position has not been re-marked on a fresh chain "
+                                 "recently (the arm is abstaining, holding or not ticking). The unrealized "
+                                 "figure is that older mark, not a current price.")
+              elif a.get("marks_as_of"):
                   st.caption(f"Marks: the engine's snapshot as of {a['marks_as_of']} — never a fresh quote.")
           curve = T.get("equity_curve") or []
           if curve:

@@ -190,6 +190,98 @@ def test_2l_rejects_while_2l_rot_evicts_the_weak_trade_and_funds_the_strong_one(
     assert old1["outcome"] is None                                    # the trade itself is still open
 
 
+def _serve_book(monkeypatch, nodes: dict, calls: list = None):
+    """Fake ONLY the Dhan chain call, so the eviction runs the REAL quote door
+    (live_bridge._leg_quotes_for). nodes: {(strike, 'CE'): (bid, ask, last)}."""
+    from src import dhan_client
+    oc = {}
+    for (strike, kind), (bid, ask, ltp) in nodes.items():
+        oc.setdefault(f"{float(strike):.6f}", {})[kind.lower()] = {
+            "top_bid_price": bid, "top_ask_price": ask, "last_price": ltp}
+
+    def fake(ticker, expiry):
+        if calls is not None:
+            calls.append((ticker, expiry))
+        return {"last_price": 24300.0, "oc": oc}
+    monkeypatch.setattr(dhan_client, "get_option_chain", fake)
+
+
+def test_an_eviction_through_the_real_door_uses_crossed_quotes(world, monkeypatch):
+    """Architect ruling 1 (2026-10-05): the eviction closes the slice on
+    CROSSED quotes — the long 24000 CE sold at its bid, the short 24200 CE
+    bought back at its ask, never the last traded 250 / 60. rr_left is
+    re-verified on that realizable value, the EXIT ticket's limits are the
+    crossed prices, and no exit-side ladder is charged on top of them."""
+    conn, j = world
+    calls = []
+    _serve_book(monkeypatch, {(24000.0, "CE"): (248.0, 252.0, 250.0),
+                              (24200.0, "CE"): (58.0, 62.0, 60.0)}, calls)
+    res = pt.evict_for_rotation(conn, ROT, "old1", 1, max_rr_left=5.0, entries=j.rows)   # default door
+    assert calls == [("NIFTY 50", "2026-10-28")]
+    assert res["status"] == "evicted", res
+    assert res["exit_price_basis"] == "crossed"
+    # crossed: 248 - 62 = 186 vs the 70 debit -> +116/share (last prices said +120)
+    assert res["rr_left"] == pytest.approx((130 - 116) / (70 + 116), abs=1e-4)
+    limits = {(r[0], r[1]): r[2] for r in conn.execute(
+        "SELECT strike, side, limit_price FROM trade_legs")}
+    assert limits == {(24000.0, "SELL"): 248.0, (24200.0, "BUY"): 62.0}
+    crossed = {(24000.0, "CE"): 248.0, (24200.0, "CE"): 62.0}
+    frictions, entry_side = pt._spread_exit_costs_quoted(_spread(), crossed, exit_crossed=True)
+    _, with_exit_ladder = pt._spread_exit_costs_quoted(_spread(), crossed)
+    assert with_exit_ladder > entry_side                               # the ladder the ruling drops
+    venue_slip = (248.0 * 0.001 + 62.0 * 0.001) * 65
+    pnl = conn.execute("SELECT pnl_net FROM paper_margin_locks WHERE account_id = ? AND "
+                       "journal_ref = 'old1'", (ROT,)).fetchone()[0]
+    assert pnl == pytest.approx(round(116 * 65 - frictions - entry_side - venue_slip, 2), abs=0.02)
+    assert j.rows[0]["accounts"][ROT]["exit_price_basis"] == "crossed"
+
+
+def test_an_eviction_is_refused_when_the_door_cannot_cross_a_leg(world, monkeypatch, capsys):
+    """The long leg has no bid: the door refuses the whole quote set, so
+    nothing is evicted and no ticket is issued."""
+    conn, j = world
+    _serve_book(monkeypatch, {(24000.0, "CE"): (0, 252.0, 250.0),
+                              (24200.0, "CE"): (58.0, 62.0, 60.0)})
+    res = pt.evict_for_rotation(conn, ROT, "old1", 1, max_rr_left=5.0, entries=j.rows)
+    assert res["status"] == "no_chain_quotes"
+    assert "refused on 24000CE: no bid to sell the long leg" in capsys.readouterr().out
+    assert pm._active_shadow_lock(conn, ROT, "old1") is not None
+    assert conn.execute("SELECT COUNT(*) FROM trade_tickets").fetchone()[0] == 0
+
+
+def test_a_non_venue_eviction_books_no_exit_ladder_on_crossed_quotes(world, monkeypatch):
+    """Without the paper venue the crossing is the whole exit cost: the
+    booked slippage is the entry-side ladder alone."""
+    conn, j = world
+    monkeypatch.setattr("src.config.PAPER_VENUE_ENABLED", False)
+    crossed = {(24000.0, "CE"): 248.0, (24200.0, "CE"): 62.0}
+    res = pt.evict_for_rotation(conn, ROT, "old1", 1, max_rr_left=5.0,
+                                quotes_fn=lambda e: crossed, entries=j.rows)
+    assert res["status"] == "evicted" and res["execution_mode"] == "model"
+    frictions, entry_side = pt._spread_exit_costs_quoted(_spread(), crossed, exit_crossed=True)
+    assert res["slippage_rs"] == pytest.approx(entry_side, abs=0.01)
+    assert res["pnl_rs"] == pytest.approx(round(116 * 65 - frictions - entry_side, 2), abs=0.02)
+
+
+def test_the_funding_estimate_does_not_charge_the_exit_ladder_on_crossed_quotes(world, monkeypatch):
+    """The estimate bounds what the settle books: on crossed quotes that is
+    the entry-side ladder + the venue's tier slip (+ a tick per leg) — the
+    exit-side ladder, which neither path books any more, is not added."""
+    conn, j = world
+    monkeypatch.setattr(pv, "_tier_frac", lambda u, slippage_fn=None: 0.0)   # venue slip = ticks only
+    quotes = QUOTES["old1"]
+    mine = dict(_spread(), lots=1)
+    f, entry_side = pt._spread_exit_costs_quoted(mine, quotes, exit_crossed=True)
+    _, with_exit_ladder = pt._spread_exit_costs_quoted(mine, quotes)
+    ticks = 0.05 * 2 * 65
+    assert with_exit_ladder > entry_side + ticks                      # the case that matters
+    profit = 120.0 * 65
+    freed = pm.paper_available_cash(conn, ROT) + 100000.0 + profit - f - entry_side - ticks
+    ok = pt.evict_for_rotation(conn, ROT, "old1", 1, max_rr_left=5.0, quotes_fn=lambda e: quotes,
+                               entries=j.rows, need_rs=freed - 0.01)
+    assert ok["status"] == "evicted", ok
+
+
 def test_a_weak_trade_that_is_strong_on_real_quotes_is_not_evicted(world, monkeypatch):
     conn, j = world
     # the model calls old2 weak; the chain says it is flat (rr_left 1.857 > 1.857/1.5)

@@ -10,16 +10,30 @@ eviction (#115) could execute. Every test stubbed the door, so nothing
 noticed. These tests drive the REAL door (only the Dhan call is faked) and
 add a codebase-wide guard against an import of a name that does not exist.
 Hermetic: no network, tmp journal/portfolio/brain map.
+
+ARCHITECT RULING 1 (2026-10-05): every intraday exit crosses the spread — a
+long leg is sold at the BID, a short leg bought back at the ASK, never the
+last traded price. The door refuses (None, reason printed) a leg it cannot
+cross: no bid on a long, no ask on a short, a crossed book, or a quote more
+than 50% off a live last price. The tests below were changed from the
+Issue-44 last-traded expectations where the ruling changes them.
 """
 import ast
 import json
 from datetime import date, datetime
 from pathlib import Path
 
+import pytest
+
 from src import dhan_client, journal, live_bridge as lb, plan_tracker as pt
 from src import portfolio as pf
 
 ROOT = Path(__file__).resolve().parents[1]
+# tests/test_options_spreads.py and tests/test_expiry_backstop.py assign stubs
+# straight onto plan_tracker (cash settlement, brain connect) and never put
+# them back; captured here at collection time, before any test runs
+_REAL_SETTLE_CASH = pt._settle_spread_cash
+_REAL_BRAIN_CONNECT = pt._brain_connect
 
 
 def _chain(ltps: dict, key_fmt="{:.6f}") -> dict:
@@ -28,6 +42,15 @@ def _chain(ltps: dict, key_fmt="{:.6f}") -> dict:
     for (strike, kind), ltp in ltps.items():
         oc.setdefault(key_fmt.format(float(strike)), {})[kind.lower()] = {
             "last_price": ltp, "top_bid_price": ltp - 1 if ltp else 0, "top_ask_price": ltp + 1 if ltp else 0}
+    return {"last_price": 23000.0, "oc": oc}
+
+
+def _book(nodes: dict) -> dict:
+    """{(strike, 'CE'|'PE'): (bid, ask, last)} -> a Dhan-shaped chain."""
+    oc = {}
+    for (strike, kind), (bid, ask, ltp) in nodes.items():
+        oc.setdefault(f"{float(strike):.6f}", {})[kind.lower()] = {
+            "top_bid_price": bid, "top_ask_price": ask, "last_price": ltp}
     return {"last_price": 23000.0, "oc": oc}
 
 
@@ -42,7 +65,10 @@ def _entry(short_id="sq000001"):
                                 {"side": "SELL", "option_type": "PE", "strike": 23500.0, "premium": 70.0}]}}
 
 
-WIN = {(24000.0, "PE"): 500.0, (23500.0, "PE"): 120.0}       # 300/share profit = 71% of max -> above 65%
+WIN = {(24000.0, "PE"): 500.0, (23500.0, "PE"): 120.0}       # last prices; _chain quotes bid/ask at +-1
+# crossed: the long 24000 PE sold at its bid 499, the short 23500 PE bought
+# back at its ask 121 -> exit mark 378, profit 298/share = 71% of max -> above 65%
+WIN_CROSSED = {(24000.0, "PE"): 499.0, (23500.0, "PE"): 121.0}
 
 
 def _sandbox(tmp_path, monkeypatch, entries):
@@ -56,6 +82,8 @@ def _sandbox(tmp_path, monkeypatch, entries):
     monkeypatch.setattr(pf, "PORTFOLIO_PATH", tmp_path / "portfolio.json", raising=False)
     from src import brain_map
     monkeypatch.setattr(brain_map, "DEFAULT_DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(pt, "_settle_spread_cash", _REAL_SETTLE_CASH)
+    monkeypatch.setattr(pt, "_brain_connect", _REAL_BRAIN_CONNECT)
 
 
 def _serve(monkeypatch, chain, calls=None):
@@ -66,19 +94,49 @@ def _serve(monkeypatch, chain, calls=None):
     monkeypatch.setattr(dhan_client, "get_option_chain", fake)
 
 
-def test_the_real_door_returns_last_traded_premiums(monkeypatch):
+def test_the_real_door_returns_crossed_prices_long_at_bid_short_at_ask(monkeypatch):
+    """Ruling 1 (changed from Issue 44's last-traded expectation): the long
+    leg is priced at the bid it can be sold at, the short at the ask it is
+    bought back at."""
     calls = []
     _serve(monkeypatch, _chain(WIN), calls)
-    assert lb._leg_quotes_for(_entry()) == WIN
+    assert lb._leg_quotes_for(_entry()) == WIN_CROSSED
     assert calls == [("NIFTY 50", "2026-07-21")]                 # the chain IS requested (it never was)
     _serve(monkeypatch, _chain(WIN, key_fmt="{}"))               # "24000.0" keys, not "24000.000000"
-    assert lb._leg_quotes_for(_entry()) == WIN
+    assert lb._leg_quotes_for(_entry()) == WIN_CROSSED
+    # an asymmetric book proves the side, not an average: bid for the long, ask for the short
+    _serve(monkeypatch, _book({(24000.0, "PE"): (480.0, 520.0, 500.0),
+                               (23500.0, "PE"): (110.0, 135.0, 120.0)}))
+    assert lb._leg_quotes_for(_entry()) == {(24000.0, "PE"): 480.0, (23500.0, "PE"): 135.0}
 
 
-def test_the_door_refuses_a_leg_without_a_price_and_names_why(monkeypatch, capsys):
-    _serve(monkeypatch, _chain({(24000.0, "PE"): 500.0, (23500.0, "PE"): 0}))
+@pytest.mark.parametrize("nodes, reason", [
+    # a long with no bid is REFUSED here, not priced at 0 as the live arm marks it
+    ({(24000.0, "PE"): (0, 501.0, 500.0), (23500.0, "PE"): (119.0, 121.0, 120.0)},
+     "refused on 24000PE: no bid to sell the long leg"),
+    ({(24000.0, "PE"): (499.0, 501.0, 500.0), (23500.0, "PE"): (119.0, 0, 120.0)},
+     "refused on 23500PE: no ask to buy the short leg back"),
+    ({(24000.0, "PE"): (505.0, 501.0, 500.0), (23500.0, "PE"): (119.0, 121.0, 120.0)},
+     "refused on 24000PE: crossed book (bid > ask)"),
+    ({(24000.0, "PE"): (499.0, 501.0, 500.0), (23500.0, "PE"): (119.0, 190.0, 120.0)},
+     "refused on 23500PE: quote 190 is >50% off last 120"),
+], ids=["long_no_bid", "short_no_ask", "crossed_book", "stale_quote"])
+def test_the_door_refuses_a_leg_it_cannot_cross_and_names_why(monkeypatch, capsys, nodes, reason):
+    _serve(monkeypatch, _book(nodes))
     assert lb._leg_quotes_for(_entry()) is None
-    assert "no last price for 23500PE" in capsys.readouterr().out
+    assert f"(square-off quotes for sq000001: {reason})" in capsys.readouterr().out
+
+
+def test_a_long_with_no_bid_is_refused_where_the_live_arm_would_mark_it_at_zero():
+    """The one deliberate difference from live_pricer.crossed_close_price."""
+    from src.execution import live_pricer
+    leg = {"side": "BUY", "option_type": "PE", "strike": 24000.0}
+    q = {"bid": None, "ask": 501.0, "ltp": 500.0}
+    assert live_pricer.crossed_close_price(leg, q) == (0.0, None)     # the live arm: marks at 0
+    assert lb._crossed_exit_price(leg, q) == (None, "no bid to sell the long leg")
+
+
+def test_the_door_refuses_without_a_chain_and_names_why(monkeypatch, capsys):
     _serve(monkeypatch, None)
     monkeypatch.setattr(dhan_client, "last_chain_error", lambda: "rate limit (DH-904: Too many requests)")
     assert lb._leg_quotes_for(_entry()) is None
@@ -91,8 +149,29 @@ def test_the_door_refuses_a_leg_without_a_price_and_names_why(monkeypatch, capsy
     assert "chain fetch failed: reset by peer" in capsys.readouterr().out
 
 
-def test_a_square_off_through_the_real_door_settles_on_real_quotes(tmp_path, monkeypatch):
+def _entry_side_ladder(spread: dict) -> float:
+    qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
+    return sum(pt.apply_slippage(l["premium"], "OPTION") * qty for l in spread["legs"])
+
+
+def _all_frictions(spread: dict, exit_prices: dict) -> float:
+    qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
+    f = 0.0
+    for l in spread["legs"]:
+        side = l["side"].upper()
+        f += pf.calculate_trade_frictions("OPTION", side, l["premium"], qty)
+        f += pf.calculate_trade_frictions("OPTION", "SELL" if side == "BUY" else "BUY",
+                                          exit_prices[(float(l["strike"]), l["option_type"])], qty)
+    return f
+
+
+def test_a_square_off_through_the_real_door_settles_on_crossed_prices(tmp_path, monkeypatch):
+    """The venue path (config.json arms the paper venue): the EXIT ticket's
+    limits ARE the crossed prices, the venue adds its tier slip on them as
+    it does on these accounts' crossed entry limits, and the exit-side
+    ladder is not charged on top."""
     monkeypatch.setattr("src.config.RATCHET_ENABLED", False)    # the 65% take is the trigger under test
+    monkeypatch.setattr("src.config.PAPER_VENUE_ENABLED", True)
     entries = [_entry()]
     _sandbox(tmp_path, monkeypatch, entries)
     _serve(monkeypatch, _chain(WIN))
@@ -101,6 +180,53 @@ def test_a_square_off_through_the_real_door_settles_on_real_quotes(tmp_path, mon
     assert out["status"] == "squared_off", out
     o = journal.read_all()[0]["outcome"]
     assert o["exit_basis"] == "intraday_chain" and o["resolution"] == "profit_take"
+    assert o["exit_price_basis"] == "crossed"
+    assert o["price"] == 378.0                                        # 499 - 121, not 500 - 120
+    ex = o["execution"]
+    assert ex["mode"] == "paper_venue" and ex["status"] == "FILLED"
+    assert {k: v["limit"] for k, v in ex["fills"].items()} == {"24000PE": 499.0, "23500PE": 121.0}
+    venue_rs = ex["venue_slippage_ps"] * 75
+    assert o["slippage_rs"] == pytest.approx(_entry_side_ladder(_entry()["spread"]) + venue_rs, abs=0.02)
+
+
+def test_a_non_venue_square_off_charges_no_exit_ladder_on_crossed_prices(tmp_path, monkeypatch):
+    """Ruling 1: the crossing IS the exit slippage (the #70 precedent) — with
+    no venue, the booked slippage is the entry-side ladder alone and the P&L
+    is the crossed gross less frictions and that ladder."""
+    monkeypatch.setattr("src.config.RATCHET_ENABLED", False)
+    monkeypatch.setattr("src.config.PAPER_VENUE_ENABLED", False)
+    entries = [_entry()]
+    _sandbox(tmp_path, monkeypatch, entries)
+    _serve(monkeypatch, _chain(WIN))
+    sig = {"short_id": "sq000001", "signal": "profit_take", "capture_pct": 72.0}
+    out = lb.intraday_square_off(sig, entries=journal.read_all(), today=date(2026, 7, 14))
+    assert out["status"] == "squared_off", out
+    o = journal.read_all()[0]["outcome"]
+    assert "execution" not in o and o["exit_price_basis"] == "crossed"
+    spread = _entry()["spread"]
+    ladder = _entry_side_ladder(spread)
+    frictions = _all_frictions(spread, WIN_CROSSED)
+    assert o["slippage_rs"] == pytest.approx(ladder, abs=0.01)
+    assert o["frictions_rs"] == pytest.approx(frictions, abs=0.01)
+    assert o["pnl_rs"] == pytest.approx(298.0 * 75 - frictions - ladder, abs=0.02)
+    book = json.loads((tmp_path / "portfolio.json").read_text())
+    assert book["cash"] == pytest.approx(100000.0 + o["pnl_rs"], abs=0.01)
+
+
+def test_the_real_capture_gate_is_judged_on_crossed_prices(tmp_path, monkeypatch, capsys):
+    """Last prices at 67% of max profit, crossed at 62%: the take is declined
+    on the crossed (realizable) value and the trade stays with the EOD path."""
+    monkeypatch.setattr("src.config.RATCHET_ENABLED", False)
+    entries = [_entry()]
+    _sandbox(tmp_path, monkeypatch, entries)
+    # last 470 / 110 -> 280/share = 66.7%; crossed 465 / 114 -> 271/share = 64.5% < 65%
+    _serve(monkeypatch, _book({(24000.0, "PE"): (465.0, 475.0, 470.0),
+                               (23500.0, "PE"): (106.0, 114.0, 110.0)}))
+    sig = {"short_id": "sq000001", "signal": "profit_take", "capture_pct": 70.0}
+    out = lb.intraday_square_off(sig, entries=journal.read_all(), today=date(2026, 7, 14))
+    assert out["status"] == "below_threshold_on_real_quotes"
+    assert out["real_capture_pct"] == pytest.approx(271 / 420 * 100, abs=0.01)
+    assert journal.read_all()[0].get("outcome") is None
 
 
 def test_the_bridge_logs_every_square_off_outcome():

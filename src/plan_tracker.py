@@ -475,11 +475,27 @@ def _settle_spread_cash(pnl_net: float) -> bool:
 
 # ------------------------------------------------- intraday square-off
 
+# Architect ruling 1 (2026-10-05): every intraday exit of PAPER_10L /
+# PAPER_2L / PAPER_2L_ROT is priced on CROSSED quotes (live_bridge.
+# _leg_quotes_for: long legs at the bid, short legs at the ask), never the
+# last traded price. Stamped on the outcome as `exit_price_basis`;
+# `exit_basis` keeps saying WHERE the price came from ("intraday_chain").
+INTRADAY_EXIT_PRICE_BASIS = "crossed"
+
+
 def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict,
-                              exit_slipped: bool = False) -> tuple:
+                              exit_slipped: bool = False,
+                              exit_crossed: bool = False) -> tuple:
     """(total_frictions, total_slippage) like _spread_exit_costs, but the
     exit side is priced on REAL quoted premiums instead of the linear
-    model — the intraday square-off's cost basis (decision #69)."""
+    model — the intraday square-off's cost basis (decision #69).
+
+    `exit_crossed` (ruling 1, 2026-10-05): the exit premiums ARE the
+    crossed bid/ask, so the crossing is the exit slippage and the ladder
+    is not charged on top — the exit-side twin of #70's entry guard
+    below. `exit_slipped` (#103): the venue filled the exit, its slip is
+    the caller's to add. Either one skips the exit-side ladder; the
+    entry-side ladder and every friction are charged as before."""
     qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
     frictions = slippage = 0.0
     for leg in spread["legs"]:
@@ -492,7 +508,7 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict,
         # #70: same double-charge guard as _spread_exit_costs.
         if leg.get("fill_basis") not in ("quoted", "venue", "live_crossed"):   # #70; "venue" = paper venue already slipped (#101); "live_crossed" = #120
             slippage += apply_slippage(leg["premium"], "OPTION") * qty
-        if not exit_slipped:                                   # #103: venue exit already slipped
+        if not (exit_slipped or exit_crossed):   # #103: venue exit already slipped; ruling 1: crossed IS the slip
             slippage += apply_slippage(exit_premium, "OPTION") * qty
     return frictions, slippage
 
@@ -600,8 +616,10 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
 #   rotation_marks     rr_left for each open trade, on the tracker's own
 #                      modeled mark at the live spot (the same arithmetic
 #                      as live_bridge.evaluate_position). No spot = no mark.
-#   evict_for_rotation closes ONE account's slice of one trade on REAL chain
-#                      quotes (re-verifying it is still weak enough), as an
+#   evict_for_rotation closes ONE account's slice of one trade on CROSSED
+#                      chain quotes (long legs at the bid, short legs at the
+#                      ask — ruling 1, 2026-10-05), re-verifying on them
+#                      that it is still weak enough, as an
 #                      OMS EXIT ticket for THAT account only; settles only
 #                      that account's lock. The primary and every other
 #                      account keep the trade, untouched.
@@ -674,7 +692,10 @@ def evict_for_rotation(conn, account: str, journal_ref: str, lots: int,
                        max_rr_left: float = None, reason: str = "",
                        quotes_fn=None, entries=None, venue_mod=None,
                        today: date = None, need_rs: float = None) -> dict:
-    """Close `account`'s `lots` of `journal_ref` NOW (decision #115).
+    """Close `account`'s `lots` of `journal_ref` NOW (decision #115), on
+    the CROSSED quotes of live_bridge._leg_quotes_for (ruling 1,
+    2026-10-05): rr_left is re-verified on the value the exit would
+    actually realize, and the crossing is the exit slippage.
     Returns {status, ...}: "evicted" (with pnl_rs, capture_pct, rr_left,
     ticket_id) or a named refusal that leaves the trade open everywhere —
     "not_rotation_account", "not_open", "no_chain_quotes",
@@ -722,8 +743,8 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
     """evict_for_rotation's body, run under the journal lock. `need_rs` (the
     new trade's one-lot, VIX-stressed margin): the eviction is refused as
     "would_not_fund" unless the account's liquid cash + this lock's margin +
-    the slice's P&L on these quotes (the conservative ladder exit costs)
-    covers it — a live trade is never closed for an entry it cannot fund."""
+    the slice's P&L on these quotes (net of a bound on the exit costs the
+    settle books) covers it — a live trade is never closed for an entry it cannot fund."""
     from src import portfolio_manager as pm
     spread = entry["spread"]
     try:
@@ -747,18 +768,21 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
     qty = lot * lots
     mine = dict(spread, lots=lots)
     if need_rs is not None:
-        est_f, est_s = _spread_exit_costs_quoted(mine, quotes, exit_slipped=False)
-        # the paper venue fills this exit at the underlying's liquidity-tier
-        # fraction, which can exceed the premium ladder: take the worse of
-        # the two (+ a tick of rounding per leg) so the estimate is a bound
+        # The estimate must BOUND what the settle below books. On crossed
+        # quotes (ruling 1, 2026-10-05) neither path books the exit-side
+        # ladder: without the venue the cost is the entry-side ladder
+        # alone; with it, the entry-side ladder + the venue's tier slip on
+        # the crossed limits. So the bound is entry-side ladder + the tier
+        # fraction of each limit (+ a tick of rounding per leg). Only when
+        # the tier cannot be read does the premium ladder stand in for it.
+        est_f, est_s = _spread_exit_costs_quoted(mine, quotes)
         try:
             from src.execution import paper_venue as _pv
             frac = _pv._tier_frac(entry.get("ticker") or "")
             venue_s = sum((float(quotes[(float(l["strike"]), l["option_type"].upper())]) * frac + 0.05)
                           for l in spread["legs"]) * qty
-            # the booked cost = entry-side ladder + the venue's exit slip
-            _, entry_s = _spread_exit_costs_quoted(mine, quotes, exit_slipped=True)
-            est_s = max(est_s, entry_s + venue_s)
+            _, entry_s = _spread_exit_costs_quoted(mine, quotes, exit_crossed=True)
+            est_s = entry_s + venue_s
         except Exception:
             pass
         est_pnl = profit_ps * qty - est_f - est_s
@@ -798,7 +822,9 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
             pass
         return dict(res, status="exit_not_filled", ticket_id=execution.get("ticket_id"))
     slipped = execution.get("venue_slippage_ps") is not None
-    frictions, slippage = _spread_exit_costs_quoted(mine, quotes, exit_slipped=slipped)
+    # ruling 1: the quotes are crossed — no exit-side ladder in either path
+    frictions, slippage = _spread_exit_costs_quoted(mine, quotes, exit_slipped=slipped,
+                                                    exit_crossed=True)
     if slipped:
         slippage += float(execution["venue_slippage_ps"]) * qty
     pnl_net = round(profit_ps * qty - frictions - slippage, 2)
@@ -808,7 +834,7 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
         return dict(res, status="not_open", reason=settled.get("reason"))
     stamp = {"status": "evicted", "evicted_on": today.isoformat(), "pnl_rs": pnl_net,
              "capture_pct": round(capture, 2), "exit_ticket_id": execution.get("ticket_id"),
-             "reason": reason}
+             "exit_price_basis": INTRADAY_EXIT_PRICE_BASIS, "reason": reason}
 
     def _mutate(e):
         acc = e.get("accounts")
@@ -824,7 +850,8 @@ def _evict_locked(conn, account, journal_ref, lots, max_rr_left, reason, quotes,
         print(f"  (rotation stamp skipped for {journal_ref}: {exc})")
     return dict(res, status="evicted", pnl_rs=pnl_net, capture_pct=round(capture, 2),
                 frictions_rs=round(frictions, 2), slippage_rs=round(slippage, 2),
-                ticket_id=execution.get("ticket_id"), execution_mode=execution.get("mode"))
+                ticket_id=execution.get("ticket_id"), execution_mode=execution.get("mode"),
+                exit_price_basis=INTRADAY_EXIT_PRICE_BASIS)
 
 
 def pr_floor2(x: float) -> float:
@@ -877,12 +904,19 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
     path uses do the arithmetic, and journal.update_entry makes the write
     race-safe against the hourly tracker sweep.
 
-    `leg_quotes` maps (strike, 'CE'/'PE') -> last traded premium for every
-    leg. The threshold is RE-VERIFIED on these real quotes: a modeled 70%
-    that is really 55% does NOT exit (model-vs-market divergence guard) —
-    the EOD path keeps owning it. Returns {"status", ...}; every non-
-    "squared_off" status leaves the trade untouched for the EOD path.
-    Never raises."""
+    `leg_quotes` maps (strike, 'CE'/'PE') -> the CROSSED close price for
+    every leg — a long leg at the bid, a short leg at the ask (Architect
+    ruling 1, 2026-10-05; the production door is live_bridge.
+    _leg_quotes_for, which refuses a leg it cannot cross). Never the last
+    traded price. The threshold is RE-VERIFIED on these crossed quotes,
+    i.e. on what the exit would actually realize: a modeled 70% that is
+    really 55% after crossing does NOT exit (model-vs-market divergence
+    guard) — the EOD path keeps owning it. The crossing IS the exit
+    slippage, so the exit-side ladder is not charged on top (the #70
+    precedent); the paper venue, when it fills the EXIT ticket, adds its
+    tier slip on the crossed limits exactly as it does on the crossed
+    ENTRY limits. Returns {"status", ...}; every non-"squared_off" status
+    leaves the trade untouched for the EOD path. Never raises."""
     today = today or date.today()
     result = {"status": "error", "short_id": short_id}
     try:
@@ -910,7 +944,7 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
             max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
             m_entry = _spread_entry_mark(spread)
             profit_ps = max(-max_loss_ps, min(m_exit - m_entry, max_profit_ps))
-            # The real-quote verification gate.
+            # The real-quote verification gate — on CROSSED prices (ruling 1).
             real_capture = (profit_ps / max_profit_ps * 100) if max_profit_ps else 0.0
             if resolution == "ratchet_hit":
                 # decision #110: the ratchet fired because the MODELED capture
@@ -929,10 +963,13 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
 
             m_exit = m_entry + profit_ps          # clamped basket exit mark
             gross_pnl = profit_ps * qty
+            # Ruling 1 (2026-10-05): the quotes are crossed, so no exit-side
+            # ladder on top of them (the entry side keeps #70's guard).
             frictions, slippage = _spread_exit_costs_quoted(
-                spread, leg_quotes)
+                spread, leg_quotes, exit_crossed=True)
             # Decision #103: the square-off is an EXIT ticket the paper
-            # venue fills at the REAL quotes (+ tier slippage).
+            # venue fills at the CROSSED quotes (+ tier slippage, as it
+            # fills these accounts' crossed entry tickets).
             execution = _execute_paper_exit(entry, leg_quotes, resolution, today=today)
             if execution.get("venue_slippage_ps") is not None:
                 frictions, slippage = _spread_exit_costs_quoted(
@@ -967,6 +1004,7 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
                 "slippage_rs": round(slippage, 2),
                 "exit_style": "atomic_basket",
                 "exit_basis": "intraday_chain",    # vs the EOD path's bars
+                "exit_price_basis": INTRADAY_EXIT_PRICE_BASIS,   # ruling 1: bid/ask crossed
                 "model_capture_pct": model_capture_pct,  # signal-vs-fill gap
                 **({"execution": execution,
                     "venue_slippage_rs": (round(float(execution["venue_slippage_ps"]) * qty, 2)
@@ -1014,7 +1052,7 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
                 "pnl_rs": result.get("pnl_rs"),
                 "note": (f"intraday square-off at "
                          f"{result.get('capture_pct', 0):.0f}% of max "
-                         "profit (real chain quotes, decision #69)"),
+                         "profit (crossed bid/ask chain quotes, decision #69)"),
             })
         except Exception:
             pass

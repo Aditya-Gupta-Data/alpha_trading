@@ -43,7 +43,7 @@ from datetime import date, datetime, timedelta
 
 from src import journal
 from src import plan_tracker as pt
-from src.execution.live_pricer import leg_quote
+from src.execution.live_pricer import crossed_close_price, leg_quote
 from src.market_loop import (MARKET_CLOSE, MARKET_OPEN,
                              is_market_open, ist_now)
 from src.simulator import analysis_from_closes
@@ -348,22 +348,53 @@ class AlertRegistry:
 
 # --------------------------------------------- intraday square-off (#69)
 
+def _is_long(leg: dict) -> bool:
+    return str(leg.get("side") or "").upper() == "BUY"
+
+
+def _crossed_exit_price(leg: dict, q: dict) -> tuple:
+    """(price, reason) to CLOSE one leg of a primary/2L/ROT position now —
+    `live_pricer.crossed_close_price` (long sold at the bid, short bought
+    back at the ask; refuses a crossed book and a quote > 50% off a live
+    last price) with ONE difference: a long leg with no bid is REFUSED,
+    not priced at 0. The live arm values an unsellable long at 0 because
+    it is measuring friction on its own book; these quotes SETTLE the
+    primary's trade (and gate the 65% take / the ratchet lock), so the
+    primary never exits on a made-up price (Architect ruling 1,
+    2026-10-05)."""
+    if _is_long(leg) and q.get("bid") is None:
+        return None, "no bid to sell the long leg"
+    price, why = crossed_close_price(leg, q)
+    if price is not None and price <= 0:              # defensive: leg_quote drops <= 0 sides
+        return None, "non-positive crossed price"
+    return price, why
+
+
 def _leg_quotes_for(entry: dict) -> dict | None:
-    """REAL last-traded premiums for every leg of one open spread, from
-    the live option chain: {(strike, 'CE'/'PE') -> premium}. None when the
-    chain is unreachable or ANY leg has no quote — the caller falls back
-    to the EOD path, never a modeled fill (decision #69).
+    """The CROSSED close price for every leg of one open spread, from the
+    live option chain: {(strike, 'CE'/'PE') -> price} — a long leg at the
+    BID it can be sold at, a short leg at the ASK it is bought back at,
+    never the last traded price (ARCHITECT RULING 1, 2026-10-05: every
+    intraday exit crosses the spread, as the entry already does under
+    #70 and PAPER_2L_LIVE under #120). None when the chain is unreachable
+    or ANY leg's crossed side is unusable — no bid on a long, no ask on a
+    short, a crossed book (bid > ask), or a quote > 50% off a live last
+    price (live_pricer.STALE_QUOTE_FRACTION). The caller then falls back
+    to the EOD path, never a modeled fill (decision #69). Every refusal is
+    printed with its reason. Consumers: the square-off (#69/#110), the
+    rotation eviction (#115) and its approval-time prefetch.
 
     LEDGER ISSUE 44 (2026-10-05): from 2026-07-15 to 2026-10-05 this door
     was DEAD. It imported `options_proposer._premium`, which decision #70
     removed the day after #69 shipped, inside a bare `except Exception:
     return None` — so every call returned None, every intraday square-off
     (#69, #110) declined as "no_chain_quotes" and no capital-rotation
-    eviction (#115) could ever execute. The last-traded price now comes
-    from `live_pricer.leg_quote` (the same tolerant strike-key match),
-    imported at MODULE level so a missing name fails loudly at import; the
-    try below covers only the network fetch and the leg lookup, and its
-    failure is printed with the door's reason (dhan_client.last_chain_error)."""
+    eviction (#115) could ever execute. The quotes now come from
+    `live_pricer.leg_quote` / `crossed_close_price` (the same tolerant
+    strike-key match and data-quality rules as the live arm), imported at
+    MODULE level so a missing name fails loudly at import; the try below
+    covers only the network fetch, and its failure is printed with the
+    door's reason (dhan_client.last_chain_error)."""
     from src import dhan_client
     ref = entry.get("short_id")
     try:
@@ -378,12 +409,12 @@ def _leg_quotes_for(entry: dict) -> dict | None:
         return None
     quotes = {}
     for leg in spread.get("legs") or []:
-        ltp = leg_quote(chain, leg).get("ltp")          # None when absent or <= 0
-        if ltp is None:
-            print(f"  (square-off quotes for {ref}: no last price for "
-                  f"{float(leg['strike']):g}{str(leg['option_type']).upper()})", flush=True)
+        price, why = _crossed_exit_price(leg, leg_quote(chain, leg))
+        if price is None:
+            print(f"  (square-off quotes for {ref}: refused on "
+                  f"{float(leg['strike']):g}{str(leg['option_type']).upper()}: {why})", flush=True)
             return None
-        quotes[(float(leg["strike"]), str(leg["option_type"]).upper())] = ltp
+        quotes[(float(leg["strike"]), str(leg["option_type"]).upper())] = price
     return quotes or None
 
 
@@ -405,10 +436,11 @@ def _square_off_note(sig: dict) -> str:
 
 def intraday_square_off(sig: dict, entries=None, quotes_fn=_leg_quotes_for,
                         today: date = None) -> dict:
-    """The production square-off seam: profit-take signal -> real chain
-    quotes -> plan_tracker.resolve_intraday_profit_take (the ONE
-    settlement path; decision #41's read-only rule is amended by #69 for
-    exactly this call). Approved trades only; every failure returns a
+    """The production square-off seam: profit-take signal -> CROSSED chain
+    quotes (`_leg_quotes_for`: long legs at the bid, short legs at the
+    ask — ruling 1, 2026-10-05) -> plan_tracker.resolve_intraday_profit_take
+    (the ONE settlement path; decision #41's read-only rule is amended by
+    #69 for exactly this call). Approved trades only; every failure returns a
     status and leaves the trade to the EOD path. Never raises."""
     try:
         entry = next((e for e in _open_spreads(entries)
@@ -616,7 +648,7 @@ async def run_live_loop(underlyings=UNDERLYINGS,
     if _cfg.get("intraday_profit_take", True):
         square_off_fn = intraday_square_off
         print("[Live Bridge] intraday profit-take square-off ARMED "
-              "(real chain quotes, decision #69).", flush=True)
+              "(crossed bid/ask chain quotes, decision #69 + ruling 2026-10-05).", flush=True)
     live_account_fn = None
     try:
         from src import portfolio_manager as _pm

@@ -42,6 +42,40 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-05 ~17:30 IST — Issue 44 FIXED in code (not deployed); PAPER_2L_LIVE sweep COMPLETED (24 confirmed findings)
+
+**State.**
+- `origin/main` is at `e97f3b0` plus docs. The VM is still at `5cadb5f`: nothing was deployed today, and the market was open during the work.
+- Suite: 2,543 passed.
+
+**Issue 44: the intraday square-off's real-quote door was dead from 2026-07-15 to 2026-10-05.** The refuter panel confirmed it 3 of 3, and it is fixed in `e97f3b0`.
+- `live_bridge._leg_quotes_for` had imported a deleted name inside a bare `except`.
+- So no intraday square-off (#69/#110) and no PAPER_2L_ROT eviction (#115) ever ran in production.
+- It was the only unresolvable import among all 844 `src` imports. A new test now guards every one.
+- **Deploying switches on two exit paths that have never run.** Before deploying:
+  1. Dry-run the open book on the VM after 15:30 (the Issue 31 rule).
+  2. Get the owner's answer: should #69 exits keep last-traded pricing, as restored, or cross the bid/ask like #70 and #120?
+- **Checked in a repro:** the revived square-off with PAPER_2L_LIVE open on the same trade settles the primary, 2L and ROT exactly once and leaves PAPER_2L_LIVE untouched.
+
+**Chunk 2 sweep: COMPLETE.** Read `docs/audit_chunk2_paper_2l_live_sweep.md`.
+- 24 confirmed: 1 high (Issue 44), 6 medium and 17 low.
+- The 6 medium findings:
+  - **F01:** an impossible quote latches the ratchet.
+  - **F02:** abstentions and holds are invisible.
+  - **F09:** the #68 gate is blind to a LIVE position that outlives its primary.
+  - **F17:** a stock option entered exactly 7 days before expiry is closed on the first tick.
+  - **F22:** the expiry backstop books the previous close.
+  - **F23:** a Monday expiry moved by a holiday leaves no pre-expiry session.
+- 1 refuted, 0 critical.
+- The proposed fix order is in the doc and needs owner sign-off.
+
+**Do first:**
+1. After 15:30 on a trading day, run the read-only open-book dry-run for `e97f3b0` on the VM, then deploy it.
+2. Owner rulings:
+   - #69 exit pricing (last-traded or crossed).
+   - F09 (is #68 per account or firm-wide?).
+3. Implement F01 → F02/F21 → F22/F23 → F17/F18 in that order, each with tests and the suite as the gate.
+
 ## 2026-10-04 ~19:45 IST — PAPER_2L_LIVE sweep resumed, then PAUSED at the usage guardrail (5-hour window 96%); no code changed
 
 - **Done:** 4 of 7 finder lenses (`illiquidity`, `mid_exit_failure`, `boundaries`, `lifecycle`). 17 raw findings, none verified by the panel yet.

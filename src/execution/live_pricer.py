@@ -39,13 +39,20 @@ the scheduler must still self-terminate at 15:30). Per leg: a SHORT leg
 with no ask, a bid above the ask, or a quote > 50% off its last price
 means NO mark this tick (abstain, keep the last mark); a LONG leg with no
 bid is worth 0 (it cannot be sold) and the structure still marks.
-profit = clamp(mark − d, −max_loss, +max_profit); capture = profit ÷
-max_profit. The account keeps its OWN profit-ratchet peak/lock (#110) on
-its own capture; neutral structures keep the static 65% take; the
-pre-expiry rule is the tracker's own predicate. There is NO stop (#105).
-A predicate that fires on a CACHED chain is re-verified on a fresh fetch
-before anything is issued. An exit that would cost more than the
-structure's max loss is refused (held) — expiry can never do worse.
+A crossed mark can only be at or BELOW true value, so a mark above the
+structure's upper bound (d + max_profit: the width for a debit, 0 for a
+credit) by more than a tick is a bad print — the tick abstains on it
+(audit F01). profit = clamp(mark − d, −max_loss, +max_profit); capture =
+profit ÷ max_profit. The account keeps its OWN profit-ratchet peak/lock
+(#110) on its own capture; a read that would raise the lock to a new rung
+is persisted only once a SECOND, later chain fetch also clears that rung
+(`_confirm_rung`, F01) — one snapshot can never arm a lock. Neutral
+structures keep the static 65% take; the pre-expiry rule is the tracker's
+own predicate. There is NO stop (#105). A predicate that fires on a
+CACHED chain is re-verified on a fresh fetch before anything is issued.
+An exit that would cost more than the structure's max loss, or that is
+priced on an impossible mark, is refused (held) — expiry can never do
+worse.
 
 EXIT EXECUTION: the row is stamped `exiting` FIRST, then ONE EXIT ticket
 for this account alone goes through plan_tracker._execute_paper_exit (the
@@ -127,11 +134,20 @@ CREATE TABLE IF NOT EXISTS paper_live_positions (
 # per-process chain cache: (ticker, expiry) -> (fetched_epoch, fetched_iso, chain)
 _CHAIN_CACHE: dict = {}
 _LAST_CHAIN_CALL = 0.0
+# per-process ratchet rungs awaiting confirmation (audit F01):
+# (account_id, journal_ref) -> {"src": the _CHAIN_CACHE entry the new rung
+# was first read on, "capture": that read's floored capture}. Memory only,
+# on purpose: a restart forgets a half-seen rung, so it must be seen twice
+# again — the safe direction (no lock = no ratchet exit; #105 has no stop).
+_PENDING_RUNG: dict = {}
 
 
 def reset_cache() -> None:
+    """Forget every per-process state — chain cache, pacing clock and the
+    unconfirmed ratchet rungs — exactly what a restart does."""
     global _LAST_CHAIN_CALL
     _CHAIN_CACHE.clear()
+    _PENDING_RUNG.clear()
     _LAST_CHAIN_CALL = 0.0
 
 
@@ -290,6 +306,26 @@ def _clamp(profit_ps: float, max_loss_ps: float, max_profit_ps: float) -> float:
 
 def _capture(profit_ps: float, max_profit_ps: float) -> float:
     return (profit_ps / max_profit_ps * 100.0) if max_profit_ps > 0 else 0.0
+
+
+def impossible_mark_reason(row: dict, mark_ps: float):
+    """The named reason a crossed CLOSE mark cannot be a real price, or None.
+
+    Crossing sells every long at its bid and buys every short back at its
+    ask, so a crossed mark is at or BELOW the structure's true value — and
+    true value never exceeds d + max_profit: the width for a debit
+    structure, 0 for a credit one (a short condor or butterfly never PAYS
+    you to close it). A mark above that bound by more than a tick is a bad
+    print (a stale bid on an untraded strike, a torn opening book), not a
+    100% capture. Audit F01: the clamp used to turn it into one, which
+    latched the ratchet at lock 70 from one snapshot, fired a condor's
+    profit take, and booked full max profit on a pre-expiry exit. The loss
+    side has no twin here: a crossed mark far BELOW value is a wide book,
+    not an impossible one, and `_exit` holds any exit beyond max loss."""
+    bound = float(row["entry_mark_ps"]) + float(row["max_profit_ps"])
+    if float(mark_ps) > bound + TICK_FLOOR + 1e-9:
+        return f"impossible mark {float(mark_ps):g} above the structure's upper bound {round(bound, 4):g}"
+    return None
 
 
 # ------------------------------------------------------------- entry
@@ -573,6 +609,12 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
     if would - d < -float(row["max_loss_ps"]) - 1e-9:
         return {"status": "held_loss_beyond_max", "journal_ref": row["journal_ref"],
                 "would_loss_ps": round(d - would, 4), "max_loss_ps": row["max_loss_ps"]}
+    # The profit-side twin (audit F01): evaluate already abstains on such a
+    # mark, but this is the door that books money, so it refuses on its own
+    # rather than let _settle clamp an impossible print into max profit.
+    impossible = impossible_mark_reason(row, would)
+    if impossible:
+        return {"status": "held_impossible_mark", "journal_ref": row["journal_ref"], "reason": impossible}
     last = row.get("last_exit_attempt_ts")
     if last:
         try:
@@ -689,21 +731,39 @@ def _repair_unrecorded(conn, account: str, now: datetime) -> list:
 # ------------------------------------------------------------- the tick
 
 def evaluate(row: dict, chain: dict, today: date) -> dict:
-    """Pure: {ok, reason, mark_ps, profit_ps, capture_pct, peak, lock, signal, prices}."""
+    """Pure: {ok, reason, mark_ps, profit_ps, capture_pct, peak, lock,
+    unconfirmed, signal, prices}. `peak`/`lock` are what the record may
+    keep from this read alone: a read that would raise the lock to a new
+    rung leaves them at the record's confirmed values and names the raise
+    in `unconfirmed` ({peak, lock, capture}) for tick's `_confirm_rung`
+    (audit F01). `signal` is judged against the CONFIRMED lock only."""
     from src import plan_tracker as pt, profit_ratchet as pr
     m = crossed_mark(chain, row["legs"])
     if not m["ok"]:
         return {"ok": False, "reason": m["reason"], "signal": None}
+    impossible = impossible_mark_reason(row, m["mark_ps"])
+    if impossible:
+        return {"ok": False, "reason": impossible, "signal": None}
     d, max_loss, max_profit = float(row["entry_mark_ps"]), float(row["max_loss_ps"]), float(row["max_profit_ps"])
     profit_ps = _clamp(m["mark_ps"] - d, max_loss, max_profit)
     capture = _capture(profit_ps, max_profit)
     peak, lock = row.get("ratchet_peak_pct"), row.get("ratchet_lock_pct")
     directional = pr.is_directional({"strategy": row.get("strategy"), "direction": row.get("direction")})
-    signal = "hold"
+    signal, unconfirmed = "hold", None
     if directional and max_profit > 0:
-        peak = capture if peak is None else max(float(peak), capture)
-        st = pr.state(peak, lock)
-        lock = st["locked_pct"]
+        confirmed_lock = pr.state(peak, lock)["locked_pct"]
+        new_peak = capture if peak is None else max(float(peak), capture)
+        new_lock = pr.state(new_peak, lock)["locked_pct"]
+        if new_lock is not None and (confirmed_lock is None or new_lock > confirmed_lock):
+            # A NEW RUNG from this one read (audit F01): the record keeps its
+            # confirmed peak/lock until a second, later fetch agrees. The
+            # lock only ever rises, so one bad print would otherwise be
+            # permanent — and the next ordinary mark below it is a forced
+            # exit #105 forbids on a trade that never really armed.
+            unconfirmed = {"peak": pr.floor2(new_peak), "lock": new_lock, "capture": pr.floor2(capture)}
+            lock = confirmed_lock
+        else:
+            peak, lock = new_peak, new_lock
         if pr.ratchet_hit(capture, lock):
             signal = "ratchet_hit"
     elif max_profit > 0 and profit_ps >= pt.OPTION_PROFIT_TAKE_FRACTION * max_profit:
@@ -713,7 +773,47 @@ def evaluate(row: dict, chain: dict, today: date) -> dict:
         signal = "pre_expiry_exit"
     return {"ok": True, "reason": None, "mark_ps": m["mark_ps"], "profit_ps": round(profit_ps, 4),
             "capture_pct": round(capture, 2), "peak": (pr.floor2(peak) if peak is not None else None),  # floored (#122)
-            "lock": lock, "signal": signal, "prices": m["prices"], "days_left": days_left}
+            "lock": lock, "unconfirmed": unconfirmed, "signal": signal, "prices": m["prices"],
+            "days_left": days_left}
+
+
+def _confirm_rung(row: dict, ev: dict, src) -> dict:
+    """Audit F01: a ratchet lock rises only when TWO independently fetched
+    chains both clear the new rung. `src` is the `_CHAIN_CACHE` entry `ev`
+    was read on — the cache only ever moves forward, so a different entry
+    is a later fetch, while the same entry re-read on the next 60-s tick is
+    the SAME snapshot and confirms nothing. The two reads agree on
+    min(first capture, this capture); the rung that clears is persisted
+    (it may be lower than the one first seen). Reads must be consecutive:
+    a usable read that implies no new rung forgets the earlier sighting.
+    An abstaining read (bad quote, no chain) never reaches here — it is no
+    evidence either way. Returns `ev`, promoted when confirmed; stamps
+    `rung` = 'pending' | 'confirmed' for the tick summary."""
+    from src import profit_ratchet as pr
+    key = (row["account_id"], row["journal_ref"])
+    seen = ev.get("unconfirmed")
+    if seen is None:
+        _PENDING_RUNG.pop(key, None)
+        return ev
+    first = _PENDING_RUNG.get(key)
+    if first is None or first["src"] is src:
+        _PENDING_RUNG.setdefault(key, {"src": src, "capture": seen["capture"]})
+        return dict(ev, rung="pending")
+    agreed = min(float(first["capture"]), float(seen["capture"]))
+    peak0, lock0 = row.get("ratchet_peak_pct"), row.get("ratchet_lock_pct")
+    peak = agreed if peak0 is None else max(float(peak0), agreed)
+    lock = pr.state(peak, lock0)["locked_pct"]
+    # Defensive: the two reads agree on no rung above the confirmed lock
+    # (the record moved under the first sighting) — start over from this one.
+    if lock is None or (ev["lock"] is not None and lock <= ev["lock"]):
+        _PENDING_RUNG[key] = {"src": src, "capture": seen["capture"]}
+        return dict(ev, rung="pending")
+    if seen["lock"] > lock:
+        # this read is higher still: it is the first sighting of THAT rung
+        _PENDING_RUNG[key] = {"src": src, "capture": seen["capture"]}
+    else:
+        _PENDING_RUNG.pop(key, None)
+    return dict(ev, peak=pr.floor2(peak), lock=lock, rung="confirmed")
 
 
 def _record_mark(conn, row: dict, ev: dict, quote_ts: str, now: datetime) -> None:
@@ -805,6 +905,7 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                 if not cached:
                     out["abstained"] += 1
                     continue
+                src = cached                 # which fetch this read is on (F01 rung confirmation)
                 _, quote_ts, chain = cached
                 ev = evaluate(row, chain, now.date())
                 if not ev["ok"]:
@@ -823,6 +924,7 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                     if got:
                         fresh.add(key)
                         quote_ts, chain = got
+                        src = _CHAIN_CACHE.get(key)
                         ev2 = evaluate(row, chain, now.date())
                         if not ev2["ok"]:
                             out["abstained"] += 1
@@ -831,6 +933,11 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                     else:
                         ev = dict(ev, signal="hold")
                         out["unconfirmed"] = out.get("unconfirmed", 0) + 1
+                # A new ratchet rung is persisted only on a second, later
+                # fetch (F01); the mark itself is recorded either way.
+                ev = _confirm_rung(row, ev, src)
+                if ev.get("rung"):
+                    out[f"rung_{ev['rung']}"] = out.get(f"rung_{ev['rung']}", 0) + 1
                 _record_mark(conn, row, ev, quote_ts, now)
                 out["marked"] += 1
                 if ev["signal"] != "hold":
@@ -840,6 +947,9 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                     out["exits"].append({"journal_ref": row["journal_ref"], "signal": ev["signal"], **res})
             except Exception as exc:
                 print(f"  (live account: {row.get('journal_ref')} tick failed: {exc})")
+        open_keys = {(r["account_id"], r["journal_ref"]) for r in rows}
+        for k in [k for k in _PENDING_RUNG if k not in open_keys]:
+            _PENDING_RUNG.pop(k, None)              # a closed position's sighting is moot
         return out
     except Exception as exc:
         print(f"  (live account tick skipped: {exc})")

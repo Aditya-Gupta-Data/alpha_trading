@@ -307,14 +307,21 @@ def test_ratchet_arms_on_live_capture_and_exits_only_this_account_at_bid_ask(wor
     up = _chain({(24000, "CE"): (140.0, 142.0, 141.0), (24200, "CE"): (12.0, 14.0, 13.0)})   # mark 126, +56 = 43% -> arms
     t = lp.tick(now=OPEN, conn=c, chain_fn=lambda tk, x: up, sleep_fn=lambda s: None,
                 now_epoch_fn=lambda: 1000.0, interval_s=300)
-    assert t["marked"] == 1 and t["exits"] == [] and t["fetched"] == 1
+    assert t["marked"] == 1 and t["exits"] == [] and t["fetched"] == 1 and t["rung_pending"] == 1
+    row = lp.open_rows(c, LIVE)[0]
+    # one snapshot never arms a rung (audit F01): the mark is recorded, the lock waits for a second fetch
+    assert row["ratchet_peak_pct"] is None and row["ratchet_lock_pct"] is None
+    assert row["last_mark_ps"] == 126.0 and row["quote_ts"] is not None
+    # a second, later fetch (one quote interval on) shows the same 43%: the breakeven lock arms
+    t = lp.tick(now=OPEN.replace(minute=5), conn=c, chain_fn=lambda tk, x: up, sleep_fn=lambda s: None,
+                now_epoch_fn=lambda: 1300.0, interval_s=300)
+    assert t["fetched"] == 1 and t["rung_confirmed"] == 1 and t["exits"] == []
     row = lp.open_rows(c, LIVE)[0]
     assert row["ratchet_peak_pct"] == pytest.approx(43.08, abs=0.01) and row["ratchet_lock_pct"] == 0.0
-    assert row["last_mark_ps"] == 126.0 and row["quote_ts"] is not None
     # give-back below the breakeven lock: capture -5% -> ratchet_hit -> exit at bid/ask, LIVE only
     down = _chain({(24000, "CE"): (90.0, 92.0, 91.0), (24200, "CE"): (24.0, 26.0, 25.0)})    # mark 64, -6
-    t = lp.tick(now=OPEN.replace(hour=11, minute=5), conn=c, chain_fn=lambda tk, x: down, sleep_fn=lambda s: None,
-                now_epoch_fn=lambda: 2000.0, interval_s=300)
+    t = lp.tick(now=OPEN.replace(hour=11, minute=10), conn=c, chain_fn=lambda tk, x: down, sleep_fn=lambda s: None,
+                now_epoch_fn=lambda: 1600.0, interval_s=300)
     assert len(t["exits"]) == 1 and t["exits"][0]["status"] == "settled" and t["exits"][0]["signal"] == "ratchet_hit"
     tix = c.execute("SELECT account_id, lots, note FROM trade_tickets WHERE note LIKE 'EXIT%'").fetchall()
     assert [tuple(r) for r in tix] == [(LIVE, 1, "EXIT ratchet_hit")]
@@ -328,7 +335,7 @@ def test_ratchet_arms_on_live_capture_and_exits_only_this_account_at_bid_ask(wor
     expected = round(-6.0 * qty - frictions, 2)
     closed = lp.positions(c)[0]
     assert closed["state"] == "closed" and closed["resolution"] == "ratchet_hit"
-    assert closed["closed_at"] == "2026-09-29T11:05:00" and closed["pnl_net"] == pytest.approx(expected, abs=0.02)
+    assert closed["closed_at"] == "2026-09-29T11:10:00" and closed["pnl_net"] == pytest.approx(expected, abs=0.02)
     assert closed["settlement_basis"] == "live_bid_ask" and closed["exit_mark_ps"] == 64.0
     # only LIVE's lock settled; 2L and the primary untouched
     assert pm._active_shadow_lock(c, LIVE, "lv0001") is None and pm._active_shadow_lock(c, TWO_L, "lv0001") is not None
@@ -336,14 +343,18 @@ def test_ratchet_arms_on_live_capture_and_exits_only_this_account_at_bid_ask(wor
     assert pm.paper_equity(c, LIVE) == pytest.approx(200000.0 + expected, abs=0.02)
     assert pm.paper_equity(c, TWO_L) == 200000.0
     detail = json.loads(c.execute("SELECT detail FROM paper_account_events WHERE event_type = 'live_exit'").fetchone()[0])
-    assert detail["resolution"] == "ratchet_hit" and detail["closed_at"] == "2026-09-29T11:05:00" and detail["lock_released"]
+    assert detail["resolution"] == "ratchet_hit" and detail["closed_at"] == "2026-09-29T11:10:00" and detail["lock_released"]
 
 
 def test_a_cached_predicate_is_reverified_on_a_fresh_chain_before_any_exit(world):
     c = world
     _open(c)
     up = _chain({(24000, "CE"): (140.0, 142.0, 141.0), (24200, "CE"): (12.0, 14.0, 13.0)})
-    lp.tick(now=OPEN, conn=c, chain_fn=lambda tk, x: up, sleep_fn=lambda s: None, now_epoch_fn=lambda: 1000.0)
+    # the breakeven lock arms only on a second, later fetch (audit F01)
+    for epoch in (500.0, 800.0):
+        lp.tick(now=OPEN, conn=c, chain_fn=lambda tk, x: up, sleep_fn=lambda s: None,
+                now_epoch_fn=lambda: epoch, interval_s=300)
+    assert lp.open_rows(c, LIVE)[0]["ratchet_lock_pct"] == 0.0
     # poison the cache with a give-back; the fresh fetch says "still fine"
     key = ("NIFTY 50", "2026-10-28")
     down = _chain({(24000, "CE"): (90.0, 92.0, 91.0), (24200, "CE"): (24.0, 26.0, 25.0)})
@@ -714,7 +725,11 @@ def test_the_confirm_path_exits_on_the_fresh_chain_and_a_zero_bid_long_settles_o
     c = world
     _open(c)
     up = _chain({(24000, "CE"): (140.0, 142.0, 141.0), (24200, "CE"): (12.0, 14.0, 13.0)})
-    lp.tick(now=OPEN, conn=c, chain_fn=lambda tk, x: up, sleep_fn=lambda s: None, now_epoch_fn=lambda: 1000.0)
+    # the breakeven lock arms only on a second, later fetch (audit F01)
+    for epoch in (500.0, 800.0):
+        lp.tick(now=OPEN, conn=c, chain_fn=lambda tk, x: up, sleep_fn=lambda s: None,
+                now_epoch_fn=lambda: epoch, interval_s=300)
+    assert lp.open_rows(c, LIVE)[0]["ratchet_lock_pct"] == 0.0
     key = ("NIFTY 50", "2026-10-28")
     stale_down = _chain({(24000, "CE"): (90.0, 92.0, 91.0), (24200, "CE"): (24.0, 26.0, 25.0)})
     fresh_down = _chain({(24000, "CE"): (88.0, 90.0, 89.0), (24200, "CE"): (25.0, 27.0, 26.0)})

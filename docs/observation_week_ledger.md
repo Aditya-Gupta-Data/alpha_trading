@@ -2274,3 +2274,27 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **Mac lake copy:** 330 `pricer_journal.jsonl` rows dated 09-14 were removed the same way. The archive is in the Mac's `data/purged_holiday_data/`.
 - **Kept on purpose (not NSE session prices):** `cross_asset` 09-14 (a real MCX bar with volume), `macro_daily` (a calendar-day snapshot), and `news_daily`, `events`, `earnings*`, `deals_*`.
 - **Not touched:** holiday-session rows in ledgers outside the lake (`data/proposal_ledger.jsonl`, `logs/exposure_blocks.jsonl`, `logs/sizing_adjustments.jsonl`, `logs/greeks_snapshots.jsonl`), and the append-only macro ledgers.
+
+## Issue 44 — the intraday square-off's real-quote door was DEAD from 2026-07-15 to 2026-10-05; no square-off (#69/#110) and no rotation eviction (#115) ever ran in production (found 2026-10-04 by the PAPER_2L_LIVE sweep; verified 3/3 by the refuter panel 2026-10-05; FIXED in code, NOT deployed)
+
+- **Cause (verified, three ways):**
+  - `live_bridge._leg_quotes_for` ran `from src.options_proposer import _premium` inside `try: … except Exception: return None`.
+  - Decision #70 (412e57e, 2026-07-15) deleted `_premium` one day after #69 shipped.
+  - A direct import raises `ImportError: cannot import name '_premium'`. A static scan of all 844 `src` imports found this as the only one naming something that does not exist.
+  - Every test stubbed the door, so the suite never called it.
+- **Effect (verified in code; amounts not measured):**
+  - Every `profit_take` / `ratchet_hit` square-off declined as `no_chain_quotes` (e.g. `24f931bb` on 10-01). The decline was written only into Discord text.
+  - All PAPER_10L / PAPER_2L / PAPER_2L_ROT exits were therefore booked on the EOD linear model.
+  - `evict_for_rotation` could never get quotes, so PAPER_2L_ROT never evicted and the #115 A/B arm has measured nothing since it went live.
+  - In the Mac's journal copy (10-02), 0 of 50 approved resolved spreads carry `exit_basis: intraday_chain`.
+  - PAPER_2L_LIVE is unaffected: it prices on its own chain door.
+- **Fix (branch `fix/square-off-quote-door`; suite 2,543 passed; 2 mutants killed):**
+  - Last-traded prices come from `live_pricer.leg_quote`, imported at module level.
+  - Only the network fetch is fail-open, and each refusal prints its reason.
+  - The bridge's log line now ends with the square-off outcome.
+  - New tests drive the real door and statically check every `src` import.
+- **NOT DEPLOYED — DEPLOYING SWITCHES ON TWO EXIT PATHS THAT HAVE NEVER RUN IN PRODUCTION.**
+  - Any open directional spread whose MODEL ratchet lock is armed will square off at last-traded prices the first time its model capture dips under the lock and real quotes confirm. `24f931bb`: the primary's lock is at 70 on a model peak of 100.
+  - PAPER_2L_ROT will start evicting at its margin wall.
+  - Before deploying: dry-run the resolver over the open book on the VM (the Issue 31 rule), after 15:30.
+  - **Owner question:** #69 exits price at LAST-TRADED, not crossed bid/ask (#70/#120 honesty). Restored as designed; changing it would be a decision.

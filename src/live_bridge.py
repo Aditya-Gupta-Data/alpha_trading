@@ -43,6 +43,7 @@ from datetime import date, datetime, timedelta
 
 from src import journal
 from src import plan_tracker as pt
+from src.execution.live_pricer import leg_quote
 from src.market_loop import (MARKET_CLOSE, MARKET_OPEN,
                              is_market_open, ist_now)
 from src.simulator import analysis_from_closes
@@ -351,23 +352,55 @@ def _leg_quotes_for(entry: dict) -> dict | None:
     """REAL last-traded premiums for every leg of one open spread, from
     the live option chain: {(strike, 'CE'/'PE') -> premium}. None when the
     chain is unreachable or ANY leg has no quote — the caller falls back
-    to the EOD path, never a modeled fill (decision #69)."""
+    to the EOD path, never a modeled fill (decision #69).
+
+    LEDGER ISSUE 44 (2026-10-05): from 2026-07-15 to 2026-10-05 this door
+    was DEAD. It imported `options_proposer._premium`, which decision #70
+    removed the day after #69 shipped, inside a bare `except Exception:
+    return None` — so every call returned None, every intraday square-off
+    (#69, #110) declined as "no_chain_quotes" and no capital-rotation
+    eviction (#115) could ever execute. The last-traded price now comes
+    from `live_pricer.leg_quote` (the same tolerant strike-key match),
+    imported at MODULE level so a missing name fails loudly at import; the
+    try below covers only the network fetch and the leg lookup, and its
+    failure is printed with the door's reason (dhan_client.last_chain_error)."""
+    from src import dhan_client
+    ref = entry.get("short_id")
     try:
-        from src.dhan_client import get_option_chain
-        from src.options_proposer import _premium
         spread = entry["spread"]
-        chain = get_option_chain(entry["ticker"], spread["expiry"])
-        if not chain:
-            return None
-        quotes = {}
-        for leg in spread["legs"]:
-            prem = _premium(chain, leg["strike"], leg["option_type"].lower())
-            if prem is None or prem <= 0:
-                return None
-            quotes[(float(leg["strike"]), leg["option_type"].upper())] = prem
-        return quotes
-    except Exception:
+        chain = dhan_client.get_option_chain(entry["ticker"], spread["expiry"])
+    except Exception as exc:
+        print(f"  (square-off quotes for {ref}: chain fetch failed: {exc})", flush=True)
         return None
+    if not chain:
+        why = dhan_client.last_chain_error() or "empty response"
+        print(f"  (square-off quotes for {ref}: option chain unavailable ({why}))", flush=True)
+        return None
+    quotes = {}
+    for leg in spread.get("legs") or []:
+        ltp = leg_quote(chain, leg).get("ltp")          # None when absent or <= 0
+        if ltp is None:
+            print(f"  (square-off quotes for {ref}: no last price for "
+                  f"{float(leg['strike']):g}{str(leg['option_type']).upper()})", flush=True)
+            return None
+        quotes[(float(leg["strike"]), str(leg["option_type"]).upper())] = ltp
+    return quotes or None
+
+
+def _square_off_note(sig: dict) -> str:
+    """The square-off outcome for the bridge's log line (ledger Issue 44):
+    empty when no square-off was attempted (advisory-only signals)."""
+    status = sig.get("square_off_status")
+    if sig.get("squared_off"):
+        return " — SQUARED OFF intraday on real quotes"
+    if not status:
+        return ""
+    extra = ""
+    if sig.get("square_off_real_capture_pct") is not None:
+        extra = f", {sig['square_off_real_capture_pct']:.0f}% on real quotes"
+    elif sig.get("square_off_reason"):
+        extra = f": {sig['square_off_reason']}"
+    return f" — intraday fill declined ({status}{extra}); the EOD path owns it"
 
 
 def intraday_square_off(sig: dict, entries=None, quotes_fn=_leg_quotes_for,
@@ -486,8 +519,16 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
         if square_off_fn is not None and sig["signal"] in ("profit_take", "ratchet_hit"):
             try:
                 squared = square_off_fn(sig)
-            except Exception:
-                squared = None
+            except Exception as exc:
+                squared = {"status": "error", "reason": str(exc)}
+            # Ledger Issue 44: the outcome reaches the LOG, not only Discord —
+            # the dead quote door hid for 81 days because a decline was
+            # written nowhere a sweep could read it.
+            sig["square_off_status"] = (squared or {}).get("status")
+            if (squared or {}).get("reason"):
+                sig["square_off_reason"] = squared["reason"]
+            if (squared or {}).get("real_capture_pct") is not None:
+                sig["square_off_real_capture_pct"] = squared["real_capture_pct"]
         if squared and squared.get("status") == "squared_off":
             sig["squared_off"] = True
             if notify_fn:
@@ -601,7 +642,8 @@ async def run_live_loop(underlyings=UNDERLYINGS,
                 square_off_fn=square_off_fn, live_account_fn=live_account_fn)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
-                      f"({sig['capture_pct']:.0f}% capture).", flush=True)
+                      f"({sig['capture_pct']:.0f}% capture){_square_off_note(sig)}.",
+                      flush=True)
         except Exception as e:
             print(f"[Live Bridge] cycle failed ({e}) — loop continues.",
                   flush=True)

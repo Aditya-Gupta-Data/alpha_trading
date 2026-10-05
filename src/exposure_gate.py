@@ -119,15 +119,20 @@ def _firm_holdings(conn=None) -> tuple:
     as empty. Any other failure (locked past the timeout, corrupt,
     unreadable) returns ([], reason): the caller fails OPEN on it, exactly
     as the gate does for an unreadable journal."""
-    from src.execution.live_pricer import STATE_CLOSED
     own = conn is None
     try:
+        # inside the try: a broken import fails open only the firm-wide
+        # view, never the primary journal's conflicts (Chunk 2 B review)
+        from src.execution.live_pricer import STATE_CLOSED
         if own:
             from src import brain_map
             path = Path(brain_map.DEFAULT_DB_PATH)
             if not path.exists():
                 return [], None
-            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            # the house busy timeout (#122), not sqlite's 5 s default: a
+            # read that gives up early would fail the firm view open
+            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True,
+                                   timeout=brain_map.BUSY_TIMEOUT_SECONDS)
         present = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name IN (?, ?)", _FIRM_TABLES)}

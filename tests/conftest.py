@@ -185,8 +185,11 @@ def _isolated_shared_runtime_files(monkeypatch, tmp_path):
     logs/discord_digest_queue.jsonl, so while the owner's queue held cards
     (the Mac 19:15 chain spools them every weekday) about a dozen tests
     either drained real cards into `.drained` unsent (before the guard) or
-    failed on the guard (after it). Each test gets its own."""
+    failed on the guard (after it). Each test gets its own. So does the
+    live arm's single-instance tick lock (audit F06): every `tick` takes
+    it on its real path, with no pytest branch to hide that path."""
     from src import adaptive_sizing, dhan_client, journal, notifier
+    from src.execution import live_pricer
     # The journal and its write lock (decision #122: every journal write
     # takes journal.lock beside the file) — a test that fakes read_all /
     # rewrite_all still takes the lock, so the lock must live in tmp too.
@@ -202,3 +205,5 @@ def _isolated_shared_runtime_files(monkeypatch, tmp_path):
                         tmp_path / ".dhan_throttle")
     monkeypatch.setattr(dhan_client, "_CHAIN_THROTTLE_FILE",
                         tmp_path / ".dhan_chain_throttle")
+    monkeypatch.setattr(live_pricer, "TICK_LOCK_FILE",
+                        tmp_path / ".live_pricer_tick.lock")

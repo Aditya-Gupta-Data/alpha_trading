@@ -90,7 +90,9 @@ it) → settle from those fills; nothing filled → reopen; SOME legs closed
 the next chain FETCHED on a tick closes ONLY the legs still open, at their
 remaining quantity (`_complete_exit`); settlement then prices every leg at
 its own volume-weighted fill across both tickets — no leg is closed twice
-and no fill is ignored. A host-wide, non-blocking flock
+and no fill is ignored — and books that legged result UNCLAMPED (the leg
+left open really can move past the structure's bounds; such a result is
+named `legged_beyond_bounds` on the exit event). A host-wide, non-blocking flock
 (`data/.live_pricer_tick.lock`) lets one process tick at a time; a second
 scheduler or a hand-run live_bridge skips its tick, named.
 
@@ -143,8 +145,9 @@ HELD_ON_PRICE = ("held_loss_beyond_max", "held_impossible_mark")
 # `exiting` until the rest is closed; one row per position per IST day.
 EVENT_EXIT_PARTIAL = "live_exit_partial"
 # Audit F06: one live-arm tick at a time on the host (beside the brain map,
-# like dhan_client's throttle files). Never opened under pytest unless a
-# test passes its own path (`tick(tick_lock=...)`).
+# like dhan_client's throttle files). tick reads this constant on every
+# call and has no test branch: the suite's conftest points it at a per-test
+# tmp file, exactly as it does dhan_client's throttle files (L1 review).
 TICK_LOCK_FILE = Path(__file__).resolve().parents[2] / "data" / ".live_pricer_tick.lock"
 
 _SCHEMA = """
@@ -533,13 +536,17 @@ def _frictions(row: dict, exit_prices: dict | None) -> float:
 
 
 def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, frictions: float,
-            now: datetime, ticket_id: str = None, detail: dict = None) -> dict:
+            now: datetime, ticket_id: str = None, detail: dict = None, clamp: bool = True) -> dict:
     """Close the row and settle ONLY this account's lock. Idempotent: an
-    already-closed row settles nothing."""
+    already-closed row settles nothing. `clamp=False` books the mark as it
+    is, beyond the structure's bounds — only a legged exit's actual fills
+    (`_settle_from_fills`); everything else is clamped to the bounds."""
     from src import portfolio_manager as pm
     qty = int(row["lots"]) * int(row["lot_size"])
     d = float(row["entry_mark_ps"])
-    profit_ps = _clamp(float(exit_mark_ps) - d, float(row["max_loss_ps"]), float(row["max_profit_ps"]))
+    profit_ps = float(exit_mark_ps) - d
+    if clamp:
+        profit_ps = _clamp(profit_ps, float(row["max_loss_ps"]), float(row["max_profit_ps"]))
     pnl = round(profit_ps * qty - float(frictions), 2)
     # Everything that may commit or write runs BEFORE the transaction opens
     # (audit Chunk 1 D4, decision #122): the schema check, and the halt
@@ -620,7 +627,8 @@ def _exit_fills(conn, row: dict) -> dict:
     position leg: `filled` (qty_filled summed over every ticket, whatever
     state the leg ended in — a cancelled remainder keeps its fills),
     `avg_fill` (volume-weighted), `remaining` (position qty − filled, never
-    below 0). `in_flight` = tickets with a leg still PENDING/PARTIAL (a
+    below 0), `by_ticket` ({ticket: (qty, avg)}, the fills each ticket
+    contributed). `in_flight` = tickets with a leg still PENDING/PARTIAL (a
     venue may yet fill it); `filled_tickets` = tickets with any fill,
     oldest first; `complete` = every leg closed; `filled_any` = some fill.
     Commits (oms.ensure_schema): call it outside a transaction."""
@@ -630,7 +638,7 @@ def _exit_fills(conn, row: dict) -> dict:
     tickets = [tuple(r) for r in conn.execute(
         "SELECT ticket_id, note FROM trade_tickets WHERE account_id = ? AND journal_ref = ? "
         "AND note LIKE 'EXIT %' ORDER BY rowid", (row["account_id"], row["journal_ref"])).fetchall()]
-    agg, in_flight, filled_tickets = {}, [], []
+    agg, per, in_flight, filled_tickets = {}, {}, [], []
     for tid, _note in tickets:
         got = False
         for strike, otype, state, q, avg in (tuple(r) for r in conn.execute(
@@ -643,6 +651,7 @@ def _exit_fills(conn, row: dict) -> dict:
                 key = (float(strike), str(otype or "").upper())
                 n, notional = agg.get(key, (0, 0.0))
                 agg[key] = (n + q, notional + q * float(avg))
+                per.setdefault(key, {})[tid] = (q, float(avg))
                 got = True
         if got:
             filled_tickets.append(tid)
@@ -651,7 +660,7 @@ def _exit_fills(conn, row: dict) -> dict:
         key = (float(l["strike"]), str(l["option_type"]).upper())
         n, notional = agg.get(key, (0, 0.0))
         legs.append({"leg": l, "key": key, "filled": n, "remaining": max(0, qty - n),
-                     "avg_fill": round(notional / n, 4) if n else None})
+                     "avg_fill": round(notional / n, 4) if n else None, "by_ticket": per.get(key, {})})
     note = str(tickets[0][1] or "") if tickets else ""
     return {"tickets": [t[0] for t in tickets], "in_flight": in_flight, "filled_tickets": filled_tickets,
             "legs": legs, "filled_any": any(x["filled"] for x in legs),
@@ -675,22 +684,50 @@ def _mark_from_ticket(view: dict) -> tuple:
     return round(mark, 4), prices
 
 
-def _settle_from_fills(conn, row: dict, ex: dict, now: datetime, detail: dict = None) -> dict:
+def _settle_from_fills(conn, row: dict, ex: dict, now: datetime, detail: dict = None,
+                       floored: dict = None) -> dict:
     """Settle on what the OMS says filled (audit F05): exit mark = Σ sign ×
     each leg's volume-weighted fill across EVERY exit ticket of the row,
     frictions on those prices — a basket closed over two tickets is booked
     once, on both tickets' real prices. The row's own predicate names it;
     a row stamped before `exit_resolution` existed falls back to the
-    ticket's note."""
-    prices = {x["key"]: x["avg_fill"] for x in ex["legs"]}
-    mark = round(sum(_sign(x["leg"]["side"]) * x["avg_fill"] for x in ex["legs"]), 4)
+    ticket's note.
+
+    `floored` = {leg key: (ticket, quote)} for the legs whose limit on
+    that ticket was floored up to TICK_FLOOR from a quote below it (a long
+    with no bid is worth 0). That ticket's fill AT the floor is booked at
+    the quote, as `_exit` books it (#120: the floor is the venue's
+    constraint, not a price); `fills` keeps what the venue recorded.
+
+    A LEGGED exit (fills on more than one ticket) is booked UNCLAMPED (L1
+    review, spec 3(b): P&L comes from the actual fills). Legging risk is
+    real: the leg left open moves while the other is already closed, so
+    the result can fall outside [−max loss, +max profit], and a clamp would
+    misstate it. Such a result is named `legged_beyond_bounds` on the
+    exit event. A single-ticket exit is clamped, as every other settlement."""
+    prices, fills = {}, {}
+    for x in ex["legs"]:
+        fills[x["key"]] = x["avg_fill"]
+        f_tid, quote = (floored or {}).get(x["key"], (None, None))
+        notional = sum(q * (float(quote) if t == f_tid and abs(avg - TICK_FLOOR) < 1e-9 else avg)
+                       for t, (q, avg) in x["by_ticket"].items())
+        prices[x["key"]] = round(notional / x["filled"], 4)
+    mark = round(sum(_sign(x["leg"]["side"]) * prices[x["key"]] for x in ex["legs"]), 4)
     resolution = row.get("exit_resolution") or ex.get("note_resolution") or "resumed_exit"
-    d = dict(detail or {}, fills={f"{k[0]:g}{k[1]}": v for k, v in prices.items()})
-    if len(ex["filled_tickets"]) > 1:
+    d = dict(detail or {}, fills={f"{k[0]:g}{k[1]}": v for k, v in fills.items()})
+    if floored:
+        d["limit_floored"] = {**(d.get("limit_floored") or {}),
+                              **{f"{k[0]:g}{k[1]}": TICK_FLOOR for k in floored}}
+    legged = len(ex["filled_tickets"]) > 1
+    if legged:
         d["exit_tickets"] = list(ex["filled_tickets"])
+        profit_ps = mark - float(row["entry_mark_ps"])
+        if not -float(row["max_loss_ps"]) - 1e-9 <= profit_ps <= float(row["max_profit_ps"]) + 1e-9:
+            d["legged_beyond_bounds"] = {"profit_ps": round(profit_ps, 4), "max_loss_ps": row["max_loss_ps"],
+                                         "max_profit_ps": row["max_profit_ps"]}
     tid = ex["filled_tickets"][-1] if ex["filled_tickets"] else None
     return _settle(conn, row, mark, resolution, "live_bid_ask", _frictions(row, prices), now,
-                   ticket_id=tid, detail=d)
+                   ticket_id=tid, detail=d, clamp=not legged)
 
 
 def _reopen(conn, row: dict, exit_ticket_id, exit_started_at) -> bool:
@@ -716,10 +753,13 @@ def _row_state(conn, row: dict):
 
 
 def _resolve_attempt(conn, row: dict, ex: dict, now: datetime, exit_ticket_id, exit_started_at,
-                     detail: dict = None) -> dict:
+                     detail: dict = None, floored: dict = None) -> dict:
     """THE decision after an exit attempt that did not come back FILLED,
     made on the OMS's per-leg fills across every EXIT ticket of the row
-    (audit F05) — never on a status read before the cancel:
+    (audit F05) — never on a status read before the cancel. `row` is the
+    row AS THIS ATTEMPT LEFT IT (its own predicate and ticket — L1 review:
+    a caller's pre-stamp copy can carry an earlier attempt's predicate);
+    `floored` goes to `_settle_from_fills`:
       a leg still in flight → `exit_in_flight` (row stays `exiting`; the
                               next tick's resume decides);
       every leg closed      → settle from the fills (a concurrent sweep
@@ -734,7 +774,7 @@ def _resolve_attempt(conn, row: dict, ex: dict, now: datetime, exit_ticket_id, e
                 "reason": f"exit ticket(s) {', '.join(ex['in_flight'])} still have a leg working — "
                           "row left 'exiting' for the next tick"}
     if ex["complete"]:
-        return _settle_from_fills(conn, row, ex, now, detail)
+        return _settle_from_fills(conn, row, ex, now, detail, floored)
     if ex["filled_any"]:
         closed = ", ".join(f"{_leg_label(x['leg'])} {x['filled']}" for x in ex["legs"] if x["filled"])
         left = ", ".join(f"{_leg_label(x['leg'])} {x['remaining']}" for x in ex["legs"] if x["remaining"])
@@ -857,8 +897,14 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
                     "reason": f"cancel failed: {exc}"}
     # Audit F05: decide on what the venue ACTUALLY filled across this row's
     # exit tickets — a ticket filled between the sweep and the cancel is
-    # settled, a basket that closed some legs is never restored whole.
-    res = _resolve_attempt(conn, row, _exit_fills(conn, row), now, tid, started, detail=detail)
+    # settled, a basket that closed some legs is never restored whole. On
+    # the row as THIS attempt stamped it (L1 review): the caller's copy is
+    # pre-stamp, and a reopened earlier attempt leaves its predicate in
+    # exit_resolution — a fill landing now settles under THIS predicate.
+    stamped = dict(row, state=STATE_EXITING, exit_resolution=resolution, exit_started_at=started,
+                   last_exit_attempt_ts=started, exit_ticket_id=tid)
+    res = _resolve_attempt(conn, stamped, _exit_fills(conn, stamped), now, tid, started, detail=detail,
+                           floored={k: (tid, v) for k, v in floored.items()})
     if res["status"] != "reopened":
         return dict(res, ticket_id=res.get("ticket_id") or tid)
     pm.paper_log_event(conn, row["account_id"], EVENT_UNFILLED, row["journal_ref"],
@@ -875,9 +921,10 @@ def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, v
     back at the ask). The exit decision was made and half executed, so
     there is no predicate and no price hold here: the remainder is no
     longer the defined-risk structure the holds protect (a short leg left
-    open can lose more than the spread's max loss by expiry), and the
-    settlement clamp still bounds what is booked. A leg with no usable
-    quote waits (`partial_held`). Settles from the fills of BOTH tickets."""
+    open can lose more than the spread's max loss by expiry). A leg with no
+    usable quote waits (`partial_held`). Settles from the fills of BOTH
+    tickets, UNCLAMPED (L1 review): what the legging cost or made is
+    booked, named `legged_beyond_bounds` when it is outside the bounds."""
     from src import oms, plan_tracker as pt, portfolio_manager as pm
     ref = row["journal_ref"]
     ex = _exit_fills(conn, row)
@@ -907,11 +954,22 @@ def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, v
         prices[x["key"]] = price
     limits = {k: max(TICK_FLOOR, float(v)) for k, v in prices.items()}
     resolution = row.get("exit_resolution") or ex.get("note_resolution") or "resumed_exit"
-    # claim this attempt (F06): a compare-and-set on the row as this tick read it
+    # Claim this attempt (F06): a compare-and-set on the row as this tick
+    # read it, INCLUDING the field the claim writes (L1 review: guarding
+    # only fields it leaves alone let a second completer holding the same
+    # snapshot claim too, and close the open leg twice). The first claim
+    # changes last_exit_attempt_ts, so the second matches no row — unless
+    # the new stamp equals the old one, so a same-second retry waits.
+    claim, read = _iso(now), row.get("last_exit_attempt_ts")
+    if claim == read:
+        return {"status": "partial_held", "journal_ref": ref,
+                "reason": f"an exit attempt on this row was already claimed at {claim} (this second) — "
+                          "retried on the next fetched chain"}
     cur = conn.execute("UPDATE paper_live_positions SET last_exit_attempt_ts = ? WHERE account_id = ? "
-                       "AND journal_ref = ? AND state = ? AND exit_ticket_id IS ? AND exit_started_at IS ?",
-                       (_iso(now), row["account_id"], ref, STATE_EXITING, row.get("exit_ticket_id"),
-                        row.get("exit_started_at")))
+                       "AND journal_ref = ? AND state = ? AND exit_ticket_id IS ? AND exit_started_at IS ? "
+                       "AND last_exit_attempt_ts IS ?",
+                       (claim, row["account_id"], ref, STATE_EXITING, row.get("exit_ticket_id"),
+                        row.get("exit_started_at"), read))
     owned = cur.rowcount == 1
     conn.commit()
     if not owned:
@@ -942,10 +1000,17 @@ def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, v
         try:
             oms.cancel_ticket(conn, tid, "live account: exit completion not filled")
         except Exception as exc:
+            # the same record as _exit's failed cancel: what is still working
+            # is unknown, the row stays `exiting` for the resume
+            pm.paper_log_event(conn, row["account_id"], EVENT_UNFILLED, ref,
+                               f"{resolution}: completion ticket {tid} of a partly filled exit not filled and "
+                               f"its cancel failed ({exc}) — row left for resume")
             return {"status": "exit_error", "journal_ref": ref, "ticket_id": tid,
                     "reason": f"cancel failed: {exc}"}
-    res = _resolve_attempt(conn, row, _exit_fills(conn, row), now, tid, row.get("exit_started_at"),
-                           detail={"completion": True, "quote_ts": quote_ts})
+    claimed = dict(row, last_exit_attempt_ts=claim, exit_ticket_id=tid or row.get("exit_ticket_id"))
+    floored = {k: (tid, v) for k, v in prices.items() if float(v) < TICK_FLOOR}
+    res = _resolve_attempt(conn, claimed, _exit_fills(conn, claimed), now, tid, row.get("exit_started_at"),
+                           detail={"completion": True, "quote_ts": quote_ts}, floored=floored)
     return dict(res, ticket_id=res.get("ticket_id") or tid)
 
 
@@ -1188,7 +1253,7 @@ def _tick_lock(path):
     or the file cannot be opened) — fail-open, because the compare-and-set
     transitions keep a second tick from double-exiting on their own; the
     lock only keeps a second tick from running at all."""
-    if path is None or fcntl is None:
+    if fcntl is None:
         return None, None
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -1209,15 +1274,6 @@ def _tick_lock(path):
     return handle, None
 
 
-def _default_tick_lock():
-    """The production lock file — never under pytest, even when a test has
-    un-muzzled `_is_test_env` to reach the real chain door (conftest refuses
-    any write into the real data/, Issue 37)."""
-    if os.environ.get("PYTEST_CURRENT_TEST") or _is_test_env():
-        return None
-    return TICK_LOCK_FILE
-
-
 def _release_tick_lock(handle) -> None:
     if handle is None:
         return
@@ -1234,7 +1290,7 @@ def _release_tick_lock(handle) -> None:
 def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, now_epoch_fn=time.time,
          interval_s: int = None, max_fetches: int = DEFAULT_MAX_FETCHES,
          budget_s: float = DEFAULT_BUDGET_SECONDS, cutoff: tuple = DEFAULT_CUTOFF,
-         venue_mod=None, require_market_open: bool = True, tick_lock=None) -> dict:
+         venue_mod=None, require_market_open: bool = True) -> dict:
     """One pass: resume half-done exits, refresh due chains (paced, capped,
     never after the cutoff), mark every open row, exit on a predicate
     (re-verified on a fresh chain when the mark came from the cache), and
@@ -1245,10 +1301,9 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
     exit still waiting, with its row and reason — audit F02), `resumes`,
     `repaired` / `late_released`, `skipped`.
 
-    `tick_lock` (audit F06): the single-instance lock file; None = the
-    production `TICK_LOCK_FILE`, except under pytest, where None means no
-    lock (the real data/ is never touched by a test — a test passes a
-    tmp path). Held by another process → the tick is skipped, named."""
+    Audit F06: the tick first takes the single-instance lock on
+    `TICK_LOCK_FILE` (read at call time; tests point it at tmp). Held by
+    another process → the tick is skipped, named."""
     from src.config import LIVE_QUOTE_INTERVAL_SECONDS
     now = now or _now()
     interval_s = LIVE_QUOTE_INTERVAL_SECONDS if interval_s is None else int(interval_s)
@@ -1257,7 +1312,7 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
     if require_market_open and not _market_open(now):
         out["skipped"] = "market closed"
         return out
-    lock, held_elsewhere = _tick_lock(tick_lock if tick_lock is not None else _default_tick_lock())
+    lock, held_elsewhere = _tick_lock(TICK_LOCK_FILE)
     if held_elsewhere:
         out["skipped"] = held_elsewhere
         return out

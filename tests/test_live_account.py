@@ -627,7 +627,7 @@ def test_the_schema_check_never_commits_an_open_transaction(world):
     assert c.execute("SELECT COUNT(*) FROM paper_account_events WHERE event_type = 'probe'").fetchone()[0] == 0
 
 
-def test_an_unknown_position_state_keeps_the_lock_and_a_closed_row_releases_late(world, monkeypatch):
+def test_an_unknown_position_state_keeps_the_lock_and_a_closed_row_releases_late(world, monkeypatch, tmp_path):
     c = world
     _open(c)
     monkeypatch.setattr(lp, "has_open_position", lambda *a: (_ for _ in ()).throw(RuntimeError("busy")))
@@ -635,6 +635,7 @@ def test_an_unknown_position_state_keeps_the_lock_and_a_closed_row_releases_late
     assert not out[LIVE]["released"] and "lock kept" in out[LIVE]["reason"]
     assert pm._active_shadow_lock(c, LIVE, "lv0001") is not None
     monkeypatch.undo()
+    monkeypatch.setattr(lp, "TICK_LOCK_FILE", tmp_path / ".live_pricer_tick.lock")   # undo() reverted conftest's
     # a row that closed with pnl but whose lock survived (crash after the row write): release at that pnl
     c.execute("UPDATE paper_live_positions SET state = 'closed', pnl_net = -1234.5 WHERE journal_ref = 'lv0001'")
     c.commit()
@@ -654,7 +655,7 @@ def test_an_unknown_position_state_keeps_the_lock_and_a_closed_row_releases_late
     assert out[LIVE]["released"] and out[LIVE]["pnl_net"] == -50.0
 
 
-def test_unfilled_entry_ticket_and_unrecorded_position_paths(world, monkeypatch):
+def test_unfilled_entry_ticket_and_unrecorded_position_paths(world, monkeypatch, tmp_path):
     from src import options_proposer as op
     c = world
     monkeypatch.setattr(brain_map, "connect", lambda *a, **k: c)
@@ -690,6 +691,7 @@ def test_unfilled_entry_ticket_and_unrecorded_position_paths(world, monkeypatch)
     monkeypatch.undo()
     monkeypatch.setattr(lp, "_market_open", lambda now: True)
     monkeypatch.setattr(lp, "_stamp_journal", lambda row, payload: None)
+    monkeypatch.setattr(lp, "TICK_LOCK_FILE", tmp_path / ".live_pricer_tick.lock")   # undo() reverted conftest's
     t = lp.tick(now=OPEN, conn=c, chain_fn=lambda tk, x: BULL_ENTRY, sleep_fn=lambda s: None, now_epoch_fn=lambda: 1.0)
     assert t.get("repaired") == ["lv0022"] and lp.has_open_position(c, LIVE, "lv0022")
     row = [r for r in lp.open_rows(c, LIVE) if r["journal_ref"] == "lv0022"][0]

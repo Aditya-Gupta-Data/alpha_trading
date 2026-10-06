@@ -18,16 +18,26 @@ exit ticket of the row — all closed: settle from them; none: reopen; some:
 the row stays `exiting` and only the open legs are exited, on a freshly
 fetched chain, P&L from both tickets' fills.
 
+L1 review fixes (2026-10-06): the completion's claim is a compare-and-set
+on the field it writes (two interleaved completers on two connections:
+the second is refused); a legged exit books its actual fills UNCLAMPED,
+named `legged_beyond_bounds` outside the structure's bounds (a single
+ticket keeps the clamp); `_exit` resolves on the row as its own attempt
+stamped it; a failed cancel is recorded on both paths; a leg floored from
+a zero bid is booked at its quote on every fills path; the tick lock has
+no pytest branch (conftest points `TICK_LOCK_FILE` at tmp).
+
 Hermetic: sqlite ':memory:' or a tmp_path file (two connections stand in
 for two processes), chains injected, the ticket wall clock faked, no
 network, nothing written under the real data/ or logs/.
 """
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src import brain_map, oms, portfolio_manager as pm
+from src import brain_map, oms, plan_tracker as pt, portfolio_manager as pm
 from src import strategy_router as sr
 from src.execution import live_pricer as lp, paper_venue as pv
 from src.strategy import StrategyConstructor
@@ -57,6 +67,21 @@ def _chain(quotes):
 
 ENTRY = _chain({(24000, "CE"): (98.0, 100.0, 99.0), (24200, "CE"): (30.0, 32.0, 31.0)})
 LATER = _chain({(24000, "CE"): (120.0, 122.0, 121.0), (24200, "CE"): (40.0, 42.0, 41.0)})
+
+
+def _condor():
+    # SELL 23500 PE / BUY 23300 PE, SELL 24500 CE / BUY 24700 CE; credit 40, wings 200
+    s = StrategyConstructor(vix=13.0, lot_size=65).construct_iron_condor(23500, 24500, 200, 30.0, 10.0, 30.0, 10.0)
+    for l in s["legs"]:
+        l["fill_basis"] = "quoted"
+    s.update(lots=1, expiry="2026-10-28", entry_spot=24000.0)
+    return s
+
+
+CONDOR_ENTRY = _chain({(23500, "PE"): (30.0, 32.0, 31.0), (23300, "PE"): (9.0, 10.0, 9.5),
+                       (24500, "CE"): (30.0, 32.0, 31.0), (24700, "CE"): (9.0, 10.0, 9.5)})
+# decayed: the shorts bought back at the ask 5, the long wings have NO bid (worth 0) -> mark -10, +30 of 40
+CONDOR_PX = {(23500.0, "PE"): 5.0, (23300.0, "PE"): 0.0, (24500.0, "CE"): 5.0, (24700.0, "CE"): 0.0}
 
 
 class _Clock:
@@ -110,11 +135,11 @@ def two(monkeypatch, tmp_path):
     a.close()
 
 
-def _open(c, ref="lx0001"):
+def _open(c, ref="lx0001", spread=None, chain=ENTRY):
     """LIVE's position through the real entry path (requote -> ticket -> venue -> row)."""
-    e = {"short_id": ref, "date": "2026-09-29", "ticker": "NIFTY 50", "spread": _bull_call(), "signal": "t"}
+    e = {"short_id": ref, "date": "2026-09-29", "ticker": "NIFTY 50", "spread": spread or _bull_call(), "signal": "t"}
     pm.paper_request_entry(c, LIVE, ref, 17550.0, lots=1, primary_lots=1)
-    rq = lp.requote_entry(e, now=OPEN, chain_fn=lambda t, x: ENTRY)
+    rq = lp.requote_entry(e, now=OPEN, chain_fn=lambda t, x: chain)
     assert rq["ok"], rq
     prop = {"ticker": e["ticker"], "short_id": ref, "signal": "t", "spread": dict(e["spread"], legs=rq["legs"])}
     issued = sr.issue(c, prop, journal_ref=ref, source="t", account_id=LIVE, lots=1)
@@ -150,6 +175,15 @@ def _exit_qty_by_leg(c, ref="lx0001"):
 def _events(c, kind, ref="lx0001"):
     return c.execute("SELECT COUNT(*) FROM paper_account_events WHERE account_id = ? AND journal_ref = ? "
                      "AND event_type = ?", (LIVE, ref, kind)).fetchone()[0]
+
+
+def _event_details(c, kind, ref="lx0001"):
+    return [r[0] for r in c.execute("SELECT detail FROM paper_account_events WHERE account_id = ? AND journal_ref = ? "
+                                    "AND event_type = ? ORDER BY rowid", (LIVE, ref, kind)).fetchall()]
+
+
+def _broken_cancel(conn, ticket_id, reason="cancelled"):
+    raise sqlite3.OperationalError("database is locked")
 
 
 def _tick(c, minute, chain, epoch, **kw):
@@ -329,6 +363,7 @@ def test_a_partial_basket_re_exits_only_the_open_leg_and_settles_on_both_tickets
     assert ex["exit_mark_ps"] == 60.0 and ex["fills"] == {"24000CE": 120.0, "24200CE": 60.0}
     assert ex["pnl_net"] == round((60.0 - 70.0) * 65 - lp._frictions(r, fills), 2)
     assert ex["exit_tickets"] == [t1, t2id] and ex["ticket_id"] == t2id
+    assert ex["profit_ps"] == -10.0 and "legged_beyond_bounds" not in ex          # inside the bounds: not named
     closed = lp.positions(c)[0]
     assert closed["state"] == "closed" and closed["pnl_net"] == ex["pnl_net"]
     assert _events(c, lp.EVENT_EXIT) == 1 and pm._active_shadow_lock(c, LIVE, ref) is None
@@ -419,6 +454,177 @@ def test_a_stale_completion_issues_nothing(world, monkeypatch):
     assert res["status"] == "exit_not_owned" and len(_exit_tickets(c)) == 2
 
 
+def test_two_interleaved_completions_on_two_connections_close_the_open_leg_once(two, monkeypatch):
+    """L1 review: the claim used to guard only fields it does not write, so
+    a second process holding the same snapshot, claiming AFTER the first
+    one's claim but BEFORE its ticket existed, claimed too — and the long
+    leg was sold twice (130 against a 65-share position). The claim is now
+    a compare-and-set on last_exit_attempt_ts as read: the second matches
+    no row and issues nothing."""
+    a, b = two
+    ref = _open(a)
+    t1 = _cut_basket(a, monkeypatch)                  # the short bought back @60; the long still open
+    row_a, row_b = _row(a), _row(b)                   # both processes read the same partial row
+    assert row_a == row_b and row_a["last_exit_attempt_ts"] == "2026-09-29T11:01:00"
+    real, calls = pt._execute_paper_exit, {"n": 0}
+
+    def a_inside_the_door(*args, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:                           # A has claimed; its ticket does not exist yet
+            calls["b"] = lp._complete_exit(b, row_b, LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3))
+        return real(*args, **kw)
+    monkeypatch.setattr(pt, "_execute_paper_exit", a_inside_the_door)
+    res_a = lp._complete_exit(a, row_a, LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3))
+    assert calls["n"] == 1 and calls["b"]["status"] == "exit_not_owned"     # B never reached the door
+    assert "'exiting' and no longer as this tick read it" in calls["b"]["reason"]
+    assert res_a["status"] == "settled" and res_a["exit_tickets"] == [t1, _exit_tickets(a)[1][0]]
+    assert _exit_qty_by_leg(a) == {("BUY", 24200.0, "CE"): 65, ("SELL", 24000.0, "CE"): 65}   # the long sold ONCE
+    assert len(_exit_tickets(a)) == 2 and _events(a, lp.EVENT_EXIT, ref) == 1
+
+
+def test_a_completion_in_the_second_its_row_was_last_claimed_waits(world, monkeypatch):
+    """A claim that would write the value it read changes nothing a second
+    claimant could see, so it cannot be exclusive: it waits, named."""
+    c = world
+    _open(c)
+    t1 = _cut_basket(c, monkeypatch)                  # the first attempt stamped 11:01:00
+    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:01:00", OPEN.replace(minute=1))
+    assert res["status"] == "partial_held" and "already claimed at 2026-09-29T11:01:00" in res["reason"]
+    assert _exit_tickets(c) == [(t1, oms.PARTIAL)] and _row(c)["state"] == "exiting"
+
+
+@pytest.mark.parametrize("long_bid, profit_ps", [(5.0, -125.0), (270.0, 140.0)])
+def test_a_legged_exit_books_its_actual_fills_beyond_the_bounds_named(world, monkeypatch, long_bid, profit_ps):
+    """L1 review (spec 3(b)): the short was bought back @60 on ticket 1; the
+    long is sold on the completion at 5 (a crash) or at 270 (a rally). The
+    fills say 5 − 60 − 70 = −125/share (beyond max loss 70) or 270 − 60 −
+    70 = +140 (beyond max profit 130). That is what is booked — the clamp
+    used to book −70 / +130 — and the event names it."""
+    c = world
+    ref = _open(c)
+    _cut_basket(c, monkeypatch)
+    r = _row(c)
+    moved = _chain({(24000, "CE"): (long_bid, long_bid + 2, long_bid + 1), (24200, "CE"): (1.0, 2.0, 1.5)})
+    res = lp._complete_exit(c, r, moved, "2026-09-29T11:09:00", OPEN.replace(minute=9))
+    prices = {(24000.0, "CE"): long_bid, (24200.0, "CE"): 60.0}
+    pnl = round(profit_ps * 65 - lp._frictions(r, prices), 2)
+    assert res["status"] == "settled" and res["exit_mark_ps"] == long_bid - 60.0
+    assert res["profit_ps"] == profit_ps and res["pnl_net"] == pnl
+    assert res["legged_beyond_bounds"] == {"profit_ps": profit_ps, "max_loss_ps": 70.0, "max_profit_ps": 130.0}
+    assert json.loads(_event_details(c, lp.EVENT_EXIT)[0])["legged_beyond_bounds"]["profit_ps"] == profit_ps
+    closed = lp.positions(c)[0]
+    assert closed["pnl_net"] == pnl and closed["last_profit_ps"] == profit_ps
+    assert pm.paper_account_summary(c, LIVE)["realized_pnl"] == pnl and pm._active_shadow_lock(c, LIVE, ref) is None
+
+
+def test_a_single_ticket_exit_settled_from_its_fills_keeps_the_clamp(world):
+    """Not legged: ONE ticket filled the whole basket (here below its
+    limits, as a real venue may), resumed after a door error — the
+    settlement is clamped to the structure's bounds, as before."""
+    c = world
+    _open(c)
+    assert lp._exit(c, _row(c), PX, "pre_expiry_exit", OPEN, venue_mod=_Raise)["status"] == "exit_error"
+    (t1, _), = _exit_tickets(c)
+    for l in oms.ticket_view(c, t1)["legs"]:
+        assert oms.apply_fill(c, l["leg_id"], l["qty_target"], 5.0 if l["side"] == "SELL" else 60.0)["ok"]
+    res = lp._resume_exiting(c, _row(c), OPEN.replace(minute=1))
+    assert res["status"] == "settled" and res["exit_mark_ps"] == -55.0
+    assert res["profit_ps"] == -70.0 and "legged_beyond_bounds" not in res and "exit_tickets" not in res
+
+
+def test_a_zero_bid_leg_floored_on_the_completion_is_booked_at_its_quote(world, monkeypatch):
+    """The open long has no bid: worth 0, its limit floored to the 0.05
+    tick (the venue rejects a 0 limit) and filled there. Booked at 0, as
+    `_exit` books a floored leg; `fills` keeps the venue's 0.05."""
+    c = world
+    _open(c)
+    _cut_basket(c, monkeypatch)
+    r = _row(c)
+    no_bid = _chain({(24000, "CE"): (None, 1.0, None), (24200, "CE"): (0.5, 0.6, 0.55)})
+    res = lp._complete_exit(c, r, no_bid, "2026-09-29T11:09:00", OPEN.replace(minute=9))
+    assert oms.ticket_view(c, _exit_tickets(c)[1][0])["legs"][0]["avg_fill_price"] == lp.TICK_FLOOR
+    assert res["status"] == "settled" and res["exit_mark_ps"] == -60.0              # 0 − 60, not 0.05 − 60
+    assert res["fills"] == {"24000CE": 0.05, "24200CE": 60.0} and res["limit_floored"] == {"24000CE": 0.05}
+    prices = {(24000.0, "CE"): 0.0, (24200.0, "CE"): 60.0}
+    assert res["pnl_net"] == round(-130.0 * 65 - lp._frictions(r, prices), 2)
+
+
+def test_a_zero_bid_wing_filled_under_the_cancel_is_booked_at_its_quote(world, monkeypatch):
+    """The same in `_exit`'s not-filled branch: a condor's worthless wings
+    floored to 0.05, the ticket filled by another sweep under the cancel —
+    settled from the fills, at the mark `_exit` itself would book (-10)."""
+    c = world
+    ref = _open(c, "lx0003", _condor(), CONDOR_ENTRY)
+    row = _row(c, ref)
+    _cancel_after_a_concurrent_fill(monkeypatch, c)
+    res = lp._exit(c, row, CONDOR_PX, "profit_take", OPEN.replace(minute=5), venue_mod=_NoFill)
+    assert res["status"] == "settled" and res["exit_mark_ps"] == -10.0              # not −9.9
+    assert res["fills"]["23300PE"] == 0.05 and res["fills"]["24700CE"] == 0.05
+    assert res["limit_floored"] == {"23300PE": 0.05, "24700CE": 0.05} and "exit_tickets" not in res
+    assert res["pnl_net"] == round(30.0 * 65 - lp._frictions(row, CONDOR_PX), 2)
+
+
+def test_a_fill_under_the_cancel_settles_under_this_attempts_predicate(world, monkeypatch):
+    """L1 review: `_exit` used to resolve on the caller's PRE-stamp row. A
+    reopened `profit_take` attempt leaves its predicate in exit_resolution,
+    so a later `pre_expiry_exit` whose ticket filled under the cancel was
+    booked as `profit_take`."""
+    c = world
+    ref = _open(c)
+    assert lp._exit(c, _row(c), PX, "profit_take", OPEN, venue_mod=_NoFill)["status"] == "unfilled"
+    row = _row(c)
+    assert row["state"] == "open" and row["exit_resolution"] == "profit_take"
+    _cancel_after_a_concurrent_fill(monkeypatch, c)
+    res = lp._exit(c, row, PX, "pre_expiry_exit", OPEN.replace(minute=10), venue_mod=_NoFill)
+    assert res["status"] == "settled" and res["resolution"] == "pre_expiry_exit"
+    assert c.execute("SELECT resolution FROM paper_live_positions WHERE journal_ref = ?",
+                     (ref,)).fetchone()[0] == "pre_expiry_exit"
+    assert json.loads(_event_details(c, lp.EVENT_EXIT)[0])["resolution"] == "pre_expiry_exit"
+
+
+def test_a_failed_cancel_leaves_the_row_exiting_and_the_resume_decides(world, monkeypatch):
+    """What is still working after a failed cancel is unknown: the row is
+    never reopened on a guess; it stays `exiting`, recorded, and the next
+    resume cancels and decides on the fills."""
+    c = world
+    ref = _open(c)
+    real = oms.cancel_ticket
+    monkeypatch.setattr(oms, "cancel_ticket", _broken_cancel)
+    res = lp._exit(c, _row(c), PX, "ratchet_hit", OPEN, venue_mod=_NoFill)
+    (tid, st), = _exit_tickets(c)
+    assert res["status"] == "exit_error" and res["ticket_id"] == tid
+    assert res["reason"] == "cancel failed: database is locked"
+    r = _row(c)
+    assert r["state"] == "exiting" and r["exit_ticket_id"] == tid and st == oms.PENDING
+    (detail,) = _event_details(c, lp.EVENT_UNFILLED, ref)
+    assert f"exit ticket {tid} not filled and its cancel failed" in detail
+    monkeypatch.setattr(oms, "cancel_ticket", real)
+    t = _tick(c, 1, ENTRY, 1000)
+    (r,) = t["resumes"]
+    assert r["status"] == "reopened" and r["cancelled"] == {tid: oms.CANCELLED}
+    assert _row(c)["state"] == "open"
+
+
+def test_a_failed_completion_cancel_is_recorded_and_leaves_the_row_exiting(world, monkeypatch):
+    c = world
+    ref = _open(c)
+    _cut_basket(c, monkeypatch)
+    before = len(_event_details(c, lp.EVENT_UNFILLED, ref))
+    real = oms.cancel_ticket
+    monkeypatch.setattr(oms, "cancel_ticket", _broken_cancel)
+    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3), venue_mod=_NoFill)
+    _, (t2, st2) = _exit_tickets(c)
+    assert res["status"] == "exit_error" and res["ticket_id"] == t2 and "cancel failed" in res["reason"]
+    assert st2 == oms.PENDING and _row(c)["state"] == "exiting" and _row(c)["exit_ticket_id"] == t2
+    details = _event_details(c, lp.EVENT_UNFILLED, ref)
+    assert len(details) == before + 1
+    assert f"completion ticket {t2} of a partly filled exit not filled and its cancel failed" in details[-1]
+    monkeypatch.setattr(oms, "cancel_ticket", real)
+    res = lp._resume_exiting(c, _row(c), OPEN.replace(minute=4))
+    assert res["status"] == "partial" and res["cancelled"] == {t2: oms.CANCELLED}
+    assert _row(c)["state"] == "exiting"
+
+
 def test_a_ticket_filled_under_the_resume_cancel_is_settled_not_reopened(world, monkeypatch):
     c = world
     ref = _open(c)
@@ -463,25 +669,41 @@ def test_nothing_filled_is_cancelled_and_reopened(world):
 
 # ------------------------------------------------------------- F06: one tick at a time on the host
 
-def test_a_second_process_skips_its_tick_while_the_lock_is_held(world, tmp_path):
+def test_a_second_process_skips_its_tick_while_the_lock_is_held(world, monkeypatch, tmp_path):
     c = world
     _open(c)
-    path = tmp_path / ".live_pricer_tick.lock"
+    path = tmp_path / "held.lock"
+    monkeypatch.setattr(lp, "TICK_LOCK_FILE", path)
     held, why = lp._tick_lock(path)                     # the other process, mid-tick
     assert held is not None and why is None
-    t = _tick(c, 1, ENTRY, 1000, tick_lock=path)
+    t = _tick(c, 1, ENTRY, 1000)
     assert t["marked"] == 0 and t["fetched"] == 0
     assert t["skipped"].startswith("another process is ticking the live account") and str(path) in t["skipped"]
     lp._release_tick_lock(held)
-    t = _tick(c, 2, ENTRY, 1000, tick_lock=path)
+    t = _tick(c, 2, ENTRY, 1000)
     assert t["skipped"] is None and t["marked"] == 1
     again, why = lp._tick_lock(path)                     # the tick released it on its way out
     assert again is not None and why is None
     lp._release_tick_lock(again)
 
 
-def test_the_production_lock_file_is_never_opened_under_pytest(monkeypatch):
-    monkeypatch.setattr(lp, "_is_test_env", lambda: False)   # as a test reaching the real chain door does
-    assert lp._default_tick_lock() is None
-    assert lp._tick_lock(None) == (None, None)
-    assert lp.TICK_LOCK_FILE.name == ".live_pricer_tick.lock" and lp.TICK_LOCK_FILE.parent.name == "data"
+def test_every_tick_holds_the_lock_on_its_real_path_and_the_suite_keeps_it_out_of_data(world, tmp_path):
+    """No pytest branch: a plain tick takes `TICK_LOCK_FILE` (conftest
+    points it at this test's tmp, as it does dhan_client's throttle files),
+    holds it while it works and releases it on the way out."""
+    c = world
+    _open(c)
+    assert lp.TICK_LOCK_FILE == tmp_path / ".live_pricer_tick.lock"   # conftest's redirect, never data/
+    seen = []
+
+    def chain(t, x):                                    # a second process tries to tick mid-fetch
+        seen.append(lp._tick_lock(lp.TICK_LOCK_FILE))
+        return ENTRY
+    t = lp.tick(now=OPEN.replace(minute=1), conn=c, chain_fn=chain, sleep_fn=lambda s: None,
+                now_epoch_fn=lambda: 1000.0, interval_s=300)
+    assert t["skipped"] is None and t["marked"] == 1
+    (handle, why), = seen
+    assert handle is None and why.startswith("another process is ticking the live account")
+    again, why = lp._tick_lock(lp.TICK_LOCK_FILE)
+    assert again is not None and why is None
+    lp._release_tick_lock(again)

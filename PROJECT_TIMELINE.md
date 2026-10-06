@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-06 · 4 commits · 25 files touched
+### 2026-10-06 · 6 commits · 28 files touched
 
+- `a66423a` docs: DEPLOYED Issue 44 + Chunk 2 fixes A-G + margin-block refusal (VM bc6fbe0, 18:21 IST); Chunk 2 close-out status (15 lows open); HANDOVER
+- `bc6fbe0` fix(chunk2): a margin-blocked approval is a refusal, not a decision — API 409, the Discord bot keeps the buttons
 - `8de274c` docs: Chunk 2 fixes E-G done (#128 approval re-checks, #129 expiry timing); open-book dry-run on the VM snapshot; HANDOVER
 - `47f807a` fix(chunk2): the #68 one-position slot is re-checked firm-wide at approval (Fix G)
 - `1e3966c` fix(chunk2): no stock-option round trip at entry; no approval inside the forced-exit window (F17 + F18)

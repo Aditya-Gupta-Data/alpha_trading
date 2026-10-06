@@ -12,6 +12,9 @@ asks "is the market open / is today a session" reaches this module through
 pricer, the 15-minute tracker, the report cards) or
 `master_scheduler.session_over`, or calls `is_trading_day` directly (the
 chain archiver, the darlings tap, the ops heartbeats, the human-pulse count).
+`plan_tracker` asks it which session an expiry settles on and whether today
+is the last session before an expiry (`expiry_session`,
+`in_forced_exit_window` — audit F22/F23).
 
 THE LISTS ARE HAND-MAINTAINED, ON PURPOSE. A holiday date guessed from a
 pattern is the same bug as a guessed security id (ledger Issues 14/15):
@@ -120,6 +123,16 @@ def previous_trading_day(d) -> date:
     d = _day(d) - timedelta(days=1)
     while not is_trading_day(d):
         d -= timedelta(days=1)
+    return d
+
+
+def next_trading_day(d) -> date:
+    """The first trading day strictly after `d` (plan_tracker's forced
+    pre-expiry window asks it whether today is the last session before an
+    expiry — audit F23)."""
+    d = _day(d) + timedelta(days=1)
+    while not is_trading_day(d):
+        d += timedelta(days=1)
     return d
 
 

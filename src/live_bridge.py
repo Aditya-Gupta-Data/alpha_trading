@@ -293,17 +293,20 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
         ratchet["new_rung"] = (ratchet["locked_pct"] is not None
                                and (prior.get("locked_pct") is None
                                     or float(ratchet["locked_pct"]) > float(prior["locked_pct"])))
+    # The tracker's ONE forced-exit predicate (audit F23: it includes the last
+    # session before a holiday-moved Monday expiry).
+    in_window = pt.in_forced_exit_window(entry.get("ticker"), expiry, today)
     if ratchet is not None:
         if pr.ratchet_hit(capture, ratchet["locked_pct"]):
             signal = "ratchet_hit"
-        elif days_left <= pt._forced_exit_days(entry.get("ticker")):
+        elif in_window:
             signal = "pre_expiry_exit"
         else:
             signal = "hold"
     elif (max_profit_ps > 0
             and profit_ps >= pt.OPTION_PROFIT_TAKE_FRACTION * max_profit_ps):
         signal = "profit_take"
-    elif days_left <= pt._forced_exit_days(entry.get("ticker")):
+    elif in_window:
         # Stock options leave before expiry WEEK (physical settlement);
         # index options keep the 2-day rule. Same one predicate as the
         # tracker so the live advisory and the settlement path can never

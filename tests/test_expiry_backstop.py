@@ -127,21 +127,30 @@ def test_feed_exception_does_not_kill_the_sweep_and_backstop_still_fires():
         assert len(released) == 1
 
 
-def test_gap_over_exit_window_settles_at_last_close_before_expiry():
+def test_gap_over_exit_window_waits_then_settles_on_the_named_stale_close():
     """Bars stop on the 10th (too early for the 65% profit-take, and the
-    2-day pre-expiry trigger never had a bar to fire on). Past expiry,
-    settle at intrinsic on that last close, dated AT expiry, and say which
-    close was used."""
+    2-day pre-expiry trigger never had a bar to fire on). Audit F22: the 10th
+    is NOT the expiry session (Fri 07-24 for this Sunday-dated expiry), so
+    inside the grace window the backstop WAITS for that session's close.
+    After the grace window it settles at intrinsic on the 10th's close,
+    dated AT expiry, NAMED stale_close_after_grace and dated by the close
+    it used. (Before F22 it settled on the 10th at the first sweep.)"""
     with tempfile.TemporaryDirectory() as tmp:
-        entry = make_open_spread()
         bars = [b for b in RANGE_BARS if b[0] <= "2026-07-10"]
         resolved, fj, settled, released = run_tracker_on(
-            tmp, [entry], bars, date(2026, 7, 27))
+            tmp, [make_open_spread()], bars, date(2026, 7, 27))
+        assert resolved == 0 and fj.rewritten is None
+        assert settled == [] and released == []
+    with tempfile.TemporaryDirectory() as tmp:
+        entry = make_open_spread()
+        resolved, fj, settled, released = run_tracker_on(
+            tmp, [entry], bars, date(2026, 7, 29))       # 3 days past: grace over
         assert resolved == 1
         o = fj.rewritten[0]["outcome"]
         assert o["resolution"] == "expiry_backstop"
-        assert o["settlement_basis"] == "last_close_on_or_before_expiry"
+        assert o["settlement_basis"] == "stale_close_after_grace"
         assert o["settlement_close_date"] == "2026-07-10"
+        assert "STALE CLOSE" in o["verdict"] and "2026-07-10" in o["verdict"]
         assert o["exit_date"] == "2026-07-26"
         # Condor body 24800/25200 with spot 25000 at expiry: every leg expires
         # worthless, the full net credit is kept -> max profit, less costs.

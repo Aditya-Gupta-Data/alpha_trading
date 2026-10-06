@@ -74,12 +74,14 @@ closes with the tick's IST timestamp. A crash between fill and settlement
 is RESUMED from the ticket on the next tick, never re-issued. Unfilled →
 cancelled, position kept.
 
-EXPIRY BACKSTOP (`eod_sweep`, from plan_tracker.run_tracker): mirrors the
-primary's `_expiry_backstop` byte-for-byte — intrinsic at the last close
-on/before expiry, or after the grace window with no bars the defined max
-loss at zero frictions. A row still waiting for bars is named with its
-reason in `reasons`, and run_tracker prints it and every per-row error
-(audit F21).
+EXPIRY BACKSTOP (`eod_sweep`, from plan_tracker.run_tracker): calls the
+primary's `_expiry_backstop` itself — intrinsic at the EXPIRY SESSION's own
+close (audit F22: an earlier session's close is waited out, never settled
+on); after the grace window, the newest earlier close named
+`stale_close_after_grace`, or with no bars the defined max loss at zero
+frictions. The event records the pricing close's date
+(`settlement_close_date`). A row still waiting is named with its reason in
+`reasons`, and run_tracker prints it and every per-row error (audit F21).
 
 Fail-open everywhere: a broken tick prints and returns; the live loop and
 the primary account are never touched.
@@ -792,7 +794,10 @@ def evaluate(row: dict, chain: dict, today: date) -> dict:
     elif max_profit > 0 and profit_ps >= pt.OPTION_PROFIT_TAKE_FRACTION * max_profit:
         signal = "profit_take"
     days_left = (date.fromisoformat(row["expiry"]) - today).days
-    if signal == "hold" and days_left <= pt._forced_exit_days(row["ticker"]):
+    # the tracker's own forced-exit window (audit F23: it includes the last
+    # session before a holiday-moved Monday expiry) — one predicate, so the
+    # live arm and its control can never disagree about when to be out
+    if signal == "hold" and pt.in_forced_exit_window(row["ticker"], row["expiry"], today):
         signal = "pre_expiry_exit"
     return {"ok": True, "reason": None, "mark_ps": m["mark_ps"], "profit_ps": round(profit_ps, 4),
             "capture_pct": round(capture, 2), "peak": (pr.floor2(peak) if peak is not None else None),  # floored (#122)
@@ -852,10 +857,11 @@ def _record_mark(conn, row: dict, ev: dict, quote_ts: str, now: datetime) -> Non
 
 def _exit_window(row: dict, today: date) -> tuple:
     """(inside the forced-exit window?, days to expiry) — the predicate
-    evaluate's pre_expiry_exit uses (the tracker's own)."""
+    evaluate's pre_expiry_exit uses (the tracker's own,
+    `plan_tracker.in_forced_exit_window`)."""
     from src import plan_tracker as pt
     days_left = (date.fromisoformat(row["expiry"]) - today).days
-    return days_left <= pt._forced_exit_days(row["ticker"]), days_left
+    return pt.in_forced_exit_window(row["ticker"], row["expiry"], today), days_left
 
 
 def _log_once_a_day(conn, row: dict, event_type: str, detail: str) -> bool:
@@ -1093,9 +1099,10 @@ def eod_sweep_standalone(today: date = None) -> dict:
 
 def eod_sweep(conn, today: date = None, bars_fn=None, now: datetime = None) -> dict:
     """Settle open rows whose expiry has passed, exactly like the primary's
-    `_expiry_backstop`: intrinsic at the last close on/before expiry, or —
-    past the grace window with no bars — the defined max loss at zero
-    frictions. Never raises. `errors` holds "<ref>: <exception>" (the row
+    `_expiry_backstop`: intrinsic at the expiry session's own close (audit
+    F22); past the grace window, the newest earlier close
+    (`stale_close_after_grace`) or — with no bars — the defined max loss at
+    zero frictions. Never raises. `errors` holds "<ref>: <exception>" (the row
     stays open with its lock; the next run retries), `waiting` the refs
     still inside the grace window, `reasons` {ref: why it waits} — the
     caller prints both (audit F21)."""
@@ -1119,12 +1126,22 @@ def eod_sweep(conn, today: date = None, bars_fn=None, now: datetime = None) -> d
             if res is None:
                 out["waiting"].append(row["journal_ref"])
                 days = (today - date.fromisoformat(row["expiry"])).days
-                out["reasons"][row["journal_ref"]] = (
-                    f"{row['ticker']} expired {row['expiry']} and no daily close on or before expiry has "
-                    f"arrived yet (day {days} of the {pt.EXPIRY_BACKSTOP_GRACE_DAYS}-day grace window; after "
-                    "it the defined max loss settles at zero frictions)")
+                older = [b[0] for b in (bars or []) if b[0] <= row["expiry"]]
+                if older:
+                    # audit F22: an earlier close is in the series but not the
+                    # expiry session's — wait for it rather than book the wrong day
+                    out["reasons"][row["journal_ref"]] = (
+                        f"{row['ticker']} expired {row['expiry']} and the expiry session's own close "
+                        f"({pt.expiry_session(row['expiry']).isoformat()}) has not arrived yet — the newest "
+                        f"close is {max(older)} (day {days} of the {pt.EXPIRY_BACKSTOP_GRACE_DAYS}-day grace "
+                        f"window; after it the newest close settles, named {pt.STALE_CLOSE_BASIS})")
+                else:
+                    out["reasons"][row["journal_ref"]] = (
+                        f"{row['ticker']} expired {row['expiry']} and no daily close on or before expiry has "
+                        f"arrived yet (day {days} of the {pt.EXPIRY_BACKSTOP_GRACE_DAYS}-day grace window; after "
+                        "it the defined max loss settles at zero frictions)")
                 continue
-            resolution, exit_mark_ps, _frac, _day, close, basis, _close_day = res
+            resolution, exit_mark_ps, _frac, _day, close, basis, close_day = res
             if basis == "no_price_data_max_loss":
                 frictions = 0.0
             else:
@@ -1132,8 +1149,10 @@ def eod_sweep(conn, today: date = None, bars_fn=None, now: datetime = None) -> d
                           max(0.0, (float(close) - float(l["strike"])) if l["option_type"] == "CE"
                               else (float(l["strike"]) - float(close))) for l in row["legs"]}
                 frictions = _frictions(row, prices)
+            # which session priced it (audit F22) — the expiry session's, or
+            # an earlier one on the named stale fallback
             out["settled"].append(_settle(conn, row, exit_mark_ps, resolution, basis, frictions, now,
-                                          detail={"close": close}))
+                                          detail={"close": close, "settlement_close_date": close_day}))
         except Exception as exc:
             out["errors"].append(f"{row['journal_ref']}: {exc}")
     return out

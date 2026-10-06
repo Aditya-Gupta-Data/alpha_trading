@@ -46,6 +46,7 @@ from datetime import date, datetime
 from src import analyst
 from src import brain_map
 from src import journal
+from src import nse_calendar
 from src.journal import JournalLockTimeout
 from src import portfolio as pf
 from src.config import PLAN_MAX_DAYS
@@ -148,6 +149,50 @@ def _forced_exit_days(underlying: str) -> int:
         return PRE_EXPIRY_EXIT_DAYS
 
 
+def _as_date(d) -> date:
+    """date / datetime / ISO string -> date."""
+    if isinstance(d, datetime):
+        return d.date()
+    return d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
+
+
+def in_forced_exit_window(ticker: str, expiry, today) -> bool:
+    """THE forced pre-expiry exit rule — the one predicate the tracker's bar
+    walk (`_resolve_spread`, `_resolve_spread_trailed`), the live arm
+    (`live_pricer.evaluate`) and the live bridge's advisory
+    (`live_bridge.evaluate_position`) all ask, so they can never disagree
+    about when a position must be out. `expiry`/`today`: date or ISO string.
+
+    True when EITHER
+      1. `_forced_exit_days(ticker)` or fewer CALENDAR days are left (2 for
+         an index, 7 for a stock option — unchanged), OR
+      2. today is the LAST NSE session strictly before the expiry: the next
+         trading day after today is on or after the expiry date (audit F23).
+
+    Rule 2 is for expiries a holiday moved onto a Monday — the NIFTY weekly
+    of Mon 2026-10-19 (Dussehra Tue 10-20), every November monthly on Mon
+    2026-11-23 (Guru Nanak Tue 11-24). Friday is 3 calendar days out, so
+    rule 1 alone first fired ON expiry day: the primary could only exit on
+    the expiry bar (served the next morning, after the backstop had taken
+    Friday's close — F22) and the live arm had a single session. For a
+    normal Tuesday expiry Monday is already inside rule 1, and a stock
+    option's 7-day window always contains its last session, so neither
+    changes. Holidays come from nse_calendar only (decision #124)."""
+    expiry, today = _as_date(expiry), _as_date(today)
+    if (expiry - today).days <= _forced_exit_days(ticker):
+        return True
+    return nse_calendar.next_trading_day(today) >= expiry
+
+
+def expiry_session(expiry) -> date:
+    """The NSE session a spread expires on: the listed expiry date when it is
+    a trading day, else the last trading day before it (the exchange moves
+    an expiry off a holiday to the previous session). The expiry backstop
+    settles on THIS session's close and no other (audit F22)."""
+    expiry = _as_date(expiry)
+    return expiry if nse_calendar.is_trading_day(expiry) else nse_calendar.previous_trading_day(expiry)
+
+
 def _spread_trackable(entry: dict) -> bool:
     """Journal entries carrying a Phase 5 `spread` dict (strategy, legs,
     lot_size, lots, expiry, max_loss/max_profit — as built by
@@ -202,7 +247,9 @@ def _resolve_spread(entry: dict, bars: list):
                         below the profit ratchet's locked level (armed at 40%
                         of max profit → breakeven; 60→30, 80→50, 90→70);
                         only on bars on/after RATCHET_EFFECTIVE_DATE
-      pre_expiry_exit   PRE_EXPIRY_EXIT_DAYS or fewer days to expiry
+      pre_expiry_exit   inside the forced-exit window (`in_forced_exit_window`:
+                        PRE_EXPIRY_EXIT_DAYS — 7 for a stock option — or
+                        fewer days to expiry, or the last session before it)
     There is NO mid-trade stop (decision #105): a defined-risk structure's
     max loss is capped by construction. The walk stamps `entry["ratchet"]`
     (peak / lock / armed) for directional spreads so the live bridge and the
@@ -273,8 +320,9 @@ def _resolve_spread(entry: dict, bars: list):
         # max loss — and NSE's delivery margin escalates through the final
         # week, so a "defined-risk" structure stops being defined-risk
         # exactly there. Index options are cash-settled and keep the
-        # existing 2-day rule.
-        if days_left <= _forced_exit_days(entry.get("ticker")):
+        # existing 2-day rule. Either way, the last session before expiry is
+        # always inside the window (audit F23: a holiday-moved Monday expiry).
+        if in_forced_exit_window(entry.get("ticker"), expiry, d):
             return "pre_expiry_exit", m_now, frac_left, day
     if ratcheted and last_day is not None and pending:
         # rungs newer than every bar walked (an intraday raise today, before
@@ -352,7 +400,7 @@ def _resolve_spread_trailed(entry: dict, bars: list):
             return "trail_hit", m_now, frac_left, day
         if max_profit_ps > 0 and profit_ps >= OPTION_PROFIT_TAKE_FRACTION * max_profit_ps:
             return "profit_take", m_now, frac_left, day
-        if (expiry - date.fromisoformat(day)).days <= _forced_exit_days(entry.get("ticker")):
+        if in_forced_exit_window(entry.get("ticker"), expiry, day):
             return "pre_expiry_exit", m_now, frac_left, day
         extreme = c if extreme is None else (max(extreme, c) if bullish
                                              else min(extreme, c))
@@ -376,10 +424,26 @@ def _resolve_spread_trailed(entry: dict, bars: list):
 # the spread no longer exists at the exchange, so the journal must not say
 # it is open. Settlement price, in order of honesty:
 #
-#   1. the last available close ON OR BEFORE expiry -> intrinsic value only
-#      (time value is zero at expiry). Named `last_close_on_or_before_expiry`.
-#      Fires the first sweep after expiry.
-#   2. NO price data at all -> the defined max loss, named
+#   1. the EXPIRY SESSION's own close -> intrinsic value only (time value is
+#      zero at expiry). The expiry session is the listed expiry date, or the
+#      last NSE session before it when that date is not a trading day
+#      (`expiry_session`). Named `last_close_on_or_before_expiry` (it is
+#      exactly that). Fires the first sweep that HAS that bar.
+#      Audit F22 (2026-10-06): this used to take the newest bar on or before
+#      expiry, whichever session it was. Dhan serves day D's daily bar only
+#      around 05:30 on D+1, and the hourly Auto-Sync runs all night, so the
+#      first sweep after midnight booked D-1's close as the expiry
+#      settlement — anywhere from max loss to max profit when spot crossed
+#      the strikes on expiry day — and nothing ever corrected it. An earlier
+#      session's close is not the expiry price: the backstop now WAITS for
+#      the expiry session's bar.
+#   2. the expiry session's bar never came, but an earlier close exists ->
+#      intrinsic on the newest close on or before expiry, only AFTER
+#      EXPIRY_BACKSTOP_GRACE_DAYS, and NAMED `stale_close_after_grace` with
+#      that close's own date (`settlement_close_date`), so the row says which
+#      session priced it and can be reviewed by hand. The lock must not be
+#      held for ever over one missing bar.
+#   3. NO price data at all -> the defined max loss, named
 #      `no_price_data_max_loss`. Deliberately CONSERVATIVE (the ledger's
 #      loss-permanence bias, RULE 3): a settlement is never marked up on a
 #      guess. Waits EXPIRY_BACKSTOP_GRACE_DAYS after expiry so a one-day
@@ -387,10 +451,11 @@ def _resolve_spread_trailed(entry: dict, bars: list):
 #      margin release matters more than the mark, and the outcome carries
 #      the basis so the row can be reviewed by hand.
 #
-# Both paths release the margin lock and journal the outcome exactly like a
-# normal resolution. Nothing here places an order (Rule 7).
+# Every path releases the margin lock and journals the outcome exactly like
+# a normal resolution. Nothing here places an order (Rule 7).
 EXPIRY_BACKSTOP_RESOLUTION = "expiry_backstop"
-EXPIRY_BACKSTOP_GRACE_DAYS = 3        # calendar days past expiry before path (2)
+EXPIRY_BACKSTOP_GRACE_DAYS = 3        # calendar days past expiry before paths (2)/(3)
+STALE_CLOSE_BASIS = "stale_close_after_grace"
 
 
 def _today() -> date:
@@ -401,11 +466,15 @@ def _today() -> date:
 def _expiry_backstop(entry: dict, bars: list, today: date = None):
     """Force-settle a spread whose expiry date has passed.
 
-    Returns None while the backstop does not apply (expiry not yet past, or
-    no data and still inside the grace window). Otherwise returns
+    Returns None while the backstop does not apply: expiry not yet past, or
+    still inside the grace window with no close for the expiry session
+    (audit F22 — an earlier session's close is waited out, not settled on).
+    Otherwise returns
       (resolution, exit_mark_per_share, frac_left, exit_day, exit_close,
        settlement_basis, close_date)
-    where exit_close/close_date are None on the no-data path."""
+    where exit_close/close_date are None on the no-data path. `close_date`
+    is the date of the bar that priced it — the expiry session's on the
+    normal path, an earlier one on `stale_close_after_grace`."""
     spread = entry["spread"]
     expiry = date.fromisoformat(spread["expiry"])
     today = today or _today()
@@ -417,14 +486,21 @@ def _expiry_backstop(entry: dict, bars: list, today: date = None):
     max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
 
     usable = [b for b in (bars or []) if b[0] <= spread["expiry"]]
-    if usable:
-        close_day, _low, _high, close = max(usable, key=lambda b: b[0])
+    newest = max(usable, key=lambda b: b[0]) if usable else None
+    in_grace = (today - expiry).days < EXPIRY_BACKSTOP_GRACE_DAYS
+    # The newest bar on/before expiry IS the expiry session's when it is dated
+    # on or after that session (a bar on a listed expiry the calendar calls a
+    # holiday means the exchange did trade it — the bar wins).
+    on_session = newest is not None and newest[0] >= expiry_session(expiry).isoformat()
+    if newest is not None and (on_session or not in_grace):
+        close_day, _low, _high, close = newest
         m_now = _spread_mark(spread, float(close), 0.0)   # intrinsic only
         profit_ps = max(-max_loss_ps, min(m_now - m_entry, max_profit_ps))
         return (EXPIRY_BACKSTOP_RESOLUTION, m_entry + profit_ps, 0.0,
                 spread["expiry"], float(close),
-                "last_close_on_or_before_expiry", close_day)
-    if (today - expiry).days < EXPIRY_BACKSTOP_GRACE_DAYS:
+                "last_close_on_or_before_expiry" if on_session else STALE_CLOSE_BASIS,
+                close_day)
+    if in_grace:
         return None
     return (EXPIRY_BACKSTOP_RESOLUTION, m_entry - max_loss_ps, 0.0,
             spread["expiry"], None, "no_price_data_max_loss", None)
@@ -1069,8 +1145,14 @@ def _spread_verdict(entry: dict, resolution: str, pnl_net: float, capture_pct: f
         if basis == "no_price_data_max_loss":
             return ("EXPIRY BACKSTOP — NO PRICE DATA: settled at the defined max loss "
                     "(conservative, wall clock; review this row by hand)")
-        return (f"EXPIRY BACKSTOP — settled at intrinsic value on the last close "
-                f"before expiry (wall clock), net Rs.{pnl_net:+,.2f}")
+        if basis == STALE_CLOSE_BASIS:
+            close_day = (entry.get("outcome") or {}).get("settlement_close_date")
+            return (f"EXPIRY BACKSTOP — STALE CLOSE: the expiry session's close never arrived; "
+                    f"settled at intrinsic value on the {close_day} close after the "
+                    f"{EXPIRY_BACKSTOP_GRACE_DAYS}-day grace window, net Rs.{pnl_net:+,.2f} "
+                    f"(review this row by hand)")
+        return (f"EXPIRY BACKSTOP — settled at intrinsic value on the expiry session's "
+                f"close (wall clock), net Rs.{pnl_net:+,.2f}")
     if resolution == "ratchet_hit":
         rs = entry.get("ratchet") or {}
         return ((f"WIN — profit ratchet took {capture_pct:.0f}% of max profit "
@@ -1741,13 +1823,18 @@ def _settle_spread_row(entry: dict, bars: list, seen: dict) -> bool:
     backstop = None
     # The bar walk only settles on a bar. Past expiry with no usable
     # exit (no bars, a gap over the exit window, or a "pre-expiry" hit
-    # that landed on a POST-expiry bar) the wall clock takes over.
+    # that landed on a POST-expiry bar) the wall clock takes over. A
+    # post-expiry hit is never settled on, even while the backstop waits
+    # for the expiry session's close (audit F22): it prices a session in
+    # which the spread no longer existed.
     if hit is None or hit[3] > spread["expiry"]:
         backstop = _expiry_backstop(entry, bars)
-        if backstop is not None:
-            hit = backstop[:4]
+        hit = backstop[:4] if backstop is not None else None
     if hit is None:
-        seen["status"] = "live" if bars else "no_data"
+        if bars and _today() > date.fromisoformat(spread["expiry"]):
+            seen["status"] = "awaiting_expiry_close"
+        else:
+            seen["status"] = "live" if bars else "no_data"
         # The walk stamps the profit ratchet it saw on the closes (#110) so the
         # live bridge and the journal share one state: a still-open spread's
         # raised ratchet is written (the walk started from this FRESH row, and
@@ -2076,6 +2163,11 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
         if entry is None or seen.get("status") != "resolved":
             if seen.get("status") == "no_data":
                 print(f"Plan tracker: no price data for {candidate['ticker']} spread — will retry next run.")
+            elif seen.get("status") == "awaiting_expiry_close":
+                exp = candidate["spread"]["expiry"]
+                print(f"Plan tracker: {candidate['ticker']} spread expired {exp} — waiting for the expiry "
+                      f"session's own close ({expiry_session(exp).isoformat()}) before settling "
+                      f"(up to {EXPIRY_BACKSTOP_GRACE_DAYS} days past expiry; audit F22) — will retry next run.")
             elif seen.get("status") == "live":
                 print(f"Plan tracker: {candidate['spread']['strategy']} on {candidate['ticker']} still live "
                       f"(expiry {candidate['spread']['expiry']}).")

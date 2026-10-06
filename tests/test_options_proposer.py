@@ -837,7 +837,13 @@ def test_the_tracker_and_the_live_bridge_ask_the_SAME_predicate():
     assert _pt._forced_exit_days("NIFTY 50") == 2
     import inspect
     from src import live_bridge
-    assert "_forced_exit_days" in inspect.getsource(live_bridge)
+    from src.execution import live_pricer
+    # audit F23: the one predicate is plan_tracker.in_forced_exit_window,
+    # which is built on _forced_exit_days (behavioural agreement is in
+    # tests/test_expiry_session_and_exit_window.py)
+    assert "_forced_exit_days" in inspect.getsource(_pt.in_forced_exit_window)
+    assert "in_forced_exit_window" in inspect.getsource(live_bridge)
+    assert "in_forced_exit_window" in inspect.getsource(live_pricer)
 
 
 def test_the_forced_exit_lookup_fails_SAFE_to_the_index_rule(monkeypatch):

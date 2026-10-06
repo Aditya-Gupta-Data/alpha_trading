@@ -74,6 +74,26 @@ closes with the tick's IST timestamp. A crash between fill and settlement
 is RESUMED from the ticket on the next tick, never re-issued. Unfilled →
 cancelled, position kept.
 
+ONE ACTOR PER EXIT, AND WHAT FILLED IS WHAT COUNTS (audit F05 + F06,
+2026-10-06). The `exiting` stamp is a compare-and-set on `state = 'open'`:
+when it matches no row, another actor owns (or finished) this exit, and
+`_exit` returns `exit_not_owned` — no ticket, no fill. Every statement
+that puts a row back to `open` is a compare-and-set on the attempt it
+undoes (still `exiting`, same exit ticket, same start stamp), so a CLOSED
+row is never reopened. After any exit attempt that did not come back
+FILLED — a door error resumed on the next tick, an unfilled ticket — the
+in-flight ticket is cancelled and the decision is made on the OMS's per-leg
+FILLS across every EXIT ticket of the row (`_exit_fills`), never on a
+status read before the cancel: all legs closed (a concurrent sweep filled
+it) → settle from those fills; nothing filled → reopen; SOME legs closed
+(a basket cut between two per-leg commits) → the row stays `exiting`, and
+the next chain FETCHED on a tick closes ONLY the legs still open, at their
+remaining quantity (`_complete_exit`); settlement then prices every leg at
+its own volume-weighted fill across both tickets — no leg is closed twice
+and no fill is ignored. A host-wide, non-blocking flock
+(`data/.live_pricer_tick.lock`) lets one process tick at a time; a second
+scheduler or a hand-run live_bridge skips its tick, named.
+
 EXPIRY BACKSTOP (`eod_sweep`, from plan_tracker.run_tracker): calls the
 primary's `_expiry_backstop` itself — intrinsic at the EXPIRY SESSION's own
 close (audit F22: an earlier session's close is waited out, never settled
@@ -92,6 +112,12 @@ import json
 import os
 import time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+try:
+    import fcntl  # POSIX (Linux VM + macOS) — the single-instance tick lock (audit F06)
+except ImportError:  # pragma: no cover — non-POSIX host
+    fcntl = None
 
 IST = timezone(timedelta(hours=5, minutes=30))
 STATE_OPEN, STATE_EXITING, STATE_CLOSED = "open", "exiting", "closed"
@@ -113,6 +139,13 @@ EVENT_EXIT_HELD, EVENT_MARK_ABSTAINED = "live_exit_held", "live_mark_abstained"
 # held_recent_attempt is only the pause after an unfilled attempt, which
 # already wrote its own live_exit_unfilled event.
 HELD_ON_PRICE = ("held_loss_beyond_max", "held_impossible_mark")
+# Audit F05: an exit basket that closed SOME legs only — the row stays
+# `exiting` until the rest is closed; one row per position per IST day.
+EVENT_EXIT_PARTIAL = "live_exit_partial"
+# Audit F06: one live-arm tick at a time on the host (beside the brain map,
+# like dhan_client's throttle files). Never opened under pytest unless a
+# test passes its own path (`tick(tick_lock=...)`).
+TICK_LOCK_FILE = Path(__file__).resolve().parents[2] / "data" / ".live_pricer_tick.lock"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_live_positions (
@@ -467,15 +500,18 @@ def positions(conn, include_closed: bool = True) -> list:
 
 # ------------------------------------------------------------- settlement
 
-def _entry_like(row: dict) -> dict:
+def _entry_like(row: dict, legs: list = None, lots: int = None) -> dict:
     """The tracker-shaped entry the exit door needs, built from the row so
-    it works whatever the journal row says now."""
+    it works whatever the journal row says now. `legs` / `lots` narrow it
+    to what a partly filled exit left open (audit F05: the completion
+    ticket carries ONLY those legs, at the remaining quantity)."""
     lot = int(row["lot_size"])
     return {"short_id": row["journal_ref"], "ticker": row["ticker"], "date": row["opened_at"][:10],
             "spread": {"strategy": row["strategy"], "direction": row["direction"], "expiry": row["expiry"],
-                       "lot_size": lot, "lots": int(row["lots"]),
+                       "lot_size": lot, "lots": int(row["lots"] if lots is None else lots),
                        "legs": [{"side": l["side"], "option_type": l["option_type"], "strike": l["strike"],
-                                 "premium": l["entry_fill"], "fill_basis": FILL_BASIS} for l in row["legs"]],
+                                 "premium": l["entry_fill"], "fill_basis": FILL_BASIS}
+                                for l in (row["legs"] if legs is None else legs)],
                        "max_loss": round(float(row["max_loss_ps"]) * lot, 2),
                        "max_profit": round(float(row["max_profit_ps"]) * lot, 2),
                        "spread_width": row["width_ps"]}}
@@ -576,17 +612,55 @@ def _stamp_journal(row: dict, payload: dict) -> None:
         print(f"  (live account: journal stamp skipped for {row['journal_ref']}: {exc})")
 
 
-def _find_exit_ticket(conn, row: dict):
-    """The EXIT ticket this row's exit issued (for resume), or None."""
+def _exit_fills(conn, row: dict) -> dict:
+    """What this row's EXIT tickets have ACTUALLY closed, read from the OMS
+    (audit F05). Every EXIT ticket of (account, journal_ref) counts — the
+    position row is one per pair, so they are all this row's: the first
+    attempt and the completion of a basket that only partly filled. Per
+    position leg: `filled` (qty_filled summed over every ticket, whatever
+    state the leg ended in — a cancelled remainder keeps its fills),
+    `avg_fill` (volume-weighted), `remaining` (position qty − filled, never
+    below 0). `in_flight` = tickets with a leg still PENDING/PARTIAL (a
+    venue may yet fill it); `filled_tickets` = tickets with any fill,
+    oldest first; `complete` = every leg closed; `filled_any` = some fill.
+    Commits (oms.ensure_schema): call it outside a transaction."""
     from src import oms
     oms.ensure_schema(conn)
-    if row.get("exit_ticket_id"):
-        return oms.ticket_view(conn, row["exit_ticket_id"])
-    since = row.get("exit_started_at") or row["opened_at"]
-    t = conn.execute("SELECT ticket_id FROM trade_tickets WHERE account_id = ? AND journal_ref = ? "
-                     "AND issued_at >= ? AND note LIKE 'EXIT %' ORDER BY issued_at DESC LIMIT 1",
-                     (row["account_id"], row["journal_ref"], since)).fetchone()
-    return oms.ticket_view(conn, t[0]) if t else None
+    qty = int(row["lots"]) * int(row["lot_size"])
+    tickets = [tuple(r) for r in conn.execute(
+        "SELECT ticket_id, note FROM trade_tickets WHERE account_id = ? AND journal_ref = ? "
+        "AND note LIKE 'EXIT %' ORDER BY rowid", (row["account_id"], row["journal_ref"])).fetchall()]
+    agg, in_flight, filled_tickets = {}, [], []
+    for tid, _note in tickets:
+        got = False
+        for strike, otype, state, q, avg in (tuple(r) for r in conn.execute(
+                "SELECT strike, option_type, state, qty_filled, avg_fill_price FROM trade_legs "
+                "WHERE ticket_id = ?", (tid,)).fetchall()):
+            if state in (oms.PENDING, oms.PARTIAL) and tid not in in_flight:
+                in_flight.append(tid)
+            q = int(q or 0)
+            if q > 0 and avg is not None:
+                key = (float(strike), str(otype or "").upper())
+                n, notional = agg.get(key, (0, 0.0))
+                agg[key] = (n + q, notional + q * float(avg))
+                got = True
+        if got:
+            filled_tickets.append(tid)
+    legs = []
+    for l in row["legs"]:
+        key = (float(l["strike"]), str(l["option_type"]).upper())
+        n, notional = agg.get(key, (0, 0.0))
+        legs.append({"leg": l, "key": key, "filled": n, "remaining": max(0, qty - n),
+                     "avg_fill": round(notional / n, 4) if n else None})
+    note = str(tickets[0][1] or "") if tickets else ""
+    return {"tickets": [t[0] for t in tickets], "in_flight": in_flight, "filled_tickets": filled_tickets,
+            "legs": legs, "filled_any": any(x["filled"] for x in legs),
+            "complete": all(x["remaining"] == 0 for x in legs),
+            "note_resolution": note[5:].strip() if note.startswith("EXIT ") else ""}
+
+
+def _leg_label(leg: dict) -> str:
+    return f"{str(leg['side']).upper()} {float(leg['strike']):g}{str(leg['option_type']).upper()}"
 
 
 def _mark_from_ticket(view: dict) -> tuple:
@@ -601,24 +675,101 @@ def _mark_from_ticket(view: dict) -> tuple:
     return round(mark, 4), prices
 
 
-def _resume_exiting(conn, row: dict, now: datetime) -> dict:
-    """A row left in `exiting` by a crash: settle from a FILLED ticket,
-    cancel an unfilled one and reopen. Never issues a new ticket."""
-    from src import oms
-    view = _find_exit_ticket(conn, row)
-    if view and view.get("status") == oms.FILLED:
-        mark, prices = _mark_from_ticket(view)
-        note = str(view.get("note") or "")
-        resolution = row.get("exit_resolution") or (note[5:].strip() if note.startswith("EXIT ") else "") \
-            or "resumed_exit"
-        return _settle(conn, row, mark, resolution, "live_bid_ask", _frictions(row, prices), now,
-                       ticket_id=view["ticket_id"], detail={"resumed": True})
-    if view and view.get("status") not in (oms.CANCELLED, oms.REJECTED):
-        oms.cancel_ticket(conn, view["ticket_id"], "live account: exit resumed unfilled")
-    conn.execute("UPDATE paper_live_positions SET state = ?, exit_started_at = NULL, exit_ticket_id = NULL "
-                 "WHERE account_id = ? AND journal_ref = ?", (STATE_OPEN, row["account_id"], row["journal_ref"]))
+def _settle_from_fills(conn, row: dict, ex: dict, now: datetime, detail: dict = None) -> dict:
+    """Settle on what the OMS says filled (audit F05): exit mark = Σ sign ×
+    each leg's volume-weighted fill across EVERY exit ticket of the row,
+    frictions on those prices — a basket closed over two tickets is booked
+    once, on both tickets' real prices. The row's own predicate names it;
+    a row stamped before `exit_resolution` existed falls back to the
+    ticket's note."""
+    prices = {x["key"]: x["avg_fill"] for x in ex["legs"]}
+    mark = round(sum(_sign(x["leg"]["side"]) * x["avg_fill"] for x in ex["legs"]), 4)
+    resolution = row.get("exit_resolution") or ex.get("note_resolution") or "resumed_exit"
+    d = dict(detail or {}, fills={f"{k[0]:g}{k[1]}": v for k, v in prices.items()})
+    if len(ex["filled_tickets"]) > 1:
+        d["exit_tickets"] = list(ex["filled_tickets"])
+    tid = ex["filled_tickets"][-1] if ex["filled_tickets"] else None
+    return _settle(conn, row, mark, resolution, "live_bid_ask", _frictions(row, prices), now,
+                   ticket_id=tid, detail=d)
+
+
+def _reopen(conn, row: dict, exit_ticket_id, exit_started_at) -> bool:
+    """Put an `exiting` row back to `open` after an exit attempt that
+    filled NOTHING. Audit F06: a compare-and-set on the attempt being
+    undone — the row must still be `exiting`, with that attempt's exit
+    ticket and start stamp — never an unconditional write (a stale actor
+    used to reopen a row another one had CLOSED: a ghost whose lock was
+    already released). False = the row moved on; nothing is written."""
+    cur = conn.execute("UPDATE paper_live_positions SET state = ?, exit_started_at = NULL, exit_ticket_id = NULL "
+                       "WHERE account_id = ? AND journal_ref = ? AND state = ? AND exit_ticket_id IS ? "
+                       "AND exit_started_at IS ?",
+                       (STATE_OPEN, row["account_id"], row["journal_ref"], STATE_EXITING,
+                        exit_ticket_id, exit_started_at))
     conn.commit()
-    return {"status": "reopened", "journal_ref": row["journal_ref"]}
+    return cur.rowcount == 1
+
+
+def _row_state(conn, row: dict):
+    r = conn.execute("SELECT state FROM paper_live_positions WHERE account_id = ? AND journal_ref = ?",
+                     (row["account_id"], row["journal_ref"])).fetchone()
+    return r[0] if r else None
+
+
+def _resolve_attempt(conn, row: dict, ex: dict, now: datetime, exit_ticket_id, exit_started_at,
+                     detail: dict = None) -> dict:
+    """THE decision after an exit attempt that did not come back FILLED,
+    made on the OMS's per-leg fills across every EXIT ticket of the row
+    (audit F05) — never on a status read before the cancel:
+      a leg still in flight → `exit_in_flight` (row stays `exiting`; the
+                              next tick's resume decides);
+      every leg closed      → settle from the fills (a concurrent sweep
+                              filled it: never reopen a closed exit);
+      some legs closed      → `partial` (row stays `exiting`; only the
+                              rest is ever exited again — `_complete_exit`);
+      nothing filled        → `reopened` (compare-and-set on this attempt,
+                              F06) or `not_reopened` when the row moved on."""
+    ref = row["journal_ref"]
+    if ex["in_flight"]:
+        return {"status": "exit_in_flight", "journal_ref": ref,
+                "reason": f"exit ticket(s) {', '.join(ex['in_flight'])} still have a leg working — "
+                          "row left 'exiting' for the next tick"}
+    if ex["complete"]:
+        return _settle_from_fills(conn, row, ex, now, detail)
+    if ex["filled_any"]:
+        closed = ", ".join(f"{_leg_label(x['leg'])} {x['filled']}" for x in ex["legs"] if x["filled"])
+        left = ", ".join(f"{_leg_label(x['leg'])} {x['remaining']}" for x in ex["legs"] if x["remaining"])
+        reason = (f"{row.get('exit_resolution') or 'exit'} basket partly filled: closed {closed}; still open "
+                  f"{left} — the row stays 'exiting' and only the open legs are exited, on the next fetched chain")
+        _log_once_a_day(conn, row, EVENT_EXIT_PARTIAL, reason)
+        return {"status": "partial", "journal_ref": ref, "reason": reason,
+                "remaining": {_leg_label(x["leg"]): x["remaining"] for x in ex["legs"] if x["remaining"]}}
+    if _reopen(conn, row, exit_ticket_id, exit_started_at):
+        return {"status": "reopened", "journal_ref": ref}
+    return {"status": "not_reopened", "journal_ref": ref,
+            "reason": f"row is '{_row_state(conn, row)}' now — another actor moved it; nothing reopened"}
+
+
+def _resume_exiting(conn, row: dict, now: datetime) -> dict:
+    """A row left in `exiting` — a crash or a door error mid-exit, or a
+    basket that only partly filled: cancel whatever is still in flight
+    (keeping what each cancel returns), then resolve on what the OMS says
+    ACTUALLY filled across all of the row's EXIT tickets (audit F05: it
+    used to reopen the FULL position on any non-FILLED read, so a
+    half-filled basket — or a ticket filled under the cancel — was closed
+    a second time later). Never issues a ticket: closing the legs a
+    partial basket left open is tick's job, on a freshly fetched chain."""
+    from src import oms
+    ex = _exit_fills(conn, row)
+    cancelled = {}
+    for tid in ex["in_flight"]:
+        cancelled[tid] = oms.cancel_ticket(conn, tid, "live account: exit resumed unfilled").get("status")
+    if cancelled:
+        ex = _exit_fills(conn, row)     # what the cancels left — a fill that beat them counts
+    res = _resolve_attempt(conn, row, ex, now, row.get("exit_ticket_id"), row.get("exit_started_at"),
+                           detail={"resumed": True})
+    if cancelled:
+        res["cancelled"] = cancelled
+    return res
 
 
 def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_mod=None,
@@ -657,17 +808,28 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
         # no paper venue: the crossed quotes ARE the fill; settle without a ticket
         return _settle(conn, row, would, resolution, "live_bid_ask_no_venue", frictions, now,
                        detail=detail)
-    conn.execute("UPDATE paper_live_positions SET state = ?, exit_started_at = ?, exit_resolution = ?, "
-                 "last_exit_attempt_ts = ? WHERE account_id = ? AND journal_ref = ? AND state = ?",
-                 (STATE_EXITING, _iso(now), resolution, _iso(now), row["account_id"], row["journal_ref"],
-                  STATE_OPEN))
+    started = _iso(now)
+    cur = conn.execute("UPDATE paper_live_positions SET state = ?, exit_started_at = ?, exit_resolution = ?, "
+                       "last_exit_attempt_ts = ? WHERE account_id = ? AND journal_ref = ? AND state = ?",
+                       (STATE_EXITING, started, resolution, started, row["account_id"], row["journal_ref"],
+                        STATE_OPEN))
+    owned = cur.rowcount == 1
     conn.commit()
+    if not owned:
+        # Audit F06: this stamp IS the exit's serialisation. Matching no row
+        # means the caller's copy is stale — another actor already stamped,
+        # resumed or settled this position — so this one issues NOTHING (a
+        # stale copy used to issue and fill a second EXIT ticket, refused
+        # only afterwards by _settle's 'already_closed').
+        return {"status": "exit_not_owned", "journal_ref": row["journal_ref"],
+                "reason": f"row is '{_row_state(conn, row)}', not 'open' — another actor owns this exit; "
+                          "no ticket issued"}
     rec = pt._execute_paper_exit(_entry_like(row), limits, resolution, conn=conn, venue_mod=venue_mod,
                                  today=now.date(), accounts=[(row["account_id"], int(row["lots"]))])
     tid = rec.get("ticket_id")
     if tid:
-        conn.execute("UPDATE paper_live_positions SET exit_ticket_id = ? WHERE account_id = ? AND journal_ref = ?",
-                     (tid, row["account_id"], row["journal_ref"]))
+        conn.execute("UPDATE paper_live_positions SET exit_ticket_id = ? WHERE account_id = ? AND journal_ref = ? "
+                     "AND state = ?", (tid, row["account_id"], row["journal_ref"], STATE_EXITING))
         conn.commit()
     if rec.get("mode") == "paper_venue" and rec.get("status") == oms.FILLED:
         view = oms.ticket_view(conn, tid) or {}
@@ -686,16 +848,105 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
     if tid:
         try:
             oms.cancel_ticket(conn, tid, "live account: exit not filled")
-        except Exception:
-            pass
-    conn.execute("UPDATE paper_live_positions SET state = ?, exit_started_at = NULL, exit_ticket_id = NULL "
-                 "WHERE account_id = ? AND journal_ref = ?", (STATE_OPEN, row["account_id"], row["journal_ref"]))
-    conn.commit()
+        except Exception as exc:
+            # what is still working is unknown: never reopen on a guess (F05)
+            pm.paper_log_event(conn, row["account_id"], EVENT_UNFILLED, row["journal_ref"],
+                               f"{resolution}: exit ticket {tid} not filled and its cancel failed ({exc}) "
+                               "— row left for resume")
+            return {"status": "exit_error", "journal_ref": row["journal_ref"], "ticket_id": tid,
+                    "reason": f"cancel failed: {exc}"}
+    # Audit F05: decide on what the venue ACTUALLY filled across this row's
+    # exit tickets — a ticket filled between the sweep and the cancel is
+    # settled, a basket that closed some legs is never restored whole.
+    res = _resolve_attempt(conn, row, _exit_fills(conn, row), now, tid, started, detail=detail)
+    if res["status"] != "reopened":
+        return dict(res, ticket_id=res.get("ticket_id") or tid)
     pm.paper_log_event(conn, row["account_id"], EVENT_UNFILLED, row["journal_ref"],
                        f"{resolution}: exit ticket {tid or '-'} not filled ({rec.get('status')} "
                        f"{rec.get('error') or ''}) — position kept, next attempt after {interval_s}s")
     return {"status": "unfilled", "journal_ref": row["journal_ref"], "ticket_id": tid,
             "reason": rec.get("error") or rec.get("status")}
+
+
+def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, venue_mod=None) -> dict:
+    """Close ONLY the legs a partly filled exit basket left open (audit
+    F05), at their remaining quantity, on a chain FETCHED this tick and
+    crossed like every live exit (a long sold at the bid, a short bought
+    back at the ask). The exit decision was made and half executed, so
+    there is no predicate and no price hold here: the remainder is no
+    longer the defined-risk structure the holds protect (a short leg left
+    open can lose more than the spread's max loss by expiry), and the
+    settlement clamp still bounds what is booked. A leg with no usable
+    quote waits (`partial_held`). Settles from the fills of BOTH tickets."""
+    from src import oms, plan_tracker as pt, portfolio_manager as pm
+    ref = row["journal_ref"]
+    ex = _exit_fills(conn, row)
+    if ex["in_flight"] or ex["complete"] or not ex["filled_any"]:
+        # not a partial basket any more (the resume pass owns these states)
+        return _resolve_attempt(conn, row, ex, now, row.get("exit_ticket_id"), row.get("exit_started_at"),
+                                detail={"completion": True})
+    open_legs = [x for x in ex["legs"] if x["remaining"] > 0]
+    qtys = {x["remaining"] for x in open_legs}
+    lot = int(row["lot_size"])
+    if len(qtys) != 1 or next(iter(qtys)) % lot:
+        # one exit ticket carries ONE lot count for all its legs. The paper
+        # venue fills a leg whole (fill fraction 1.0), so this is not reached
+        # in production; a remainder it cannot express waits, named.
+        reason = ("the open remainder (" + ", ".join(f"{_leg_label(x['leg'])} {x['remaining']}" for x in open_legs)
+                  + f") is not one whole-lot basket of lot size {lot} — it cannot be ticketed as one exit; "
+                  "held for a human")
+        _log_once_a_day(conn, row, EVENT_EXIT_PARTIAL, reason)
+        return {"status": "partial_held", "journal_ref": ref, "reason": reason}
+    lots = next(iter(qtys)) // lot
+    prices = {}
+    for x in open_legs:
+        price, why = crossed_close_price(x["leg"], leg_quote(chain, x["leg"]))
+        if price is None:
+            return {"status": "partial_held", "journal_ref": ref,
+                    "reason": f"closing the open remainder: {_leg_label(x['leg'])}: {why}"}
+        prices[x["key"]] = price
+    limits = {k: max(TICK_FLOOR, float(v)) for k, v in prices.items()}
+    resolution = row.get("exit_resolution") or ex.get("note_resolution") or "resumed_exit"
+    # claim this attempt (F06): a compare-and-set on the row as this tick read it
+    cur = conn.execute("UPDATE paper_live_positions SET last_exit_attempt_ts = ? WHERE account_id = ? "
+                       "AND journal_ref = ? AND state = ? AND exit_ticket_id IS ? AND exit_started_at IS ?",
+                       (_iso(now), row["account_id"], ref, STATE_EXITING, row.get("exit_ticket_id"),
+                        row.get("exit_started_at")))
+    owned = cur.rowcount == 1
+    conn.commit()
+    if not owned:
+        return {"status": "exit_not_owned", "journal_ref": ref,
+                "reason": f"row is '{_row_state(conn, row)}' and no longer as this tick read it — another "
+                          "actor owns this exit; no ticket issued"}
+    rec = pt._execute_paper_exit(_entry_like(row, legs=[x["leg"] for x in open_legs], lots=lots), limits,
+                                 resolution, conn=conn, venue_mod=venue_mod, today=now.date(),
+                                 accounts=[(row["account_id"], lots)])
+    tid = rec.get("ticket_id")
+    if tid in ex["tickets"]:
+        # exit ticket ids are keyed to the wall-clock second, and issuing is
+        # idempotent: an id this row already has means NOTHING new was issued
+        # (a tick always comes later in production) — never read the old one
+        return {"status": "partial_held", "journal_ref": ref,
+                "reason": f"the completion ticket's id {tid} is an earlier exit ticket's (same wall-clock "
+                          "second) — nothing new was issued; retried on the next fetched chain"}
+    if tid:
+        conn.execute("UPDATE paper_live_positions SET exit_ticket_id = ? WHERE account_id = ? AND journal_ref = ? "
+                     "AND state = ?", (tid, row["account_id"], ref, STATE_EXITING))
+        conn.commit()
+    if rec.get("error") and not tid:
+        pm.paper_log_event(conn, row["account_id"], EVENT_UNFILLED, ref,
+                           f"{resolution}: completion of a partly filled exit — door error "
+                           f"({rec.get('error')}) — row left for resume")
+        return {"status": "exit_error", "journal_ref": ref, "reason": rec.get("error")}
+    if tid and rec.get("status") != oms.FILLED:
+        try:
+            oms.cancel_ticket(conn, tid, "live account: exit completion not filled")
+        except Exception as exc:
+            return {"status": "exit_error", "journal_ref": ref, "ticket_id": tid,
+                    "reason": f"cancel failed: {exc}"}
+    res = _resolve_attempt(conn, row, _exit_fills(conn, row), now, tid, row.get("exit_started_at"),
+                           detail={"completion": True, "quote_ts": quote_ts})
+    return dict(res, ticket_id=res.get("ticket_id") or tid)
 
 
 def _repair_late_locks(conn, account: str) -> list:
@@ -930,17 +1181,74 @@ def _fetch(key: tuple, chain_fn, sleep_fn, now_epoch_fn) -> tuple | None:
     return _CHAIN_CACHE[key][1], chain
 
 
+def _tick_lock(path):
+    """Take the host-wide single-instance tick lock without waiting (audit
+    F06). Returns (handle, None) when held; (None, reason) when another
+    process holds it; (None, None) when no guard can be taken (no fcntl,
+    or the file cannot be opened) — fail-open, because the compare-and-set
+    transitions keep a second tick from double-exiting on their own; the
+    lock only keeps a second tick from running at all."""
+    if path is None or fcntl is None:
+        return None, None
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+")
+    except OSError as exc:
+        print(f"  (live account: tick lock {path} unavailable, ticking unguarded: {exc})")
+        return None, None
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None, (f"another process is ticking the live account (tick lock {path} is held) — "
+                      "this tick skipped")
+    except OSError as exc:
+        handle.close()
+        print(f"  (live account: tick lock {path} could not be taken, ticking unguarded: {exc})")
+        return None, None
+    return handle, None
+
+
+def _default_tick_lock():
+    """The production lock file — never under pytest, even when a test has
+    un-muzzled `_is_test_env` to reach the real chain door (conftest refuses
+    any write into the real data/, Issue 37)."""
+    if os.environ.get("PYTEST_CURRENT_TEST") or _is_test_env():
+        return None
+    return TICK_LOCK_FILE
+
+
+def _release_tick_lock(handle) -> None:
+    if handle is None:
+        return
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        handle.close()
+    except Exception:
+        pass
+
+
 def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, now_epoch_fn=time.time,
          interval_s: int = None, max_fetches: int = DEFAULT_MAX_FETCHES,
          budget_s: float = DEFAULT_BUDGET_SECONDS, cutoff: tuple = DEFAULT_CUTOFF,
-         venue_mod=None, require_market_open: bool = True) -> dict:
+         venue_mod=None, require_market_open: bool = True, tick_lock=None) -> dict:
     """One pass: resume half-done exits, refresh due chains (paced, capped,
     never after the cutoff), mark every open row, exit on a predicate
-    (re-verified on a fresh chain when the mark came from the cache).
-    Never raises. Returns a summary: counts, `exits` (every exit outcome
-    with its row, holds included), `row_notes` (every abstention and every
-    unconfirmed cached predicate, with its row and reason — audit F02),
-    `resumes`, `repaired` / `late_released`, `skipped`."""
+    (re-verified on a fresh chain when the mark came from the cache), and
+    close the open legs of a partly filled exit on a freshly fetched chain
+    (audit F05). Never raises. Returns a summary: counts, `exits` (every
+    exit outcome with its row, holds included), `row_notes` (every
+    abstention, every unconfirmed cached predicate and every partly filled
+    exit still waiting, with its row and reason — audit F02), `resumes`,
+    `repaired` / `late_released`, `skipped`.
+
+    `tick_lock` (audit F06): the single-instance lock file; None = the
+    production `TICK_LOCK_FILE`, except under pytest, where None means no
+    lock (the real data/ is never touched by a test — a test passes a
+    tmp path). Held by another process → the tick is skipped, named."""
     from src.config import LIVE_QUOTE_INTERVAL_SECONDS
     now = now or _now()
     interval_s = LIVE_QUOTE_INTERVAL_SECONDS if interval_s is None else int(interval_s)
@@ -948,6 +1256,10 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
            "resumed": 0, "skipped": None, "row_notes": []}
     if require_market_open and not _market_open(now):
         out["skipped"] = "market closed"
+        return out
+    lock, held_elsewhere = _tick_lock(tick_lock if tick_lock is not None else _default_tick_lock())
+    if held_elsewhere:
+        out["skipped"] = held_elsewhere
         return out
     own = conn is None
     try:
@@ -968,19 +1280,31 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                 print(f"  (live account: repair pass failed: {exc})")
             rows.extend(open_rows(conn, acct))
         out["rows"] = len(rows)
+        partial = set()
         for row in [r for r in rows if r["state"] == STATE_EXITING]:
             try:
                 res = _resume_exiting(conn, row, now)
+                if res.get("status") == "partial":
+                    partial.add((row["account_id"], row["journal_ref"]))
+                    if not res.get("cancelled"):
+                        # a standing partial basket (audit F05): nothing moved
+                        # since the last tick — the completion pass below
+                        # names it (de-duplicated), not a resume line per tick
+                        continue
                 out["resumed"] += 1
                 out.setdefault("resumes", []).append(
                     {"account_id": row["account_id"], "journal_ref": row["journal_ref"], **res})
             except Exception as exc:
                 print(f"  (live account: resume {row['journal_ref']} failed: {exc})")
-        rows = [r for r in open_rows(conn) if r["state"] == STATE_OPEN]
-        # chains due, stalest first, capped per tick and by the clock
+        after = open_rows(conn)
+        rows = [r for r in after if r["state"] == STATE_OPEN]
+        completing = [r for r in after if r["state"] == STATE_EXITING
+                      and (r["account_id"], r["journal_ref"]) in partial]
+        # chains due, stalest first, capped per tick and by the clock (a
+        # partly exited row's chain is fetched on the same schedule)
         start = now_epoch_fn()
         past_cutoff = (now.hour, now.minute) >= cutoff
-        keys = sorted({(r["ticker"], r["expiry"]) for r in rows},
+        keys = sorted({(r["ticker"], r["expiry"]) for r in rows + completing},
                       key=lambda k: _CHAIN_CACHE.get(k, (0.0,))[0])
         fresh, failed = set(), set()
         for key in keys:
@@ -1062,6 +1386,34 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                         _log_once_a_day(conn, row, EVENT_EXIT_HELD, _held_detail(ev["signal"], res))
             except Exception as exc:
                 print(f"  (live account: {row.get('journal_ref')} tick failed: {exc})")
+        # Audit F05: a basket that closed only SOME legs is finished on a
+        # chain FETCHED this tick (never a cached one — the same rule as a
+        # cached predicate), its open legs only. Its chain is due on the
+        # normal schedule, so a remainder that cannot fill yet is retried
+        # once per quote interval, not re-fetched every 60 s.
+        for row in completing:
+            try:
+                key = (row["ticker"], row["expiry"])
+                cached = _CHAIN_CACHE.get(key)
+                res = None
+                if key in fresh and cached:
+                    res = _complete_exit(conn, row, cached[2], cached[1], now, venue_mod=venue_mod)
+                    if res.get("status") != "partial_held":
+                        out["exits"].append({"account_id": row["account_id"], "journal_ref": row["journal_ref"],
+                                             "signal": row.get("exit_resolution"), "completion": True, **res})
+                        continue
+                why = (res["reason"] if res else
+                       "the fetch failed this tick" if key in failed else
+                       "past the fetch cutoff" if past_cutoff else
+                       "the chain was not fetched this tick (next fetch on the quote interval, or the "
+                       "per-tick fetch cap or time budget was reached)")
+                out["row_notes"].append(
+                    {"account_id": row["account_id"], "journal_ref": row["journal_ref"], "kind": "partial_exit",
+                     "days_left": (date.fromisoformat(row["expiry"]) - now.date()).days,
+                     "reason": f"{row.get('exit_resolution') or 'exit'} basket partly filled; the open legs "
+                               f"wait: {why}"})
+            except Exception as exc:
+                print(f"  (live account: completing {row.get('journal_ref')} failed: {exc})")
         open_keys = {(r["account_id"], r["journal_ref"]) for r in rows}
         for k in [k for k in _PENDING_RUNG if k not in open_keys]:
             _PENDING_RUNG.pop(k, None)              # a closed position's sighting is moot
@@ -1076,6 +1428,7 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                 conn.close()
             except Exception:
                 pass
+        _release_tick_lock(lock)
 
 
 # ------------------------------------------------------------- expiry backstop

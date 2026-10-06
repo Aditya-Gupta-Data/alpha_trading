@@ -40,6 +40,12 @@ ORDER STATES (per leg; the ticket rolls them up):
 
   Terminal states never transition again. `qty_filled` can only rise, never
   above `qty_target`; an over-fill is refused with a named reason.
+  Every transition is a COMPARE-AND-SET on the leg as it was read (state and
+  qty_filled): several processes write this one file, and a fill committed
+  by another connection between this call's read and its write is never
+  overwritten — the write matches no row and is refused, named (audit F05,
+  2026-10-06: a cancel could turn a just-FILLED leg CANCELLED, or a fill
+  land on a just-cancelled one, after the caller had decided on the read).
   Ticket status: FILLED when every leg is FILLED; REJECTED when any leg is
   REJECTED; CANCELLED when every leg ended CANCELLED/REJECTED with no fill;
   PARTIAL when any fill exists and the ticket is not complete; else PENDING.
@@ -222,6 +228,18 @@ def _refuse(reason, **extra):
     return {"ok": False, "reason": reason, **extra}
 
 
+def _moved(conn, leg_id: str, verb: str) -> dict:
+    """A compare-and-set write matched no row: another connection moved the
+    leg after this call read it. End the (empty) write transaction — an
+    open one would hold the database's write lock — and refuse by name,
+    with the state the leg is in NOW."""
+    conn.commit()
+    now = _leg(conn, leg_id) or {}
+    return _refuse(f"leg changed under this {verb} (now {now.get('state')}, "
+                   f"{now.get('qty_filled')} filled) — a concurrent writer moved it",
+                   state=now.get("state"))
+
+
 def apply_fill(conn, leg_id: str, qty: int, price: float,
                broker_order_id: str = None, basis: str = None) -> dict:
     """A fill report for one leg. Moves PENDING/PARTIAL -> PARTIAL or FILLED,
@@ -248,11 +266,16 @@ def apply_fill(conn, leg_id: str, qty: int, price: float,
     new_state = FILLED if filled == leg["qty_target"] else PARTIAL
     if new_state not in LEGAL_TRANSITIONS[leg["state"]]:
         return _refuse(f"illegal {leg['state']} -> {new_state}", state=leg["state"])
-    conn.execute(
+    # compare-and-set on the leg as read (audit F05): a cancel or another
+    # fill committed since `_leg` above wins, and this fill is refused
+    cur = conn.execute(
         "UPDATE trade_legs SET qty_filled = ?, avg_fill_price = ?, state = ?, "
         "broker_order_id = COALESCE(?, broker_order_id), fill_basis = COALESCE(?, fill_basis), "
-        "updated_at = ? WHERE leg_id = ?",
-        (filled, round(avg, 4), new_state, broker_order_id, basis, _now(), leg_id))
+        "updated_at = ? WHERE leg_id = ? AND state = ? AND qty_filled = ?",
+        (filled, round(avg, 4), new_state, broker_order_id, basis, _now(), leg_id,
+         leg["state"], leg["qty_filled"]))
+    if cur.rowcount != 1:
+        return _moved(conn, leg_id, "fill")
     _event(conn, leg_id, leg["state"], new_state, qty, price, "fill")
     _roll_up(conn, leg["ticket_id"])
     conn.commit()
@@ -268,9 +291,13 @@ def reject(conn, leg_id: str, reason: str, broker_order_id: str = None) -> dict:
         return _refuse("unknown leg")
     if REJECTED not in LEGAL_TRANSITIONS[leg["state"]]:
         return _refuse(f"illegal {leg['state']} -> REJECTED", state=leg["state"])
-    conn.execute("UPDATE trade_legs SET state = ?, reject_reason = ?, "
-                 "broker_order_id = COALESCE(?, broker_order_id), updated_at = ? WHERE leg_id = ?",
-                 (REJECTED, str(reason)[:300], broker_order_id, _now(), leg_id))
+    cur = conn.execute("UPDATE trade_legs SET state = ?, reject_reason = ?, "
+                       "broker_order_id = COALESCE(?, broker_order_id), updated_at = ? "
+                       "WHERE leg_id = ? AND state = ? AND qty_filled = ?",
+                       (REJECTED, str(reason)[:300], broker_order_id, _now(), leg_id,
+                        leg["state"], leg["qty_filled"]))
+    if cur.rowcount != 1:
+        return _moved(conn, leg_id, "reject")
     _event(conn, leg_id, leg["state"], REJECTED, None, None, str(reason)[:300])
     _roll_up(conn, leg["ticket_id"])
     conn.commit()
@@ -286,8 +313,14 @@ def cancel(conn, leg_id: str, reason: str = "cancelled") -> dict:
         return _refuse("unknown leg")
     if CANCELLED not in LEGAL_TRANSITIONS[leg["state"]]:
         return _refuse(f"illegal {leg['state']} -> CANCELLED", state=leg["state"])
-    conn.execute("UPDATE trade_legs SET state = ?, updated_at = ? WHERE leg_id = ?",
-                 (CANCELLED, _now(), leg_id))
+    # compare-and-set (audit F05): a fill another connection committed since
+    # the read above is never overwritten to CANCELLED — the cancel is refused
+    # and the leg keeps its fill (the caller reads the ticket's status after)
+    cur = conn.execute("UPDATE trade_legs SET state = ?, updated_at = ? "
+                       "WHERE leg_id = ? AND state = ? AND qty_filled = ?",
+                       (CANCELLED, _now(), leg_id, leg["state"], leg["qty_filled"]))
+    if cur.rowcount != 1:
+        return _moved(conn, leg_id, "cancel")
     _event(conn, leg_id, leg["state"], CANCELLED, None, None, str(reason)[:300])
     _roll_up(conn, leg["ticket_id"])
     conn.commit()
@@ -295,7 +328,11 @@ def cancel(conn, leg_id: str, reason: str = "cancelled") -> dict:
 
 
 def cancel_ticket(conn, ticket_id: str, reason: str = "cancelled") -> dict:
-    """Cancel every open leg of a ticket. Returns per-leg results."""
+    """Cancel every open leg of a ticket. Returns per-leg results and the
+    ticket's `status` AFTER the cancel — FILLED or PARTIAL when fills landed
+    first (a FILLED leg is skipped; a leg filled under the cancel refuses
+    it). A caller deciding what the cancel left must read that status or
+    the legs' fills, never assume nothing filled (audit F05)."""
     ensure_schema(conn)
     out = {}
     for row in conn.execute("SELECT leg_id, state FROM trade_legs WHERE ticket_id = ?",

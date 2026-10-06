@@ -151,6 +151,57 @@ def test_cancel_keeps_partial_fills_and_rolls_up_honestly():
     assert oms.cancel_ticket(conn, tid2)["status"] == oms.CANCELLED
 
 
+def test_every_transition_is_a_compare_and_set_on_the_leg_as_read(monkeypatch, tmp_path):
+    """Audit F05 (2026-10-06): several processes write this one file. A
+    transition that read the leg BEFORE another connection committed a
+    change used to overwrite it — a cancel turned a just-FILLED leg
+    CANCELLED, a fill landed on a just-cancelled leg. Now the write matches
+    no row and is refused by name; the other writer's state stands, no
+    audit event is written, and the refusing connection does not keep the
+    database's write lock."""
+    db = tmp_path / "oms.db"
+    a, b = sqlite3.connect(db), sqlite3.connect(db, timeout=0.2)
+    for c in (a, b):
+        c.row_factory = sqlite3.Row
+    oms.ensure_schema(a)
+    tid = sr.issue(a, _proposal(lots=1))["ticket_id"]
+    leg0, leg1 = f"{tid}:0", f"{tid}:1"
+    real_leg = oms._leg
+
+    def read_was(snapshot):                 # A's `_leg` read happened before B's commit
+        pending = {snapshot["leg_id"]: snapshot}
+        monkeypatch.setattr(oms, "_leg", lambda conn, leg_id: pending.pop(leg_id, None) or real_leg(conn, leg_id))
+
+    # (1) A reads leg 0 PENDING to cancel it; B's venue fills it first
+    stale = real_leg(a, leg0)
+    assert oms.apply_fill(b, leg0, 65, 100.0)["state"] == oms.FILLED
+    read_was(stale)
+    r = oms.cancel(a, leg0, "withdrawn")
+    assert not r["ok"] and r["reason"].startswith("leg changed under this cancel (now FILLED, 65 filled)")
+    assert r["state"] == oms.FILLED
+    assert oms.apply_fill(b, leg1, 1, 30.0)["ok"]          # A holds no write lock after its refusal
+    # (2) A reads leg 1 PARTIAL(1) to fill the rest; B withdraws it first
+    stale = real_leg(a, leg1)
+    assert oms.cancel(b, leg1)["state"] == oms.CANCELLED
+    read_was(stale)
+    r = oms.apply_fill(a, leg1, 64, 30.0)
+    assert not r["ok"] and r["reason"].startswith("leg changed under this fill (now CANCELLED, 1 filled)")
+    # (3) a reject on a stale read is refused the same way
+    tid2 = sr.issue(a, _proposal(lots=1), issued_at="2026-09-19T13:00:00+05:30")["ticket_id"]
+    stale = real_leg(a, f"{tid2}:0")
+    assert oms.apply_fill(b, f"{tid2}:0", 65, 100.0)["state"] == oms.FILLED
+    read_was(stale)
+    assert "changed under this reject" in oms.reject(a, f"{tid2}:0", "late")["reason"]
+    monkeypatch.setattr(oms, "_leg", real_leg)
+    v = oms.ticket_view(a, tid)
+    assert [(l["state"], l["qty_filled"]) for l in v["legs"]] == [(oms.FILLED, 65), (oms.CANCELLED, 1)]
+    assert [(e["leg_id"][-1], e["to_state"]) for e in v["events"]] == [
+        ("0", "PENDING"), ("1", "PENDING"), ("0", "FILLED"), ("1", "PARTIAL"), ("1", "CANCELLED")]
+    assert oms.ticket_view(a, tid2)["legs"][0]["state"] == oms.FILLED
+    a.close()
+    b.close()
+
+
 def test_roll_up_matrix():
     P, A, F, R, C = oms.PENDING, oms.PARTIAL, oms.FILLED, oms.REJECTED, oms.CANCELLED
     assert oms.roll_up_status([], []) == P

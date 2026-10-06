@@ -42,6 +42,58 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-06 ~17:15 IST — Chunk 2 fixes E, F, G DONE and pushed; open-book dry-run DONE; READY TO DEPLOY (not deployed)
+
+**State.**
+- `origin/main` is at `47f807a` plus docs. Suite: **2,721 passed** (about 37 s).
+- The VM is still at `18178c8`, the holiday-purge commit (it is NOT `5cadb5f`, as earlier notes said).
+- Not yet deployed: `e97f3b0` (Issue 44), fixes A–G, and #126–#129. The deploy range has no schema, cron or dependency change, and the VM's `config/` matches the repo's.
+
+**Done today.** Each fix had an implementer, 3 adversarial reviewers (0 blocking issues on all three) and mutants, all killed.
+- **E (F22 + F23), `d5295e7`, #129:**
+  - One forced-exit predicate, `plan_tracker.in_forced_exit_window`. The calendar-day rule still applies, and the exit now also fires on the last NSE session before expiry. Holiday-moved Monday expiries (NIFTY weekly 10-19, 11-09; the November monthlies 11-23) now exit on the Friday before.
+  - The expiry backstop waits for the expiry session's own bar. After the 3-day grace window it settles as `stale_close_after_grace`, with `settlement_close_date`.
+- **F (F17 + F18), `1e3966c`, #128/#129:**
+  - The stock-option entry floor is 12 days: forced exit 7 + `ENTRY_HOLD_BUFFER_DAYS` 5.
+  - An approval inside the forced-exit window is refused with `inside_exit_window`, and the entry stays pending.
+- **G (Architect ruling 2026-10-06), `47f807a`, #128:** the firm-wide #68 slot is re-checked at APPROVAL, inside the journal lock, giving `exposure_blocked`. The order is window, then #68, then margin. Every caller handles it: API 409, the Discord bot keeps its buttons, the CLI and auto-approve name the refusal.
+
+**Open-book dry-run (read-only snapshot of the VM, 10-06 15:37 IST; re-checked 16:52, unchanged).** This was run with the VM's code and with `47f807a` on the same snapshot, inside throwaway worktrees.
+- 16 open primary spreads, 4 open PAPER_2L_LIVE rows, 0 pending, none past expiry.
+- **Exit decisions are IDENTICAL under the old and the new code** for every row:
+  - EOD walk on the 10-06 close.
+  - Forced-exit session.
+  - Bridge signal for 10-07.
+- **Will exit at the next settlement, with or without the deploy:** `24f931bb` NIFTY MID SELECT bear put (PAPER_10L + ROT), as `ratchet_hit` on the 10-06 close. Modeled capture is about −17% against a 70% lock; the dry-run mark is 31.17 against a 39.70 entry, about −₹3.1k gross on 3 lots.
+  - The lock came from 10-01 INTRADAY modeled rungs (52 → 80 → 97%), while its PAPER_2L_LIVE twin on real crossed quotes never passed 29%. This is the model-vs-market gap #110 is built on, not a deploy effect.
+  - If settlement has not run by 09:15, the revived door (Issue 44 + A) squares it off at crossed quotes instead.
+  - Its PAPER_2L_LIVE row (no lock) stays open.
+- **The only gate difference:** after `24f931bb` settles, the NIFTY MID SELECT **bearish** slot stays BLOCKED under the new code (held by PAPER_2L_LIVE). The old code frees it. Every other slot is the same under both.
+- **Not blocked or refused:**
+  - No pending entry, so G and F18 refuse nothing.
+  - No LIVE mark is impossible (C).
+  - No LIVE lock exists, so no rung needs confirmation.
+  - No row is near its forced-exit session before 10-12 (`1cc5214e` NIFTY 50, expiry 10-13, exits 10-12 under both).
+- **Armed for the first time, conditional:** a ROT eviction at crossed quotes. It can fire only when an approval finds ROT short of margin; ROT holds 5 locks, about ₹1.41L.
+
+**Deploy (after 15:30, the owner or Architect runs it):**
+1. On the VM: `git fetch && git merge --ff-only origin/main`.
+2. `sudo systemctl restart alpha-trading alpha-discord-bot`. `alpha-trading` is the uvicorn API and Auto-Sync; master_scheduler picks up the new code at its 09:10 cron.
+3. Run the health check.
+4. The dashboard's `src/dashboard/*` changes (D) reach the Oracle box only by shipping the Streamlit app.
+
+**Open questions for the owner or Architect:**
+1. `margin_blocked` answers 200 `ok:true`, so the Discord bot says "journaled" and removes the buttons from a still-pending entry. This is pre-existing. Should it get the same 409 treatment?
+2. With crossing, `ratchet_hit` is easier to confirm (#126 note).
+3. #110 intraday rungs come from MODELED marks (`24f931bb` above). Should a primary rung also need a real-quote confirmation, as C does for the live arm?
+4. Minor follow-ups from the reviews:
+   - The glassbreaking shadow grader can time-exit on a post-expiry bar while the backstop waits.
+   - `scripts/audit_logs.py` does not WARN on `stale_close_after_grace`.
+   - `docs/SYSTEM_BLUEPRINT.md` still says the stock floor is 7 days.
+   - `eod_summary`'s "Blocked today" now counts approval-stage lines.
+   - `run_session` journals an approved spread with no gates (a manual tool).
+5. The foreign worktree `.claude/worktrees/sharp-kalam-d5aaee` is still untouched.
+
 ## 2026-10-05 ~18:55 IST — Chunk 2 fixes A–D DONE and pushed; E–F PAUSED at the usage guardrail; NOTHING deployed
 
 **State.** `origin/main` is at `96feb2a` plus docs. Suite: 2,621 passed. The VM is still at `5cadb5f`. Not yet deployed: `e97f3b0` (Issue 44) and all of the fixes below.

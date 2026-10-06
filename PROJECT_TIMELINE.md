@@ -235,6 +235,14 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-06 · 4 commits · 25 files touched
+
+- `8de274c` docs: Chunk 2 fixes E-G done (#128 approval re-checks, #129 expiry timing); open-book dry-run on the VM snapshot; HANDOVER
+- `47f807a` fix(chunk2): the #68 one-position slot is re-checked firm-wide at approval (Fix G)
+- `1e3966c` fix(chunk2): no stock-option round trip at entry; no approval inside the forced-exit window (F17 + F18)
+- `d5295e7` fix(chunk2): expiry backstop settles only on the expiry session's own close; the forced pre-expiry exit also fires on the last session before expiry (F22 + F23)
+
+
 ### 2026-10-04 · 4 commits · 20 files touched
 
 - `ae8baf5` docs: 10-04 evening — 7f4a4897 voided, #124 calendar + #125 desk latch deployed (VM 5cadb5f); ledger Issues 41-43 status, HANDOVER

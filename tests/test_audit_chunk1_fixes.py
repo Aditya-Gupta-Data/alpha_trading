@@ -211,7 +211,9 @@ def test_an_approval_writes_only_its_row_so_a_nested_stamp_survives(monkeypatch)
     erasing the rotation stamp its own eviction had just written on the
     EVICTED trade's row."""
     journal.log(_spread_row("pend0001", decision="pending_approval"))
-    journal.log(_spread_row("held0001"))
+    # on another underlying: an open NIFTY 50 condor would hold the neutral
+    # slot and block this approval (#68 re-checked at approval, Chunk 2 Fix G)
+    journal.log(_spread_row("held0001", ticker="NIFTY BANK"))
 
     def execute(entry, **k):
         journal.update_entry("held0001", lambda e: e.update(stamp="evicted"))   # nested write

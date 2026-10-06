@@ -241,7 +241,9 @@ def _fetch_pending() -> list:
 def _decide(trade_id: str, action: str, why: str) -> tuple:
     """POST /api/discord/action -> (status, body). 200 decided, 404 gone,
     409 already tracker-resolved, or (body status "inside_exit_window")
-    an approval refused inside the forced-exit window, still pending."""
+    an approval refused inside the forced-exit window, or (body status
+    "exposure_blocked") one refused by the #68 slot re-check — both still
+    pending."""
     return _bridge_call("POST", "/api/discord/action",
                         {"action": action, "trade_id": trade_id, "why": why})
 
@@ -266,6 +268,13 @@ def _decision_note(trade_id: str, status: int, body: dict) -> tuple:
         # entry is still pending — keep the buttons, Reject still works.
         return (f"⏱️ Too late to approve `{trade_id}` — {body.get('error')} "
                 "Not journaled; you can still reject it.", False)
+    if status == 409 and body.get("status") == "exposure_blocked":
+        # Chunk 2 Fix G: the #68 slot is taken by a position opened while the
+        # entry waited. Nothing journaled, still pending — keep the buttons:
+        # Reject works now, and Approve works again once that position exits.
+        return (f"🧱 Can't approve `{trade_id}` — {body.get('error')}. "
+                "Not journaled; you can still reject it, or approve it once "
+                "that position has closed.", False)
     if status == 409:
         return (f"⏱️ Too late — the tracker already resolved "
                 f"`{trade_id}` hypothetically. Left as-is "

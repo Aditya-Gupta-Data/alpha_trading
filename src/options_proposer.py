@@ -1164,8 +1164,10 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
         if verdict["status"] == "approved":
             return {"proposed": True, "reason": "ok (auto-approved)",
                     "entry": verdict["entry"], "auto_approved": True}
-        # margin_blocked etc. — the entry stays pending for a human; report
-        # honestly instead of pretending the auto-approval happened.
+        # margin_blocked, inside_exit_window, exposure_blocked (Fix G) — the
+        # entry stays pending for a human; report honestly instead of
+        # pretending the auto-approval happened. Tried ONCE per entry: no
+        # loop re-offers a pending entry to auto-approve.
         return {"proposed": True,
                 "reason": f"proposed; auto-approval declined "
                           f"({verdict.get('reason', verdict['status'])})",
@@ -1269,8 +1271,8 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     fail-safe Discord confirmation the interactive review does.
 
     Returns {"status": "approved"|"rejected"|"not_found"|"already_resolved"
-             |"margin_blocked"|"inside_exit_window", "entry": dict-or-None,
-             "reason": str (the two refusals only)}.
+             |"margin_blocked"|"inside_exit_window"|"exposure_blocked",
+             "entry": dict-or-None, "reason": str (the three refusals only)}.
 
     D1 (decision #122): the whole decision runs under the journal lock on
     the row read FRESH inside it, and writes THAT ROW alone — two taps (or
@@ -1284,7 +1286,16 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     every account — nothing journaled, no ticket, no live position, no lock
     re-taken; the entry stays pending and any lock it still holds is
     released by the D7 15:30 sweep. A rejection is never refused. The
-    approval's date is `_today()` (IST)."""
+    approval's date is `_today()` (IST).
+
+    Fix G (Architect ruling, 2026-10-06): an APPROVAL is refused
+    ("exposure_blocked") when another position on the entry's underlying +
+    direction is open anywhere in the firm (decision #68, firm-wide since
+    #127) — e.g. a second pending entry approved first, or a PAPER_2L_LIVE
+    position opened while this one waited. Same shape as the two refusals
+    above: nothing journaled, no ticket, no lock touched, left pending. One
+    ledger line per entry per day; an AUTO-approval's block is announced on
+    Discord once per entry per day (a human's tap gets its door's answer)."""
     today = _today()
     if human:
         # Phase 3 (§6.6): any human decision — button, CLI, either verdict
@@ -1295,10 +1306,11 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
             human_pulse.touch("decide_pending")
         except Exception:
             pass
-    # F18: an approval the exit-window gate is going to refuse needs no
-    # quotes — skip both network prefetches. Only an optimisation: the gate
-    # that decides runs inside the lock, on the fresh row.
-    fetch = approve and not _prefetch_sees_exit_window(trade_id, today)
+    # F18 + Fix G: an approval the exit-window gate or the #68 re-check is
+    # going to refuse needs no quotes — skip both network prefetches. Only
+    # an optimisation: both verdicts are made again inside the lock, on the
+    # fresh row, and only those decide.
+    fetch = approve and not _prefetch_sees_refusal(trade_id, today)
     # The live arm's re-quote is a Dhan chain call: made HERE, before the
     # journal lock, so no other writer waits on the network (#122 panel).
     prefetched = _prefetch_live_requote(trade_id) if fetch else None
@@ -1310,6 +1322,19 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     with journal.locked():
         verdict = _decide_pending_locked(trade_id, approve, why, live_requote=prefetched,
                                          rotation=rotation, today=today)
+    # Fix G: the #68 block's one card, after the lock (D1). Only for an
+    # AUTO-approval — its proposal card said "being journaled as APPROVED"
+    # and nobody is looking at a reply — and only on the first block of
+    # this entry today (`announce`, from the ledger's once-per-entry-per-day
+    # memory), so a retried approval never repeats it.
+    announce = verdict.pop("announce", False)
+    if verdict["status"] == EXPOSURE_BLOCKED and announce and not human:
+        try:
+            from src import exposure_gate
+            _notify_discord(exposure_gate.approval_block_note(verdict["entry"],
+                                                              verdict.get("reason")))
+        except Exception as _note_err:
+            print(f"  (exposure-block note skipped: {_note_err})")
     if verdict["status"] not in ("approved", "rejected"):
         return verdict
     target, decision = verdict["entry"], verdict["status"]
@@ -1342,6 +1367,8 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
 
 
 INSIDE_EXIT_WINDOW = "inside_exit_window"
+# Fix G (Architect ruling 2026-10-06): the #68 slot re-checked at approval
+EXPOSURE_BLOCKED = "exposure_blocked"
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -1388,13 +1415,23 @@ def _exit_window_refusal(entry: dict, today: date) -> str | None:
             "margin lock it still holds is released by the 15:30 sweep.")
 
 
-def _prefetch_sees_exit_window(trade_id: str, today: date) -> bool:
-    """True when the row, read OUTSIDE the lock, is already refused by
-    `_exit_window_refusal` — decide_pending then skips its network
-    prefetches. Never raises: any doubt means fetch as before."""
+def _prefetch_sees_refusal(trade_id: str, today: date) -> bool:
+    """True when the pending row, read OUTSIDE the lock, is already refused
+    by `_exit_window_refusal` (F18) or by the #68 approval re-check (Fix G,
+    `exposure_gate.check_approval` — pure and quiet: no ledger line, no
+    card) — decide_pending then skips its network prefetches. It never
+    decides: if the row changed before the lock (the conflicting position
+    exited), the approval proceeds as an un-prefetched one — the live arm
+    re-quotes inside, rotation evicts nothing. Never raises: any doubt
+    means fetch as before."""
     try:
         e = journal.get_entry(trade_id)
-        return bool(e) and _exit_window_refusal(e, today) is not None
+        if not e or e.get("decision") != "pending_approval":
+            return False
+        if _exit_window_refusal(e, today) is not None:
+            return True
+        from src import exposure_gate
+        return not exposure_gate.check_approval(e, today=today, quiet=True)[0]
     except Exception:
         return False
 
@@ -1492,6 +1529,7 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
         return {"status": "already_resolved", "entry": target}
 
     if approve:
+        today = today or _today()
         # F18 (audit): FIRST, before any account is judged or any lock is
         # re-taken — an entry inside its forced-exit window is refused for
         # EVERY account at once, so no ticket is issued, the live arm never
@@ -1499,9 +1537,33 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
         # written and no lock is re-taken: the row stays pending, any lock
         # it still holds is released by the D7 15:30 sweep, and the tracker
         # still scores it hypothetically.
-        refusal = _exit_window_refusal(target, today or _today())
+        refusal = _exit_window_refusal(target, today)
         if refusal:
             return {"status": INSIDE_EXIT_WINDOW, "entry": target, "reason": refusal}
+
+        # Fix G (Architect ruling 2026-10-06): SECOND — the #68 slot,
+        # re-checked FIRM-WIDE on this fresh row before margin, the shadow
+        # accounts, the venue or the journal are touched. The proposal gate
+        # never counts PENDING rows, so two pending entries on one
+        # underlying+direction could both be approved, and a PAPER_2L_LIVE
+        # position can open while an entry waits; either now blocks it,
+        # exactly like a margin block: left pending, nothing journaled, no
+        # ticket, no live position, no broadcast — and no lock re-taken
+        # (a D7-expired lock stays expired; one still held is released by
+        # the 15:30 sweep). The entry's own ref never conflicts with
+        # itself. Local reads only (journal + brain_map.db mode=ro) — no
+        # network inside the lock. Fail-OPEN like the proposal gate: an
+        # unreadable firm view judges on the primary journal alone (note
+        # printed), any other failure allows. No sandbox exemption here:
+        # decide_pending only knows the REAL book (it locks real margin and
+        # fills on the real venue — see run_headless's auto-approve note),
+        # so whatever produced the row, approving it opens a real-book
+        # position. Rejections never reach this.
+        from src import exposure_gate
+        allowed, exp_reason, first_today = exposure_gate.gate_approval(target, today=today)
+        if not allowed:
+            return {"status": EXPOSURE_BLOCKED, "entry": target, "reason": exp_reason,
+                    "announce": first_today}
 
         # Phase 6J: approval is the moment a trade is ACCEPTED, so the
         # capital layer must grant its margin first (idempotent no-op when

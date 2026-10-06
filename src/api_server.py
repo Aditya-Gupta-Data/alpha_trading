@@ -30,7 +30,10 @@ Two-way Discord bridge:
   "rejected" (the canonical skip). Entries the tracker already resolved
   hypothetically come back 409 — no approving with hindsight. So does an
   approval of an entry already inside its forced pre-expiry exit window
-  (409, "status": "inside_exit_window", audit F18) — left pending, undecided.
+  (409, "status": "inside_exit_window", audit F18) — left pending, undecided —
+  and an approval the #68 slot re-check refuses because another position on
+  the same underlying+direction is open firm-wide (409, "status":
+  "exposure_blocked", Chunk 2 Fix G) — left pending too.
 
 Run on the VM:  uvicorn src.api_server:app --host 127.0.0.1 --port 8000
 """
@@ -135,14 +138,20 @@ def discord_action(req: DiscordActionRequest):
                      f"hypothetically (verdict: {verdict}) — left as-is; no "
                      "approving with hindsight.", "trade_id": req.trade_id},
         )
-    if result["status"] == options_proposer.INSIDE_EXIT_WINDOW:
+    if result["status"] in (options_proposer.INSIDE_EXIT_WINDOW,
+                            options_proposer.EXPOSURE_BLOCKED):
         # Audit F18: too late to APPROVE — the entry is already inside its
-        # forced pre-expiry exit window. Nothing was journaled; the entry is
-        # still pending (a reject still works), so this is not a decision.
+        # forced pre-expiry exit window. Fix G: the #68 slot is taken —
+        # another position on this underlying+direction is open firm-wide.
+        # Either way nothing was journaled; the entry is still pending (a
+        # reject still works), so this is not a decision.
+        fallback = ("inside the forced-exit window"
+                    if result["status"] == options_proposer.INSIDE_EXIT_WINDOW
+                    else "exposure gate: the underlying+direction slot is taken (decision #68)")
         return JSONResponse(
             status_code=409,
             content={"ok": False, "status": result["status"],
-                     "error": result.get("reason") or "inside the forced-exit window",
+                     "error": result.get("reason") or fallback,
                      "trade_id": req.trade_id},
         )
     return {"ok": True, "decision": result["status"],

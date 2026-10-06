@@ -30,6 +30,15 @@ L1 residuals: (a) the completion's claim refuses a claim in flight INSIDE the
 compare-and-set; (b) a zero-bid leg floored on ANY ticket is booked at its
 quote; (c) three surviving mutants pinned.
 
+L2 review fixes (2026-10-06): only a PRICE hold is memoised against its
+snapshot (a recent-attempt hold is read off the row, so the retry fires at
+the attempt + one interval); a pending expiry keeps a FILLED live entry's
+lock too, inside its one transaction; a waiting `exiting` row is reported
+once, its no-bars reason names the partial rule, and a refused backstop
+claim names the backstop; five pins (put intrinsic, the in-flight guard
+after the backstop's cancel, the re-verify snapshot, the zero-friction
+bound, and why the partial close's compare-and-set has no reachable race).
+
 Hermetic: sqlite ':memory:' or tmp_path files, chains injected, the ticket
 wall clock faked, the journal in tmp (conftest), nothing under data/ or logs/.
 """
@@ -133,6 +142,47 @@ def test_a_different_predicate_on_the_cached_snapshot_is_still_re_verified(world
     t = _tick_at(c, datetime(2026, 10, 27, 11, 2), fn, 5120.0)
     assert len(calls) == 2                               # new evidence: fetched, as before
     assert t["exits"][0]["signal"] == "profit_take" and "held_on_cached_chain" not in t["exits"][0]
+
+
+def test_an_allowed_retry_fires_one_quote_interval_after_the_attempt_not_later(world):
+    """L2 review: a recent-attempt hold memoised against the snapshot it was
+    decided on outlived the attempt's own interval. After a restart the
+    first tick (11:02) fetches at once, so the snapshot is younger than the
+    11:00 attempt, and the retry waited for that snapshot's refresh (11:07).
+    The hold is read off the row: the retry fires at 11:05, on a re-verify."""
+    c = world
+    _open(c)
+    calls = []
+    fn = lambda t, x: calls.append(x) or OK
+    first = _tick_at(c, datetime(2026, 10, 27, 11, 0), fn, 5000.0, venue_mod=_NoFill)
+    assert first["exits"][0]["status"] == "unfilled" and _row(c)["last_exit_attempt_ts"] == "2026-10-27T11:00:00"
+    lp.reset_cache()                                      # a restart: the next tick fetches the chain at once
+    seen = [_tick_at(c, datetime(2026, 10, 27, 11, m), fn, 5000.0 + 60 * m)["exits"][0] for m in (2, 3, 4, 5)]
+    assert [x["status"] for x in seen] == ["held_recent_attempt"] * 3 + ["settled"]
+    assert [bool(x.get("held_on_cached_chain")) for x in seen[:3]] == [False, True, True]
+    assert len(calls) == 3                                # 11:00, the restart's 11:02, the 11:05 re-verify
+    assert lp._HELD_EXIT == {} and lp.has_open_position(c, LIVE, "lx0001") is False
+
+
+def test_a_hold_reached_through_the_re_verify_fetch_is_pinned_to_the_new_snapshot(world, monkeypatch):
+    """The predicate fires on a CACHED chain, the re-verify fetch refuses it:
+    the hold is remembered against the snapshot that fetch made, so the next
+    tick's read of that snapshot is answered without a chain call."""
+    c = world
+    _open(c)
+    calls = []
+    fn = lambda t, x: calls.append(x) or DEAD
+    real = lp.evaluate
+    monkeypatch.setattr(lp, "evaluate", lambda row, chain, today: dict(real(row, chain, today), signal="hold"))
+    assert _tick_at(c, datetime(2026, 10, 27, 11, 0), fn, 5000.0)["exits"] == []      # fetched; nothing fires
+    monkeypatch.setattr(lp, "evaluate", real)
+    t = _tick_at(c, datetime(2026, 10, 27, 11, 1), fn, 5060.0)                       # fires on the cached chain
+    (x,) = t["exits"]
+    assert len(calls) == 2 and x["status"] == "held_loss_beyond_max" and "held_on_cached_chain" not in x
+    assert lp._HELD_EXIT[(LIVE, "lx0001")]["src"] is lp._CHAIN_CACHE[("NIFTY 50", "2026-10-28")]
+    t = _tick_at(c, datetime(2026, 10, 27, 11, 2), fn, 5120.0)
+    assert len(calls) == 2 and t["exits"][0]["held_on_cached_chain"] is True
+    assert t["exits"][0]["status"] == "held_loss_beyond_max"
 
 
 def test_standing_hold_rules():
@@ -279,7 +329,7 @@ def test_a_basket_cut_on_expiry_day_after_the_cutoff_settles_on_the_backstop(wor
     assert out["reasons"][ref].startswith("NIFTY 50 expired 2026-10-28 and the expiry session's own close "
                                           "(2026-10-28) has not arrived yet — the newest close is 2026-10-27")
     assert "left 'exiting' by an unfinished exit" in out["reasons"][ref]
-    assert [(x["journal_ref"], x["status"]) for x in out["exiting"]] == [(ref, "waiting")]
+    assert out["exiting"] == []                       # named ONCE, in `waiting` (L2 review)
     assert _row(c)["state"] == "exiting" and _lock_active(c, ref)
     # 05:35: the expiry bar is in
     out = lp.eod_sweep(c, today=date(2026, 10, 29), bars_fn=lambda t, s: _bars(close), now=EOD)
@@ -341,7 +391,11 @@ def test_with_no_price_data_after_grace_the_open_legs_take_their_conservative_bo
     _cut_basket(c, monkeypatch)
     r = _row(c)
     out = lp.eod_sweep(c, today=date(2026, 10, 30), bars_fn=lambda t, s: [], now=datetime(2026, 10, 30, 5, 35))
-    assert out["waiting"] == [ref]                                               # inside the grace window
+    assert out["waiting"] == [ref] and out["exiting"] == []                      # inside the grace window
+    assert "(day 2 of the 3-day grace window; after it the closed legs settle at their fills and the open legs " \
+           "at their conservative bound — an open long at 0, an open short at the structure's width, no " \
+           "frictions on them)" in out["reasons"][ref]
+    assert "defined max loss" not in out["reasons"][ref]                         # not the open-row rule (L2 review)
     out = lp.eod_sweep(c, today=date(2026, 10, 31), bars_fn=lambda t, s: [], now=datetime(2026, 10, 31, 5, 35))
     (s,) = out["settled"]
     assert s["basis"] == "no_price_data_max_loss" and s["partial"]["open_at_expiry"] == {"BUY 24000CE": 0.0}
@@ -356,15 +410,99 @@ def test_with_no_price_data_an_open_short_is_valued_at_the_structure_width(world
     real = _fail_second_leg_fill(monkeypatch)           # the condor basket is cut after its FIRST leg
     assert lp._exit(c, _row(c, ref), CONDOR_PX, "profit_take", OPEN)["status"] == "exit_error"
     monkeypatch.setattr(oms, "apply_fill", real)
+    r = _row(c, ref)
     out = lp.eod_sweep(c, today=date(2026, 10, 31), bars_fn=lambda t, s: [], now=datetime(2026, 10, 31, 5, 35))
     (s,) = out["settled"]
-    opened = s["partial"]["open_at_expiry"]
-    assert len(opened) == 3 and len(s["partial"]["closed_at_fills"]) == 1
-    assert {k: v for k, v in opened.items() if k.startswith("SELL")} == {"SELL 24500CE": 200.0} or \
-        {k: v for k, v in opened.items() if k.startswith("SELL")} == {"SELL 23500PE": 200.0}
-    assert all(v == 0.0 for k, v in opened.items() if k.startswith("BUY"))
+    assert s["partial"] == {"closed_at_fills": {"SELL 23500PE": 5.0},
+                            "open_at_expiry": {"BUY 23300PE": 0.0, "SELL 24500CE": 200.0, "BUY 24700CE": 0.0}}
+    assert s["exit_mark_ps"] == -205.0 and s["profit_ps"] == -165.0              # beyond the 160 max loss
     assert s["profit_ps"] < -float(_row_closed(c, ref)["max_loss_ps"]) and "legged_beyond_bounds" in s
+    # the zero-friction policy (L2 review): an open leg valued at its bound
+    # traded nothing and pays no exit frictions; the closed leg pays on its fill
+    traded = {(23500.0, "PE"): 5.0, (23300.0, "PE"): 0.0, (24500.0, "CE"): 0.0, (24700.0, "CE"): 0.0}
+    assert s["frictions_rs"] == lp._frictions(r, traded)
+    assert s["frictions_rs"] < lp._frictions(r, {**traded, (24500.0, "CE"): 200.0})
+    assert s["pnl_net"] == round(-165.0 * 65 - s["frictions_rs"], 2)
     assert not _lock_active(c, ref)
+
+
+@pytest.mark.parametrize("close, long_put, beyond", [(23200.0, 100.0, True), (23250.0, 50.0, True),
+                                                     (23400.0, 0.0, False)])
+def test_a_partial_basket_values_an_open_put_at_the_put_intrinsic(world, monkeypatch, close, long_put, beyond):
+    """A condor cut after its FIRST leg (the short put bought back @5) and
+    settled at expiry: the long put's intrinsic is strike − close, the calls
+    are worthless. Below 23300 the legging made money beyond the 40 credit."""
+    c = world
+    ref = _open(c, "lx0003", _condor(), CONDOR_ENTRY)
+    real = _fail_second_leg_fill(monkeypatch)
+    assert lp._exit(c, _row(c, ref), CONDOR_PX, "profit_take", OPEN)["status"] == "exit_error"
+    monkeypatch.setattr(oms, "apply_fill", real)
+    r = _row(c, ref)
+    bars = UPTO_27 + [("2026-10-28", close, 24300.0, close)]
+    out = lp.eod_sweep(c, today=date(2026, 10, 29), bars_fn=lambda t, s: bars, now=EOD)
+    (s,) = out["settled"]
+    assert s["partial"] == {"closed_at_fills": {"SELL 23500PE": 5.0},
+                            "open_at_expiry": {"BUY 23300PE": long_put, "SELL 24500CE": 0.0, "BUY 24700CE": 0.0}}
+    assert s["basis"] == "last_close_on_or_before_expiry" and s["close"] == close
+    assert s["exit_mark_ps"] == long_put - 5.0 and s["profit_ps"] == long_put - 5.0 + 40.0
+    prices = {(23500.0, "PE"): 5.0, (23300.0, "PE"): long_put, (24500.0, "CE"): 0.0, (24700.0, "CE"): 0.0}
+    assert s["frictions_rs"] == lp._frictions(r, prices)
+    assert s["pnl_net"] == round(s["profit_ps"] * 65 - s["frictions_rs"], 2)
+    assert ("legged_beyond_bounds" in s) is beyond and not _lock_active(c, ref)
+
+
+def test_a_ticket_still_working_after_the_backstops_cancel_settles_nothing(world, monkeypatch):
+    """The backstop cancels what is still working, then re-reads the fills;
+    a ticket the cancel did not stop may yet fill — nothing is settled on a
+    guess, the row stays `exiting` with its lock, and the next run retries."""
+    c = world
+    ref = _open(c)
+    assert lp._exit(c, _row(c), PX, "pre_expiry_exit", datetime(2026, 10, 28, 15, 20),
+                    venue_mod=_Raise)["status"] == "exit_error"
+    (tid, st), = _exit_tickets(c)
+    assert st == oms.PENDING
+    real_cancel = oms.cancel_ticket
+    monkeypatch.setattr(oms, "cancel_ticket", lambda conn, ticket_id, reason="": {"status": oms.PENDING})
+    out = lp.eod_sweep(c, today=date(2026, 10, 29), bars_fn=lambda t, s: _bars(24350.0), now=EOD)
+    assert out["settled"] == [] and out["waiting"] == [] and out["errors"] == [] and out["moved"] == []
+    (x,) = out["exiting"]
+    assert x["status"] == "exit_in_flight"
+    assert x["reason"] == f"exit ticket(s) {tid} still have a leg working after the cancel — retried next run"
+    assert _row(c)["state"] == "exiting" and _lock_active(c, ref) and _events(c, lp.EVENT_EXIT) == 0
+    assert oms.ticket_status(c, tid) == oms.PENDING
+    monkeypatch.setattr(oms, "cancel_ticket", real_cancel)          # the next hourly run: the cancel takes
+    out = lp.eod_sweep(c, today=date(2026, 10, 29), bars_fn=lambda t, s: _bars(24350.0),
+                       now=datetime(2026, 10, 29, 6, 35))
+    (s,) = out["settled"]
+    assert s["cancelled"] == {tid: oms.CANCELLED} and s["exit_mark_ps"] == 200.0 and not _lock_active(c, ref)
+
+
+# L2 review 3(c) — no test, on purpose: the partial path's compare-and-set
+# (`_expire_exiting` -> `_settle(expect_state='exiting')`) has no reachable
+# race to pin. Between the backstop's claim and its close, a partly filled
+# `exiting` row can only move to `closed`: `_reopen` runs only when NOTHING
+# filled (and `_exit_fills` reads every EXIT ticket of the pair, so a fill
+# never disappears), `_exit`'s stamp needs `open`, and every other claimant
+# (`_complete_exit`, a second backstop) is refused by `_claim`. A move to
+# `closed` is refused identically with or without `expect_state` (both
+# answer `already_closed`, nothing booked). `state_moved` is reachable on
+# the nothing-filled path — pinned above (reopened under the sweep).
+
+
+def test_a_backstop_refused_on_a_stale_read_names_itself(world, monkeypatch):
+    """`_claim`'s refusal names its claimant (L2 review): the backstop is not
+    'this tick', and it issues and settles nothing."""
+    c = world
+    _open(c)
+    _cut_basket(c, monkeypatch)                                # last attempt 11:01
+    stale = _row(c)
+    assert lp._claim(c, _row(c), datetime(2026, 9, 29, 11, 6), 300)["owned"] is True   # another claimant
+    res = pt._expiry_backstop(lp._entry_like(stale), _bars(24350.0), date(2026, 10, 29))
+    got = lp._expire_exiting(c, stale, res, EOD)
+    assert got["status"] == "exit_not_owned"
+    assert got["reason"] == ("row is 'exiting' and no longer as the expiry backstop read it — another actor owns "
+                             "this exit; nothing issued or settled")
+    assert _row(c)["state"] == "exiting" and len(_exit_tickets(c)) == 1
 
 
 def test_the_backstop_settles_an_open_row_only_in_the_state_it_read(world, monkeypatch):
@@ -446,6 +584,33 @@ def test_a_completion_is_refused_while_the_backstop_holds_the_claim(world, monke
     assert not _lock_active(c, ref)
 
 
+def test_a_waiting_exiting_row_with_nothing_filled_keeps_the_open_row_rule(world):
+    c = world
+    ref = _open(c)
+    assert lp._exit(c, _row(c), PX, "pre_expiry_exit", datetime(2026, 10, 28, 15, 20),
+                    venue_mod=_Raise)["status"] == "exit_error"
+    out = lp.eod_sweep(c, today=date(2026, 10, 30), bars_fn=lambda t, s: [], now=datetime(2026, 10, 30, 5, 35))
+    assert out["waiting"] == [ref] and out["exiting"] == []
+    assert out["reasons"][ref] == ("NIFTY 50 expired 2026-10-28 and no daily close on or before expiry has arrived "
+                                   "yet (day 2 of the 3-day grace window; after it the defined max loss settles at "
+                                   "zero frictions); the row was left 'exiting' by an unfinished exit and settles "
+                                   "with that close")
+
+
+def test_run_tracker_names_a_waiting_exiting_row_once(world, monkeypatch, capsys):
+    c = world
+    ref = _open(c)
+    _cut_basket(c, monkeypatch)
+    monkeypatch.setattr(lp, "eod_sweep_standalone",
+                        lambda today=None: lp.eod_sweep(c, today=date(2026, 10, 29), bars_fn=lambda t, s: UPTO_27,
+                                                        now=datetime(2026, 10, 29, 0, 35)))
+    monkeypatch.setattr(pt.journal, "read_all", lambda: [])
+    assert pt.run_tracker(email=False) == 0
+    lines = [l for l in capsys.readouterr().out.splitlines() if l.startswith(f"Plan tracker: live account {ref} ")]
+    assert len(lines) == 1 and "is waiting for bars" in lines[0]
+    assert "left 'exiting' by an unfinished exit" in lines[0]
+
+
 def test_run_tracker_names_what_the_backstop_did_with_an_exiting_row(world, monkeypatch, capsys):
     c = world
     _open(c)
@@ -508,6 +673,60 @@ def test_a_lock_whose_entry_never_filled_is_still_released_at_zero(world):
     assert v["released"] is True and v["pnl_net"] == 0.0
     assert _events(c, lp.EVENT_LOCK_NO_POSITION, ref) == 1 and _events(c, lp.EVENT_LOCK_KEPT_FILLED, ref) == 0
     assert lp.filled_entry_ticket(c, LIVE, ref) is None
+
+
+def test_a_pending_expiry_keeps_a_filled_live_entrys_lock_inside_its_one_transaction(world, monkeypatch):
+    """F15's sibling (L2 review): the approval filled LIVE's entry ticket,
+    then its row insert AND its journal write failed — the entry still reads
+    pending, and the 15:30 expiry released the lock at zero; the tick's
+    repair scans ACTIVE locks only, so the filled trade was lost. Now the
+    expiry keeps it, named like release_shadow_locks does — and F16 holds:
+    the keep is written inside the one transaction, so a later failure
+    expires nothing and keeps nothing on record."""
+    c = world
+    ref = "lx0017"
+    monkeypatch.setattr(pm, "PAPER_2L_ACCOUNT_ENABLED", True)
+    tid = _filled_live_entry_without_a_row(c, ref)                     # primary + LIVE locks, LIVE ticket FILLED
+    assert pm.paper_request_entry(c, TWO_L, ref, 17550.0, lots=1, primary_lots=1)["approved"]   # after LIVE's
+    c.execute(f"CREATE TEMP TRIGGER l2r_f16 BEFORE INSERT ON paper_account_events WHEN NEW.account_id = '{TWO_L}' "
+              "AND NEW.event_type = 'pending_lock_expired' BEGIN SELECT RAISE(ABORT, 'simulated busy/disk'); END")
+    c.commit()
+    seen, real_keep = [], lp.keep_filled_entry_lock
+
+    def spy(conn, account, journal_ref, ticket_id, commit=True):
+        before = conn.in_transaction
+        why = real_keep(conn, account, journal_ref, ticket_id, commit=commit)
+        seen.append((account, ticket_id, before, conn.in_transaction))
+        return why
+    monkeypatch.setattr(lp, "keep_filled_entry_lock", spy)
+    with pytest.raises(Exception, match="simulated busy/disk"):
+        pm.expire_pending_lock(c, ref, why="test")
+    assert seen == [(LIVE, tid, True, True)]                           # kept INSIDE the transaction, uncommitted
+    assert c.in_transaction is False
+    assert c.execute("SELECT released_at FROM margin_locks WHERE journal_ref = ?", (ref,)).fetchone()[0] is None
+    assert pm._active_shadow_lock(c, TWO_L, ref) is not None and _lock_active(c, ref)    # NOTHING expired
+    assert _events(c, lp.EVENT_LOCK_KEPT_FILLED, ref) == 0                               # ... nor recorded
+    c.execute("DROP TRIGGER l2r_f16")
+    c.commit()
+    assert pm.expire_pending_lock(c, ref, why="test") == {pm.ACCOUNT_PAPER_10L: 17550.0, TWO_L: 17550.0}
+    assert _lock_active(c, ref) and _events(c, lp.EVENT_LOCK_KEPT_FILLED, ref) == 1
+    (why,) = _event_details(c, lp.EVENT_LOCK_KEPT_FILLED, ref)
+    assert why == (f"entry ticket {tid} FILLED but no live position row was recorded — lock kept; the next live "
+                   "tick opens the position from the ticket")
+    assert _events(c, pm.PENDING_LOCK_EXPIRED_EVENT, ref) == 0 and _events(c, lp.EVENT_LOCK_NO_POSITION, ref) == 0
+    assert pm.expire_pending_lock(c, ref, why="test") == {}            # the hourly retry: still kept, one row a day
+    assert _lock_active(c, ref) and _events(c, lp.EVENT_LOCK_KEPT_FILLED, ref) == 1
+    t = _tick_at(c, OPEN.replace(minute=5), ENTRY, 1000.0)            # the one repair door opens it
+    assert t["repaired"] == [ref] and lp.has_open_position(c, LIVE, ref)
+
+
+def test_a_pending_expiry_still_expires_a_live_lock_whose_entry_never_filled(world, monkeypatch):
+    c = world
+    ref = "lx0018"
+    tid = _filled_live_entry_without_a_row(c, ref, fill=False)
+    assert oms.ticket_status(c, tid) == oms.CANCELLED
+    assert pm.expire_pending_lock(c, ref, why="test") == {pm.ACCOUNT_PAPER_10L: 17550.0, LIVE: 17550.0}
+    assert not _lock_active(c, ref) and _events(c, lp.EVENT_LOCK_KEPT_FILLED, ref) == 0
 
 
 def test_no_oms_tables_means_no_filled_entry():

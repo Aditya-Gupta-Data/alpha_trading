@@ -1973,7 +1973,8 @@ def run_tracker(email: bool = True, on_episode=None) -> int:
             why = (swept.get("reasons") or {}).get(ref) or "no daily close on or before expiry yet"
             print(f"Plan tracker: live account {ref} is waiting for bars — {why}; will retry next run.")
         # Audit F08 (L2): a row an unfinished exit left 'exiting' past expiry
-        # — what the backstop did with it, one line each, whatever it was.
+        # — what the backstop did with it, one line each (one still waiting
+        # for its close is already named above, once — L2 review).
         for x in swept.get("exiting") or []:
             print(f"Plan tracker: live account {x.get('journal_ref')} was left 'exiting' past expiry — "
                   f"{x.get('status')}: {x.get('reason')}.")

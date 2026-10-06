@@ -635,7 +635,9 @@ def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
     executescript, which COMMITS first), so the primary's and every
     earlier shadow's expiry were committed midway. Every schema check now
     runs here, BEFORE the first write, and live_pricer.ensure_schema is
-    D4-safe (no statement once the table exists): the guard only reads."""
+    D4-safe (no statement once the table exists): the guard only reads
+    (and a kept lock's event is written uncommitted, inside the one
+    transaction)."""
     ensure_accounts_schema(conn)
     from src.execution import live_pricer
     live_pricer.ensure_schema(conn)
@@ -658,12 +660,21 @@ def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
                 "AND released_at IS NULL", (journal_ref,)).fetchall():
             if account in LIVE_ACCOUNTS:
                 # the release_shadow_locks guard: a live position (or an unknown
-                # state) keeps its lock — it settles on its own quotes. A READ
-                # only, inside this transaction (F16).
+                # state) keeps its lock — it settles on its own quotes. So does
+                # a FILLED entry ticket with no row (F15's sibling, L2 review:
+                # the approval's row insert AND its journal write failed, so
+                # the entry still reads pending; released here at zero, the
+                # filled trade was lost — the tick's repair scans ACTIVE
+                # locks only). READS only, inside this transaction (F16); the
+                # kept lock's named event joins it (commit=False).
                 try:
                     if live_pricer.has_open_position(conn, account, journal_ref):
                         continue
+                    filled = live_pricer.filled_entry_ticket(conn, account, journal_ref)
                 except Exception:
+                    continue
+                if filled:
+                    live_pricer.keep_filled_entry_lock(conn, account, journal_ref, filled, commit=False)
                     continue
             conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = 0 WHERE "
                          "account_id = ? AND journal_ref = ? AND released_at IS NULL",
@@ -1625,11 +1636,8 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
                 # _repair_unrecorded, on the next live tick, under the tick
                 # lock) — it opens the position, which then settles itself
                 # on its own quotes like any other
-                why = (f"entry ticket {filled} FILLED but no live position row was recorded — lock kept; "
-                       "the next live tick opens the position from the ticket")
-                out[account] = {"released": False, "reason": why}
-                live_pricer._log_once_a_day(conn, {"account_id": account, "journal_ref": journal_ref},
-                                            live_pricer.EVENT_LOCK_KEPT_FILLED, why)
+                out[account] = {"released": False,
+                                "reason": live_pricer.keep_filled_entry_lock(conn, account, journal_ref, filled)}
                 continue
             out[account] = paper_release_margin(conn, account, journal_ref, 0.0)
             if out[account].get("released"):

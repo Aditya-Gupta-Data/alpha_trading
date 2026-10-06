@@ -114,14 +114,17 @@ width). Every backstop close is a compare-and-set on the state it read.
 
 L2 (2026-10-06, audit F04 / F07 / F15 / F16). A HELD exit is not
 re-verified on a new chain inside the quote interval (`_standing_hold`):
-the same predicate on the same cached snapshot is the same refusal, and an
-attempt inside the interval is refused at any price. The `live_exit`
-event commits in the SAME transaction as the row close, the lock release
-and the P&L — money and audit land together or not at all; a journal
-stamp that failed after the commit is re-stamped by the backstop
-(`_repair_journal_stamps`). A lock whose entry ticket FILLED is never
-released at zero as 'never opened' (`filled_entry_ticket`, the repair's
-own evidence). `ensure_schema` runs no statement once the table exists.
+the same predicate on the same cached snapshot is the same price refusal,
+and an attempt inside the interval is refused at any price — until that
+attempt's own interval ends, read off the row (never memoised: L2 review).
+The `live_exit` event commits in the SAME transaction as the row close,
+the lock release and the P&L — money and audit land together or not at
+all; a journal stamp that failed after the commit is re-stamped by the
+backstop (`_repair_journal_stamps`). A lock whose entry ticket FILLED is
+never released at zero as 'never opened' — not when the primary settles
+first, nor when its entry still reads pending at the 15:30 expiry
+(`filled_entry_ticket`, the repair's own evidence; `keep_filled_entry_lock`
+names it). `ensure_schema` runs no statement once the table exists.
 
 Fail-open everywhere: a broken tick prints and returns; the live loop and
 the primary account are never touched.
@@ -226,7 +229,10 @@ _PENDING_RUNG: dict = {}
 # hold result}. While the cache still holds THAT snapshot (younger than the
 # quote interval — the fetch loop replaces it once it is due) the same
 # predicate on it is the same refusal, so it is not re-verified on a new
-# chain every 60-s tick. Memory only, beside the cache it is measured
+# chain every 60-s tick. PRICE holds only (HELD_ON_PRICE — L2 review): a
+# recent-attempt hold ends with the attempt's own interval, not the
+# snapshot's, and `_standing_hold` answers it exactly from the persisted
+# last_exit_attempt_ts. Memory only, beside the cache it is measured
 # against: a restart forgets both, and the first tick fetches anyway.
 _HELD_EXIT: dict = {}
 
@@ -1060,7 +1066,7 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
             "reason": rec.get("error") or rec.get("status")}
 
 
-def _claim(conn, row: dict, now: datetime, interval_s: int = None) -> dict:
+def _claim(conn, row: dict, now: datetime, interval_s: int = None, actor: str = "this tick") -> dict:
     """THE exclusive claim on the next step of an `exiting` row's exit —
     `_complete_exit` (tick) and the expiry backstop (`eod_sweep`, the API
     process, which runs WITHOUT the tick lock) both take it. A
@@ -1080,7 +1086,9 @@ def _claim(conn, row: dict, now: datetime, interval_s: int = None) -> dict:
         and it covers the same-second claim the L1 review guarded.
     Returns {"owned": True, "claim": stamp} or {"owned": False, "status",
     "reason"}: `partial_held` (in flight — the row is as read, retried
-    after the interval) or `exit_not_owned` (the row moved on)."""
+    after the interval) or `exit_not_owned` (the row moved on). `actor`
+    names the claimant in that reason ("this tick" for the completion,
+    "the expiry backstop" for eod_sweep — L2 review)."""
     from src.config import LIVE_QUOTE_INTERVAL_SECONDS
     interval_s = LIVE_QUOTE_INTERVAL_SECONDS if interval_s is None else int(interval_s)
     claim, read = _iso(now), row.get("last_exit_attempt_ts")
@@ -1104,8 +1112,8 @@ def _claim(conn, row: dict, now: datetime, interval_s: int = None) -> dict:
                 "reason": f"an exit attempt on this row was already claimed at {read} — inside the "
                           f"{interval_s}-s quote interval it is in flight or was just tried; retried after it"}
     return {"owned": False, "status": "exit_not_owned",
-            "reason": f"row is '{now_row[0] if now_row else None}' and no longer as this tick read it — "
-                      "another actor owns this exit; no ticket issued"}
+            "reason": f"row is '{now_row[0] if now_row else None}' and no longer as {actor} read it — "
+                      "another actor owns this exit; nothing issued or settled"}
 
 
 def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, venue_mod=None,
@@ -1228,6 +1236,25 @@ def filled_entry_ticket(conn, account: str, journal_ref: str):
                      "AND note NOT LIKE 'EXIT %' AND status = ? ORDER BY issued_at DESC LIMIT 1",
                      (account, journal_ref, oms.FILLED)).fetchone()
     return t[0] if t else None
+
+
+def keep_filled_entry_lock(conn, account: str, journal_ref: str, ticket_id: str, commit: bool = True) -> str:
+    """Audit F15: a LIVE lock with no position row whose entry ticket
+    FILLED (`filled_entry_ticket`) is KEPT for the one repair door
+    (`_repair_unrecorded`, on the next live tick, under the tick lock),
+    never released at zero as 'never opened'. Names it — one
+    `live_lock_kept_filled_entry` row per position per IST day — and
+    returns the reason. Both doors that would release such a lock at zero
+    use it: portfolio_manager.release_shadow_locks (the primary settled
+    first) and portfolio_manager.expire_pending_lock (the approval's
+    journal write failed too, so the entry still reads pending — L2
+    review), which passes `commit=False`: the row joins its one
+    transaction (F16)."""
+    why = (f"entry ticket {ticket_id} FILLED but no live position row was recorded — lock kept; "
+           "the next live tick opens the position from the ticket")
+    _log_once_a_day(conn, {"account_id": account, "journal_ref": journal_ref}, EVENT_LOCK_KEPT_FILLED, why,
+                    commit=commit)
+    return why
 
 
 def _repair_unrecorded(conn, account: str, now: datetime) -> list:
@@ -1375,7 +1402,7 @@ def _exit_window(row: dict, today: date) -> tuple:
     return pt.in_forced_exit_window(row["ticker"], row["expiry"], today), days_left
 
 
-def _log_once_a_day(conn, row: dict, event_type: str, detail: str) -> bool:
+def _log_once_a_day(conn, row: dict, event_type: str, detail: str, commit: bool = True) -> bool:
     """Write ONE `paper_account_events` row per (account, position,
     event_type) per IST day — the day of the stamp pm.paper_log_event
     writes, so the check and the record share one clock. A held or
@@ -1383,7 +1410,9 @@ def _log_once_a_day(conn, row: dict, event_type: str, detail: str) -> bool:
     that it happened and why, not 375 times a day. No Discord card
     (#102/#120 telemetry rule). Fail-open: a failed write is printed and
     the tick carries on — marks and exits never depend on their own
-    telemetry. Returns True when a row was written."""
+    telemetry. `commit=False`: the row joins the caller's open transaction
+    (pm.paper_log_event's own flag; the schema check is D4-safe). Returns
+    True when a row was written."""
     from src import portfolio_manager as pm
     try:
         pm.ensure_accounts_schema(conn)
@@ -1392,7 +1421,7 @@ def _log_once_a_day(conn, row: dict, event_type: str, detail: str) -> bool:
                         "AND event_type = ? AND substr(ts, 1, 10) = ? LIMIT 1",
                         (row["account_id"], row["journal_ref"], event_type, day)).fetchone():
             return False
-        pm.paper_log_event(conn, row["account_id"], event_type, row["journal_ref"], detail)
+        pm.paper_log_event(conn, row["account_id"], event_type, row["journal_ref"], detail, commit=commit)
         return True
     except Exception as exc:
         print(f"  (live account: {event_type} event for {row.get('journal_ref')} skipped: {exc})")
@@ -1426,22 +1455,21 @@ def _held_detail(signal: str, res: dict) -> str:
     return f"{signal} held ({res.get('status')}): {res.get('reason')} — position kept"
 
 
-HELD_EXIT_STATUSES = HELD_ON_PRICE + ("held_recent_attempt",)
-
-
 def _standing_hold(row: dict, ev: dict, src, now: datetime, interval_s: int):
     """Audit F04: the hold `_exit` would answer for a predicate that fired
     on a CACHED chain, known WITHOUT a new fetch — or None (re-verify on a
     fresh chain, as before). A held exit (`_exit` writes nothing for a
     price hold) used to re-fetch the chain on every 60-s tick for as long
     as the hold lasted, ignoring LIVE_QUOTE_INTERVAL_SECONDS:
-      * the same predicate was already refused on THIS cached snapshot
-        (`_HELD_EXIT`, keyed to the cache entry): the same quotes give the
-        same refusal; the fetch loop replaces the snapshot once it is a
-        quote interval old, and that fresh chain re-decides;
+      * the same predicate was already refused on its PRICE on THIS cached
+        snapshot (`_HELD_EXIT`, keyed to the cache entry): the same quotes
+        give the same refusal; the fetch loop replaces the snapshot once
+        it is a quote interval old, and that fresh chain re-decides;
       * the row's last exit attempt is inside the quote interval: `_exit`
         refuses any price then (`held_recent_attempt`, the persisted
-        last_exit_attempt_ts).
+        last_exit_attempt_ts) — and only then: the retry is due at the
+        attempt + one interval, whatever snapshot is cached (L2 review:
+        a memoised recent-attempt hold outlived it by up to an interval).
     A DIFFERENT predicate, or the same one on a newer snapshot, is new
     evidence and re-verifies as before."""
     memo = _HELD_EXIT.get((row["account_id"], row["journal_ref"]))
@@ -1676,11 +1704,14 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                                 interval_s=interval_s)
                     out["exits"].append({"account_id": row["account_id"], "journal_ref": row["journal_ref"],
                                          "signal": ev["signal"], **res})
-                    # Audit F04: remember a hold against the snapshot it was
-                    # decided on (`src`), so the next ticks' cached reads of
-                    # it do not re-fetch to be refused again.
+                    # Audit F04: remember a PRICE hold against the snapshot it
+                    # was decided on (`src`), so the next ticks' cached reads
+                    # of it do not re-fetch to be refused again. Not a
+                    # recent-attempt hold (L2 review): `_standing_hold` reads
+                    # that one off the row, and it lapses with the attempt's
+                    # interval, not with this snapshot.
                     rk = (row["account_id"], row["journal_ref"])
-                    if res.get("status") in HELD_EXIT_STATUSES:
+                    if res.get("status") in HELD_ON_PRICE:
                         _HELD_EXIT[rk] = {"src": src, "signal": ev["signal"], "res": res}
                     else:
                         _HELD_EXIT.pop(rk, None)
@@ -1763,7 +1794,11 @@ def _intrinsic(leg: dict, close) -> float:
                else (float(leg["strike"]) - float(close)))
 
 
-def _waiting_reason(row: dict, bars: list, today: date) -> str:
+def _waiting_reason(row: dict, bars: list, today: date, partial: bool = False) -> str:
+    """Why an expired row still waits for its close. `partial` = a row an
+    unfinished exit left `exiting` with SOME legs closed: with no close at
+    all after the grace window it does not settle at the defined max loss
+    like an open row, but on `_expire_exiting`'s partial rule (L2 review)."""
     from src import plan_tracker as pt
     days = (today - date.fromisoformat(row["expiry"])).days
     older = [b[0] for b in (bars or []) if b[0] <= row["expiry"]]
@@ -1774,9 +1809,12 @@ def _waiting_reason(row: dict, bars: list, today: date) -> str:
                 f"({pt.expiry_session(row['expiry']).isoformat()}) has not arrived yet — the newest "
                 f"close is {max(older)} (day {days} of the {pt.EXPIRY_BACKSTOP_GRACE_DAYS}-day grace "
                 f"window; after it the newest close settles, named {pt.STALE_CLOSE_BASIS})")
+    after = ("the closed legs settle at their fills and the open legs at their conservative bound — an "
+             "open long at 0, an open short at the structure's width, no frictions on them"
+             if partial else "the defined max loss settles at zero frictions")
     return (f"{row['ticker']} expired {row['expiry']} and no daily close on or before expiry has "
             f"arrived yet (day {days} of the {pt.EXPIRY_BACKSTOP_GRACE_DAYS}-day grace window; after "
-            "it the defined max loss settles at zero frictions)")
+            f"it {after})")
 
 
 def _expire_exiting(conn, row: dict, res, now: datetime, interval_s: int = None) -> dict:
@@ -1812,8 +1850,8 @@ def _expire_exiting(conn, row: dict, res, now: datetime, interval_s: int = None)
     ref = row["journal_ref"]
     ex = _exit_fills(conn, row)
     if res is None and not (ex["complete"] and not ex["in_flight"]):
-        return {"status": "waiting", "journal_ref": ref}
-    got = _claim(conn, row, now, interval_s)
+        return {"status": "waiting", "journal_ref": ref, "filled_any": ex["filled_any"]}
+    got = _claim(conn, row, now, interval_s, actor="the expiry backstop")
     if not got["owned"]:
         return {"status": got["status"], "journal_ref": ref, "reason": got["reason"]}
     row = dict(row, last_exit_attempt_ts=got["claim"])
@@ -1833,7 +1871,7 @@ def _expire_exiting(conn, row: dict, res, now: datetime, interval_s: int = None)
     if ex["complete"]:
         return _settle_from_fills(conn, row, ex, now, detail, expect_state=STATE_EXITING)
     if res is None:
-        return {"status": "waiting", "journal_ref": ref}
+        return {"status": "waiting", "journal_ref": ref, "filled_any": ex["filled_any"]}
     resolution, exit_mark_ps, _frac, _day, close, basis, close_day = res
     detail.update(close=close, settlement_close_date=close_day)
     if not ex["filled_any"]:
@@ -1879,11 +1917,13 @@ def eod_sweep(conn, today: date = None, bars_fn=None, now: datetime = None, inte
     caller prints both (audit F21).
 
     Audit F08 (L2): a row left `exiting` past expiry is resolved too
-    (`_expire_exiting`), and every one of them is named in `exiting`
-    ({journal_ref, status, reason}) whatever happened to it. Every close
-    here is a compare-and-set on the state the sweep READ (it runs in the
-    API process, beside the tick); a row another actor moved meanwhile is
-    named in `moved`. Then `_repair_journal_stamps` (F07): `restamped`."""
+    (`_expire_exiting`), and named ONCE (L2 review): still waiting for its
+    close → in `waiting`, its reason saying it was left `exiting`;
+    anything else the backstop did with it → in `exiting` ({journal_ref,
+    status, reason}). Every close here is a compare-and-set on the state
+    the sweep READ (it runs in the API process, beside the tick); a row
+    another actor moved meanwhile is named in `moved`. Then
+    `_repair_journal_stamps` (F07): `restamped`."""
     from src import plan_tracker as pt
     today = today or _now().date()
     now = now or _now()
@@ -1906,11 +1946,15 @@ def eod_sweep(conn, today: date = None, bars_fn=None, now: datetime = None, inte
             if row["state"] == STATE_EXITING:
                 r = _expire_exiting(conn, row, res, now, interval_s)
                 if r["status"] == "waiting":
+                    # named ONCE, in `waiting` beside the open rows that wait
+                    # (run_tracker prints a line per entry of each list; in
+                    # both lists it was two lines on every hourly run)
                     out["waiting"].append(ref)
-                    out["reasons"][ref] = (_waiting_reason(row, bars, today) + "; the row was left 'exiting' "
-                                           "by an unfinished exit and settles with that close")
-                    r = dict(r, reason="waiting for the expiry close — " + out["reasons"][ref])
-                elif r["status"] == "settled":
+                    out["reasons"][ref] = (_waiting_reason(row, bars, today, partial=bool(r.get("filled_any")))
+                                           + "; the row was left 'exiting' by an unfinished exit and settles "
+                                             "with that close")
+                    continue
+                if r["status"] == "settled":
                     out["settled"].append(r)
                 out["exiting"].append({"journal_ref": ref, "status": r["status"],
                                        "reason": r.get("reason") or _exiting_how(r)})

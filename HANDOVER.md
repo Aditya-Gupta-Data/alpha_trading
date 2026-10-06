@@ -42,6 +42,31 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-06 ~18:30 IST — DEPLOYED: Issue 44 + Chunk 2 fixes A–G + the margin-block refusal (VM `bc6fbe0`)
+
+**Live now.** The VM is at `bc6fbe0`; it was `18178c8`. `alpha-trading` (uvicorn API + hourly Auto-Sync) and `alpha-discord-bot` restarted at 18:21 IST.
+- Before the restart, 236 scoped tests passed on the VM.
+- After it: both services active, `/api/health` 200, `deploy_log` shows both on `bc6fbe0`, the bot reconnected, and the VM tree is clean.
+- `master_scheduler` (cron 09:10) runs the new code from 10-07.
+- Mac suite: 2,724 passed.
+
+**New today, after the 17:15 block:** `bc6fbe0`. A MARGIN-blocked approval is a refusal: `options_proposer.MARGIN_BLOCKED` + `APPROVAL_REFUSALS`, and `api_server` answers 409 `{ok:false,status:"margin_blocked",error,trade_id}`. The Discord bot explains and KEEPS the buttons. Before, it answered 200 and the bot said "journaled" and retired the buttons of a still-pending entry. This closes #128's known gap (a).
+
+**Pre-deploy check (Issue 31 rule).** The 17:15 block's dry-run still held at 18:20: 16 open, 0 pending, the same refs, and 4 LIVE rows.
+
+**Do first on 10-07:**
+1. Confirm `24f931bb` settled as `ratchet_hit`, on the first Auto-Sync that has the 10-06 bar. If not, the revived door squares it off at crossed quotes after 09:15.
+2. Watch the first live intraday square-off, the first ROT eviction (if any), and any `live_exit_held` / `live_mark_abstained` events.
+3. Confirm new NIFTY MID SELECT **bearish** proposals are blocked while PAPER_2L_LIVE holds `24f931bb`.
+
+**Chunk 2 is NOT fully closed.** All of high, medium, the two rulings and the approval re-checks are done and deployed. Still open per the audit doc's fix-order step 7 (see "Close-out status" in `docs/audit_chunk2_paper_2l_live_sweep.md`):
+- 15 lows: F04–F08, F10–F16, F19, F20, F24.
+- The closed-market detector #124 queued for this chunk.
+
+The Architect must rule: fix them in a batch, or formally defer them.
+
+**Next domain:** audit Chunk 3, Analytics & Sizing (the 09-29 four-chunk plan; then Chunk 4, Dashboard & Bridge).
+
 ## 2026-10-06 ~17:15 IST — Chunk 2 fixes E, F, G DONE and pushed; open-book dry-run DONE; READY TO DEPLOY (not deployed)
 
 **State.**

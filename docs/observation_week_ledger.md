@@ -2298,3 +2298,8 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   - PAPER_2L_ROT will start evicting at its margin wall.
   - Before deploying: dry-run the resolver over the open book on the VM (the Issue 31 rule), after 15:30.
   - **Owner question:** #69 exits price at LAST-TRADED, not crossed bid/ask (#70/#120 honesty). Restored as designed; changing it would be a decision.
+- **Ruled 2026-10-05:** every intraday exit crosses the bid/ask (#126, `224c07f`), so the revived door never prices at last-traded.
+- **DEPLOYED 2026-10-06 18:21 IST:** the VM went `18178c8` → `bc6fbe0` (Issue 44 + Chunk 2 fixes A–G + the margin-block refusal), and `alpha-trading` and `alpha-discord-bot` were restarted. Before the restart, 236 scoped tests passed on the VM. Afterwards both services were active, health returned 200, `deploy_log` showed both on `bc6fbe0`, and the bot reconnected to the gateway.
+  - The read-only open-book dry-run beforehand (snapshot 15:37, re-checked 16:52 and 18:20; 16 open, 0 pending) showed identical exit decisions under the old and new code.
+  - `24f931bb` (model lock 70, capture about −17%) is due as `ratchet_hit` at the next settlement either way.
+  - **Not yet observed live:** the first intraday crossed square-off and the first ROT eviction. Check them on 10-07.

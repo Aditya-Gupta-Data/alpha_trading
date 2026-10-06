@@ -87,6 +87,27 @@ Read-only adversarial audit of the live-quote arm (decision #120) and the exit/s
 6. **F09:** the #68 exposure gate is evaluated per account or firm-wide (owner ruling).
 7. **The remaining lows**, batched: F04–F08, F10–F16, F19, F20, F24.
 
+## Close-out status (2026-10-06 ~18:30 IST)
+
+**Fixed and DEPLOYED** (VM `bc6fbe0`, 2026-10-06 18:21 IST). Each fix had an implementer, 3 adversarial reviewers and mutation checks, and the full suite passed (2,724).
+- **L1 = Issue 44:** `e97f3b0`, priced crossed per #126.
+- **Ruling 1 (#126):** `224c07f`.
+- **F09, ruling 2 (#127):** `1102c8b` + `53bcc0d`.
+- **F01:** `e589411`.
+- **F02 + F21:** `cf09e52` + `96feb2a`.
+- **F22 + F23 (#129):** `d5295e7`.
+- **F17 + F18 (#128/#129):** `1e3966c`.
+- **#68 re-checked at approval (#128), Architect ruling 2026-10-06:** `47f807a`.
+- **Margin-block refusal UX:** `bc6fbe0`. A margin-blocked approval now answers 409 and the Discord bot keeps the buttons. It used to answer 200 "journaled".
+
+**Still OPEN — the fix order's step 7:** the remaining 15 lows, F04–F08, F10–F16, F19, F20 and F24. None is critical, and none was found to double-book money, orphan a lock or leave a ghost position.
+
+**Also open:**
+- The data-driven closed-market detector that #124 queued for this chunk is not built.
+- The informational notes F25 and F26 need no fix.
+
+Chunk 2 closes when the Architect either rules the lows into a fix batch or formally defers them.
+
 Raw lens answers, every refuter's reasoning and the repro tests are in `.claude/audit_state/paper_2l_live_sweep/` (git-ignored; Mac only). Its files:
 - `done_lenses.json` (lens answers)
 - `find_result.json` (merged findings)

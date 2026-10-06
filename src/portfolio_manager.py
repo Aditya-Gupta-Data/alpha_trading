@@ -628,43 +628,56 @@ def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
     """Expire every ACTIVE lock held for one still-pending entry (the
     caller has established it is pending and past its cutoff). Returns
     {account_id: margin_rs released}. Idempotent: nothing active, nothing
-    done. One commit for all of it."""
+    done. One commit for all of it — a failure anywhere expires NOTHING.
+
+    Audit F16: the PAPER_2L_LIVE guard below used to run DDL inside the
+    open transaction (has_open_position -> live_pricer.ensure_schema ->
+    executescript, which COMMITS first), so the primary's and every
+    earlier shadow's expiry were committed midway. Every schema check now
+    runs here, BEFORE the first write, and live_pricer.ensure_schema is
+    D4-safe (no statement once the table exists): the guard only reads."""
     ensure_accounts_schema(conn)
+    from src.execution import live_pricer
+    live_pricer.ensure_schema(conn)
     now = _now_iso()
     note = why or "not approved by the 15:30 close"
     out = {}
-    row = conn.execute("SELECT margin_rs FROM margin_locks WHERE journal_ref = ? "
-                       "AND released_at IS NULL", (journal_ref,)).fetchone()
-    if row is not None:
-        conn.execute("UPDATE margin_locks SET released_at = ?, pnl_net = 0 WHERE journal_ref = ? "
-                     "AND released_at IS NULL", (now, journal_ref))
-        conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)",
-                     (now, PENDING_LOCK_EXPIRED_EVENT,
-                      f"{journal_ref}: pending lock Rs.{float(row[0]):,.2f} expired unapproved "
-                      f"— released at zero ({note})"))
-        out[ACCOUNT_PAPER_10L] = float(row[0])
-    for account, margin in conn.execute(
-            "SELECT account_id, margin_rs FROM paper_margin_locks WHERE journal_ref = ? "
-            "AND released_at IS NULL", (journal_ref,)).fetchall():
-        if account in LIVE_ACCOUNTS:
-            # the release_shadow_locks guard: a live position (or an unknown
-            # state) keeps its lock — it settles on its own quotes
-            try:
-                from src.execution import live_pricer
-                if live_pricer.has_open_position(conn, account, journal_ref):
+    try:
+        row = conn.execute("SELECT margin_rs FROM margin_locks WHERE journal_ref = ? "
+                           "AND released_at IS NULL", (journal_ref,)).fetchone()
+        if row is not None:
+            conn.execute("UPDATE margin_locks SET released_at = ?, pnl_net = 0 WHERE journal_ref = ? "
+                         "AND released_at IS NULL", (now, journal_ref))
+            conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)",
+                         (now, PENDING_LOCK_EXPIRED_EVENT,
+                          f"{journal_ref}: pending lock Rs.{float(row[0]):,.2f} expired unapproved "
+                          f"— released at zero ({note})"))
+            out[ACCOUNT_PAPER_10L] = float(row[0])
+        for account, margin in conn.execute(
+                "SELECT account_id, margin_rs FROM paper_margin_locks WHERE journal_ref = ? "
+                "AND released_at IS NULL", (journal_ref,)).fetchall():
+            if account in LIVE_ACCOUNTS:
+                # the release_shadow_locks guard: a live position (or an unknown
+                # state) keeps its lock — it settles on its own quotes. A READ
+                # only, inside this transaction (F16).
+                try:
+                    if live_pricer.has_open_position(conn, account, journal_ref):
+                        continue
+                except Exception:
                     continue
-            except Exception:
-                continue
-        conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = 0 WHERE "
-                     "account_id = ? AND journal_ref = ? AND released_at IS NULL",
-                     (now, account, journal_ref))
-        conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, journal_ref, "
-                     "detail) VALUES (?, ?, ?, ?, ?)",
-                     (account, now, PENDING_LOCK_EXPIRED_EVENT, journal_ref,
-                      f"pending lock Rs.{float(margin):,.2f} expired unapproved — released at "
-                      f"zero ({note})"))
-        out[account] = float(margin)
-    conn.commit()
+            conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = 0 WHERE "
+                         "account_id = ? AND journal_ref = ? AND released_at IS NULL",
+                         (now, account, journal_ref))
+            conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, journal_ref, "
+                         "detail) VALUES (?, ?, ?, ?, ?)",
+                         (account, now, PENDING_LOCK_EXPIRED_EVENT, journal_ref,
+                          f"pending lock Rs.{float(margin):,.2f} expired unapproved — released at "
+                          f"zero ({note})"))
+            out[account] = float(margin)
+        conn.commit()
+    except Exception:
+        conn.rollback()     # all or nothing: the next run (hourly, or 15:30) retries the whole ref
+        raise
     return out
 
 
@@ -995,14 +1008,20 @@ def paper_drawdown_pct(conn, account: str) -> float:
 
 
 def paper_log_event(conn, account: str, event_type: str, journal_ref: str = None,
-                    detail: str = "") -> None:
+                    detail: str = "", commit: bool = True) -> None:
     """The shadow ledger's append-only trail. Never the primary's
-    `account_events`: a 2L refusal must not read as a 10L halt."""
+    `account_events`: a 2L refusal must not read as a 10L halt.
+
+    `commit=False`: the INSERT joins the CALLER's open transaction and
+    commits with it (audit F07: live_pricer._settle writes its live_exit
+    event in the same transaction as the money). The schema check is
+    D4-safe (`_apply_schema`: present → no statement)."""
     ensure_accounts_schema(conn)
     conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, "
                  "journal_ref, detail) VALUES (?, ?, ?, ?, ?)",
                  (account, _now_iso(), event_type, journal_ref, detail))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def paper_halt_latched(conn, account: str) -> bool:
@@ -1571,7 +1590,8 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
         if account in LIVE_ACCOUNTS:
             # #120: a live-quote account settles ITSELF while it holds the
             # position; a lock with no open position (rejected, never
-            # approved, entry refused/unfilled) is released at zero, named;
+            # approved, entry refused/unfilled) is released at zero, named —
+            # unless its entry ticket FILLED (F15: kept for the repair);
             # a lock whose row already CLOSED (a crash between the two
             # writes) is released at that row's settled P&L. An UNKNOWN
             # state (lookup error) keeps the lock — never money on a guess.
@@ -1579,6 +1599,12 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
                 from src.execution import live_pricer
                 holds = live_pricer.has_open_position(conn, account, journal_ref)
                 late_pnl = None if holds else live_pricer.closed_pnl(conn, account, journal_ref)
+                # Audit F15: no row is NOT "never opened" when the entry
+                # ticket FILLED — the row insert failed at approval, and
+                # the tick's repair opens it from that ticket. Releasing
+                # here at zero lost a really-filled trade for good.
+                filled = None if holds or late_pnl is not None else \
+                    live_pricer.filled_entry_ticket(conn, account, journal_ref)
             except Exception as exc:
                 out[account] = {"released": False,
                                 "reason": f"live position lookup failed ({exc}) — lock kept"}
@@ -1593,6 +1619,17 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
                     paper_log_event(conn, account, "live_lock_released_late", journal_ref,
                                     f"lock released at the row's settled pnl Rs.{late_pnl:,.2f} "
                                     "(row had closed before the lock settled)")
+                continue
+            if filled:
+                # the lock stays for the ONE repair door (live_pricer.
+                # _repair_unrecorded, on the next live tick, under the tick
+                # lock) — it opens the position, which then settles itself
+                # on its own quotes like any other
+                why = (f"entry ticket {filled} FILLED but no live position row was recorded — lock kept; "
+                       "the next live tick opens the position from the ticket")
+                out[account] = {"released": False, "reason": why}
+                live_pricer._log_once_a_day(conn, {"account_id": account, "journal_ref": journal_ref},
+                                            live_pricer.EVENT_LOCK_KEPT_FILLED, why)
                 continue
             out[account] = paper_release_margin(conn, account, journal_ref, 0.0)
             if out[account].get("released"):

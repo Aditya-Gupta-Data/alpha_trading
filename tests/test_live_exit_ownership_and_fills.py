@@ -431,12 +431,14 @@ def test_a_completion_whose_ticket_id_is_an_earlier_tickets_issues_nothing(world
             return frozen if tz is None else frozen.astimezone(tz)
     monkeypatch.setattr(sr, "datetime", Frozen)
     t1 = _cut_basket(c, monkeypatch)
-    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3))
+    # (L2: a completion claims at least one quote interval after the last
+    # attempt — the cut basket's, 11:01 — so these run at 11:06 / 11:12)
+    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:06:00", OPEN.replace(minute=6))
     assert res["status"] == "partial_held" and "same wall-clock second" in res["reason"]
     assert _exit_tickets(c) == [(t1, oms.PARTIAL)] and _row(c)["state"] == "exiting"
-    _Clock.t = frozen + timedelta(minutes=6)
+    _Clock.t = frozen + timedelta(minutes=12)
     monkeypatch.setattr(sr, "datetime", _FakeDT)                      # a later second: it completes
-    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:09:00", OPEN.replace(minute=9))
+    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:12:00", OPEN.replace(minute=12))
     assert res["status"] == "settled" and len(_exit_tickets(c)) == 2
 
 
@@ -447,10 +449,10 @@ def test_a_stale_completion_issues_nothing(world, monkeypatch):
     _open(c)
     _cut_basket(c, monkeypatch)
     stale = _row(c)                                                   # actor B's read
-    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3), venue_mod=_NoFill)
+    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:06:00", OPEN.replace(minute=6), venue_mod=_NoFill)
     assert res["status"] == "partial" and len(_exit_tickets(c)) == 2   # A tried; nothing filled; withdrawn
     assert _row(c)["exit_ticket_id"] == _exit_tickets(c)[1][0]
-    res = lp._complete_exit(c, stale, LATER, "2026-09-29T11:04:00", OPEN.replace(minute=4))
+    res = lp._complete_exit(c, stale, LATER, "2026-09-29T11:12:00", OPEN.replace(minute=12))
     assert res["status"] == "exit_not_owned" and len(_exit_tickets(c)) == 2
 
 
@@ -471,10 +473,10 @@ def test_two_interleaved_completions_on_two_connections_close_the_open_leg_once(
     def a_inside_the_door(*args, **kw):
         calls["n"] += 1
         if calls["n"] == 1:                           # A has claimed; its ticket does not exist yet
-            calls["b"] = lp._complete_exit(b, row_b, LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3))
+            calls["b"] = lp._complete_exit(b, row_b, LATER, "2026-09-29T11:06:00", OPEN.replace(minute=6))
         return real(*args, **kw)
     monkeypatch.setattr(pt, "_execute_paper_exit", a_inside_the_door)
-    res_a = lp._complete_exit(a, row_a, LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3))
+    res_a = lp._complete_exit(a, row_a, LATER, "2026-09-29T11:06:00", OPEN.replace(minute=6))
     assert calls["n"] == 1 and calls["b"]["status"] == "exit_not_owned"     # B never reached the door
     assert "'exiting' and no longer as this tick read it" in calls["b"]["reason"]
     assert res_a["status"] == "settled" and res_a["exit_tickets"] == [t1, _exit_tickets(a)[1][0]]
@@ -612,7 +614,7 @@ def test_a_failed_completion_cancel_is_recorded_and_leaves_the_row_exiting(world
     before = len(_event_details(c, lp.EVENT_UNFILLED, ref))
     real = oms.cancel_ticket
     monkeypatch.setattr(oms, "cancel_ticket", _broken_cancel)
-    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:03:00", OPEN.replace(minute=3), venue_mod=_NoFill)
+    res = lp._complete_exit(c, _row(c), LATER, "2026-09-29T11:06:00", OPEN.replace(minute=6), venue_mod=_NoFill)
     _, (t2, st2) = _exit_tickets(c)
     assert res["status"] == "exit_error" and res["ticket_id"] == t2 and "cancel failed" in res["reason"]
     assert st2 == oms.PENDING and _row(c)["state"] == "exiting" and _row(c)["exit_ticket_id"] == t2
@@ -620,7 +622,7 @@ def test_a_failed_completion_cancel_is_recorded_and_leaves_the_row_exiting(world
     assert len(details) == before + 1
     assert f"completion ticket {t2} of a partly filled exit not filled and its cancel failed" in details[-1]
     monkeypatch.setattr(oms, "cancel_ticket", real)
-    res = lp._resume_exiting(c, _row(c), OPEN.replace(minute=4))
+    res = lp._resume_exiting(c, _row(c), OPEN.replace(minute=7))
     assert res["status"] == "partial" and res["cancelled"] == {t2: oms.CANCELLED}
     assert _row(c)["state"] == "exiting"
 

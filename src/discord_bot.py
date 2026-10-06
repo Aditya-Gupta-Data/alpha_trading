@@ -240,9 +240,38 @@ def _fetch_pending() -> list:
 
 def _decide(trade_id: str, action: str, why: str) -> tuple:
     """POST /api/discord/action -> (status, body). 200 decided, 404 gone,
-    409 already tracker-resolved."""
+    409 already tracker-resolved, or (body status "inside_exit_window")
+    an approval refused inside the forced-exit window, still pending."""
     return _bridge_call("POST", "/api/discord/action",
                         {"action": action, "trade_id": trade_id, "why": why})
+
+
+def _decision_note(trade_id: str, status: int, body: dict) -> tuple:
+    """The gateway's answer to one tap -> (the note to post, whether to
+    retire the proposal's buttons). Pure, so it is testable without a live
+    Discord interaction."""
+    body = body if isinstance(body, dict) else {}
+    if status == 200:
+        marker = "✅" if body.get("decision") == "approved" else "❌"
+        return (f"{marker} **{body.get('decision', '').upper()}** "
+                f"(`{trade_id}`) — journaled. "
+                + ("The plan tracker manages the exit from here."
+                   if body.get("decision") == "approved"
+                   else "The tracker will score the skip."), True)
+    if status == 404:
+        return (f"🤷 `{trade_id}` has no pending entry anymore — "
+                "it was probably already decided elsewhere.", True)
+    if status == 409 and body.get("status") == "inside_exit_window":
+        # Audit F18: the approval was refused, nothing was journaled and the
+        # entry is still pending — keep the buttons, Reject still works.
+        return (f"⏱️ Too late to approve `{trade_id}` — {body.get('error')} "
+                "Not journaled; you can still reject it.", False)
+    if status == 409:
+        return (f"⏱️ Too late — the tracker already resolved "
+                f"`{trade_id}` hypothetically. Left as-is "
+                "(no hindsight approvals).", True)
+    return (f"⚠️ Gateway said HTTP {status}: "
+            f"{body.get('error', 'unknown error')}", False)
 
 
 def _format_pending(p: dict) -> str:
@@ -319,28 +348,12 @@ class WhyModal(discord.ui.Modal):
             await interaction.followup.send(f"Gateway unreachable: {e}")
             return
 
-        if status == 200:
-            marker = "✅" if body.get("decision") == "approved" else "❌"
-            note = (f"{marker} **{body.get('decision', '').upper()}** "
-                    f"(`{self._trade_id}`) — journaled. "
-                    + ("The plan tracker manages the exit from here."
-                       if body.get("decision") == "approved"
-                       else "The tracker will score the skip."))
-        elif status == 404:
-            note = (f"🤷 `{self._trade_id}` has no pending entry anymore — "
-                    "it was probably already decided elsewhere.")
-        elif status == 409:
-            note = (f"⏱️ Too late — the tracker already resolved "
-                    f"`{self._trade_id}` hypothetically. Left as-is "
-                    "(no hindsight approvals).")
-        else:
-            note = (f"⚠️ Gateway said HTTP {status}: "
-                    f"{body.get('error', 'unknown error')}")
+        note, retire = _decision_note(self._trade_id, status, body)
 
         # Retire the buttons on the original proposal message (best-effort;
         # the journal is already correct even if this edit fails).
         origin = self._origin or interaction.message
-        if origin is not None and status in (200, 404, 409):
+        if origin is not None and retire:
             try:
                 await origin.edit(content=f"{origin.content}\n\n{note}", view=None)
             except Exception:

@@ -31,7 +31,7 @@ Every data input is injectable so tests run fully offline.
 """
 
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from src import journal
 from src import portfolio as pf
@@ -60,6 +60,17 @@ LOT_SIZES = {"NIFTY 50": 65, "NIFTY BANK": 30,
 # immediately close: skip expiries closer than this many days out.
 MIN_DAYS_TO_EXPIRY = 7
 
+# THE HOLDING WINDOW (audit F17, 2026-10-06). A fresh entry must have at
+# least this many calendar days between its entry floor and the day its
+# forced pre-expiry exit fires — the gap the index pair has always had
+# (MIN_DAYS_TO_EXPIRY 7 vs plan_tracker.PRE_EXPIRY_EXIT_DAYS 2). The stock
+# pair below once had none (floor 7 == forced exit 7): a stock option
+# entered exactly 7 days out was closed by the live arm's first tick and by
+# the primary's next close — a guaranteed two-crossing round trip booked as
+# a strategy outcome. tests/test_entry_floor_and_approval_window.py holds
+# every underlying to floor - forced exit >= this buffer.
+ENTRY_HOLD_BUFFER_DAYS = 5
+
 
 # =========== EQUITY OPTIONS + PHYSICAL SETTLEMENT (2026-08-05) ==========
 #
@@ -81,12 +92,15 @@ MIN_DAYS_TO_EXPIRY = 7
 # directions, and the two are kept apart by `is_equity_option()`:
 #
 #   ENTRY  : no NEW equity-option position inside
-#            EQUITY_MIN_DAYS_TO_EXPIRY (7). Index entries keep the
-#            existing MIN_DAYS_TO_EXPIRY.
+#            EQUITY_MIN_DAYS_TO_EXPIRY (12 = the forced exit's 7 + the
+#            ENTRY_HOLD_BUFFER_DAYS 5, audit F17 — it was 7, the same
+#            number as the forced exit, so a day-7 entry was closed on
+#            arrival). Index entries keep the existing MIN_DAYS_TO_EXPIRY.
 #   EXIT   : an OPEN equity-option position is forced out BEFORE expiry
 #            week — EQUITY_FORCED_EXIT_DAYS (7) — rather than the index
 #            book's PRE_EXPIRY_EXIT_DAYS (2). We leave before the delivery
-#            margin period starts, not during it.
+#            margin period starts, not during it. This number guards the
+#            physical-settlement risk and is NOT the one F17 moved.
 #
 # The universe is deliberately a SHORT hardcoded list of the most liquid
 # F&O names rather than "anything with options": an illiquid stock option
@@ -110,11 +124,13 @@ EQUITY_OPTION_UNDERLYINGS = {
     "TCS.NS": 225,
 }
 
-# Entry: no new stock-option position within this many days of expiry.
-EQUITY_MIN_DAYS_TO_EXPIRY = 7
 # Exit: force an open stock-option position out this many days before
 # expiry — i.e. before expiry week and its delivery-margin escalation.
 EQUITY_FORCED_EXIT_DAYS = 7
+# Entry: no new stock-option position within this many days of expiry —
+# the forced exit plus the holding window, so a fresh entry always has
+# ENTRY_HOLD_BUFFER_DAYS to work before that exit can touch it (F17).
+EQUITY_MIN_DAYS_TO_EXPIRY = EQUITY_FORCED_EXIT_DAYS + ENTRY_HOLD_BUFFER_DAYS
 
 
 def is_equity_option(underlying: str) -> bool:
@@ -160,7 +176,9 @@ def physical_settlement_gate(underlying: str, expiry: str,
                        f"minimum {EQUITY_MIN_DAYS_TO_EXPIRY}d for a stock "
                        "option — an ITM short leg becomes a delivery "
                        "obligation, and delivery margin escalates through "
-                       "expiry week")
+                       f"expiry week (forced out at {EQUITY_FORCED_EXIT_DAYS}d, "
+                       f"so an entry needs {ENTRY_HOLD_BUFFER_DAYS}d more "
+                       "to hold — audit F17)")
     return True, None
 
 
@@ -501,8 +519,10 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
 
     horizon = horizon or horizon_for(analysis, macro_score=macro_score)
     if expiry is None:
-        expiry = pick_expiry(get_expiry_list(underlying), underlying=underlying,
-                             horizon=horizon)
+        # `today` reaches the expiry choice as well as the gate below, so an
+        # injected clock judges both against the same day (None = today).
+        expiry = pick_expiry(get_expiry_list(underlying), today=today,
+                             underlying=underlying, horizon=horizon)
     if expiry is None:
         return {"proposal": None, "view": view, "vix": vix,
                 "reason": "no usable expiry (need >= "
@@ -1248,15 +1268,24 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     left as-is — no approving with hindsight (decision #31). Fires the same
     fail-safe Discord confirmation the interactive review does.
 
-    Returns {"status": "approved"|"rejected"|"not_found"|"already_resolved",
-             "entry": dict-or-None}.
+    Returns {"status": "approved"|"rejected"|"not_found"|"already_resolved"
+             |"margin_blocked"|"inside_exit_window", "entry": dict-or-None,
+             "reason": str (the two refusals only)}.
 
     D1 (decision #122): the whole decision runs under the journal lock on
     the row read FRESH inside it, and writes THAT ROW alone — two taps (or
     a tap racing auto-approve) cannot both approve one entry, a tracker
     resolution cannot be reverted by a stale copy, and a rotation stamp
     this approval writes on the EVICTED trade's row survives. Discord
-    notes go out after the lock is released."""
+    notes go out after the lock is released.
+
+    F18 (audit, 2026-10-06): an APPROVAL of an entry already inside its
+    forced pre-expiry exit window is refused ("inside_exit_window") for
+    every account — nothing journaled, no ticket, no live position, no lock
+    re-taken; the entry stays pending and any lock it still holds is
+    released by the D7 15:30 sweep. A rejection is never refused. The
+    approval's date is `_today()` (IST)."""
+    today = _today()
     if human:
         # Phase 3 (§6.6): any human decision — button, CLI, either verdict
         # — is the pulse that keeps full autonomy armed. Recorded before
@@ -1266,17 +1295,21 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
             human_pulse.touch("decide_pending")
         except Exception:
             pass
+    # F18: an approval the exit-window gate is going to refuse needs no
+    # quotes — skip both network prefetches. Only an optimisation: the gate
+    # that decides runs inside the lock, on the fresh row.
+    fetch = approve and not _prefetch_sees_exit_window(trade_id, today)
     # The live arm's re-quote is a Dhan chain call: made HERE, before the
     # journal lock, so no other writer waits on the network (#122 panel).
-    prefetched = _prefetch_live_requote(trade_id) if approve else None
+    prefetched = _prefetch_live_requote(trade_id) if fetch else None
     # #123 (Chunk 1 leftover): the rotation arm's marks and the eviction
     # candidate's chain quotes are fetched here too, before the lock; inside
     # it the eviction only re-verifies on these quotes (a candidate that
     # changed meanwhile has none, so it is simply not evicted).
-    rotation = _prefetch_rotation(trade_id) if approve else None
+    rotation = _prefetch_rotation(trade_id) if fetch else None
     with journal.locked():
         verdict = _decide_pending_locked(trade_id, approve, why, live_requote=prefetched,
-                                         rotation=rotation)
+                                         rotation=rotation, today=today)
     if verdict["status"] not in ("approved", "rejected"):
         return verdict
     target, decision = verdict["entry"], verdict["status"]
@@ -1306,6 +1339,64 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
         except Exception as _bcast_err:
             print(f"  (broadcast alert skipped: {_bcast_err})")
     return {"status": decision, "entry": target}
+
+
+INSIDE_EXIT_WINDOW = "inside_exit_window"
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _today() -> date:
+    """The approval's date in IST — the exchange's day and the live arm's
+    clock (live_pricer._now), whatever the host's zone. The test seam for
+    every door into decide_pending (CLI, API bridge, auto-approve)."""
+    return datetime.now(_IST).date()
+
+
+def _exit_window_refusal(entry: dict, today: date) -> str | None:
+    """Why `entry` may not be APPROVED on `today` (audit F18), or None.
+
+    An entry already inside its forced pre-expiry exit window — the ONE
+    predicate, `plan_tracker.in_forced_exit_window`: 2 calendar days for an
+    index, 7 for a stock option, or the last NSE session before expiry — is
+    exited by the live arm's next 60-s tick and by the primary's next close.
+    Approving it buys two bid/ask crossings and frictions on a trade nobody
+    can hold, booked as a strategy outcome. A row stays approvable that
+    long because the tracker resolves a pending row only on a completed
+    daily bar, served the next morning.
+
+    No spread expiry -> None: not an option spread, no window to be inside
+    (the tracker cannot track such a row either). An expiry that cannot be
+    read -> refused (fail-closed): the window cannot be judged, and an
+    unknown expiry on an option is not something to approve on a guess."""
+    expiry = (entry.get("spread") or {}).get("expiry")
+    if not expiry:
+        return None
+    from src import plan_tracker
+    ticker = entry.get("ticker")
+    try:
+        days = (date.fromisoformat(str(expiry)[:10]) - today).days
+        inside = plan_tracker.in_forced_exit_window(ticker, expiry, today)
+    except (TypeError, ValueError):
+        return (f"expiry {expiry!r} is unreadable — the forced-exit window cannot "
+                "be judged, so the approval is refused (fail-closed)")
+    if not inside:
+        return None
+    return (f"{days}d to the {expiry} expiry on {today.isoformat()} — already inside "
+            f"the forced pre-expiry exit window ({forced_exit_days_for(ticker)}d, or "
+            "the last session before expiry), so every account would exit it on its "
+            "next tick or close: a guaranteed round trip (audit F18). Left pending; any "
+            "margin lock it still holds is released by the 15:30 sweep.")
+
+
+def _prefetch_sees_exit_window(trade_id: str, today: date) -> bool:
+    """True when the row, read OUTSIDE the lock, is already refused by
+    `_exit_window_refusal` — decide_pending then skips its network
+    prefetches. Never raises: any doubt means fetch as before."""
+    try:
+        e = journal.get_entry(trade_id)
+        return bool(e) and _exit_window_refusal(e, today) is not None
+    except Exception:
+        return False
 
 
 def _prefetch_live_requote(trade_id: str):
@@ -1390,7 +1481,8 @@ def _rotation_fns(rotation):
 
 
 def _decide_pending_locked(trade_id: str, approve: bool, why: str,
-                           live_requote: dict = None, rotation: dict = None) -> dict:
+                           live_requote: dict = None, rotation: dict = None,
+                           today: date = None) -> dict:
     """decide_pending's body — caller holds the journal lock."""
     import copy
     target = journal.get_entry(trade_id)
@@ -1400,6 +1492,17 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
         return {"status": "already_resolved", "entry": target}
 
     if approve:
+        # F18 (audit): FIRST, before any account is judged or any lock is
+        # re-taken — an entry inside its forced-exit window is refused for
+        # EVERY account at once, so no ticket is issued, the live arm never
+        # re-quotes into a position its next tick closes, and nothing is
+        # written and no lock is re-taken: the row stays pending, any lock
+        # it still holds is released by the D7 15:30 sweep, and the tracker
+        # still scores it hypothetically.
+        refusal = _exit_window_refusal(target, today or _today())
+        if refusal:
+            return {"status": INSIDE_EXIT_WINDOW, "entry": target, "reason": refusal}
+
         # Phase 6J: approval is the moment a trade is ACCEPTED, so the
         # capital layer must grant its margin first (idempotent no-op when
         # the headless gate already locked it at proposal time; a lock that

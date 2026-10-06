@@ -434,6 +434,10 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(pv, "_tier_frac", lambda u, slippage_fn=None: 0.001)
     monkeypatch.setattr(lp, "_market_open", lambda now: True)
     monkeypatch.setattr(lp, "_now", lambda: OPEN)
+    # the approval's clock (the F18 exit-window gate) is the same day as the
+    # live arm's — the 10-27 expiry must not drift into its window as the
+    # real calendar advances
+    monkeypatch.setattr(op, "_today", lambda: OPEN.date())
     monkeypatch.setattr(pt, "_settle_spread_cash", lambda pnl: True)
     monkeypatch.setattr(eg, "LEDGER_PATH", tmp_path / "exposure_blocks.jsonl")
     hosts = []

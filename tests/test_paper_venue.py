@@ -152,6 +152,9 @@ def _wire(monkeypatch, tmp_path, flag: bool):
     monkeypatch.setattr(journal, "read_all", lambda: entries)
     monkeypatch.setattr(journal, "rewrite_all", lambda rows: written.setdefault("rows", rows))
     monkeypatch.setattr(op, "_notify_discord", lambda *a, **k: None)
+    # approved on the proposal day — the F18 gate refuses an approval inside
+    # the forced-exit window, and the 09-30 expiry is past now
+    monkeypatch.setattr(op, "_today", lambda: date(2026, 9, 19))
     from src import portfolio_manager as pm
     monkeypatch.setattr(pm, "gate_headless_entry", lambda *a, **k: (True, None))
     monkeypatch.setattr(pm, "release_entry", lambda *a, **k: {})

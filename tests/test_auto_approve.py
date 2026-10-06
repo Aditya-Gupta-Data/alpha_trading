@@ -21,6 +21,7 @@ Run:
 import os
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -60,7 +61,10 @@ def _headless(env: dict, gate=None, state=None):
         return "alert"
 
     gate = gate or mock.Mock(return_value=(True, "margin locked"))
-    with mock.patch.object(journal, "DATA_DIR", tmp), \
+    # the cycle runs on 07-07, two weeks before the canned 07-21 expiry: the
+    # F18 gate refuses an approval inside the forced-exit window
+    with mock.patch.object(op, "_today", return_value=date(2026, 7, 7)), \
+         mock.patch.object(journal, "DATA_DIR", tmp), \
          mock.patch.object(journal, "JOURNAL_PATH", tmp / "journal.jsonl"), \
          mock.patch.dict(os.environ, env, clear=False), \
          mock.patch.object(op, "build_proposal",

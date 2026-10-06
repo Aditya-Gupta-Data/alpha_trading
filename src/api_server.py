@@ -28,7 +28,9 @@ Two-way Discord bridge:
   decide_pending, decision #31): approve -> "approved" ON PAPER (the plan
   tracker takes over; no broker anywhere, decision #11), reject ->
   "rejected" (the canonical skip). Entries the tracker already resolved
-  hypothetically come back 409 — no approving with hindsight.
+  hypothetically come back 409 — no approving with hindsight. So does an
+  approval of an entry already inside its forced pre-expiry exit window
+  (409, "status": "inside_exit_window", audit F18) — left pending, undecided.
 
 Run on the VM:  uvicorn src.api_server:app --host 127.0.0.1 --port 8000
 """
@@ -132,6 +134,16 @@ def discord_action(req: DiscordActionRequest):
             content={"ok": False, "error": "Entry already resolved "
                      f"hypothetically (verdict: {verdict}) — left as-is; no "
                      "approving with hindsight.", "trade_id": req.trade_id},
+        )
+    if result["status"] == options_proposer.INSIDE_EXIT_WINDOW:
+        # Audit F18: too late to APPROVE — the entry is already inside its
+        # forced pre-expiry exit window. Nothing was journaled; the entry is
+        # still pending (a reject still works), so this is not a decision.
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "status": result["status"],
+                     "error": result.get("reason") or "inside the forced-exit window",
+                     "trade_id": req.trade_id},
         )
     return {"ok": True, "decision": result["status"],
             "trade_id": req.trade_id, "entry": result["entry"]}

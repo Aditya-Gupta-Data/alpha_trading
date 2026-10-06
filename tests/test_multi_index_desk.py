@@ -75,8 +75,10 @@ def test_the_corrected_lot_sizes_are_pinned():
 
 
 def test_activation_did_not_weaken_the_settlement_guard():
-    """The guard was explicitly out of scope for this change; prove it."""
-    assert op.EQUITY_MIN_DAYS_TO_EXPIRY == 7
+    """The guard was explicitly out of scope for this change; prove it.
+    (The entry floor rose 7 -> 12 with audit F17 — a holding window
+    behind the unchanged 7-day forced exit; it only ever tightens.)"""
+    assert op.EQUITY_MIN_DAYS_TO_EXPIRY == 12
     assert op.EQUITY_FORCED_EXIT_DAYS == 7
     ok, why = op.physical_settlement_gate("RELIANCE.NS", "2026-08-08",
                                           today=TODAY)
@@ -349,7 +351,7 @@ def test_a_shallow_chain_takes_the_furthest_it_HAS_and_does_not_refuse():
 
 def test_the_long_horizon_still_respects_the_equity_entry_floor():
     """The settlement guard outranks the horizon preference."""
-    tight = ["2026-08-08", "2026-08-09"]        # both inside the 7d floor
+    tight = ["2026-08-08", "2026-08-09"]        # both inside the 12d floor
     assert op.pick_expiry(tight, today=TODAY, underlying="RELIANCE.NS",
                           horizon="long") is None
 

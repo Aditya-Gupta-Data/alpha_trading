@@ -201,6 +201,9 @@ def _wire_decide(monkeypatch, execute):
     monkeypatch.setattr(op, "_execute_paper_entry", execute)
     monkeypatch.setattr(op, "_notify_discord", lambda *a, **k: None)
     monkeypatch.setattr("src.notifier.fire_broadcast", lambda *a, **k: None)
+    # Approved on the rows' proposal day: the F18 gate refuses an approval
+    # inside the forced-exit window, and the 07-26 expiry is long past now.
+    monkeypatch.setattr(op, "_today", lambda: date(2026, 7, 6))
 
 
 def test_an_approval_writes_only_its_row_so_a_nested_stamp_survives(monkeypatch):

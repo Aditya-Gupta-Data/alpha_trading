@@ -8,6 +8,7 @@ ratio. Hermetic: sqlite ':memory:', journal/venue/Discord seams patched.
 """
 import json
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -234,6 +235,7 @@ def test_decide_pending_issues_one_ticket_per_accepting_account(monkeypatch):
     monkeypatch.setattr(journal, "read_all", lambda: entries)
     monkeypatch.setattr(journal, "rewrite_all", lambda rows: written.setdefault("rows", rows))
     monkeypatch.setattr(op, "_notify_discord", lambda *a, **k: None)
+    monkeypatch.setattr(op, "_today", lambda: date(2026, 9, 19))   # the proposal day (F18 gate)
     monkeypatch.setattr(pv, "_tier_frac", lambda u, slippage_fn=None: 0.001)
     monkeypatch.setattr(pm, "gate_headless_entry",            # the real gate, on the shared conn
                         lambda ref, m, conn=None: (pm.request_entry(c, ref, m)["approved"], ""))
@@ -271,6 +273,7 @@ def test_decide_pending_records_a_shadow_refusal_and_issues_no_shadow_ticket(mon
     monkeypatch.setattr(journal, "read_all", lambda: entries)
     monkeypatch.setattr(journal, "rewrite_all", lambda rows: written.setdefault("rows", rows))
     monkeypatch.setattr(op, "_notify_discord", lambda *a, **k: None)
+    monkeypatch.setattr(op, "_today", lambda: date(2026, 9, 19))   # the proposal day (F18 gate)
     monkeypatch.setattr(pv, "_tier_frac", lambda u, slippage_fn=None: 0.001)
     monkeypatch.setattr(pm, "gate_headless_entry",            # the real gate, on the shared conn
                         lambda ref, m, conn=None: (pm.request_entry(c, ref, m)["approved"], ""))

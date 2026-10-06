@@ -13,6 +13,7 @@ Run:
 
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -105,7 +106,10 @@ def test_mounted_engine_routes_are_gated_too():
 def test_approve_updates_pending_entry():
     entry = make_pending_entry()
     rewritten = {}
+    # decided on the proposal day — the F18 gate refuses an approval inside
+    # the forced-exit window, and the fixture's 07-16 expiry is past now
     with _env_with_key(), \
+         mock.patch.object(op, "_today", return_value=date(2026, 7, 6)), \
          mock.patch.object(op.journal, "read_all", return_value=[entry]), \
          mock.patch.object(op.journal, "rewrite_all",
                            side_effect=lambda e: rewritten.setdefault("v", e)), \

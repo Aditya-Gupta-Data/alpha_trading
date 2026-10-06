@@ -62,8 +62,9 @@ INDEX_UNDERLYINGS = ("NIFTY 50", "NIFTY BANK",
 
 # EQUITY OPTIONS — activated 2026-08-05 (closes blocker A1). These are
 # PHYSICALLY SETTLED and are guarded by options_proposer's
-# physical_settlement_gate (no entry inside 7 days to expiry) and its
-# 7-day forced exit before expiry week. Do not add a name here without
+# physical_settlement_gate (no entry inside EQUITY_MIN_DAYS_TO_EXPIRY = 12
+# days to expiry — 7 until audit F17, 2026-10-06) and its 7-day forced exit
+# before expiry week. Do not add a name here without
 # adding it to EQUITY_OPTION_UNDERLYINGS with a VERIFIED lot size.
 #
 # BLOCKER A2 — CLOSED 2026-08-05. All five lot sizes were verified against

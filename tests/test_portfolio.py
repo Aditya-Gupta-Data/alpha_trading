@@ -510,12 +510,16 @@ def test_pm_decide_pending_approval_is_margin_gated():
     rewrites, gate_calls = [], []
     saved = (journal_mod.read_all, journal_mod.rewrite_all,
              op._notify_discord, notifier_mod.fire_broadcast,
-             pm.gate_headless_entry)
+             pm.gate_headless_entry, op._today)
     try:
         journal_mod.read_all = lambda: entries
         journal_mod.rewrite_all = lambda e: rewrites.append(e)
         op._notify_discord = lambda text: True
         notifier_mod.fire_broadcast = lambda payload: None
+        # decided well before the 07-16 expiry: the F18 gate refuses an
+        # approval inside the forced-exit window, and that date is past now
+        import datetime as _dt
+        op._today = lambda: _dt.date(2026, 7, 6)
 
         # margin refused -> the approval is blocked, nothing is written
         pm.gate_headless_entry = lambda ref, margin, conn=None: (
@@ -542,7 +546,7 @@ def test_pm_decide_pending_approval_is_margin_gated():
     finally:
         (journal_mod.read_all, journal_mod.rewrite_all,
          op._notify_discord, notifier_mod.fire_broadcast,
-         pm.gate_headless_entry) = saved
+         pm.gate_headless_entry, op._today) = saved
 
 
 # --- Walkaway Protocol (Directive 3, 2026-07-27) -------------------------

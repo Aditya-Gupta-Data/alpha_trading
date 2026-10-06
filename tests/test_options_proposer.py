@@ -754,14 +754,18 @@ def test_the_gate_ALLOWS_an_index_option_at_the_same_distance():
 
 
 def test_the_gate_allows_an_equity_option_far_enough_out():
-    assert op.physical_settlement_gate("RELIANCE.NS", _in(7)) == (True, None)
+    assert op.physical_settlement_gate("RELIANCE.NS", _in(12)) == (True, None)
     assert op.physical_settlement_gate("RELIANCE.NS", _in(30)) == (True, None)
 
 
 def test_the_boundary_is_exactly_the_declared_minimum():
-    assert op.EQUITY_MIN_DAYS_TO_EXPIRY == 7
-    assert op.physical_settlement_gate("TCS.NS", _in(7))[0] is True
-    assert op.physical_settlement_gate("TCS.NS", _in(6))[0] is False
+    # 12 since audit F17 (2026-10-06): the 7-day forced exit + a 5-day
+    # holding window. At 7 (== the forced exit) a day-7 entry was closed
+    # on arrival — tests/test_entry_floor_and_approval_window.py.
+    assert op.EQUITY_MIN_DAYS_TO_EXPIRY == 12
+    assert op.physical_settlement_gate("TCS.NS", _in(12))[0] is True
+    assert op.physical_settlement_gate("TCS.NS", _in(11))[0] is False
+    assert op.physical_settlement_gate("TCS.NS", _in(7))[0] is False
 
 
 def test_an_unreadable_expiry_on_a_STOCK_option_FAILS_CLOSED():
@@ -808,9 +812,10 @@ def test_the_index_book_is_completely_unaffected_by_this_change():
 def test_expiry_selection_uses_the_stricter_clock_for_stocks():
     expiries = [_in(3), _in(5), _in(9), _in(20)]
     assert op.pick_expiry(expiries, underlying="NIFTY 50") == _in(9)
-    assert op.pick_expiry(expiries, underlying="RELIANCE.NS") == _in(9)
+    # the 9-day contract is inside the stock floor (12, audit F17)
+    assert op.pick_expiry(expiries, underlying="RELIANCE.NS") == _in(20)
     # only expiries inside the stock floor exist -> nothing usable
-    tight = [_in(3), _in(5)]
+    tight = [_in(3), _in(5), _in(11)]
     assert op.pick_expiry(tight, underlying="RELIANCE.NS") is None
     # legacy call with no underlying keeps the original index clock
     assert op.pick_expiry(expiries) == _in(9)

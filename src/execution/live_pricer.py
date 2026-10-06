@@ -27,7 +27,9 @@ fills that ticket at the crossed limits with ZERO tier slippage
 (`paper_venue.ZERO_SLIP_ACCOUNTS`): crossing IS the cost. `open_position`
 then records the fills; d = Σ sign × fill (long +, short −; d > 0 debit,
 d < 0 credit), width = the structure's `spread_width`, max_profit =
-width − d (debit) or −d (credit), max_loss = d (debit) or width + d (credit).
+width − d (a debit structure) or −d (a credit one), max_loss = d (debit) or
+width + d (credit) — debit/credit being the STRUCTURE's, never d's sign
+(audit F11, below).
 
 MARK + EXIT (`tick`, from live_bridge.live_cycle every 60 s in market
 hours): one option chain per (underlying, expiry) at most every
@@ -126,6 +128,24 @@ first, nor when its entry still reads pending at the 15:30 expiry
 (`filled_entry_ticket`, the repair's own evidence; `keep_filled_entry_lock`
 names it). `ensure_schema` runs no statement once the table exists.
 
+L3 (2026-10-06, audit F11 / F14 + L2 residuals). Debit or credit is the
+STRUCTURE's (strategy_router.premium_of / premium_refusal), never the sign
+of d: `structure_bounds` takes the formulas from the structure, and prices
+that invert it (a debit vertical at a net credit, a condor at a net debit —
+an inverted or stale book) are refused by name at the re-quote and at
+`open_position`, never booked on bounds read off the sign. `open_position`
+never overwrites a row: a (account, journal_ref) is opened ONCE
+(`position_state`; LiveEntryRefused). A FILLED entry the row door refuses
+is named on one `live_filled_entry_refused` row + one card a day
+(`note_refused_fill`), its lock kept. With the arm switched OFF while it
+still holds positions (`refs_to_manage`), live_bridge arms `tick` anyway —
+manage-only: tick never opens an entry — and `announce_manage_only` says so
+on one card a day. Inside a caller's transaction (`commit=False`)
+`_log_once_a_day` raises instead of swallowing, so the caller's rollback
+runs (expire_pending_lock: nothing expires unless all does). The R:R floor
+and risk budget on the re-quote (F12) and the halts on a held lock (F13)
+live in options_proposer / portfolio_manager.
+
 Fail-open everywhere: a broken tick prints and returns; the live loop and
 the primary account are never touched.
 """
@@ -174,6 +194,12 @@ TICK_LOCK_FILE = Path(__file__).resolve().parents[2] / "data" / ".live_pricer_ti
 # lock with no position row — the lock is kept for the tick's repair (one
 # row per position per IST day: reconcile_orphan_locks retries hourly).
 EVENT_LOCK_KEPT_FILLED = "live_lock_kept_filled_entry"
+# Audit F11 / L2 residual (b): a FILLED entry ticket open_position refused
+# (one row + one card per position per IST day — `note_refused_fill`).
+EVENT_FILLED_REFUSED = "live_filled_entry_refused"
+# Audit F14: the arm is switched off while it still holds positions (one
+# row + one card per IST day — `announce_manage_only`).
+EVENT_ARM_OFF = "live_arm_off_managing"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_live_positions (
@@ -395,16 +421,43 @@ def crossed_mark(chain: dict, legs: list) -> dict:
 # ------------------------------------------------------------- structure math
 
 def structure_bounds(spread: dict, d: float) -> dict:
-    """{width_ps, max_profit_ps, max_loss_ps} from the structure's width and
-    the ACTUAL crossed entry d (debit > 0, credit < 0)."""
+    """{width_ps, max_profit_ps, max_loss_ps} from the structure's width,
+    its premium TYPE and the ACTUAL crossed entry d (Σ long − Σ short).
+
+    Audit F11 (2026-10-06): debit or credit is the STRUCTURE's
+    (strategy_router.premium_of), never d's sign. The sign rule took a bear
+    put quoted at a net credit for a credit structure and a condor quoted at
+    a net debit for a debit one, and every clamp then enforced those wrong
+    bounds (the condor's loss capped at d instead of the width + d). From
+    the structure, a d that contradicts it gives a NON-POSITIVE bound — the
+    true bounds of such a fill (a condor bought for a debit can only lose)
+    — which requote_entry and open_position refuse by name
+    (`premium_refusal`) before anything is booked. A structure the routing
+    table does not know raises: its bounds cannot be derived."""
+    from src.strategy_router import premium_of
+    kind = premium_of(spread.get("strategy"))
+    if kind is None:
+        raise ValueError(f"unknown structure {spread.get('strategy')!r}: no debit/credit type to bound it by")
     lot = int(spread.get("lot_size") or 0)
     width = spread.get("spread_width")
     if width is None and lot:
         width = (float(spread.get("max_loss") or 0) + float(spread.get("max_profit") or 0)) / lot
     width = float(width or 0.0)
-    if d > 0:
+    if kind == "debit":
         return {"width_ps": width, "max_profit_ps": round(width - d, 4), "max_loss_ps": round(d, 4)}
     return {"width_ps": width, "max_profit_ps": round(-d, 4), "max_loss_ps": round(width + d, 4)}
+
+
+def _premium_refusal(strategy: str, d: float):
+    """strategy_router.premium_refusal — the ONE debit/credit rule (F11)."""
+    from src.strategy_router import premium_refusal
+    return premium_refusal(strategy, d)
+
+
+class LiveEntryRefused(ValueError):
+    """open_position will not record this entry; the message names why
+    (audit F11: fills that invert the structure; L2 residual (b): a row
+    for this (account, journal_ref) already exists)."""
 
 
 def _clamp(profit_ps: float, max_loss_ps: float, max_profit_ps: float) -> float:
@@ -461,6 +514,13 @@ def requote_entry(entry: dict, now: datetime = None, chain_fn=None) -> dict:
                     "reason": f"{leg['side']} {leg['strike']:g}{leg['option_type']}: {why}"}
         legs.append(dict(leg, premium=round(price, 2), fill_basis=FILL_BASIS, requoted_from=leg.get("premium")))
     d = round(sum(_sign(l["side"]) * float(l["premium"]) for l in legs), 4)
+    # Audit F11: prices that invert the structure (a debit vertical at a net
+    # credit, a condor at a net debit) are an inverted or stale book — the
+    # arm abstains, named, rather than open on bounds taken from the sign.
+    inverted = _premium_refusal(spread.get("strategy"), d)
+    if inverted:
+        return {"ok": False, "legs": None, "quote_ts": None,
+                "reason": f"crossed prices invert the structure: {inverted}"}
     b = structure_bounds(spread, d)
     if b["max_profit_ps"] <= 0 or b["max_loss_ps"] <= 0 or b["max_loss_ps"] >= b["width_ps"] > 0:
         return {"ok": False, "legs": None, "quote_ts": None,
@@ -471,10 +531,24 @@ def requote_entry(entry: dict, now: datetime = None, chain_fn=None) -> dict:
 
 def open_position(conn, account: str, entry: dict, ticket_view: dict, quote_ts: str = None,
                   now: datetime = None) -> dict:
-    """Record the account's FILLED entry ticket as an open live position."""
+    """Record the account's FILLED entry ticket as an open live position.
+
+    Refuses — raises LiveEntryRefused, nothing written — when (L2 residual
+    (b)) a row for this (account, journal_ref) already exists: the table's
+    key is that pair, and the old INSERT OR REPLACE let a re-approval of a
+    still-pending entry whose LIVE position had been kept and repaired
+    overwrite it (an `exiting` row's earlier EXIT tickets would then be
+    counted against the new row) — or erase a settled row; or (audit F11)
+    when the fills invert the structure. _execute_paper_entry checks the
+    first BEFORE any ticket is issued and requote_entry the second; this is
+    the backstop at the door that writes."""
     ensure_schema(conn)
     now = now or _now()
     spread = entry["spread"]
+    held = position_state(conn, account, entry.get("short_id"))
+    if held is not None:
+        raise LiveEntryRefused(f"a live position for {entry.get('short_id')} is already recorded "
+                               f"({held}) — a ref is opened once; nothing written")
     legs, d = [], 0.0
     for l in ticket_view.get("legs") or []:
         fill = float(l["avg_fill_price"])
@@ -484,8 +558,11 @@ def open_position(conn, account: str, entry: dict, ticket_view: dict, quote_ts: 
     if not legs:
         raise ValueError("ticket has no filled legs")
     d = round(d, 4)
+    inverted = _premium_refusal(spread.get("strategy"), d)
+    if inverted:
+        raise LiveEntryRefused(f"the entry fills invert the structure: {inverted}")
     b = structure_bounds(spread, d)
-    conn.execute("INSERT OR REPLACE INTO paper_live_positions (account_id, journal_ref, ticker, strategy, "
+    conn.execute("INSERT INTO paper_live_positions (account_id, journal_ref, ticker, strategy, "
                  "direction, expiry, lots, lot_size, legs_json, entry_mark_ps, width_ps, max_profit_ps, "
                  "max_loss_ps, opened_at, entry_quote_ts, state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (account, entry.get("short_id"), entry["ticker"], spread.get("strategy"),
@@ -503,6 +580,17 @@ def has_open_position(conn, account: str, journal_ref: str) -> bool:
     row = conn.execute("SELECT 1 FROM paper_live_positions WHERE account_id = ? AND journal_ref = ? "
                        "AND state != ?", (account, journal_ref, STATE_CLOSED)).fetchone()
     return row is not None
+
+
+def position_state(conn, account: str, journal_ref: str):
+    """The row's state ('open' | 'exiting' | 'closed') for this (account,
+    journal_ref), or None when no row exists — a ref is opened ONCE (L2
+    residual (b)). RAISES on a database error, like has_open_position:
+    'unknown' must never be read as 'no position'."""
+    ensure_schema(conn)
+    row = conn.execute("SELECT state FROM paper_live_positions WHERE account_id = ? AND journal_ref = ?",
+                       (account, journal_ref)).fetchone()
+    return None if row is None else str(row[0])
 
 
 def closed_pnl(conn, account: str, journal_ref: str):
@@ -1250,8 +1338,33 @@ def keep_filled_entry_lock(conn, account: str, journal_ref: str, ticket_id: str,
     journal write failed too, so the entry still reads pending — L2
     review), which passes `commit=False`: the row joins its one
     transaction (F16)."""
-    why = (f"entry ticket {ticket_id} FILLED but no live position row was recorded — lock kept; "
-           "the next live tick opens the position from the ticket")
+    try:
+        row = conn.execute("SELECT state, pnl_net FROM paper_live_positions WHERE account_id = ? "
+                           "AND journal_ref = ?", (account, journal_ref)).fetchone()
+        unread = None
+    except Exception as exc:
+        if not commit:
+            raise           # inside the caller's transaction: its rollback decides (L2 residual (a))
+        row, unread = None, exc
+    if unread is not None:
+        why = (f"entry ticket {ticket_id} FILLED and the live position row could not be read ({unread}) "
+               "— lock kept")
+    elif row is None:
+        why = (f"entry ticket {ticket_id} FILLED but no live position row was recorded — lock kept; "
+               "the next live tick opens the position from the ticket")
+    elif row[0] == STATE_CLOSED:
+        # L2 residual (c): a CLOSED row whose lock is still active (a crash
+        # between the row close and the lock release) is not 'no row' — it
+        # is the late lock _repair_late_locks releases at the row's P&L
+        why = ((f"entry ticket {ticket_id} FILLED and its live position row is CLOSED (settled pnl "
+                f"Rs.{float(row[1]):,.2f}) but its lock is still active — lock kept; the next live tick "
+                "releases it at that pnl") if row[1] is not None else
+               (f"entry ticket {ticket_id} FILLED and its live position row is CLOSED with no settled pnl "
+                "recorded, its lock still active — lock kept; nothing releases it on its own: needs a "
+                "human look"))
+    else:
+        why = (f"entry ticket {ticket_id} FILLED and its live position row is {row[0]} — lock kept; "
+               "the position settles on its own quotes")
     _log_once_a_day(conn, {"account_id": account, "journal_ref": journal_ref}, EVENT_LOCK_KEPT_FILLED, why,
                     commit=commit)
     return why
@@ -1286,9 +1399,90 @@ def _repair_unrecorded(conn, account: str, now: datetime) -> list:
                                  "spread_width": max(widths) if widths else 0.0}}
         if not entry_like["spread"]["expiry"]:
             continue
-        open_position(conn, account, entry_like, view, quote_ts=None, now=now)
+        try:
+            open_position(conn, account, entry_like, view, quote_ts=None, now=now)
+        except LiveEntryRefused as exc:
+            # audit F11: fills that invert the structure are never recorded
+            # with bounds from their sign — named (one row + one card a
+            # day), the lock kept, and the next ref is still repaired
+            note_refused_fill(conn, account, ref, tid, str(exc))
+            continue
         fixed.append(ref)
     return fixed
+
+
+def note_refused_fill(conn, account: str, journal_ref: str, ticket_id: str, why: str) -> str:
+    """A FILLED live entry ticket that open_position refused
+    (LiveEntryRefused: its fills invert the structure, audit F11; or a row
+    for the ref already exists, L2 residual (b)). Nothing books it and
+    nothing will on its own: the lock is kept (F15 — a filled trade is never
+    released at zero as 'never opened') and a human has to look. ONE
+    `live_filled_entry_refused` row and ONE Discord card per position per
+    IST day — the event row IS the de-dup, so a repair retried every tick
+    never pages twice. Fail-open: a failed card never blocks the caller.
+    Returns the detail."""
+    detail = (f"entry ticket {ticket_id} FILLED but the live position was refused: {why} — lock kept; "
+              "nothing opens or settles it on its own: needs a human look")
+    if _log_once_a_day(conn, {"account_id": account, "journal_ref": journal_ref}, EVENT_FILLED_REFUSED, detail):
+        try:
+            from src.notifier import fire_broadcast
+            fire_broadcast({"event": "live_entry_needs_review", "ticker": account, "short_id": journal_ref,
+                            "date": _now().date().isoformat(),
+                            "description": f"⚠️ {account} `{journal_ref}`: {detail}"})
+        except Exception as exc:
+            print(f"  (live account: review card for {journal_ref} skipped: {exc})")
+    return detail
+
+
+def refs_to_manage(conn) -> list:
+    """Audit F14: every ref the live arm still has to manage, whatever its
+    switch says — a row not closed (marks, exits, finishing a partly
+    filled basket), an ACTIVE lock whose entry ticket FILLED with no row yet
+    (F15: the tick's repair opens it), and a CLOSED row whose lock is still
+    active (the tick's late-lock repair releases it at the row's P&L).
+    Sorted; read-only. RAISES on a database error: the caller must not read
+    'unknown' as 'nothing to manage'."""
+    from src import portfolio_manager as pm
+    ensure_schema(conn)
+    pm.ensure_accounts_schema(conn)
+    refs = set()
+    for acct in sorted(_accounts()):
+        refs.update(r["journal_ref"] for r in open_rows(conn, acct))
+        for (ref,) in (tuple(r) for r in conn.execute(
+                "SELECT journal_ref FROM paper_margin_locks WHERE account_id = ? AND released_at IS NULL",
+                (acct,)).fetchall()):
+            state = position_state(conn, acct, ref)
+            if state == STATE_CLOSED or (state is None and filled_entry_ticket(conn, acct, ref)):
+                refs.add(ref)
+    return sorted(refs)
+
+
+def announce_manage_only(conn, refs: list) -> bool:
+    """Audit F14: the arm's switch is OFF but it still holds `refs` — the
+    live loop ticks them anyway (marks + exits only; no new live entry can
+    open, the switch gates every entry at approval). ONE
+    `live_arm_off_managing` row and ONE Discord card per IST day (a
+    restarted scheduler does not page again). Fail-open on the card; the
+    event write raises (the caller prints it). True when announced."""
+    from src import portfolio_manager as pm
+    pm.ensure_accounts_schema(conn)
+    account = pm.ACCOUNT_PAPER_2L_LIVE
+    day = pm._now_iso()[:10]
+    if conn.execute("SELECT 1 FROM paper_account_events WHERE account_id = ? AND event_type = ? "
+                    "AND substr(ts, 1, 10) = ? LIMIT 1", (account, EVENT_ARM_OFF, day)).fetchone():
+        return False
+    detail = (f"the live-quote arm is switched OFF but holds {len(refs)} position(s) "
+              f"({', '.join(refs)}) — the live loop still marks and exits them on crossed quotes "
+              "(manage-only); no new live entry opens while the switch is off")
+    pm.paper_log_event(conn, account, EVENT_ARM_OFF, None, detail)
+    try:
+        from src.notifier import fire_broadcast
+        fire_broadcast({"event": "live_arm_off_managing", "ticker": account, "date": day,
+                        "description": (f"🟡 {account}: {detail}. To end it: let these positions exit, "
+                                        "or switch the arm back on (audit F14).")})
+    except Exception as exc:
+        print(f"  (live account: manage-only card skipped: {exc})")
+    return True
 
 
 # ------------------------------------------------------------- the tick
@@ -1411,8 +1605,14 @@ def _log_once_a_day(conn, row: dict, event_type: str, detail: str, commit: bool 
     (#102/#120 telemetry rule). Fail-open: a failed write is printed and
     the tick carries on — marks and exits never depend on their own
     telemetry. `commit=False`: the row joins the caller's open transaction
-    (pm.paper_log_event's own flag; the schema check is D4-safe). Returns
-    True when a row was written."""
+    (pm.paper_log_event's own flag; the schema check is D4-safe) — and a
+    failure RAISES (L2 residual (a)): inside someone else's transaction a
+    failed write may already have rolled that whole transaction back
+    (SQLITE_FULL / IOERR / NOMEM, a trigger's RAISE(ROLLBACK)); swallowed,
+    the caller would carry on in a fresh implicit transaction with its own
+    earlier writes silently undone (expire_pending_lock's 'nothing expires
+    unless all does', F16). The caller's rollback-on-failure must run.
+    Returns True when a row was written."""
     from src import portfolio_manager as pm
     try:
         pm.ensure_accounts_schema(conn)
@@ -1424,6 +1624,8 @@ def _log_once_a_day(conn, row: dict, event_type: str, detail: str, commit: bool 
         pm.paper_log_event(conn, row["account_id"], event_type, row["journal_ref"], detail, commit=commit)
         return True
     except Exception as exc:
+        if not commit:
+            raise
         print(f"  (live account: {event_type} event for {row.get('journal_ref')} skipped: {exc})")
         return False
 

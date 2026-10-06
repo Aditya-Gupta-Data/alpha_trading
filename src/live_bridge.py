@@ -751,6 +751,43 @@ def _notify_discord(text: str) -> bool:
         return False
 
 
+def _manage_only_arm(lp_mod):
+    """Audit F14 (policy default, 2026-10-06 — the off switch stops NEW live
+    entries, never abandons open ones). With paper_2l_live_account_enabled
+    (or the 2L switch) OFF, `live_pricer.tick` used to be wired nowhere: an
+    open LIVE position went unmarked and unexited (no ratchet, no pre-expiry
+    exit) until the expiry backstop, and an `exiting` row was never
+    finished. While the arm still holds positions (`refs_to_manage`), the
+    tick is armed MANAGE-ONLY: it marks and exits those rows (and repairs a
+    filled entry with no row) — it never opens an entry, and the switch
+    already keeps the arm out of every approval. ONE card per IST day says
+    so (`announce_manage_only`). Holding nothing → None, as before. A book
+    that cannot be read arms it anyway: the tick on an empty book is a
+    no-op, while an unarmed one would abandon whatever is there."""
+    try:
+        from src import brain_map
+        conn = brain_map.connect()
+        try:
+            refs = lp_mod.refs_to_manage(conn)
+            if refs:
+                try:
+                    lp_mod.announce_manage_only(conn, refs)
+                except Exception as e:
+                    print(f"[Live Bridge] (manage-only notice not recorded: {e})", flush=True)
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[Live Bridge] PAPER_2L_LIVE arm is OFF and its book could not be read ({e}) — "
+              "armed MANAGE-ONLY so nothing it holds is abandoned (audit F14).", flush=True)
+        return lp_mod.tick
+    if not refs:
+        return None
+    print(f"[Live Bridge] PAPER_2L_LIVE arm is OFF but holds {len(refs)} position(s) "
+          f"({', '.join(refs)}) — armed MANAGE-ONLY: marks + exits of those rows on crossed quotes, "
+          "no new live entry (audit F14).", flush=True)
+    return lp_mod.tick
+
+
 async def run_live_loop(underlyings=UNDERLYINGS,
                         interval: float = POLL_INTERVAL_SECONDS,
                         quote_fn=None, notify_fn=_notify_discord,
@@ -785,11 +822,13 @@ async def run_live_loop(underlyings=UNDERLYINGS,
     live_log = LiveTickLog()     # audit F02: the arm's tick summary -> this log, de-duplicated
     try:
         from src import portfolio_manager as _pm
+        from src.execution import live_pricer as _lp
         if _pm.live_account_enabled():
-            from src.execution import live_pricer as _lp
             live_account_fn = _lp.tick
             print("[Live Bridge] PAPER_2L_LIVE live-quote arm ARMED "
                   "(crossed bid/ask marks + exits, decision #120).", flush=True)
+        else:
+            live_account_fn = _manage_only_arm(_lp)
     except Exception as e:
         print(f"[Live Bridge] live-quote arm not armed ({e}).", flush=True)
     print(f"[Live Bridge] armed — {', '.join(underlyings)} every "

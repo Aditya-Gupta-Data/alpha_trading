@@ -520,10 +520,46 @@ def _daily_breaker_check(conn) -> dict:
 
 ENTRY_HALT_CHECKS = (_risk_of_ruin_check, _daily_breaker_check)
 
+
+def entry_halt(conn, account: str = None):
+    """The halt THIS account's own entry gate refuses a new entry on right
+    now, or None — {halted, event, reason[, verdict]}. ONE reading of the
+    halt-stack rule (review #2) for every gate: the primary's composed
+    ENTRY_HALT_CHECKS (lifetime risk-of-ruin, then the daily breaker); a
+    paper account's own ruin latch, then its own daily breaker. request_entry
+    and paper_request_entry consult it for a NEW lock, and (audit F13) for a
+    lock the entry already holds when it is re-requested at approval."""
+    if _is_primary(account):
+        for check in ENTRY_HALT_CHECKS:
+            halt = check(conn)
+            if halt["halted"]:
+                return halt
+        return None
+    if paper_trading_halted(conn, account):
+        return {"halted": True, "event": "risk_of_ruin_halt",
+                "reason": (f"risk-of-ruin halt: drawdown {paper_drawdown_pct(conn, account):.2f}% "
+                           f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked")}
+    breaker = paper_daily_breaker_status(conn, account)
+    if breaker["halted"]:
+        return {"halted": True, "event": "daily_breaker_halt", "reason": breaker["reason"],
+                "verdict": breaker}
+    return None
+
+
+def _primary_halt_cards(conn, halt: dict) -> None:
+    if halt["event"] == "daily_breaker_halt":
+        _daily_breaker_card(conn, halt["verdict"])
+    elif halt["event"] == "risk_of_ruin_halt":
+        _ruin_halt_card(conn)   # cold-start site: halt already up
+
+
 # An entry that already holds its lock is approved again with this reason
 # (the approval-time re-judgement of a proposal-time lock). One constant:
 # the shadow judge's log reads it to print each lock once, when taken.
 HELD_LOCK_REASON = "margin already locked for this entry"
+# Audit F13: what a held lock's refusal at approval adds to the halt's reason
+HELD_LOCK_HALTED = ("its proposal-time lock is held, but a halted account opens no new risk "
+                    "(audit F13)")
 
 
 def request_entry(conn, journal_ref: str, required_margin: float,
@@ -539,13 +575,28 @@ def request_entry(conn, journal_ref: str, required_margin: float,
     Order of the guards matters: the composed halt list first (lifetime
     risk-of-ruin, then the daily circuit breaker — even a tiny trade is
     blocked once a halt is up), then the margin-exhaustion check against
-    available liquid cash."""
+    available liquid cash.
+
+    Audit F13 (2026-10-06, the halt-stack rule — policy default): a
+    re-request on a lock the entry ALREADY holds (decide_pending's approval
+    of a proposal-time lock) runs the same halt list first. A halt that
+    tripped after the proposal refuses it — approved False, the halt named,
+    the lock LEFT as it is (still pending: the D7 15:30 sweep releases it,
+    or a later approval passes once the halt clears); decide_pending
+    answers MARGIN_BLOCKED. The re-request is otherwise idempotent."""
     ensure_schema(conn)
     get_account(conn)
 
     active = conn.execute("SELECT 1 FROM margin_locks WHERE journal_ref = ? "
                           "AND released_at IS NULL", (journal_ref,)).fetchone()
     if active:
+        halt = entry_halt(conn)
+        if halt:
+            log_event(conn, halt["event"],
+                      f"entry {journal_ref} refused at approval ({halt['reason']}) — "
+                      f"{HELD_LOCK_HALTED}; the lock is left for the 15:30 sweep")
+            _primary_halt_cards(conn, halt)
+            return {"approved": False, "reason": f"{halt['reason']} — {HELD_LOCK_HALTED}"}
         return {"approved": True, "reason": HELD_LOCK_REASON}
     # A released row for this ref: only a pending lock that EXPIRED unapproved
     # (D7) may be taken again — at approval, judged on today's cash below.
@@ -557,16 +608,12 @@ def request_entry(conn, journal_ref: str, required_margin: float,
         return {"approved": False,
                 "reason": "this entry's margin lock was already settled — never re-locked"}
 
-    for check in ENTRY_HALT_CHECKS:
-        halt = check(conn)
-        if halt["halted"]:
-            log_event(conn, halt["event"],
-                      f"entry {journal_ref} rejected ({halt['reason']})")
-            if halt["event"] == "daily_breaker_halt":
-                _daily_breaker_card(conn, halt["verdict"])
-            elif halt["event"] == "risk_of_ruin_halt":
-                _ruin_halt_card(conn)   # cold-start site: halt already up
-            return {"approved": False, "reason": halt["reason"]}
+    halt = entry_halt(conn)
+    if halt:
+        log_event(conn, halt["event"],
+                  f"entry {journal_ref} rejected ({halt['reason']})")
+        _primary_halt_cards(conn, halt)
+        return {"approved": False, "reason": halt["reason"]}
 
     cash = available_cash(conn)
     margin = round(float(required_margin), 2)
@@ -1130,8 +1177,11 @@ def size_for_account(conn, account: str, spread: dict, primary_lots: int = None,
 def paper_request_entry(conn, account: str, journal_ref: str, required_margin: float,
                         lots: int = 1, primary_lots: int = 1) -> dict:
     """The shadow account's strict entry guard: same order as request_entry
-    (idempotent re-request -> approve; halt list; margin exhaustion), its
-    own tables. The primary delegates to request_entry()."""
+    (re-request of a held lock -> its halts, then approve; halt list;
+    margin exhaustion), its own tables. The primary delegates to
+    request_entry(). Audit F13: a held lock re-requested while the account
+    is halted is refused (lock left as it is — the caller decides;
+    evaluate_shadow_accounts releases it at zero)."""
     if _is_primary(account):
         return request_entry(conn, journal_ref, required_margin)
     get_paper_account(conn, account)
@@ -1139,6 +1189,10 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
                           "journal_ref = ? AND released_at IS NULL",
                           (account, journal_ref)).fetchone()
     if active:
+        halt = entry_halt(conn, account)
+        if halt:
+            return {"approved": False, "reason": f"{halt['reason']} — {HELD_LOCK_HALTED}",
+                    "halt": halt}
         return {"approved": True, "reason": HELD_LOCK_REASON}
     # same rule as request_entry: only a D7-expired pending lock is renewed
     prior = conn.execute("SELECT 1 FROM paper_margin_locks WHERE account_id = ? AND "
@@ -1146,17 +1200,11 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
     if prior is not None and not _lock_expired_unapproved(conn, account, journal_ref):
         return {"approved": False,
                 "reason": "this entry's margin lock was already settled — never re-locked"}
-    if paper_trading_halted(conn, account):
-        reason = (f"risk-of-ruin halt: drawdown {paper_drawdown_pct(conn, account):.2f}% "
-                  f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked")
-        paper_log_event(conn, account, "risk_of_ruin_halt", journal_ref,
-                        f"entry {journal_ref} rejected ({reason})")
-        return {"approved": False, "reason": reason}
-    breaker = paper_daily_breaker_status(conn, account)
-    if breaker["halted"]:
-        paper_log_event(conn, account, "daily_breaker_halt", journal_ref,
-                        f"entry {journal_ref} rejected ({breaker['reason']})")
-        return {"approved": False, "reason": breaker["reason"]}
+    halt = entry_halt(conn, account)
+    if halt:
+        paper_log_event(conn, account, halt["event"], journal_ref,
+                        f"entry {journal_ref} rejected ({halt['reason']})")
+        return {"approved": False, "reason": halt["reason"]}
     cash = paper_available_cash(conn, account)
     margin = round(float(required_margin), 2)
     if margin > cash:
@@ -1421,6 +1469,44 @@ def _active_shadow_lock(conn, account: str, journal_ref: str):
     return None if row is None else (float(row[0]), int(row[1]))
 
 
+def release_unopened_lock(conn, account: str, journal_ref: str) -> dict:
+    """Release ONE shadow account's lock at zero for an entry it will not
+    open — refused at approval (a halt, audit F13; the live arm's own
+    refusals, F11 / F12 / F14). For a LIVE account, release_shadow_locks'
+    guards come first: a live position row for the ref (open, exiting, or
+    closed with its lock not yet settled) or a FILLED entry ticket (F15)
+    means the lock backs a real trade — KEPT, named; an unreadable state is
+    kept too (never money on a guess). Returns paper_release_margin's dict,
+    or {released: False, reason}."""
+    if account in LIVE_ACCOUNTS:
+        try:
+            from src.execution import live_pricer
+            state = live_pricer.position_state(conn, account, journal_ref)
+            filled = None if state else live_pricer.filled_entry_ticket(conn, account, journal_ref)
+        except Exception as exc:
+            return {"released": False, "reason": f"live position lookup failed ({exc}) — lock kept"}
+        if state:
+            return {"released": False,
+                    "reason": f"a live position for this entry is recorded ({state}) — the lock backs it"}
+        if filled:
+            return {"released": False,
+                    "reason": live_pricer.keep_filled_entry_lock(conn, account, journal_ref, filled)}
+    return paper_release_margin(conn, account, journal_ref, 0.0)
+
+
+def paper_resize_lock(conn, account: str, journal_ref: str, lots: int, margin_rs: float) -> bool:
+    """Audit F12: SHRINK one shadow account's ACTIVE lock to the lots that
+    will actually open (the live arm's entry re-sized on its crossed max
+    loss). Never grows a lock and never touches a released one — the
+    compare-and-set is on `released_at IS NULL AND lots > ?`. True when the
+    lock changed (committed)."""
+    cur = conn.execute("UPDATE paper_margin_locks SET lots = ?, margin_rs = ? WHERE account_id = ? "
+                       "AND journal_ref = ? AND released_at IS NULL AND lots > ?",
+                       (int(lots), round(float(margin_rs), 2), account, journal_ref, int(lots)))
+    conn.commit()
+    return cur.rowcount == 1
+
+
 def paper_lock_released(conn, account: str, journal_ref: str) -> bool:
     """True only when this account HELD `journal_ref` and has already let it
     go (e.g. a #115 eviction) — the exit path must not close it twice."""
@@ -1468,8 +1554,27 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                 # rotation arm would evict a second trade to fund it twice).
                 held = _active_shadow_lock(conn, account, journal_ref)
                 if held is not None:
-                    out[account] = {"status": "approved", "lots": held[1], "margin_rs": held[0],
-                                    "reason": HELD_LOCK_REASON}
+                    # Audit F13 (the halt-stack rule — policy default): a held
+                    # lock still passes the account's OWN halts (ruin latch,
+                    # daily breaker) before it is accepted — a breaker that
+                    # tripped on the account's own settlements between the
+                    # proposal and this approval used to let the live arm
+                    # open new risk through it. Halted: refused for this
+                    # entry, the lock released at zero (never one that backs
+                    # a recorded or filled live position), the halt named.
+                    halt = entry_halt(conn, account)
+                    if halt is None:
+                        out[account] = {"status": "approved", "lots": held[1], "margin_rs": held[0],
+                                        "reason": HELD_LOCK_REASON}
+                        continue
+                    rel = release_unopened_lock(conn, account, journal_ref)
+                    lock = ("released at zero" if rel.get("released")
+                            else f"kept ({rel.get('reason')})")
+                    reason = f"{halt['reason']} — {HELD_LOCK_HALTED}; lock {lock}"
+                    paper_log_event(conn, account, halt["event"], journal_ref,
+                                    f"entry {journal_ref} refused at approval ({reason})")
+                    out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
+                                    "reason": reason}
                     continue
                 if account in LIVE_ACCOUNTS and not _legs_all_quoted(spread):
                     paper_log_event(conn, account, "sizing_refused", journal_ref,

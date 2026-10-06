@@ -634,9 +634,10 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                   f"condor {put_short:g}P/{call_short:g}C, wings {wing:g} wide")
 
     if spread is None:
+        # audit F11: premiums that invert the structure are refused by name
         return {"proposal": None, "view": view, "vix": vix,
-                "reason": "structure failed to build (regime gate or "
-                          "incoherent strikes)"}
+                "reason": (f"structure refused: {sc.last_refusal}" if sc.last_refusal else
+                           "structure failed to build (regime gate or incoherent strikes)")}
 
     for leg in spread["legs"]:
         leg["fill_basis"] = fill_bases.get(
@@ -1574,11 +1575,14 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
                     "announce": first_today}
 
         # Phase 6J: approval is the moment a trade is ACCEPTED, so the
-        # capital layer must grant its margin first (idempotent no-op when
-        # the headless gate already locked it at proposal time; a lock that
-        # EXPIRED unapproved at 15:30 — D7 — is taken again on today's
-        # cash). A margin-blocked approval leaves the entry pending —
-        # nothing is journaled, broadcast, or settled.
+        # capital layer must grant its margin first (idempotent when the
+        # headless gate already locked it at proposal time — but that held
+        # lock still passes the account's halt list, audit F13: a ruin
+        # latch or daily breaker that tripped since the proposal refuses
+        # the approval with the halt named; a lock that EXPIRED unapproved
+        # at 15:30 — D7 — is taken again on today's cash). A margin-blocked
+        # approval leaves the entry pending — nothing is journaled,
+        # broadcast, or settled.
         spread = target.get("spread") or {}
         per_lot = (spread.get("margin") or {}).get("total_margin")
         if per_lot is not None:
@@ -1594,8 +1598,10 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
                 return {"status": MARGIN_BLOCKED, "entry": target,
                         "reason": gate_reason}
             # #102: approval is the acceptance moment for the shadow
-            # accounts too (idempotent re-request on an active lock; a
-            # proposal-time refusal is re-judged on today's cash). D6
+            # accounts too (idempotent re-request on an active lock, which
+            # still passes the account's own halts — F13: a halted shadow is
+            # refused, its lock released at zero; a proposal-time refusal is
+            # re-judged on today's cash). D6
             # (#122): this is the ONLY judgement where the rotation account
             # may evict — the entry is being accepted, not merely proposed.
             marks_fn, evict_fn = _rotation_fns(rotation)
@@ -1672,19 +1678,121 @@ _LIVE_CHAIN_FN = None              # test seam: the live arm's chain source (Non
 
 def _live_refuse(conn, acct: str, entry: dict, why: str) -> None:
     """The live arm (#120) declines this entry at approval: verdict rejected,
-    its proposal-time lock released at zero, one named event."""
+    its proposal-time lock released at zero, one named event. Through
+    pm.release_unopened_lock: a lock that backs a recorded or FILLED live
+    position (L2 residual (b), F15) is kept, and the event says so."""
     from src import portfolio_manager as pm
     ref = entry.get("short_id")
     if isinstance(entry.get("accounts"), dict):
         entry["accounts"][acct] = dict(entry["accounts"].get(acct) or {}, status="rejected", lots=0,
                                        margin_rs=None, ticket_id=None, reason=f"live entry refused: {why}")
     try:
-        rel = pm.paper_release_margin(conn, acct, ref, 0.0)
-        pm.paper_log_event(conn, acct, "live_entry_refused", ref,
-                           f"{why} — lock {'released at zero' if rel.get('released') else 'not held'}")
+        rel = pm.release_unopened_lock(conn, acct, ref)
+        lock = ("released at zero" if rel.get("released") else
+                "not held" if rel.get("reason") == "no active lock for this ref" else
+                f"kept ({rel.get('reason')})")
+        pm.paper_log_event(conn, acct, "live_entry_refused", ref, f"{why} — lock {lock}")
     except Exception as e:
         print(f"  [{acct}] {ref}: refusal bookkeeping failed ({e})")
     print(f"  [{acct}] {ref}: REFUSED at approval — {why}")
+
+
+def _live_entry_rules(conn, acct: str, entry: dict, rq: dict, lots: int) -> int | None:
+    """Audit F12 (policy default, 2026-10-06 — the owner may revise): the
+    live arm's crossed re-quote is judged by the desk's OWN entry rules
+    before it opens — at approval the arm enters at that re-quote, which can
+    sit far from the proposal's prices after an hours-long human gap.
+      (a) the #98 R:R floor on the RE-QUOTED structure, through the
+          proposer's own gate (strategy.reward_risk_gate, its own floors):
+          below it the arm abstains for this entry — named, its lock
+          released at zero, a `live_entry_refused` event;
+      (b) the #106 risk budget on the CROSSED max loss, through the shadow
+          accounts' one sizing door (pm.size_for_account, the account's own
+          equity, risk only — its held lock is already out of its liquid
+          cash, and fewer lots need less margin): lots re-sized DOWN, never
+          above the lots it was approved for; #106's 1-lot floor is kept
+          and recorded on the verdict (`requote_sizing`); the lock shrinks
+          with the lots (a `live_entry_resized` event).
+    The primary and the other shadows are untouched. Returns the lots to
+    ticket, or None (refused). A failure abstains (refused, named): this
+    runs before ANY ticket is issued, and must never take the primary's
+    venue run down with it."""
+    try:
+        return _live_entry_rules_body(conn, acct, entry, rq, lots)
+    except Exception as e:
+        _live_refuse(conn, acct, entry, f"the desk's entry rules could not be applied to the re-quote ({e})")
+        return None
+
+
+def _live_entry_rules_body(conn, acct: str, entry: dict, rq: dict, lots: int) -> int | None:
+    from src import portfolio_manager as pm
+    ref = entry.get("short_id")
+    spread = entry["spread"]
+    lot = int(spread["lot_size"])
+    crossed = {"strategy": spread.get("strategy"),
+               "max_loss": round(float(rq["max_loss_ps"]) * lot, 2),
+               "max_profit": round(float(rq["max_profit_ps"]) * lot, 2)}
+    ok, rr, _floor, why = reward_risk_gate(crossed)
+    if not ok:
+        _live_refuse(conn, acct, entry, f"the crossed re-quote (net {float(rq['entry_mark_ps']):+.2f}/share) "
+                                        f"fails the desk's R:R floor — {why} (audit F12)")
+        return None
+    sized = pm.size_for_account(conn, acct, dict(crossed, margin={"total_margin": 0}))
+    new = min(int(lots), int(sized["lots"]))
+    if new <= 0:                 # unreachable past the gate (a measurable loss sizes >= 1)
+        _live_refuse(conn, acct, entry, f"re-sizing on the crossed max loss refused: {sized['reason']}")
+        return None
+    record = {"lots_approved": int(lots), "lots": new, "crossed_max_loss_rs": crossed["max_loss"],
+              "reward_risk": rr, "by_risk": sized["by_risk"], "risk_capacity_rs": sized["risk_capacity_rs"],
+              "risk_at_lots_rs": round(new * crossed["max_loss"], 2),
+              "floor_applied": bool(sized["floor_applied"] and new == 1),
+              "reason": sized["reason"] if new == sized["lots"] else "kept at the approved lots (below the budget)"}
+    verdict = (entry.get("accounts") or {}).get(acct)
+    if new < int(lots):
+        held = pm._active_shadow_lock(conn, acct, ref)
+        if held is not None:
+            margin = round(held[0] * new / held[1], 2) if held[1] else held[0]
+            if pm.paper_resize_lock(conn, acct, ref, new, margin):
+                record["margin_rs"] = margin
+                pm.paper_log_event(conn, acct, "live_entry_resized", ref,
+                                   f"crossed max loss Rs.{crossed['max_loss']:,.2f}/lot: {lots} -> {new} "
+                                   f"lot(s) on the {sized['risk_pct']:g}% budget Rs.{sized['risk_capacity_rs']:,.2f}; "
+                                   f"lock Rs.{held[0]:,.2f} -> Rs.{margin:,.2f} (audit F12)")
+                if isinstance(verdict, dict):
+                    verdict["margin_rs"] = margin
+        print(f"  [{acct}] {ref}: re-sized {lots} -> {new} lot(s) on the crossed max loss "
+              f"Rs.{crossed['max_loss']:,.2f}/lot (audit F12)")
+    if isinstance(verdict, dict):
+        verdict["lots"] = new
+        verdict["requote_sizing"] = record
+    return new
+
+
+def _live_already_recorded(conn, acct: str, entry: dict) -> bool:
+    """L2 residual (b): True (and refused, named, the lock KEPT) when this
+    (account, ref) was already opened — a live position row exists (a
+    kept-then-repaired position on a still-pending entry being approved
+    again), or an entry ticket for it already FILLED and its row is still
+    to be repaired from that ticket (F15). The table's key is that pair: a
+    second entry ticket would be a second fill with nowhere to be recorded.
+    Checked BEFORE any ticket is issued; an unreadable state refuses too
+    (never a second fill on a guess)."""
+    from src.execution import live_pricer
+    ref = entry.get("short_id")
+    try:
+        state = live_pricer.position_state(conn, acct, ref)
+        filled = None if state else live_pricer.filled_entry_ticket(conn, acct, ref)
+    except Exception as e:
+        state, filled = f"unreadable: {e}", None
+    if state is not None:
+        why = f"a live position for this entry is already recorded ({state})"
+    elif filled:
+        why = (f"entry ticket {filled} for this entry already FILLED (its position row is repaired from "
+               "that ticket by the next live tick)")
+    else:
+        return False
+    _live_refuse(conn, acct, entry, f"{why} — a ref is opened once; no second entry ticket")
+    return True
 
 
 def _live_requote(conn, acct: str, entry: dict, prefetched: dict = None) -> dict | None:
@@ -1709,7 +1817,17 @@ def _live_after_fill(conn, acct: str, entry: dict, stid: str, sview: dict, quote
     from src.execution import live_pricer
     try:
         if sview.get("status") == oms.FILLED:
-            opened = live_pricer.open_position(conn, acct, entry, sview, quote_ts=quote_ts)
+            try:
+                opened = live_pricer.open_position(conn, acct, entry, sview, quote_ts=quote_ts)
+            except live_pricer.LiveEntryRefused as refused:
+                # the door that writes refused a FILLED entry (F11 fills that
+                # invert the structure; a row already recorded for the ref):
+                # nothing books it on its own — lock kept, named, one card
+                detail = live_pricer.note_refused_fill(conn, acct, entry.get("short_id"), stid, str(refused))
+                if isinstance(entry.get("accounts"), dict) and acct in entry["accounts"]:
+                    entry["accounts"][acct].update(status="refused_after_fill", reason=detail)
+                print(f"  [{acct}] {entry.get('short_id')}: {detail}")
+                return
             if isinstance(entry.get("accounts"), dict) and acct in entry["accounts"]:
                 entry["accounts"][acct].update(entry_quote_ts=quote_ts,
                                                entry_mark_ps=opened["entry_mark_ps"],
@@ -1736,6 +1854,34 @@ def _live_after_fill(conn, acct: str, entry: dict, stid: str, sview: dict, quote
         print(f"  [{acct}] {entry.get('short_id')}: position row failed ({e}) — lock kept for repair")
 
 
+def _live_venue_off(entry: dict, conn=None) -> None:
+    """Audit F14 (b): with the paper venue OFF the approval opens no
+    ticket, so the live arm — which only ever opens on a real crossed fill —
+    takes no position. Its proposal-time lock used to stay held until the
+    primary exited (then released at zero); it is released NOW, named, and
+    its verdict says why. Fail-open: a failure leaves the old behaviour."""
+    try:
+        from src import portfolio_manager as pm
+        live = [a for a, v in (entry.get("accounts") or {}).items()
+                if a in pm.LIVE_ACCOUNTS and (v or {}).get("status") == "approved"]
+        if not live:
+            return
+        own = conn is None
+        if own:
+            from src import brain_map
+            conn = brain_map.connect()
+        try:
+            for acct in live:
+                _live_refuse(conn, acct, entry, "the paper venue is off (paper_venue_enabled false) — the live "
+                                                "arm opens only on a real crossed fill, so it takes no position "
+                                                "(audit F14)")
+        finally:
+            if own and not _PAPER_VENUE_KEEP_CONN:
+                conn.close()
+    except Exception as e:
+        print(f"  (live account: venue-off release skipped: {e})")
+
+
 def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: dict = None) -> dict:
     """Issue the ticket and run one venue pass for THIS entry (decision
     #101). Returns a small execution record stamped on the journal row:
@@ -1745,7 +1891,10 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: d
     from src.config import PAPER_VENUE_ENABLED
     record = {"mode": "legacy_instant", "ticket_id": None, "status": None,
               "filled_legs": 0, "error": None}
-    if not PAPER_VENUE_ENABLED or not (entry.get("spread") or {}).get("legs"):
+    if not PAPER_VENUE_ENABLED:
+        _live_venue_off(entry, conn)
+        return record
+    if not (entry.get("spread") or {}).get("legs"):
         return record
     try:
         from src import brain_map, oms, strategy_router
@@ -1774,10 +1923,16 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: d
             live_quotes = {}
             for acct, _lots in list(tickets):
                 if acct in _pm.LIVE_ACCOUNTS:
-                    rq = _live_requote(conn, acct, entry, prefetched=live_requote)
-                    if rq is None:
+                    # L2 residual (b): never a second entry ticket on a ref
+                    # whose live position is already recorded; then the
+                    # re-quote, then the desk's own entry rules on it (F12)
+                    rq = (None if _live_already_recorded(conn, acct, entry)
+                          else _live_requote(conn, acct, entry, prefetched=live_requote))
+                    lots_now = None if rq is None else _live_entry_rules(conn, acct, entry, rq, _lots)
+                    if lots_now is None:
                         tickets = [t for t in tickets if t[0] != acct]
                     else:
+                        tickets = [(a, lots_now if a == acct else n) for a, n in tickets]
                         live_quotes[acct] = rq
             tids = {}
             for acct, lots in tickets:

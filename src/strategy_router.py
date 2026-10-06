@@ -75,6 +75,42 @@ def is_defined_risk(strategy: str) -> bool:
     return bool((ROUTING_TABLE.get(strategy) or {}).get("defined_risk"))
 
 
+def premium_of(strategy: str):
+    """'debit' | 'credit' — which way money moves when the structure is
+    opened (the table's `premium`); None for a structure it does not know."""
+    return (ROUTING_TABLE.get(strategy) or {}).get("premium")
+
+
+def premium_refusal(strategy: str, net_debit_ps: float):
+    """The named reason a net entry premium CONTRADICTS the structure, or
+    None (audit F11, 2026-10-06). `net_debit_ps` = Σ long − Σ short per
+    share: > 0 a debit paid, < 0 a credit received (the live arm's d).
+
+    Debit or credit is a property of the STRUCTURE, never of the sign of a
+    price. A debit vertical (bull call / bear put) must cost a net debit;
+    a condor or butterfly must collect a net credit. One quoted the other
+    way is an inverted or stale book: bounded by its sign, a debit vertical
+    sold for a credit books a capped arbitrage, and a condor bought for a
+    debit is given max loss = d where the real worst case is the width + d
+    — and sized on that tiny 'max loss'. A zero net premium contradicts
+    both. A structure this table does not know is refused too: its type
+    would have to be guessed from the sign, which is the defect."""
+    kind = premium_of(strategy)
+    d = float(net_debit_ps)
+    if kind is None:
+        return (f"unknown structure {strategy!r}: its debit/credit type is not in the routing "
+                "table, so its max loss and max profit cannot be derived")
+    if kind == "debit" and d <= 0:
+        got = f"a net credit of {-d:.2f}/share" if d < 0 else "a zero net premium"
+        return (f"{strategy} is a DEBIT structure but these prices give {got} — an inverted or "
+                "stale book (audit F11)")
+    if kind == "credit" and d >= 0:
+        got = f"a net debit of {d:.2f}/share" if d > 0 else "a zero net premium"
+        return (f"{strategy} is a CREDIT structure but these prices give {got} — an inverted or "
+                "stale book (audit F11)")
+    return None
+
+
 # ------------------------------------------------------------------ tickets
 
 def leg_working_order(legs: list) -> list:

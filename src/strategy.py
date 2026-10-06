@@ -188,6 +188,7 @@ def propose(analysis: dict, portfolio: dict, prices: dict):
 #   * sizing by ABSOLUTE MAX LOSS, never stop-distance.
 
 from src.portfolio import calculate_span_margin  # noqa: E402  (Phase 5 section)
+from src.strategy_router import premium_refusal  # noqa: E402  (audit F11: debit/credit is the structure's)
 
 # Above this India VIX level, breakout risk makes short-range structures
 # (iron condor / iron butterfly) untradeable — strictly blocked. Debit
@@ -259,7 +260,9 @@ class StrategyConstructor:
     spreads still build.
 
     Every constructor returns None when the structure is blocked or
-    incoherent, else a spread dict:
+    incoherent — including premiums that invert it (a condor at a net
+    debit, a debit vertical at a net credit: audit F11, named on
+    `last_refusal`) — else a spread dict:
       {strategy, direction, legs, lot_size, spread_width,
        net_credit | net_debit (per share), max_loss, max_profit (per lot),
        margin {total_margin, naked_margin, offset_savings}}
@@ -269,6 +272,9 @@ class StrategyConstructor:
     def __init__(self, vix: float = None, lot_size: int = 75):
         self.vix = vix
         self.lot_size = int(lot_size)
+        # the named reason the LAST _package refused its premiums (audit
+        # F11), so a caller that got None can say why; None otherwise
+        self.last_refusal = None
 
     # ---------------------------------------------------------- regime
 
@@ -289,11 +295,23 @@ class StrategyConstructor:
     def _package(self, strategy: str, direction: str, legs: list) -> dict:
         """Common defined-risk math for any leg basket: net premium, width,
         absolute max loss/profit per lot (the sizing quantity), and the
-        SPAN margin simulation with hedge offsets."""
+        SPAN margin simulation with hedge offsets.
+
+        Audit F11 (2026-10-06): debit or credit is the STRUCTURE's
+        (strategy_router.premium_refusal), never the sign of the net. A
+        condor priced at a net debit, or a debit vertical at a net credit,
+        is an inverted or stale book — the sign rule below used to package
+        it with max loss = the net (a condor 'risking' 2/share on 200-wide
+        wings passed the R:R gate at 99 and was sized at 38 lots). It is
+        refused: None, the reason kept on `last_refusal` and printed."""
         lot = self.lot_size
         credit = sum(l["premium"] for l in legs if l["side"] == "SELL")
         debit = sum(l["premium"] for l in legs if l["side"] == "BUY")
         net = credit - debit  # >0 credit structure, <0 debit structure
+        self.last_refusal = premium_refusal(strategy, debit - credit)
+        if self.last_refusal:
+            print(f"Strategy: {strategy.replace('_', ' ')} REFUSED — {self.last_refusal}")
+            return None
 
         # Worst-case width: for verticals it's the strike gap; for a condor/
         # butterfly the loss side is the wider wing (only one side can lose).

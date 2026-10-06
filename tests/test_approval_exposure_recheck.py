@@ -652,3 +652,58 @@ def test_an_unwritable_ledger_still_blocks_and_never_announces(tmp_path, monkeyp
     held, pend = _held_row(), _pending_row()
     allowed, reason, first = eg.gate_approval(pend, entries=[held, pend], today=DAY)
     assert (allowed, first) == (False, False) and "`held0099` PAPER_10L" in reason
+
+
+# ====================== Chunk 2 close-out: a MARGIN block is a refusal too
+
+def _margin_api_row():
+    return {"short_id": "mrg00001", "date": "2026-10-06", "action": "SPREAD", "ticker": "NIFTY BANK",
+            "shares": 35, "price": 70.0, "signal": "t", "decision": "pending_approval",
+            "why": "(headless proposal)", "outcome": None,
+            "spread": {"strategy": "iron_condor", "direction": "neutral", "expiry": "2026-10-27",
+                       "lot_size": 35, "lots": 1, "legs": [],
+                       "margin": {"total_margin": 50_000.0}}}
+
+
+def test_every_approval_refusal_is_one_named_set():
+    assert op.MARGIN_BLOCKED == "margin_blocked"
+    assert set(op.APPROVAL_REFUSALS) == {op.INSIDE_EXIT_WINDOW, op.EXPOSURE_BLOCKED,
+                                         op.MARGIN_BLOCKED}
+
+
+def test_the_api_bridge_answers_409_on_a_margin_block_and_writes_nothing(monkeypatch):
+    """It used to answer 200 ok:true {"decision": "margin_blocked"}, so the
+    Discord bot said "journaled" and retired the buttons of an entry that was
+    still pending."""
+    from fastapi.testclient import TestClient
+    from src.api_server import app
+    from src import exposure_gate
+    from src import portfolio_manager as pm
+    entry = _margin_api_row()
+    monkeypatch.setenv("API_KEY", "k")
+    monkeypatch.setattr(op, "_today", lambda: date(2026, 10, 6))
+    monkeypatch.setattr(op.journal, "read_all", lambda: [entry])
+    rewrite = mock.Mock()
+    monkeypatch.setattr(op.journal, "rewrite_all", rewrite)
+    monkeypatch.setattr(op, "_prefetch_live_requote", lambda ref: None)
+    monkeypatch.setattr(op, "_prefetch_rotation", lambda ref: None)
+    monkeypatch.setattr(exposure_gate, "gate_approval", lambda e, **k: (True, "allowed", False))
+    monkeypatch.setattr(pm, "gate_headless_entry",
+                        lambda ref, margin, conn=None: (False, "margin exhaustion: free Rs.1,000"))
+    monkeypatch.setattr(op, "_notify_discord", lambda *a, **k: pytest.fail("no card for a refusal"))
+    r = TestClient(app).post("/api/discord/action", headers={"X-API-Key": "k"},
+                             json={"action": "approve", "trade_id": "mrg00001", "why": "go"})
+    assert r.status_code == 409
+    body = r.json()
+    assert body == {"ok": False, "status": "margin_blocked",
+                    "error": "margin exhaustion: free Rs.1,000", "trade_id": "mrg00001"}
+    assert not rewrite.called and entry["decision"] == "pending_approval"
+
+
+def test_the_discord_bot_explains_a_margin_block_and_keeps_the_buttons():
+    from src import discord_bot as bot
+    note, retire = bot._decision_note("mrg00001", 409, {"ok": False, "status": "margin_blocked",
+                                                        "error": "margin exhaustion: free Rs.1,000"})
+    assert retire is False                      # still pending: Reject (or a later Approve) works
+    assert "Can't approve `mrg00001`" in note and "margin exhaustion: free Rs.1,000" in note
+    assert "journaled. " not in note and "Not journaled" in note

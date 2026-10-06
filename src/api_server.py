@@ -33,7 +33,9 @@ Two-way Discord bridge:
   (409, "status": "inside_exit_window", audit F18) — left pending, undecided —
   and an approval the #68 slot re-check refuses because another position on
   the same underlying+direction is open firm-wide (409, "status":
-  "exposure_blocked", Chunk 2 Fix G) — left pending too.
+  "exposure_blocked", Chunk 2 Fix G) — left pending too — and an approval
+  the capital layer cannot grant margin for (409, "status": "margin_blocked",
+  Chunk 2 close-out; it used to answer 200 ok:true as if decided).
 
 Run on the VM:  uvicorn src.api_server:app --host 127.0.0.1 --port 8000
 """
@@ -138,16 +140,21 @@ def discord_action(req: DiscordActionRequest):
                      f"hypothetically (verdict: {verdict}) — left as-is; no "
                      "approving with hindsight.", "trade_id": req.trade_id},
         )
-    if result["status"] in (options_proposer.INSIDE_EXIT_WINDOW,
-                            options_proposer.EXPOSURE_BLOCKED):
+    if result["status"] in options_proposer.APPROVAL_REFUSALS:
         # Audit F18: too late to APPROVE — the entry is already inside its
         # forced pre-expiry exit window. Fix G: the #68 slot is taken —
         # another position on this underlying+direction is open firm-wide.
-        # Either way nothing was journaled; the entry is still pending (a
-        # reject still works), so this is not a decision.
-        fallback = ("inside the forced-exit window"
-                    if result["status"] == options_proposer.INSIDE_EXIT_WINDOW
-                    else "exposure gate: the underlying+direction slot is taken (decision #68)")
+        # Margin: the capital layer could not grant it (Chunk 2 close-out —
+        # this answered 200 ok:true, so the bot said "journaled" and retired
+        # the buttons of a still-pending entry). Every time nothing was
+        # journaled; the entry is still pending (a reject still works), so
+        # this is not a decision.
+        fallback = {
+            options_proposer.INSIDE_EXIT_WINDOW: "inside the forced-exit window",
+            options_proposer.EXPOSURE_BLOCKED:
+                "exposure gate: the underlying+direction slot is taken (decision #68)",
+            options_proposer.MARGIN_BLOCKED: "margin gate: not enough free paper margin",
+        }[result["status"]]
         return JSONResponse(
             status_code=409,
             content={"ok": False, "status": result["status"],

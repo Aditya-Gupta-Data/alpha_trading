@@ -1369,6 +1369,14 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
 INSIDE_EXIT_WINDOW = "inside_exit_window"
 # Fix G (Architect ruling 2026-10-06): the #68 slot re-checked at approval
 EXPOSURE_BLOCKED = "exposure_blocked"
+# Phase 6J: the capital layer could not grant the approval its margin
+MARGIN_BLOCKED = "margin_blocked"
+# Every status an APPROVAL can be refused with: nothing journaled, the entry
+# is still pending, so a reject (or a later approve) still works. The doors
+# (api_server's 409, the Discord bot's kept buttons) read THIS set, so a new
+# refusal cannot be reported as a decision again (Chunk 2 close-out: a
+# margin block used to answer 200 ok:true and retire the buttons).
+APPROVAL_REFUSALS = (INSIDE_EXIT_WINDOW, EXPOSURE_BLOCKED, MARGIN_BLOCKED)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -1583,7 +1591,7 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
                  "vix": (target.get("receipt") or {}).get("vix")})
             allowed, gate_reason = pm.gate_headless_entry(trade_id, required)
             if not allowed:
-                return {"status": "margin_blocked", "entry": target,
+                return {"status": MARGIN_BLOCKED, "entry": target,
                         "reason": gate_reason}
             # #102: approval is the acceptance moment for the shadow
             # accounts too (idempotent re-request on an active lock; a

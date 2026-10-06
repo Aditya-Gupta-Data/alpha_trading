@@ -242,8 +242,9 @@ def _decide(trade_id: str, action: str, why: str) -> tuple:
     """POST /api/discord/action -> (status, body). 200 decided, 404 gone,
     409 already tracker-resolved, or (body status "inside_exit_window")
     an approval refused inside the forced-exit window, or (body status
-    "exposure_blocked") one refused by the #68 slot re-check — both still
-    pending."""
+    "exposure_blocked") one refused by the #68 slot re-check, or (body
+    status "margin_blocked") one the capital layer could not fund — all
+    still pending."""
     return _bridge_call("POST", "/api/discord/action",
                         {"action": action, "trade_id": trade_id, "why": why})
 
@@ -275,6 +276,15 @@ def _decision_note(trade_id: str, status: int, body: dict) -> tuple:
         return (f"🧱 Can't approve `{trade_id}` — {body.get('error')}. "
                 "Not journaled; you can still reject it, or approve it once "
                 "that position has closed.", False)
+    if status == 409 and body.get("status") == "margin_blocked":
+        # Chunk 2 close-out: the capital layer could not grant the margin.
+        # This used to arrive as a 200 "decision" — the bot said "journaled"
+        # and retired the buttons of an entry that was still pending.
+        # Nothing journaled — keep the buttons: Reject works now, and
+        # Approve works again once margin is free.
+        return (f"💰 Can't approve `{trade_id}` — {body.get('error')}. "
+                "Not journaled; you can still reject it, or approve it once "
+                "margin frees up.", False)
     if status == 409:
         return (f"⏱️ Too late — the tracker already resolved "
                 f"`{trade_id}` hypothetically. Left as-is "

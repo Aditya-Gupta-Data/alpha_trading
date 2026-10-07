@@ -16,6 +16,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests.fake_journal import FakeJournalBase
@@ -24,6 +26,19 @@ from src import brain_map
 from src.portfolio import calculate_trade_frictions, calculate_span_margin
 from src.strategy import StrategyConstructor, VIX_BLOCK_ABOVE
 import src.plan_tracker as plan_tracker
+
+
+@pytest.fixture(autouse=True)
+def _restore_tracker_seams(monkeypatch):
+    """run_spread_tracker swaps the tracker's seams by plain assignment (it
+    is also driven by this file's plain-python runner). Registering each one
+    with monkeypatch first puts the real one back after every test: a leaked
+    `_close_paper_position` lambda failed test_audit_chunk1_batch_d's
+    cash-writer test whenever it ran later in the same session."""
+    for name in ("journal", "_daily_bars", "_settle_spread_cash", "_close_paper_position",
+                 "_brain_connect"):
+        monkeypatch.setattr(plan_tracker, name, getattr(plan_tracker, name))
+    monkeypatch.setattr(analyst, "generate_post_mortem", analyst.generate_post_mortem)
 
 
 # A NIFTY iron condor used throughout: 24800/25200 body, 200-wide wings,

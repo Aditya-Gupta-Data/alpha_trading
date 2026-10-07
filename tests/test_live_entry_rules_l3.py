@@ -41,6 +41,8 @@ Hermetic: a FILE brain_map at the per-test tmp DEFAULT_DB_PATH (or
 captured. No network, nothing under data/ or logs/.
 """
 import asyncio
+import copy
+import pickle
 from datetime import date, datetime
 
 import pytest
@@ -149,16 +151,19 @@ def desk(monkeypatch, tmp_path):
     raw.close()
 
 
-def _propose(ref, spread, ticker="NIFTY 50"):
+def _propose(ref, spread, ticker="NIFTY 50", risk_pct=None):
     """A pending spread exactly as run_headless leaves it: the primary's lock
     taken by the headless gate, every shadow judged (and locked) at proposal
-    time, the verdicts stamped on the journaled row."""
+    time — on vol_bridge's `risk_pct` override when one is given, frozen on
+    the receipt as run_headless does — the verdicts stamped on the row."""
     required = pm.required_margin_for({"spread": spread, "vix": 13.0})
     assert pm.gate_headless_entry(ref, required)[0]
-    accounts = op._judge_shadow_accounts(ref, {"spread": spread, "lots": 1, "vix": 13.0})
+    accounts = op._judge_shadow_accounts(ref, {"spread": spread, "lots": 1, "vix": 13.0}, risk_pct=risk_pct)
+    overrides = {"regime": "Expansion", "risk_pct": risk_pct} if risk_pct is not None else {}
     row = {"short_id": ref, "date": "2026-10-21", "ticker": ticker, "action": "SPREAD",
            "decision": "pending_approval", "why": "(headless proposal)", "outcome": None,
-           "spread": spread, "signal": "t", "receipt": {"vix": 13.0}, "accounts": accounts}
+           "spread": spread, "signal": "t", "receipt": {"vix": 13.0, "vol_overrides": overrides},
+           "accounts": accounts}
     journal.log(row)
     return row
 
@@ -378,6 +383,8 @@ def test_the_crossed_max_loss_resizes_the_live_arm_down_and_shrinks_its_lock(des
 def test_the_one_lot_floor_is_kept_and_recorded(desk):
     c, ref = desk["c"], "f12f0001"
     _propose(ref, _bull_call(40.0, 20.0))
+    margin3, lots3 = pm._active_shadow_lock(c, LIVE, ref)
+    assert lots3 == 3
     desk["book"]["chain"] = _call_book(100.0, 25.0)                   # d 75: loss 4,875/lot > 4,000
     v = op.decide_pending(ref, approve=True, why="tap", human=True)["entry"]["accounts"][LIVE]
     assert v["status"] == "approved" and v["lots"] == 1
@@ -385,6 +392,11 @@ def test_the_one_lot_floor_is_kept_and_recorded(desk):
     assert s["by_risk"] == 0 and s["floor_applied"] is True and s["risk_at_lots_rs"] == 4875.0
     assert s["reason"].startswith("1-lot floor: max loss Rs.4,875/lot exceeds the 2% risk capacity Rs.4,000")
     assert lp.open_rows(c, LIVE)[0]["lots"] == 1
+    # the floor's one lot is all the lock holds: a third of the 3-lot lock
+    assert pm._active_shadow_lock(c, LIVE, ref) == (round(margin3 / 3, 2), 1)
+    assert s["margin_rs"] == v["margin_rs"] == round(margin3 / 3, 2)
+    (ev,) = _events(c, LIVE, "live_entry_resized", ref)
+    assert ev.startswith("crossed max loss Rs.4,875.00/lot: 3 -> 1 lot(s)")
 
 
 def test_a_cheaper_requote_never_sizes_above_the_approved_lots(desk):
@@ -535,11 +547,14 @@ def test_every_approval_door_handles_the_primary_halt_refusal(desk, monkeypatch,
     body = r.json()
     assert body["ok"] is False and body["status"] == "margin_blocked" and body["trade_id"] == ref
     assert body["error"].startswith("risk-of-ruin halt") and "(audit F13)" in body["error"]
+    assert body["halt"] == "risk_of_ruin_halt"                 # L3 review: the halt is machine-readable
     from src import discord_bot as bot
     note, retire = bot._decision_note(ref, 409, body)
     assert retire is False and "risk-of-ruin halt" in note and "Not journaled" in note
+    assert "the account's halt is up — approve after it is cleared" in note and "margin frees up" not in note
     auto = op.decide_pending(ref, approve=True, why=op.AUTO_APPROVE_WHY, human=False)
     assert auto["status"] == op.MARGIN_BLOCKED and auto["reason"] == body["error"]
+    assert auto["halt"] == "risk_of_ruin_halt"
     answers = iter(["y", "go"])
     monkeypatch.setattr("builtins.input", lambda *a: next(answers))
     assert op.review_pending() == 0
@@ -742,9 +757,10 @@ def test_a_re_approval_never_issues_a_second_live_ticket_over_a_recorded_positio
     before = dict(lp.positions(c)[0])
     out = op.decide_pending(ref, approve=True, why="tap", human=True)
     v = out["entry"]["accounts"][LIVE]
-    assert v["status"] == "rejected"
-    assert v["reason"] == (f"live entry refused: a live position for this entry is already recorded ({state}) — "
+    assert v["status"] == op.LIVE_ALREADY_OPEN                            # its position stands: not 'rejected'
+    assert v["reason"] == (f"no second live entry: a live position for this entry is already recorded ({state}) — "
                            "a ref is opened once; no second entry ticket")
+    assert (v["lots"], v["margin_rs"]) == (1, 17550.0)                    # the lock that backs it, as held
     assert _tickets(c, ref, LIVE) == 1                                        # the original fill only
     assert dict(lp.positions(c)[0]) == before and pm._active_shadow_lock(c, LIVE, ref) is not None
     (ev,) = _events(c, LIVE, "live_entry_refused", ref)
@@ -760,9 +776,10 @@ def test_a_re_approval_never_issues_a_second_ticket_over_a_filled_entry_awaiting
     _propose(ref, _bull_call())
     tid, _ = _filled_live_ticket(c, ref, {(24000.0, "CE"): 100.0, (24200.0, "CE"): 30.0}, spread=_bull_call())
     v = op.decide_pending(ref, approve=True, why="tap", human=True)["entry"]["accounts"][LIVE]
-    assert v["status"] == "rejected" and v["reason"] == (
-        f"live entry refused: entry ticket {tid} for this entry already FILLED (its position row is repaired "
+    assert v["status"] == op.LIVE_ALREADY_OPEN and v["reason"] == (
+        f"no second live entry: entry ticket {tid} for this entry already FILLED (its position row is repaired "
         "from that ticket by the next live tick) — a ref is opened once; no second entry ticket")
+    assert (v["lots"], v["margin_rs"]) == (1, 17550.0)
     assert _tickets(c, ref, LIVE) == 1 and pm._active_shadow_lock(c, LIVE, ref) is not None
     (ev,) = _events(c, LIVE, "live_entry_refused", ref)
     assert f"lock kept (entry ticket {tid} FILLED but no live position row was recorded" in ev
@@ -842,3 +859,266 @@ def test_a_closed_row_with_its_lock_active_is_named_as_such(desk):
                        "lock kept; the next live tick releases it at that pnl")
     late = lp._repair_late_locks(c, LIVE)                                  # ... and that is what happens
     assert late == [ref] and pm._active_shadow_lock(c, LIVE, ref) is None
+
+
+# =================================================================== L3 review fixes
+
+def test_a_three_lot_lock_resized_to_two_shrinks_to_exactly_two_thirds(desk):
+    """F12 test gap: a partial re-size (3 -> 2), not just the floor — the
+    lock holds exactly the two lots that open, and one event says so."""
+    c, ref = desk["c"], "l3r32001"
+    _propose(ref, _bull_call(40.0, 20.0))                              # 1,300/lot: 3 lots on Rs.4,000
+    margin3, lots3 = pm._active_shadow_lock(c, LIVE, ref)
+    assert lots3 == 3
+    desk["book"]["chain"] = _call_book(55.0, 25.0)                     # d 30: 1,950/lot -> 2 lots
+    v = op.decide_pending(ref, approve=True, why="tap", human=True)["entry"]["accounts"][LIVE]
+    m2 = round(margin3 * 2 / 3, 2)
+    assert v["status"] == "approved" and v["lots"] == 2 and v["margin_rs"] == m2
+    assert v["requote_sizing"]["by_risk"] == 2 and v["requote_sizing"]["margin_rs"] == m2
+    assert pm._active_shadow_lock(c, LIVE, ref) == (m2, 2)
+    assert lp.open_rows(c, LIVE)[0]["lots"] == 2
+    (ev,) = _events(c, LIVE, "live_entry_resized", ref)
+    assert ev == (f"crossed max loss Rs.1,950.00/lot: 3 -> 2 lot(s) on the 2% budget Rs.4,000.00; "
+                  f"lock Rs.{margin3:,.2f} -> Rs.{m2:,.2f} (audit F12)")
+
+
+def test_the_live_arm_is_re_sized_on_the_budget_the_proposal_was_sized_on(desk):
+    """F12 review (two reviewers): sized at proposal on vol_bridge's
+    Expansion budget (1.4% -> Rs.2,800: 2 lots of 1,300), the re-quote was
+    re-sized on the default 2% (Rs.4,000 carries 2 lots of 1,950: no
+    re-size). On the proposal's own 1.4% it carries ONE."""
+    c, ref = desk["c"], "l3rp0001"
+    _propose(ref, _bull_call(40.0, 20.0), risk_pct=1.4)
+    margin2, lots2 = pm._active_shadow_lock(c, LIVE, ref)
+    assert lots2 == 2
+    desk["book"]["chain"] = _call_book(55.0, 25.0)                     # d 30: 1,950/lot
+    v = op.decide_pending(ref, approve=True, why="tap", human=True)["entry"]["accounts"][LIVE]
+    assert v["lots"] == 1 and v["requote_sizing"]["risk_capacity_rs"] == 2800.0
+    assert v["requote_sizing"]["by_risk"] == 1
+    assert pm._active_shadow_lock(c, LIVE, ref) == (round(margin2 / 2, 2), 1)
+    (ev,) = _events(c, LIVE, "live_entry_resized", ref)
+    assert "2 -> 1 lot(s) on the 1.4% budget Rs.2,800.00" in ev
+
+
+def test_an_approval_re_judgement_sizes_the_shadows_on_the_proposals_budget(desk):
+    """The same defect at the approval re-judgement: a shadow without a held
+    lock (here: D7-expired) was re-sized on the default 2% — 3 lots where
+    the proposal's 1.4% carries 2."""
+    c, ref = desk["c"], "l3rp0002"
+    pend = _propose(ref, _bull_call(40.0, 20.0), risk_pct=1.4)
+    assert pend["accounts"][TWO_L]["lots"] == 2
+    assert pm.expire_pending_lock(c, ref, why="test")[TWO_L] > 0
+    desk["book"]["chain"] = _call_book(40.0, 20.0)
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    assert out["status"] == "approved"
+    assert out["entry"]["accounts"][TWO_L]["lots"] == 2 and pm._active_shadow_lock(c, TWO_L, ref)[1] == 2
+    assert out["entry"]["accounts"][LIVE]["lots"] == 2
+
+
+def test_a_proposal_without_an_override_still_sizes_on_the_default(desk):
+    assert op._proposal_risk_pct({"receipt": {"vix": 13.0, "vol_overrides": {}}}) is None
+    assert op._proposal_risk_pct({"receipt": {"vol_overrides": {"risk_pct": 1.4}}}) == 1.4
+    assert op._proposal_risk_pct({}) is None and op._proposal_risk_pct({"receipt": None}) is None
+
+
+@pytest.mark.parametrize("switch, named", [("PAPER_2L_LIVE_ACCOUNT_ENABLED", "paper_2l_live_account_enabled"),
+                                           ("PAPER_2L_ACCOUNT_ENABLED", "paper_2l_account_enabled")])
+def test_with_the_live_switch_off_its_lock_is_released_at_approval_named(desk, monkeypatch, switch, named):
+    """F14 review: with the SWITCH off (venue on) the approval judgement never
+    sees the arm, so its proposal-time lock stayed held until the primary
+    exited. Released at approval now, named — like the venue-off case."""
+    c, ref = desk["c"], f"l3so{named[9:13]}"
+    _propose(ref, _bull_call())
+    assert pm._active_shadow_lock(c, LIVE, ref) is not None
+    monkeypatch.setattr(pm, switch, False)
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    assert out["status"] == "approved"
+    v = out["entry"]["accounts"][LIVE]
+    assert v["status"] == "rejected" and v["lots"] == 0
+    assert v["reason"] == (f"live entry refused: the live arm is switched off ({named} false) — no new live "
+                           "entry opens while it is off, so it takes no position (audit F14)")
+    assert pm._active_shadow_lock(c, LIVE, ref) is None and _tickets(c, ref, LIVE) == 0
+    (ev,) = _events(c, LIVE, "live_entry_refused", ref)
+    assert ev.endswith("(audit F14) — lock released at zero")
+    assert journal.get_entry(ref)["accounts"][LIVE]["status"] == "rejected"
+    assert _tickets(c, ref, oms.PRIMARY_ACCOUNT) == 1
+    if switch == "PAPER_2L_LIVE_ACCOUNT_ENABLED":                     # the 2L shadow: unchanged
+        assert out["entry"]["accounts"][TWO_L]["status"] == "approved" and _tickets(c, ref, TWO_L) == 1
+
+
+def test_with_the_live_switch_off_a_lock_backing_a_recorded_position_is_kept(desk, monkeypatch):
+    c, ref = desk["c"], "l3sokeep"
+    _propose(ref, _bull_call())
+    _, view = _filled_live_ticket(c, ref, {(24000.0, "CE"): 100.0, (24200.0, "CE"): 30.0}, spread=_bull_call())
+    lp.open_position(c, LIVE, {"short_id": ref, "ticker": "NIFTY 50", "spread": _bull_call()}, view, now=AT)
+    monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", False)
+    op.decide_pending(ref, approve=True, why="tap", human=True)
+    (ev,) = _events(c, LIVE, "live_entry_refused", ref)
+    assert "lock kept (a live position for this entry is recorded (open)" in ev
+    assert pm._active_shadow_lock(c, LIVE, ref) is not None and _tickets(c, ref, LIVE) == 1
+
+
+def test_with_the_live_switch_on_nothing_is_released_by_the_switch_check(desk):
+    c, ref = desk["c"], "l3sonone"
+    _propose(ref, _bull_call())
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    assert out["entry"]["accounts"][LIVE]["status"] == "approved"
+    assert _events(c, LIVE, "live_entry_refused", ref) == [] and lp.position_state(c, LIVE, ref) == "open"
+
+
+def test_the_gate_marks_a_halt_refusal_and_only_a_halt_refusal(desk):
+    """F13 review: GateVerdict unpacks and compares as the old (allowed,
+    reason) pair; `.halt` names an entry halt — on a held lock or a new one
+    — and is None for a margin refusal or an approval."""
+    c = desk["c"]
+    ok = pm.gate_headless_entry("l3g00001", 1000.0, conn=c)
+    assert ok == (True, "margin locked") and ok.halt is None
+    poor = pm.gate_headless_entry("l3g00002", 10_000_000.0, conn=c)
+    assert poor[0] is False and poor[1].startswith("margin exhaustion") and poor.halt is None
+    assert pm.request_entry(c, "old0001", 1000.0)["approved"]
+    pm.release_margin(c, "old0001", -40000.0)                          # 4% of 10L today: the breaker
+    held = pm.gate_headless_entry("l3g00001", 1000.0, conn=c)
+    assert held[0] is False and held.halt == "daily_breaker_halt" and pm.HELD_LOCK_HALTED in held[1]
+    new = pm.gate_headless_entry("l3g00003", 1000.0, conn=c)
+    assert new[0] is False and new.halt == "daily_breaker_halt" and pm.HELD_LOCK_HALTED not in new[1]
+    for twin in (copy.deepcopy(held), pickle.loads(pickle.dumps(held))):     # copies keep the mark
+        assert twin == held and twin.halt == "daily_breaker_halt"
+
+    class Boom:
+        def execute(self, *a, **k):
+            raise RuntimeError("disk I/O error")
+    failed_open = pm.gate_headless_entry("x", 1.0, conn=Boom())
+    assert failed_open[0] is True and failed_open.halt is None
+
+
+def test_a_margin_block_without_a_halt_keeps_the_margin_note(desk):
+    from src import discord_bot as bot
+    note, retire = bot._decision_note("m1", 409, {"ok": False, "status": "margin_blocked",
+                                                  "error": "margin exhaustion: free Rs.1,000"})
+    assert retire is False and "once margin frees up" in note and "halt is up" not in note
+    note, retire = bot._decision_note("m1", 409, {"ok": False, "status": "margin_blocked",
+                                                  "error": "daily circuit breaker TRIPPED", "halt":
+                                                  "daily_breaker_halt"})
+    assert retire is False and note.startswith("🛑 Can't approve `m1` — daily circuit breaker TRIPPED.")
+    assert "the account's halt is up — approve after it is cleared, or reject it now." in note
+
+
+def test_a_halted_two_lakh_shadow_is_refused_at_approval_and_its_lock_released(desk):
+    """F13 test gap: a NON-LIVE shadow under its own ruin latch — refused for
+    the entry, its proposal-time lock released at zero, no 2L ticket; the
+    primary and the live arm carry on."""
+    c, ref = desk["c"], "l3h2l001"
+    _propose(ref, _bull_call())
+    assert pm._active_shadow_lock(c, TWO_L, ref) is not None
+    pm.paper_log_event(c, TWO_L, pm.HALT_LATCH_EVENT, None, "drawdown 10.40% >= 10% (test latch)")
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    assert out["status"] == "approved"
+    v = out["entry"]["accounts"][TWO_L]
+    assert v == {"status": "rejected", "lots": 0, "margin_rs": None,
+                 "reason": ("risk-of-ruin halt: drawdown 0.00% >= 10% — all entries blocked — its proposal-time "
+                            "lock is held, but a halted account opens no new risk (audit F13); lock released "
+                            "at zero")}
+    assert pm._active_shadow_lock(c, TWO_L, ref) is None and _tickets(c, ref, TWO_L) == 0
+    (ev,) = _events(c, TWO_L, "risk_of_ruin_halt", ref)
+    assert ev.startswith(f"entry {ref} refused at approval (risk-of-ruin halt")
+    assert _tickets(c, ref, oms.PRIMARY_ACCOUNT) == 1 and _tickets(c, ref, LIVE) == 1
+    assert lp.position_state(c, LIVE, ref) == "open"
+
+
+def _fail_safe_world(desk, ref):
+    c = desk["c"]
+    _propose(ref, _bull_call())
+    assert pm._active_shadow_lock(c, LIVE, ref) is not None
+    return c
+
+
+def _primary_and_2l_still_ticketed(c, out, ref):
+    assert out["status"] == "approved" and out["entry"]["execution"]["mode"] == "paper_venue"
+    assert _tickets(c, ref, oms.PRIMARY_ACCOUNT) == 1 and _tickets(c, ref, TWO_L) == 1
+    assert out["entry"]["accounts"][TWO_L]["status"] == "approved"
+    assert _tickets(c, ref, LIVE) == 0 and lp.position_state(c, LIVE, ref) is None
+
+
+def test_a_sizer_that_raises_inside_decide_pending_refuses_the_live_arm_alone(desk, monkeypatch):
+    """RULE 6 fail-safe: pm.size_for_account raising inside _live_entry_rules
+    abstains for LIVE — named, its lock released at zero — and the primary's
+    and the 2L shadow's tickets are still issued."""
+    ref = "l3fs0001"
+    c = _fail_safe_world(desk, ref)
+
+    def boom(*a, **k):
+        raise RuntimeError("sizer exploded")
+    monkeypatch.setattr(pm, "size_for_account", boom)
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    v = out["entry"]["accounts"][LIVE]
+    assert v["status"] == "rejected" and v["reason"] == (
+        "live entry refused: the desk's entry rules could not be applied to the re-quote (sizer exploded)")
+    assert pm._active_shadow_lock(c, LIVE, ref) is None
+    (ev,) = _events(c, LIVE, "live_entry_refused", ref)
+    assert ev.endswith("— lock released at zero")
+    _primary_and_2l_still_ticketed(c, out, ref)
+
+
+def test_a_requote_that_raises_inside_decide_pending_refuses_the_live_arm_alone(desk, monkeypatch):
+    ref = "l3fs0002"
+    c = _fail_safe_world(desk, ref)
+
+    def boom(*a, **k):
+        raise RuntimeError("chain feed down")
+    monkeypatch.setattr(lp, "requote_entry", boom)
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    v = out["entry"]["accounts"][LIVE]
+    assert v["status"] == "rejected" and v["reason"] == "live entry refused: requote failed (chain feed down)"
+    assert pm._active_shadow_lock(c, LIVE, ref) is None
+    (ev,) = _events(c, LIVE, "live_entry_refused", ref)
+    assert ev == "requote failed (chain feed down) — lock released at zero"
+    _primary_and_2l_still_ticketed(c, out, ref)
+
+
+def test_an_unreadable_live_state_refuses_without_claiming_a_recorded_position(desk, monkeypatch):
+    """Nit: the unreadable-state refusal said 'a live position for this entry
+    is already recorded (unreadable: ...)'. It names what happened; the lock
+    is kept (never money on a guess) and the others are still ticketed."""
+    ref = "l3fs0003"
+    c = _fail_safe_world(desk, ref)
+
+    def boom(*a, **k):
+        raise RuntimeError("database disk image is malformed")
+    real = lp.position_state
+    monkeypatch.setattr(lp, "position_state", boom)
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    monkeypatch.setattr(lp, "position_state", real)                    # readable again for the checks
+    v = out["entry"]["accounts"][LIVE]
+    assert v["status"] == "rejected" and v["reason"] == (
+        "live entry refused: this entry's live position state could not be read (database disk image is "
+        "malformed) — no entry ticket on a guess")
+    assert "already recorded" not in v["reason"]
+    assert pm._active_shadow_lock(c, LIVE, ref) is not None
+    (ev,) = _events(c, LIVE, "live_entry_refused", ref)
+    assert ev.endswith("— lock kept (live position lookup failed (database disk image is malformed) — lock kept)")
+    _primary_and_2l_still_ticketed(c, out, ref)
+
+
+def test_a_primary_held_lock_halt_pages_once_however_often_it_is_refused(desk):
+    c, ref = desk["c"], "l3card01"
+    _propose(ref, _bull_call())
+    pm.latch_halt(c, "test latch")
+    for _ in range(2):
+        assert op.decide_pending(ref, approve=True, why="tap", human=True)["status"] == op.MARGIN_BLOCKED
+    assert [x["event"] for x in desk["cards"]] == ["ruin_halt"]
+    assert len(_primary_events(c, "ruin_halt_card")) == 1
+    assert len([e for e in _primary_events(c, "risk_of_ruin_halt") if ref in e]) == 2
+
+
+def test_the_manage_only_card_fires_again_on_the_next_ist_day(desk, monkeypatch):
+    c, cards = desk["c"], desk["cards"]
+    _open_live(c, "l3day001")
+    monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", False)
+    monkeypatch.setattr(pm, "_now_iso", lambda: "2026-10-21T10:00:00")
+    assert _wired(monkeypatch) is lp.tick and _wired(monkeypatch) is lp.tick
+    assert len(cards) == 1
+    monkeypatch.setattr(pm, "_now_iso", lambda: "2026-10-22T09:16:00")
+    assert _wired(monkeypatch) is lp.tick
+    assert [x["event"] for x in cards] == ["live_arm_off_managing"] * 2
+    assert [x["date"] for x in cards] == ["2026-10-21", "2026-10-22"]
+    assert len(_events(c, LIVE, lp.EVENT_ARM_OFF)) == 2

@@ -243,8 +243,8 @@ def _decide(trade_id: str, action: str, why: str) -> tuple:
     409 already tracker-resolved, or (body status "inside_exit_window")
     an approval refused inside the forced-exit window, or (body status
     "exposure_blocked") one refused by the #68 slot re-check, or (body
-    status "margin_blocked") one the capital layer could not fund — all
-    still pending."""
+    status "margin_blocked") one the capital layer could not fund (with
+    "halt" when an entry halt refused it) — all still pending."""
     return _bridge_call("POST", "/api/discord/action",
                         {"action": action, "trade_id": trade_id, "why": why})
 
@@ -276,6 +276,14 @@ def _decision_note(trade_id: str, status: int, body: dict) -> tuple:
         return (f"🧱 Can't approve `{trade_id}` — {body.get('error')}. "
                 "Not journaled; you can still reject it, or approve it once "
                 "that position has closed.", False)
+    if status == 409 and body.get("status") == "margin_blocked" and body.get("halt"):
+        # Audit F13 (L3 review): an entry HALT (ruin latch, daily breaker)
+        # refused it — waiting for margin would not help. Nothing journaled,
+        # still pending — keep the buttons: Reject works now, and Approve
+        # works again once the halt is cleared.
+        return (f"🛑 Can't approve `{trade_id}` — {body.get('error')}. "
+                "Not journaled; the account's halt is up — approve after it is "
+                "cleared, or reject it now.", False)
     if status == 409 and body.get("status") == "margin_blocked":
         # Chunk 2 close-out: the capital layer could not grant the margin.
         # This used to arrive as a 200 "decision" — the bot said "journaled"

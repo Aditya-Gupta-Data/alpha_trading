@@ -583,7 +583,9 @@ def request_entry(conn, journal_ref: str, required_margin: float,
     tripped after the proposal refuses it — approved False, the halt named,
     the lock LEFT as it is (still pending: the D7 15:30 sweep releases it,
     or a later approval passes once the halt clears); decide_pending
-    answers MARGIN_BLOCKED. The re-request is otherwise idempotent."""
+    answers MARGIN_BLOCKED. The re-request is otherwise idempotent. Every
+    halt refusal (held lock or new) carries `halt` (entry_halt's dict) —
+    gate_headless_entry hands its event name on (L3 review)."""
     ensure_schema(conn)
     get_account(conn)
 
@@ -596,7 +598,8 @@ def request_entry(conn, journal_ref: str, required_margin: float,
                       f"entry {journal_ref} refused at approval ({halt['reason']}) — "
                       f"{HELD_LOCK_HALTED}; the lock is left for the 15:30 sweep")
             _primary_halt_cards(conn, halt)
-            return {"approved": False, "reason": f"{halt['reason']} — {HELD_LOCK_HALTED}"}
+            return {"approved": False, "reason": f"{halt['reason']} — {HELD_LOCK_HALTED}",
+                    "halt": halt}
         return {"approved": True, "reason": HELD_LOCK_REASON}
     # A released row for this ref: only a pending lock that EXPIRED unapproved
     # (D7) may be taken again — at approval, judged on today's cash below.
@@ -613,7 +616,7 @@ def request_entry(conn, journal_ref: str, required_margin: float,
         log_event(conn, halt["event"],
                   f"entry {journal_ref} rejected ({halt['reason']})")
         _primary_halt_cards(conn, halt)
-        return {"approved": False, "reason": halt["reason"]}
+        return {"approved": False, "reason": halt["reason"], "halt": halt}
 
     cash = available_cash(conn)
     margin = round(float(required_margin), 2)
@@ -1180,8 +1183,11 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
     (re-request of a held lock -> its halts, then approve; halt list;
     margin exhaustion), its own tables. The primary delegates to
     request_entry(). Audit F13: a held lock re-requested while the account
-    is halted is refused (lock left as it is — the caller decides;
-    evaluate_shadow_accounts releases it at zero)."""
+    is halted is refused — approved False, `<halt reason> — HELD_LOCK_HALTED`
+    and `halt` — and nothing else: no event, no card, the lock left as it
+    is for the caller to decide (evaluate_shadow_accounts judges a held
+    lock itself — entry_halt, then release_unopened_lock — and never
+    reaches this branch)."""
     if _is_primary(account):
         return request_entry(conn, journal_ref, required_margin)
     get_paper_account(conn, account)
@@ -1759,9 +1765,30 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
 # never raise, and fail OPEN with a printed note: this layer is a paper
 # risk simulation and must never be the reason the learning loop stalls.
 
+class GateVerdict(tuple):
+    """gate_headless_entry's answer: the (allowed, reason) pair — it unpacks
+    and compares exactly as the old 2-tuple — plus `.halt`, the event name
+    of the entry halt that refused it ('risk_of_ruin_halt' |
+    'daily_breaker_halt'), else None. Audit F13 (L3 review): a halted
+    primary's refusal reaches the doors as MARGIN_BLOCKED, and this is the
+    machine-readable mark that tells them it is a HALT, not a margin
+    shortfall (the API's 409 `halt`, the Discord bot's note)."""
+
+    def __new__(cls, allowed: bool, reason: str, halt: str = None):
+        verdict = super().__new__(cls, (allowed, reason))
+        verdict.halt = halt
+        return verdict
+
+    def __getnewargs__(self):
+        # copy / pickle rebuild it through __new__: tuple's own answer
+        # (one tuple argument) would not fit its three
+        return (self[0], self[1], self.halt)
+
+
 def gate_headless_entry(journal_ref: str, required_margin: float,
                         conn=None) -> tuple:
-    """(allowed, reason) for the headless proposer's entry signal."""
+    """(allowed, reason) for the headless proposer's entry signal — a
+    GateVerdict, whose `.halt` names an entry halt's refusal."""
     try:
         owns = conn is None
         if conn is None:
@@ -1769,10 +1796,11 @@ def gate_headless_entry(journal_ref: str, required_margin: float,
         verdict = request_entry(conn, journal_ref, required_margin)
         if owns:
             conn.close()
-        return bool(verdict["approved"]), verdict["reason"]
+        return GateVerdict(bool(verdict["approved"]), verdict["reason"],
+                           (verdict.get("halt") or {}).get("event"))
     except Exception as e:
         print(f"  (margin gate unavailable — failing open: {e})")
-        return True, f"margin gate unavailable ({e})"
+        return GateVerdict(True, f"margin gate unavailable ({e})")
 
 
 def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None,

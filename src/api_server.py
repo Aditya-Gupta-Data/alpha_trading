@@ -35,7 +35,9 @@ Two-way Discord bridge:
   the same underlying+direction is open firm-wide (409, "status":
   "exposure_blocked", Chunk 2 Fix G) — left pending too — and an approval
   the capital layer cannot grant margin for (409, "status": "margin_blocked",
-  Chunk 2 close-out; it used to answer 200 ok:true as if decided).
+  Chunk 2 close-out; it used to answer 200 ok:true as if decided) — when an
+  entry HALT refused it, the body also carries "halt" (the halt's event name,
+  audit F13 L3 review) so the bot does not say "once margin frees up".
 
 Run on the VM:  uvicorn src.api_server:app --host 127.0.0.1 --port 8000
 """
@@ -155,12 +157,14 @@ def discord_action(req: DiscordActionRequest):
                 "exposure gate: the underlying+direction slot is taken (decision #68)",
             options_proposer.MARGIN_BLOCKED: "margin gate: not enough free paper margin",
         }[result["status"]]
-        return JSONResponse(
-            status_code=409,
-            content={"ok": False, "status": result["status"],
-                     "error": result.get("reason") or fallback,
-                     "trade_id": req.trade_id},
-        )
+        content = {"ok": False, "status": result["status"],
+                   "error": result.get("reason") or fallback,
+                   "trade_id": req.trade_id}
+        if result.get("halt"):
+            # Audit F13 (L3 review): an entry HALT refused it, not a margin
+            # shortfall — the machine-readable mark the bot's note reads.
+            content["halt"] = result["halt"]
+        return JSONResponse(status_code=409, content=content)
     return {"ok": True, "decision": result["status"],
             "trade_id": req.trade_id, "entry": result["entry"]}
 

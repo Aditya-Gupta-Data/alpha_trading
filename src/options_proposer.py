@@ -1273,7 +1273,9 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
 
     Returns {"status": "approved"|"rejected"|"not_found"|"already_resolved"
              |"margin_blocked"|"inside_exit_window"|"exposure_blocked",
-             "entry": dict-or-None, "reason": str (the three refusals only)}.
+             "entry": dict-or-None, "reason": str (the three refusals only),
+             "halt": the halt's event name (a margin_blocked an entry halt
+             caused — audit F13, L3 review — only)}.
 
     D1 (decision #122): the whole decision runs under the journal lock on
     the row read FRESH inside it, and writes THAT ROW alone — two taps (or
@@ -1582,8 +1584,11 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
         # the approval with the halt named; a lock that EXPIRED unapproved
         # at 15:30 — D7 — is taken again on today's cash). A margin-blocked
         # approval leaves the entry pending — nothing is journaled,
-        # broadcast, or settled.
+        # broadcast, or settled. A HALT's refusal carries the halt's event
+        # name (`halt`, F13 L3 review) so the doors can say "the halt is
+        # up", not "margin frees up".
         spread = target.get("spread") or {}
+        proposed = dict(target.get("accounts") or {})   # the proposal-time verdicts (F14 below)
         per_lot = (spread.get("margin") or {}).get("total_margin")
         if per_lot is not None:
             from src import portfolio_manager as pm
@@ -1593,22 +1598,32 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
             required = pm.required_margin_for(
                 {"spread": spread,
                  "vix": (target.get("receipt") or {}).get("vix")})
-            allowed, gate_reason = pm.gate_headless_entry(trade_id, required)
+            gate = pm.gate_headless_entry(trade_id, required)
+            allowed, gate_reason = gate
             if not allowed:
-                return {"status": MARGIN_BLOCKED, "entry": target,
-                        "reason": gate_reason}
+                blocked = {"status": MARGIN_BLOCKED, "entry": target, "reason": gate_reason}
+                if getattr(gate, "halt", None):
+                    blocked["halt"] = gate.halt
+                return blocked
             # #102: approval is the acceptance moment for the shadow
             # accounts too (idempotent re-request on an active lock, which
             # still passes the account's own halts — F13: a halted shadow is
             # refused, its lock released at zero; a proposal-time refusal is
-            # re-judged on today's cash). D6
+            # re-judged on today's cash, on the risk budget the proposal
+            # was sized on — F12 L3 review). D6
             # (#122): this is the ONLY judgement where the rotation account
             # may evict — the entry is being accepted, not merely proposed.
             marks_fn, evict_fn = _rotation_fns(rotation)
             target["accounts"] = _judge_shadow_accounts(
                 trade_id, {"spread": spread, "lots": spread.get("lots"),
                            "vix": (target.get("receipt") or {}).get("vix")},
+                risk_pct=_proposal_risk_pct(target),
                 allow_rotation=True, marks_fn=marks_fn, evict_fn=evict_fn)
+        # Audit F14 (L3 review): the live arm switched OFF since the
+        # proposal opens nothing now — its proposal-time lock is released
+        # here, named, like the venue-off case (not held until the primary
+        # exits).
+        _live_switch_off(target, proposed)
 
     decision = "approved" if approve else "rejected"
     target["decision"] = decision
@@ -1635,6 +1650,19 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
         from src import portfolio_manager as pm
         pm.release_entry(trade_id, 0.0)
     return {"status": decision, "entry": final}
+
+
+def _proposal_risk_pct(entry: dict):
+    """The risk budget (% of equity) the proposal was SIZED on, or None (the
+    account default, ACCOUNT_RISK_PER_TRADE_PCT). run_headless sizes on
+    vol_bridge's override (`state['vol_overrides']['risk_pct']` — 0.7 x the
+    base under Expansion) and freezes it on the row as
+    `receipt.vol_overrides.risk_pct`. Audit F12 (L3 review): every
+    approval-time sizing — the shadow accounts' re-judgement and the live
+    arm's re-size on its crossed re-quote — runs on THAT budget, never the
+    quiet-regime default. Read as stored: a value that is not a number
+    fails in the sizer, whose callers refuse by name (never a guessed 2%)."""
+    return (((entry or {}).get("receipt") or {}).get("vol_overrides") or {}).get("risk_pct")
 
 
 def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None,
@@ -1676,16 +1704,30 @@ _PAPER_VENUE_KEEP_CONN = False     # test seam: a shared in-memory conn must sur
 _LIVE_CHAIN_FN = None              # test seam: the live arm's chain source (None = dhan, muzzled under pytest)
 
 
-def _live_refuse(conn, acct: str, entry: dict, why: str) -> None:
+# L3 review: the live arm's verdict when a re-approval finds this ref
+# already opened (a recorded row, or an entry ticket FILLED awaiting its
+# repair) — that position stands on the lock behind it; only a SECOND entry
+# ticket is refused, so the verdict must not read 'rejected'.
+LIVE_ALREADY_OPEN = "already_open"
+
+
+def _live_refuse(conn, acct: str, entry: dict, why: str, status: str = "rejected") -> None:
     """The live arm (#120) declines this entry at approval: verdict rejected,
     its proposal-time lock released at zero, one named event. Through
     pm.release_unopened_lock: a lock that backs a recorded or FILLED live
-    position (L2 residual (b), F15) is kept, and the event says so."""
+    position (L2 residual (b), F15) is kept, and the event says so.
+    `status` LIVE_ALREADY_OPEN (L3 review): the ref was already opened —
+    the verdict keeps the lots and margin of the lock that backs that
+    position and is stamped `already_open`, not 'rejected'."""
     from src import portfolio_manager as pm
     ref = entry.get("short_id")
     if isinstance(entry.get("accounts"), dict):
-        entry["accounts"][acct] = dict(entry["accounts"].get(acct) or {}, status="rejected", lots=0,
-                                       margin_rs=None, ticket_id=None, reason=f"live entry refused: {why}")
+        if status == LIVE_ALREADY_OPEN:
+            entry["accounts"][acct] = dict(entry["accounts"].get(acct) or {}, status=status,
+                                           reason=f"no second live entry: {why}")
+        else:
+            entry["accounts"][acct] = dict(entry["accounts"].get(acct) or {}, status="rejected", lots=0,
+                                           margin_rs=None, ticket_id=None, reason=f"live entry refused: {why}")
     try:
         rel = pm.release_unopened_lock(conn, acct, ref)
         lock = ("released at zero" if rel.get("released") else
@@ -1694,7 +1736,8 @@ def _live_refuse(conn, acct: str, entry: dict, why: str) -> None:
         pm.paper_log_event(conn, acct, "live_entry_refused", ref, f"{why} — lock {lock}")
     except Exception as e:
         print(f"  [{acct}] {ref}: refusal bookkeeping failed ({e})")
-    print(f"  [{acct}] {ref}: REFUSED at approval — {why}")
+    print(f"  [{acct}] {ref}: {'NO SECOND ENTRY' if status == LIVE_ALREADY_OPEN else 'REFUSED'} "
+          f"at approval — {why}")
 
 
 def _live_entry_rules(conn, acct: str, entry: dict, rq: dict, lots: int) -> int | None:
@@ -1712,7 +1755,9 @@ def _live_entry_rules(conn, acct: str, entry: dict, rq: dict, lots: int) -> int 
           cash, and fewer lots need less margin): lots re-sized DOWN, never
           above the lots it was approved for; #106's 1-lot floor is kept
           and recorded on the verdict (`requote_sizing`); the lock shrinks
-          with the lots (a `live_entry_resized` event).
+          with the lots (a `live_entry_resized` event). The budget is the
+          one the proposal was sized on (`_proposal_risk_pct`: vol_bridge's
+          Expansion override, else the default — L3 review).
     The primary and the other shadows are untouched. Returns the lots to
     ticket, or None (refused). A failure abstains (refused, named): this
     runs before ANY ticket is issued, and must never take the primary's
@@ -1737,7 +1782,8 @@ def _live_entry_rules_body(conn, acct: str, entry: dict, rq: dict, lots: int) ->
         _live_refuse(conn, acct, entry, f"the crossed re-quote (net {float(rq['entry_mark_ps']):+.2f}/share) "
                                         f"fails the desk's R:R floor — {why} (audit F12)")
         return None
-    sized = pm.size_for_account(conn, acct, dict(crossed, margin={"total_margin": 0}))
+    sized = pm.size_for_account(conn, acct, dict(crossed, margin={"total_margin": 0}),
+                                risk_pct=_proposal_risk_pct(entry))
     new = min(int(lots), int(sized["lots"]))
     if new <= 0:                 # unreachable past the gate (a measurable loss sizes >= 1)
         _live_refuse(conn, acct, entry, f"re-sizing on the crossed max loss refused: {sized['reason']}")
@@ -1775,15 +1821,19 @@ def _live_already_recorded(conn, acct: str, entry: dict) -> bool:
     again), or an entry ticket for it already FILLED and its row is still
     to be repaired from that ticket (F15). The table's key is that pair: a
     second entry ticket would be a second fill with nowhere to be recorded.
-    Checked BEFORE any ticket is issued; an unreadable state refuses too
-    (never a second fill on a guess)."""
+    Checked BEFORE any ticket is issued. An opened ref's verdict reads
+    LIVE_ALREADY_OPEN (its position stands; L3 review). An unreadable state
+    refuses too — 'rejected', named as unreadable, never as 'already
+    recorded' (L3 review) — never a second fill on a guess."""
     from src.execution import live_pricer
     ref = entry.get("short_id")
     try:
         state = live_pricer.position_state(conn, acct, ref)
         filled = None if state else live_pricer.filled_entry_ticket(conn, acct, ref)
     except Exception as e:
-        state, filled = f"unreadable: {e}", None
+        _live_refuse(conn, acct, entry, f"this entry's live position state could not be read ({e}) — "
+                                        "no entry ticket on a guess")
+        return True
     if state is not None:
         why = f"a live position for this entry is already recorded ({state})"
     elif filled:
@@ -1791,7 +1841,8 @@ def _live_already_recorded(conn, acct: str, entry: dict) -> bool:
                "that ticket by the next live tick)")
     else:
         return False
-    _live_refuse(conn, acct, entry, f"{why} — a ref is opened once; no second entry ticket")
+    _live_refuse(conn, acct, entry, f"{why} — a ref is opened once; no second entry ticket",
+                 status=LIVE_ALREADY_OPEN)
     return True
 
 
@@ -1864,22 +1915,54 @@ def _live_venue_off(entry: dict, conn=None) -> None:
         from src import portfolio_manager as pm
         live = [a for a, v in (entry.get("accounts") or {}).items()
                 if a in pm.LIVE_ACCOUNTS and (v or {}).get("status") == "approved"]
-        if not live:
-            return
-        own = conn is None
-        if own:
-            from src import brain_map
-            conn = brain_map.connect()
-        try:
-            for acct in live:
-                _live_refuse(conn, acct, entry, "the paper venue is off (paper_venue_enabled false) — the live "
-                                                "arm opens only on a real crossed fill, so it takes no position "
-                                                "(audit F14)")
-        finally:
-            if own and not _PAPER_VENUE_KEEP_CONN:
-                conn.close()
+        _live_refuse_each(entry, live, "the paper venue is off (paper_venue_enabled false) — the live arm "
+                                       "opens only on a real crossed fill, so it takes no position (audit F14)",
+                          conn)
     except Exception as e:
         print(f"  (live account: venue-off release skipped: {e})")
+
+
+def _live_switch_off(entry: dict, proposed: dict, conn=None) -> None:
+    """Audit F14 (L3 review): the live arm's own SWITCH (or the 2L
+    experiment's) is OFF at approval. The approval judgement never sees the
+    arm then (shadow_account_ids leaves it out), so the lock it took at
+    proposal time stayed held until the primary exited — capital of an
+    arm that will open nothing. Like the venue-off case: every LIVE
+    account `proposed` (the row's proposal-time verdicts) approved is
+    refused now — verdict rejected and named, its lock released at zero
+    through pm.release_unopened_lock (a lock that backs a recorded or
+    FILLED live position is kept, named). Switch on → nothing. Fail-open:
+    a failure leaves the old behaviour (released when the primary exits)."""
+    try:
+        from src import portfolio_manager as pm
+        if pm.live_account_enabled():
+            return
+        live = [a for a, v in (proposed or {}).items()
+                if a in pm.LIVE_ACCOUNTS and (v or {}).get("status") == "approved"]
+        switch = ("paper_2l_account_enabled" if not pm.shadow_accounts_enabled()
+                  else "paper_2l_live_account_enabled")
+        _live_refuse_each(entry, live, f"the live arm is switched off ({switch} false) — no new live entry "
+                                       "opens while it is off, so it takes no position (audit F14)", conn)
+    except Exception as e:
+        print(f"  (live account: switch-off release skipped: {e})")
+
+
+def _live_refuse_each(entry: dict, accounts: list, why: str, conn=None) -> None:
+    """`_live_refuse` for each of `accounts` on one connection (opened here
+    when none is given; the test seam keeps a shared one open). Raises —
+    its callers fail open."""
+    if not accounts:
+        return
+    own = conn is None
+    if own:
+        from src import brain_map
+        conn = brain_map.connect()
+    try:
+        for acct in accounts:
+            _live_refuse(conn, acct, entry, why)
+    finally:
+        if own and not _PAPER_VENUE_KEEP_CONN:
+            conn.close()
 
 
 def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: dict = None) -> dict:

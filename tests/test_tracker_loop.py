@@ -17,12 +17,26 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tests.fake_journal import FakeJournalBase
 from src import analyst
 from src import brain_map
 import src.plan_tracker as plan_tracker
+
+
+@pytest.fixture(autouse=True)
+def _restore_tracker_seams(monkeypatch):
+    """run_tracker_offline swaps the tracker's seams by plain assignment (it
+    is also driven by this file's plain-python runner). Registering each one
+    with monkeypatch first puts the real one back after every test: a leaked
+    `_close_paper_position` lambda failed test_audit_chunk1_batch_d's
+    cash-writer test whenever it ran later in the same session."""
+    for name in ("journal", "_daily_bars", "_close_paper_position", "_brain_connect"):
+        monkeypatch.setattr(plan_tracker, name, getattr(plan_tracker, name))
+    monkeypatch.setattr(analyst, "generate_post_mortem", analyst.generate_post_mortem)
 
 
 FAKE_POST_MORTEM = {

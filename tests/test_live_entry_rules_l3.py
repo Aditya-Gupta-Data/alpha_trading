@@ -465,14 +465,19 @@ def test_a_daily_breaker_tripped_on_the_arms_own_settlements_refuses_its_held_lo
 
 def test_a_halted_live_arm_keeps_a_lock_that_backs_a_recorded_position(desk):
     """The held-lock refusal never releases at zero a lock a LIVE row owns
-    (a kept-then-repaired position on a still-pending entry)."""
+    (a kept-then-repaired position on a still-pending entry). L4 review:
+    that position stands, so the verdict reads already_open with the kept
+    lock's lots and margin — never 'rejected' with 0 lots."""
     c, ref = desk["c"], "f13k0001"
     _propose(ref, _bull_call())
+    held = pm._active_shadow_lock(c, LIVE, ref)
     tid, view = _filled_live_ticket(c, ref, {(24000.0, "CE"): 100.0, (24200.0, "CE"): 30.0}, spread=_bull_call())
     lp.open_position(c, LIVE, {"short_id": ref, "ticker": "NIFTY 50", "spread": _bull_call()}, view, now=AT)
     pm.paper_log_event(c, LIVE, pm.HALT_LATCH_EVENT, None, "test latch")
     v = op.decide_pending(ref, approve=True, why="tap", human=True)["entry"]["accounts"][LIVE]
-    assert v["status"] == "rejected"
+    assert v["status"] == op.LIVE_ALREADY_OPEN == pm.LIVE_ALREADY_OPEN
+    assert (v["margin_rs"], v["lots"]) == held
+    assert v["reason"].startswith("no second live entry: risk-of-ruin halt")
     assert v["reason"].endswith("lock kept (a live position for this entry is recorded (open) — the lock backs it)")
     assert pm._active_shadow_lock(c, LIVE, ref) is not None and lp.position_state(c, LIVE, ref) == "open"
     assert _tickets(c, ref, LIVE) == 1
@@ -794,9 +799,11 @@ def test_a_halted_live_arms_filled_entry_lock_is_kept_not_released_at_zero(desk)
     _propose(ref, _bull_call())
     tid, _ = _filled_live_ticket(c, ref, {(24000.0, "CE"): 100.0, (24200.0, "CE"): 30.0}, spread=_bull_call())
     pm.paper_log_event(c, LIVE, pm.HALT_LATCH_EVENT, None, "test latch")
+    held = pm._active_shadow_lock(c, LIVE, ref)
     v = op.decide_pending(ref, approve=True, why="tap", human=True)["entry"]["accounts"][LIVE]
-    assert v["status"] == "rejected" and "(audit F13); lock kept (entry ticket" in v["reason"]
-    assert pm._active_shadow_lock(c, LIVE, ref) is not None
+    assert v["status"] == op.LIVE_ALREADY_OPEN and "(audit F13); lock kept (entry ticket" in v["reason"]
+    assert (v["margin_rs"], v["lots"]) == held                                # L4 review: the kept lock's size
+    assert pm._active_shadow_lock(c, LIVE, ref) == held
     assert len(_events(c, LIVE, lp.EVENT_LOCK_KEPT_FILLED, ref)) == 1
 
 

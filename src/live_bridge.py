@@ -416,7 +416,7 @@ def _crossed_exit_price(leg: dict, q: dict) -> tuple:
     return price, why
 
 
-def _leg_quotes_for(entry: dict) -> dict | None:
+def _leg_quotes_for(entry: dict, quiet: bool = False):
     """The CROSSED close price for every leg of one open spread, from the
     live option chain: {(strike, 'CE'/'PE') -> price} — a long leg at the
     BID it can be sold at, a short leg at the ASK it is bought back at,
@@ -440,28 +440,39 @@ def _leg_quotes_for(entry: dict) -> dict | None:
     strike-key match and data-quality rules as the live arm), imported at
     MODULE level so a missing name fails loudly at import; the try below
     covers only the network fetch, and its failure is printed with the
-    door's reason (dhan_client.last_chain_error)."""
+    door's reason (dhan_client.last_chain_error).
+
+    `quiet` (audit F24, L4 review 2026-10-07) is the square-off's mode:
+    nothing is printed and the answer is `(quotes, reason)` — the quotes
+    or None, and the refusal's reason (None when every leg is quoted).
+    `intraday_square_off` carries that reason on its result, so it reaches
+    the log on the bridge's own line, which a RETRIED square-off prints
+    once per change of (signal, status): a door refusing on every retry
+    used to print its line on every retry. The default (the rotation
+    eviction and its prefetch) prints the refusal and returns the quotes
+    alone, as before."""
     from src import dhan_client
     ref = entry.get("short_id")
+
+    def refused(why: str):
+        if quiet:
+            return None, why
+        print(f"  (square-off quotes for {ref}: {why})", flush=True)
+        return None
     try:
         spread = entry["spread"]
         chain = dhan_client.get_option_chain(entry["ticker"], spread["expiry"])
     except Exception as exc:
-        print(f"  (square-off quotes for {ref}: chain fetch failed: {exc})", flush=True)
-        return None
+        return refused(f"chain fetch failed: {exc}")
     if not chain:
-        why = dhan_client.last_chain_error() or "empty response"
-        print(f"  (square-off quotes for {ref}: option chain unavailable ({why}))", flush=True)
-        return None
+        return refused(f"option chain unavailable ({dhan_client.last_chain_error() or 'empty response'})")
     quotes = {}
     for leg in spread.get("legs") or []:
         price, why = _crossed_exit_price(leg, leg_quote(chain, leg))
         if price is None:
-            print(f"  (square-off quotes for {ref}: refused on "
-                  f"{float(leg['strike']):g}{str(leg['option_type']).upper()}: {why})", flush=True)
-            return None
+            return refused(f"refused on {float(leg['strike']):g}{str(leg['option_type']).upper()}: {why}")
         quotes[(float(leg["strike"]), str(leg["option_type"]).upper())] = price
-    return quotes or None
+    return (quotes or None, None) if quiet else (quotes or None)
 
 
 def _square_off_note(sig: dict) -> str:
@@ -480,14 +491,20 @@ def _square_off_note(sig: dict) -> str:
     return f" — intraday fill declined ({status}{extra}); the EOD path owns it"
 
 
-def intraday_square_off(sig: dict, entries=None, quotes_fn=_leg_quotes_for,
+def intraday_square_off(sig: dict, entries=None, quotes_fn=None,
                         today: date = None) -> dict:
     """The production square-off seam: profit-take signal -> CROSSED chain
     quotes (`_leg_quotes_for`: long legs at the bid, short legs at the
     ask — ruling 1, 2026-10-05) -> plan_tracker.resolve_intraday_profit_take
     (the ONE settlement path; decision #41's read-only rule is amended by
     #69 for exactly this call). Approved trades only; every failure returns a
-    status and leaves the trade to the EOD path. Never raises."""
+    status and leaves the trade to the EOD path. Never raises.
+
+    The quote door is asked QUIETLY (audit F24, L4 review): a refusal
+    comes back as `no_chain_quotes` with the door's reason on the result,
+    which `_attempt_square_off` stamps on the signal for the bridge's one
+    line per change of outcome. An injected `quotes_fn` (tests, playback)
+    answers the quotes alone, as before."""
     try:
         entry = next((e for e in _open_spreads(entries)
                       if e.get("short_id") == sig["short_id"]), None)
@@ -495,9 +512,15 @@ def intraday_square_off(sig: dict, entries=None, quotes_fn=_leg_quotes_for,
             return {"status": "not_open", "short_id": sig["short_id"]}
         if entry.get("decision") != "approved":
             return {"status": "not_approved", "short_id": sig["short_id"]}
-        quotes = quotes_fn(entry)
+        if quotes_fn is None:
+            quotes, why = _leg_quotes_for(entry, quiet=True)
+        else:
+            quotes, why = quotes_fn(entry), None
         if not quotes:
-            return {"status": "no_chain_quotes", "short_id": sig["short_id"]}
+            declined = {"status": "no_chain_quotes", "short_id": sig["short_id"]}
+            if why:
+                declined["reason"] = why
+            return declined
         return pt.resolve_intraday_profit_take(
             sig["short_id"], quotes,
             model_capture_pct=sig.get("capture_pct"), today=today,

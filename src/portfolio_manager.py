@@ -560,6 +560,14 @@ HELD_LOCK_REASON = "margin already locked for this entry"
 # Audit F13: what a held lock's refusal at approval adds to the halt's reason
 HELD_LOCK_HALTED = ("its proposal-time lock is held, but a halted account opens no new risk "
                     "(audit F13)")
+# The live arm's verdict when an approval finds its ref ALREADY OPENED (a
+# recorded position row, or an entry ticket FILLED awaiting its repair):
+# that position stands on the lock behind it — only a second entry is
+# refused, so the verdict must never read 'rejected' with 0 lots (the
+# dashboard holds the row on it). ONE constant (L4 review): the F13 halt
+# path below and options_proposer's refusals (`op.LIVE_ALREADY_OPEN`, the
+# same object) both stamp it.
+LIVE_ALREADY_OPEN = "already_open"
 
 
 def request_entry(conn, journal_ref: str, required_margin: float,
@@ -1581,6 +1589,14 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                     reason = f"{halt['reason']} — {HELD_LOCK_HALTED}; lock {lock}"
                     paper_log_event(conn, account, halt["event"], journal_ref,
                                     f"entry {journal_ref} refused at approval ({reason})")
+                    if rel.get("backs_position"):
+                        # L4 review (the sibling of L3 residual (b)): the lock
+                        # was KEPT because it backs a recorded or FILLED live
+                        # position — that position stands; the halt refuses
+                        # only a second entry. Never 'rejected' with 0 lots.
+                        out[account] = {"status": LIVE_ALREADY_OPEN, "lots": held[1], "margin_rs": held[0],
+                                        "reason": f"no second live entry: {reason}"}
+                        continue
                     out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
                                     "reason": reason}
                     continue
@@ -1700,6 +1716,10 @@ def shadow_pnl(primary_pnl_net: float, lots: int, primary_lots: int,
 
 
 EVENT_LOCK_NOT_TAKEN = "lock_released_trade_not_taken"
+# L4 review: the printed warning when a model-priced shadow lock is settled
+# at a NON-ZERO scaled primary P&L with no `verdicts` — the old path, which
+# cannot tell an account that took the trade from one that never did.
+WARN_NO_VERDICTS = "shadow_settled_without_verdicts"
 
 
 def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
@@ -1719,8 +1739,10 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
     proposal-time lock with its verdict dropped and no ticket, and the
     primary's exit settled that lock at the scaled P&L of a trade it never
     took. None (a rejection, a void, a caller with no row) settles as
-    before. The live arm (#120) settles itself and is judged below, not
-    here."""
+    before — callers are expected to pass `verdicts`, so None with a
+    NON-ZERO primary P&L prints a named warning (`WARN_NO_VERDICTS`, L4
+    review) for each shadow settled that way. The live arm (#120) settles
+    itself and is judged below, not here."""
     out = {}
     ensure_accounts_schema(conn)
     rows = conn.execute("SELECT account_id, lots, primary_lots FROM paper_margin_locks "
@@ -1782,6 +1804,11 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
                                 f"'{status or 'missing'}' — it never took the trade, so it books none of "
                                 "the primary's P&L (L3 residual (a))")
             continue
+        if verdicts is None and float(primary_pnl_net or 0.0) != 0.0:
+            print(f"  [{account}] {journal_ref}: WARNING {WARN_NO_VERDICTS} — settled at the scaled primary "
+                  f"P&L (Rs.{float(primary_pnl_net):,.2f}) with no verdicts passed; a caller settling a real "
+                  "trade passes the row's accounts block, or an account that never took it books its P&L "
+                  "(L3 residual (a))", flush=True)
         pnl = shadow_pnl(primary_pnl_net, lots, primary_lots, flat_frictions_rs)
         out[account] = paper_release_margin(conn, account, journal_ref, pnl)
     return out

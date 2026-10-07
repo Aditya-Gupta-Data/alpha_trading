@@ -18,6 +18,11 @@ The L3 verifier's residuals (2026-10-06, folded into batch L4).
     no margin field still releases the LIVE lock; only an APPROVED
     proposal-time verdict is refused.
 
+L4 review (2026-10-07): a switched-off account's NOT-approved verdict stays
+on the row unchanged; the F13 halt path over a recorded LIVE position reads
+already_open with the kept lock's size (one constant, pm.LIVE_ALREADY_OPEN);
+release_shadow_locks without verdicts on a non-zero P&L warns by name.
+
 Hermetic: the per-test FILE brain_map of tests/test_live_entry_rules_l3's
 `desk` (or ':memory:' / tmp), tmp journal (conftest), injected chains.
 """
@@ -94,6 +99,26 @@ def test_the_whole_experiment_switched_off_refuses_every_shadow_by_name(desk, mo
     assert _realized(c, TWO_L) == _realized(c, ROT) == _realized(c, LIVE) == 0.0
 
 
+def test_the_whole_experiment_off_keeps_a_not_approved_verdict_as_proposed(desk, monkeypatch):
+    """L4 review: with the switch off, the approval judgement returns {} —
+    a proposal-time verdict that was NOT an approval (LIVE refused a
+    last-price leg) used to be dropped from the row with the rest. It holds
+    no lock: kept unchanged, no event, no release; the approved 2L is
+    refused by name as before."""
+    c, ref = desk["c"], "l4rkeep1"
+    s = _bull_call()
+    s["legs"][1]["fill_basis"] = "last_price"
+    pend = _propose(ref, s)
+    assert pend["accounts"][LIVE]["status"] == "rejected" and pend["accounts"][TWO_L]["status"] == "approved"
+    monkeypatch.setattr(pm, "PAPER_2L_ACCOUNT_ENABLED", False)
+    out = op.decide_pending(ref, approve=True, why="tap", human=True)
+    acc = out["entry"]["accounts"]
+    assert acc[LIVE] == pend["accounts"][LIVE] and journal.get_entry(ref)["accounts"][LIVE] == pend["accounts"][LIVE]
+    assert _events(c, LIVE, "live_entry_refused", ref) == [] and _events(c, LIVE, op.EVENT_SWITCHED_OFF, ref) == []
+    assert acc[TWO_L]["status"] == "rejected" and "(paper_2l_account_enabled false)" in acc[TWO_L]["reason"]
+    assert pm._active_shadow_lock(c, TWO_L, ref) is None
+
+
 def test_a_shadow_switched_on_at_approval_is_unaffected(desk):
     c, ref = desk["c"], "l4on0001"
     _propose(ref, _bull_call())
@@ -152,6 +177,25 @@ def test_release_shadow_locks_books_pnl_only_for_an_approved_verdict(mem, monkey
     pnl = _lock(c, TWO_L, "g0001")[3]
     assert (pnl == 0.0) is expect_zero and (pnl == 2000.0) is (not expect_zero)
     assert len(_events(c, TWO_L, pm.EVENT_LOCK_NOT_TAKEN, "g0001")) == (1 if expect_zero else 0)
+
+
+def test_release_shadow_locks_without_verdicts_warns_by_name(mem, monkeypatch, capsys):
+    """L4 review: every settlement of a real trade passes the row's verdicts;
+    None with a non-zero primary P&L still settles the old way, but says so
+    by name. A zero release, or one with verdicts, is silent."""
+    monkeypatch.setattr(pm, "PAPER_2L_ACCOUNT_ENABLED", True)
+    c = mem
+    for ref in ("w0001", "w0002", "w0003"):
+        assert pm.request_entry(c, ref, 1000.0)["approved"]
+        pm.paper_request_entry(c, TWO_L, ref, 1000.0, lots=1, primary_lots=2)
+    pm.release_shadow_locks(c, "w0001", 4000.0, 0.0)
+    out = capsys.readouterr().out
+    assert f"[{TWO_L}] w0001: WARNING {pm.WARN_NO_VERDICTS} — settled at the scaled primary P&L (Rs.4,000.00)" in out
+    assert _lock(c, TWO_L, "w0001")[3] == 2000.0                               # settled as before
+    pm.release_shadow_locks(c, "w0002", 0.0, 0.0)
+    pm.release_shadow_locks(c, "w0003", 4000.0, 0.0, verdicts={TWO_L: {"status": "approved", "lots": 1}})
+    assert pm.WARN_NO_VERDICTS not in capsys.readouterr().out
+    assert _lock(c, TWO_L, "w0002")[3] == 0.0 and _lock(c, TWO_L, "w0003")[3] == 2000.0
 
 
 def test_reconcile_settles_a_not_taken_shadow_lock_at_zero(mem, monkeypatch):
@@ -220,6 +264,30 @@ def test_a_refusal_over_a_recorded_live_position_reads_already_open_with_the_loc
     assert "lock kept (a live position for this entry is recorded (open)" in ev
 
 
+def test_a_halt_over_a_recorded_live_position_reads_already_open_on_the_row(desk, capsys):
+    """L4 review — the sibling of (b): the F13 HALT path (a ruin latch on the
+    live arm between proposal and approval) kept the lock that backs the
+    recorded position but stamped 'rejected' with 0 lots. It now stamps the
+    ONE constant, already_open, with the kept lock's lots and margin — and
+    the dashboard holds the trade on it."""
+    from src.dashboard import data as dash
+    c, ref = desk["c"], "l4halt01"
+    _propose(ref, _bull_call())
+    held = pm._active_shadow_lock(c, LIVE, ref)
+    _, view = _filled_live_ticket(c, ref, {(24000.0, "CE"): 100.0, (24200.0, "CE"): 30.0}, spread=_bull_call())
+    lp.open_position(c, LIVE, {"short_id": ref, "ticker": "NIFTY 50", "spread": _bull_call()}, view, now=AT)
+    pm.paper_log_event(c, LIVE, pm.HALT_LATCH_EVENT, None, "test latch")
+    capsys.readouterr()
+    assert op.decide_pending(ref, approve=True, why="tap", human=True)["status"] == "approved"
+    v = journal.get_entry(ref)["accounts"][LIVE]
+    assert op.LIVE_ALREADY_OPEN is pm.LIVE_ALREADY_OPEN and v["status"] == pm.LIVE_ALREADY_OPEN
+    assert (v["margin_rs"], v["lots"]) == held and v["status"] in dash.HOLDING_VERDICTS
+    assert v["reason"].startswith("no second live entry: risk-of-ruin halt")
+    assert pm._active_shadow_lock(c, LIVE, ref) == held and lp.position_state(c, LIVE, ref) == "open"
+    assert _tickets(c, ref, LIVE) == 1                                         # the first fill only
+    assert f"[{LIVE}] {ref}: NO SECOND ENTRY — no second live entry: risk-of-ruin halt" in capsys.readouterr().out
+
+
 def test_a_refusal_with_no_position_still_reads_rejected(desk, monkeypatch):
     c, ref = desk["c"], "l4bnone1"
     _propose(ref, _bull_call())
@@ -249,7 +317,8 @@ def test_switch_off_releases_the_live_lock_of_an_entry_with_no_margin_field(desk
 def test_switch_off_refuses_only_an_approved_proposal_time_verdict(desk, monkeypatch):
     """Surviving mutant 2: the `status == 'approved'` filter. A LIVE verdict
     REJECTED at proposal (a leg priced off last-price) holds no lock and is
-    not refused a second time when the switch goes off."""
+    not refused a second time when the switch goes off. L4 review: it stays
+    on the row exactly as proposed (it used to be dropped with the rest)."""
     c, ref = desk["c"], "l4dflt01"
     s = _bull_call()
     s["legs"][1]["fill_basis"] = "last_price"
@@ -259,7 +328,8 @@ def test_switch_off_refuses_only_an_approved_proposal_time_verdict(desk, monkeyp
     out = op.decide_pending(ref, approve=True, why="tap", human=True)
     assert out["status"] == "approved"
     assert _events(c, LIVE, "live_entry_refused", ref) == []
-    assert LIVE not in out["entry"]["accounts"]
+    assert out["entry"]["accounts"][LIVE] == pend["accounts"][LIVE]          # kept, unchanged
+    assert journal.get_entry(ref)["accounts"][LIVE] == pend["accounts"][LIVE]
     assert out["entry"]["accounts"][TWO_L]["status"] == "approved"
 
 

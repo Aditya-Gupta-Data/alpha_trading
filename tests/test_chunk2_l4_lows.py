@@ -23,6 +23,12 @@ F24: the intraday square-off got one look per (trade, signal) per session.
 Now a declined square-off is retried while the signal persists — once per
 quote interval per trade, the outcome printed once per change.
 
+L4 review (2026-10-07): the retry branch's `squarable` gate is pinned; the
+quote door is quiet inside the square-off (its reason rides the bridge's
+deduped line); a row opened after the tick began abstains on THIS tick's
+chain under its own name, with no window event; the stale-chain peak
+freeze is pinned inside a rung and at the interval boundary.
+
 Hermetic: ':memory:' brain maps or the per-test tmp file, tmp journal
 (conftest), injected chains / clocks / quote doors, Discord captured.
 """
@@ -459,6 +465,81 @@ def test_f19_stamps_parse_and_order_on_the_tick_clock():
     assert lp._predates_entry(row, None) is False
 
 
+def _events(c, kind, ref=None):
+    sql, args = "SELECT detail FROM paper_account_events WHERE account_id = ? AND event_type = ?", [LIVE, kind]
+    if ref is not None:
+        sql += " AND journal_ref = ?"
+        args.append(ref)
+    return [r[0] for r in c.execute(sql, args).fetchall()]
+
+
+def test_f19_review_a_row_opened_after_the_tick_began_abstains_on_this_ticks_chain_named_so(world):
+    """L4 review: an approval lands WHILE a tick runs. The tick began at
+    10:03:00 and fetched the key fresh — stamped at its start — and the row
+    opened at 10:03:20. It is not marked on that chain, but nothing is
+    missing: the reason says so (it used to blame the fetch cap), no
+    forced-exit-window event is written, and the next tick's fetch marks
+    it. The same row on a cached pre-entry chain it could NOT refresh is
+    still an event (the window is real)."""
+    c = world
+    near = "2026-10-08"                                     # 2 days out: inside the forced-exit window
+    put = _quoted(StrategyConstructor(vix=13.0, lot_size=65).construct_bear_put_spread(24000, 23800, 132.0, 60.0),
+                  near)
+    _open_live(c, "B", put, C1, _at(10, 3) + timedelta(seconds=20))
+    out = _tick(c, _at(10, 3), E0 + 180, lambda t, x: C1)
+    assert out["fetched"] == 1 and out["marked"] == 0 and out["abstained"] == 1 and out["exits"] == []
+    (note,) = out["row_notes"]
+    assert note["kind"] == "abstained" and note["in_exit_window"] is True
+    assert note["reason"] == ("the chain fetched this tick is stamped at the tick's start (2026-10-06T10:03:00), "
+                              "before this position opened at 2026-10-06T10:03:20; marked on the next tick's fetch")
+    assert _events(c, lp.EVENT_MARK_ABSTAINED, "B") == [] and _row(c, "B")["last_mark_ts"] is None
+    # that stamp predates the row, so its key is due on the next tick whatever its age —
+    # with no fetch possible, it is the cached pre-entry case: named so, and an event in the window
+    out = _tick(c, _at(10, 3) + timedelta(seconds=40), E0 + 220, lambda t, x: C1, max_fetches=0)
+    assert out["fetched"] == 0 and out["abstained"] == 1
+    assert "predates its entry (2026-10-06T10:03:20) and the per-tick fetch cap" in out["row_notes"][0]["reason"]
+    assert len(_events(c, lp.EVENT_MARK_ABSTAINED, "B")) == 1
+    out = _tick(c, _at(10, 4), E0 + 240, lambda t, x: C1)
+    assert out["fetched"] == 1 and out["marked"] == 1 and out["abstained"] == 0
+
+
+def _armed_at_45(c):
+    """Row A armed in the 40% rung (peak 45, lock 0) with a cached chain at
+    52.94% — the same rung, so no rung confirmation is involved."""
+    _open_live(c, "A", _bull_call(), C0, _at(9, 55))
+    c.execute("UPDATE paper_live_positions SET ratchet_peak_pct = 45.0, ratchet_lock_pct = 0.0 "
+              "WHERE journal_ref = 'A'")
+    c.commit()
+    hot = _chain({(24000, "CE"): (180.0, 182.0, 181.0), (24200, "CE"): (50.0, 52.0, 51.0)})   # 128 -> 81/153
+    lp._CHAIN_CACHE[("NIFTY 50", EXP)] = (E0, "2026-10-06T10:00:00", hot)
+
+
+def test_f19_review_a_stale_chain_freezes_the_peak_inside_its_rung_too(world):
+    """L4 review: the existing stale test only crosses a rung, where an
+    unconfirmed read keeps the peak anyway. Inside a rung a read moves the
+    peak by itself — a stale one must not: with the door down the mark is
+    recorded, the peak stays 45.0."""
+    c = world
+    _armed_at_45(c)
+    out = _tick(c, _at(10, 31), E0 + 1860, lambda t, x: None)               # the door answers nothing
+    assert out["fetched"] == 1 and out["marked"] == 1 and out["stale_marks"] == 1
+    a = _row(c, "A")
+    assert a["last_mark_ps"] == 128.0 and a["last_capture_pct"] == pytest.approx(52.94, abs=0.01)
+    assert (a["ratchet_peak_pct"], a["ratchet_lock_pct"]) == (45.0, 0.0)
+    assert a["last_mark_ts"] == "2026-10-06T10:00:00"
+
+
+@pytest.mark.parametrize("age, fetched, stale", [(300, 1, True), (299, 0, False)])
+def test_f19_review_a_chain_exactly_one_quote_interval_old_is_stale(world, age, fetched, stale):
+    """The boundary: at one full interval the chain is due — not refreshed,
+    it moves nothing; a second younger it is current and the peak rises."""
+    c = world
+    _armed_at_45(c)
+    out = _tick(c, _at(10, 5), E0 + age, lambda t, x: None)
+    assert out["fetched"] == fetched and out["marked"] == 1 and out.get("stale_marks") == (1 if stale else None)
+    assert _row(c, "A")["ratchet_peak_pct"] == (45.0 if stale else 52.94)
+
+
 # =================================================================== F20 — the kill switch
 
 KS_ROW = {"ticker": "NIFTY 50", "strategy": "bull_call_spread", "direction": "bullish", "expiry": EXP,
@@ -564,10 +645,11 @@ def _cycles(entries, registry, square_off, minutes, spot=lambda m: 24000.0, note
                       now_fn=lambda now=now: now, square_off_fn=square_off)
 
 
-def test_f24_a_declined_square_off_is_retried_while_the_signal_persists(capsys):
+def test_f24_a_declined_square_off_is_retried_while_the_signal_persists(monkeypatch, capsys):
     """repro test_f24_verify_square_off_one_shot_real_seam: the REAL seam,
     a persistent registry, 10 cycles with ratchet_hit on 8 of them — the
     quote door was consulted once."""
+    monkeypatch.setattr("src.config.LIVE_QUOTE_INTERVAL_SECONDS", 300)   # the default registry reads it
     entries = [_f24_entry()]
     calls = []
 
@@ -643,3 +725,86 @@ def test_f24_alerts_stay_deduplicated_and_offline_callers_stay_read_only():
     assert reg.note_square_off(sig, "no_chain_quotes", t0) is False
     reg.note_square_off(sig, "already_resolved", t0)
     assert reg.square_off_due(sig, t0 + timedelta(hours=1)) is False    # final: never retried
+
+
+def test_f24_review_a_persisting_non_squarable_signal_never_squares_off(monkeypatch, capsys):
+    """L4 review: nothing pinned the RETRY branch's `squarable` gate —
+    without it a pre_expiry_exit (advisory only, #69 squares off profit
+    takes and ratchet hits) was squared off intraday from its 2nd cycle.
+    Five quote intervals of a persisting pre_expiry_exit with the
+    square-off ARMED: never called, one advisory card. And with no
+    square-off armed (offline callers), a persisting ratchet_hit attempts
+    nothing and prints no retry line."""
+    monkeypatch.setattr("src.config.LIVE_QUOTE_INTERVAL_SECONDS", 120)
+    e = _f24_entry("f24pe01")
+    e["spread"]["expiry"] = "2026-10-06"                  # 1 day after the 10-05 cycles: forced-exit window
+    e.pop("ratchet")                                      # unarmed: nothing to hit
+    assert lb.evaluate_position(e, 24000.0, date(2026, 10, 5))["signal"] == "pre_expiry_exit"
+    calls, notes = [], []
+    _cycles([e], lb.AlertRegistry(), lambda sig: calls.append(sig["signal"]) or {"status": "no_chain_quotes"},
+            range(11), notes=notes)
+    assert calls == []
+    assert len(notes) == 1 and "LIVE exit signal" in notes[0] and "pre expiry exit at" in notes[0]
+    assert "square-off retried" not in capsys.readouterr().out
+
+    attempts = []
+    real = lb._attempt_square_off
+    monkeypatch.setattr(lb, "_attempt_square_off", lambda sig, fn: attempts.append(sig["signal"]) or real(sig, fn))
+    notes.clear()
+    _cycles([_f24_entry()], lb.AlertRegistry(), None, range(11), notes=notes)
+    assert attempts == []
+    assert len(notes) == 1 and "LIVE exit signal" in notes[0] and "ratchet hit at" in notes[0]
+    assert "square-off retried" not in capsys.readouterr().out
+
+
+def test_f24_review_the_doors_quiet_mode_returns_its_reason_and_prints_nothing(monkeypatch, capsys):
+    from src import dhan_client
+    entry = _f24_entry()
+    no_bid = _chain({(24000, "CE"): (0, 112.0, 111.0), (24200, "CE"): (40.0, 42.0, 41.0)})
+    good = _chain({(24000, "CE"): (110.0, 112.0, 111.0), (24200, "CE"): (40.0, 42.0, 41.0)})
+    monkeypatch.setattr(dhan_client, "get_option_chain", lambda t, x: no_bid)
+    assert lb._leg_quotes_for(entry, quiet=True) == (None, "refused on 24000CE: no bid to sell the long leg")
+    assert capsys.readouterr().out == ""
+    assert lb._leg_quotes_for(entry) is None                                 # the default prints, as before
+    assert "(square-off quotes for f24v01: refused on 24000CE: no bid to sell the long leg)" in \
+        capsys.readouterr().out
+    # the square-off asks quietly and carries the refusal on its result
+    out = lb.intraday_square_off({"short_id": "f24v01", "signal": "ratchet_hit"}, entries=[entry])
+    assert out == {"status": "no_chain_quotes", "short_id": "f24v01",
+                   "reason": "refused on 24000CE: no bid to sell the long leg"}
+    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(dhan_client, "get_option_chain", lambda t, x: good)
+    assert lb._leg_quotes_for(entry, quiet=True) == ({(24000.0, "CE"): 110.0, (24200.0, "CE"): 42.0}, None)
+
+
+def test_f24_review_a_refusing_door_prints_once_per_change_not_once_per_retry(monkeypatch, capsys):
+    """L4 review: the REAL door (only the Dhan call faked) behind the REAL
+    square-off seam (its settlement stubbed). The first look reaches real
+    quotes and is declined above the lock; then the door refuses on every
+    retry. It used to print its refusal line on each one; now its reason
+    rides on the bridge's retry line — printed once, on the change."""
+    from src import dhan_client
+    entries = [_f24_entry()]
+    chains = iter([_chain({(24000, "CE"): (110.0, 112.0, 111.0), (24200, "CE"): (40.0, 42.0, 41.0)})])
+    asked = []
+
+    def door(ticker, expiry):
+        asked.append(expiry)
+        return next(chains, None)
+    monkeypatch.setattr(dhan_client, "get_option_chain", door)
+    monkeypatch.setattr(dhan_client, "last_chain_error", lambda: "rate limit (DH-904: Too many requests)")
+    monkeypatch.setattr(pt, "resolve_intraday_profit_take",
+                        lambda *a, **k: {"status": "above_lock_on_real_quotes", "real_capture_pct": 72.0})
+    reg, fired = lb.AlertRegistry(retry_s=60), []
+    for m in range(6):
+        now = datetime(2026, 10, 5, 9, 15, 30, tzinfo=IST) + timedelta(minutes=m)
+        fired += lb.live_cycle(("NIFTY 50",), quote_fn=lambda u: {"last_price": 24000.0}, entries=entries,
+                               aggregators={}, registry=reg, now_fn=lambda now=now: now,
+                               square_off_fn=lambda sig: lb.intraday_square_off(sig, entries=entries))
+    assert len(asked) == 6 and len(fired) == 1
+    assert fired[0]["square_off_status"] == "above_lock_on_real_quotes"
+    out = capsys.readouterr().out
+    assert "square-off quotes for" not in out                                 # the door said nothing itself
+    assert out.count("square-off retried") == 1
+    assert ("— intraday fill declined (no_chain_quotes: option chain unavailable (rate limit (DH-904: Too many "
+            "requests))); the EOD path owns it.") in out

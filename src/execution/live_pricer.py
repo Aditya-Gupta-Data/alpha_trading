@@ -148,7 +148,10 @@ live in options_proposer / portfolio_manager.
 
 L4 (2026-10-06, audit F19 / F20). A chain fetched BEFORE a position
 existed never marks it or moves its ratchet (`_predates_entry`): the key is
-fetched at once, and until it can be the row abstains, named. A mark's
+fetched at once, and until it can be the row abstains, named (L4 review:
+a position opened after the tick began abstains on the chain fetched THIS
+tick, stamped at the tick's start — named so, no window event — and is
+marked on the next tick's fetch). A mark's
 time (`last_mark_ts`) is its chain's fetch time, on the tick's clock — a
 failing door no longer re-stamps an old chain as fresh. A chain at least a
 quote interval old that was not refreshed still marks, but moves no peak,
@@ -1685,19 +1688,21 @@ def _log_once_a_day(conn, row: dict, event_type: str, detail: str, commit: bool 
         return False
 
 
-def _note_abstained(conn, out: dict, row: dict, reason: str, today: date) -> None:
+def _note_abstained(conn, out: dict, row: dict, reason: str, today: date, event: bool = True) -> None:
     """Count AND name one abstention in the tick summary (audit F02: it
     used to be a bare counter that live_cycle threw away). Inside the
     forced-exit window it is also an event: evaluate cannot reach its
     signal block without a mark, so that abstention is the one that
     silently costs the pre-expiry exit and leaves the position to the
-    expiry backstop."""
+    expiry backstop. `event=False` (audit F19, L4 review): an abstention
+    the next tick's fetch ends by construction — no chain was missing, the
+    position only opened after this tick began — is named, never logged."""
     out["abstained"] += 1
     in_window, days_left = _exit_window(row, today)
     out["row_notes"].append({"account_id": row["account_id"], "journal_ref": row["journal_ref"],
                              "kind": "abstained", "reason": reason, "days_left": days_left,
                              "in_exit_window": in_window, "last_mark_ts": row.get("last_mark_ts")})
-    if in_window:
+    if in_window and event:
         _log_once_a_day(conn, row, EVENT_MARK_ABSTAINED,
                         f"no usable mark inside the forced-exit window ({days_left}d to expiry "
                         f"{row['expiry']}): {reason} — the pre-expiry exit cannot fire on this chain; "
@@ -1907,6 +1912,19 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                     continue
                 src = cached                 # which fetch this read is on (F01 rung confirmation)
                 _, quote_ts, chain = cached
+                if _predates_entry(row, quote_ts) and key in fresh:
+                    # Audit F19 (L4 review): fetched THIS tick, but `_fetch`
+                    # stamps the tick's start, and this position opened
+                    # after it (an approval landing while the tick ran).
+                    # Not marked on it — the stamp cannot prove the quotes
+                    # are its own — and nothing is missing: the stamp
+                    # predates the row, so the key is due on the next tick
+                    # (`behind`). Named, never a forced-exit-window event.
+                    _note_abstained(conn, out, row,
+                                    f"the chain fetched this tick is stamped at the tick's start ({quote_ts}), "
+                                    f"before this position opened at {_iso(_entered_at(row))}; marked on the "
+                                    "next tick's fetch", now.date(), event=False)
+                    continue
                 if _predates_entry(row, quote_ts):
                     # Audit F19: quotes from before this position existed
                     # never mark it or move its ratchet — it waits for the

@@ -35,6 +35,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from src import journal
 from src import portfolio as pf
+from src.portfolio_manager import LIVE_ALREADY_OPEN
 from src.position_sizing import fractional_lots
 from src.config import ACCOUNT_RISK_PER_TRADE_PCT
 from src.dhan_client import get_expiry_list, get_india_vix, get_option_chain
@@ -1623,7 +1624,8 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
         # live arm, PAPER_2L, PAPER_2L_ROT) switched OFF since the proposal
         # takes nothing now — refused by name on the row, its proposal-time
         # lock released at zero here (not held until the primary exits, and
-        # never settled at the primary's scaled P&L).
+        # never settled at the primary's scaled P&L); a proposal-time
+        # verdict that was not an approval stays on the row as proposed.
         _switched_off_refusals(target, proposed)
 
     decision = "approved" if approve else "rejected"
@@ -1696,6 +1698,8 @@ def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None,
                 continue    # the proposal-time lock, re-confirmed at approval: printed when taken
             print(f"  [{acct}] {journal_ref}: approved {v['lots']} lot(s), "
                   f"margin Rs.{float(v['margin_rs'] or 0):,.0f}")
+        elif v.get("status") == LIVE_ALREADY_OPEN:
+            print(f"  [{acct}] {journal_ref}: NO SECOND ENTRY — {v.get('reason')}")
         else:
             print(f"  [{acct}] {journal_ref}: REJECTED — {v.get('reason')}")
     return verdicts or {}
@@ -1708,8 +1712,9 @@ _LIVE_CHAIN_FN = None              # test seam: the live arm's chain source (Non
 # L3 review: the live arm's verdict when a re-approval finds this ref
 # already opened (a recorded row, or an entry ticket FILLED awaiting its
 # repair) — that position stands on the lock behind it; only a SECOND entry
-# ticket is refused, so the verdict must not read 'rejected'.
-LIVE_ALREADY_OPEN = "already_open"
+# ticket is refused, so the verdict must not read 'rejected'. The constant
+# is portfolio_manager's (L4 review: its F13 halt path stamps it too),
+# imported at the top of this module as LIVE_ALREADY_OPEN.
 
 
 def _lock_text(rel: dict) -> str:
@@ -1993,21 +1998,27 @@ def _switched_off_refusals(entry: dict, proposed: dict, conn=None) -> None:
     and switched off now is refused by name: its verdict stays on the row
     as refused, its lock released at zero through pm.release_unopened_lock
     (a lock backing a recorded or FILLED live position is kept, named —
-    `already_open`). A proposal-time verdict that was not an approval holds
-    no lock and is left alone. Runs whether or not the entry carries a
-    margin field (the judgement does not). Fail-open: a failure leaves the
-    old path, and release_shadow_locks still settles a model-priced shadow
-    with no approved verdict at zero (L3 residual (a)), so it books no
-    P&L either way."""
+    `already_open`). A proposal-time verdict that was NOT an approval holds
+    no lock: it stays on the row exactly as it was proposed — no event, no
+    release (L4 review: the judgement used to drop it with the rest). Runs
+    whether or not the entry carries a margin field (the judgement does
+    not). Fail-open: a failure leaves the old path, and release_shadow_locks
+    still settles a model-priced shadow with no approved verdict at zero
+    (L3 residual (a)), so it books no P&L either way."""
     try:
         from src import portfolio_manager as pm
         on = set(pm.shadow_account_ids())
-        off = [a for a, v in (proposed or {}).items()
-               if a in pm.PAPER_ACCOUNTS and a not in on and (v or {}).get("status") == "approved"]
-        if not off:
+        switched = {a: v for a, v in (proposed or {}).items() if a in pm.PAPER_ACCOUNTS and a not in on}
+        off = [a for a, v in switched.items() if (v or {}).get("status") == "approved"]
+        if not switched:
             return
         if not isinstance(entry.get("accounts"), dict):
             entry["accounts"] = {}
+        for acct, v in switched.items():
+            if acct not in off:
+                entry["accounts"].setdefault(acct, v)     # unchanged: nothing to refuse or release
+        if not off:
+            return
         own = conn is None
         if own:
             from src import brain_map

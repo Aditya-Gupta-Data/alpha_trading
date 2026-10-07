@@ -81,7 +81,8 @@ def test_a_routine_all_marked_tick_prints_nothing(world, capsys):
     _cycle(world, OPEN, GOOD, 1000.0, log)
     _cycle(world, OPEN.replace(minute=1), GOOD, 1060.0, log)
     assert capsys.readouterr().out == ""
-    assert lp.open_rows(world, LIVE)[0]["last_mark_ts"] == "2026-09-29T11:01:00"
+    # audit F19: the 11:01 tick marks on the 11:00 chain — a mark is as old as its quotes
+    assert lp.open_rows(world, LIVE)[0]["last_mark_ts"] == "2026-09-29T11:00:00"
 
 
 def test_an_abstaining_tick_prints_one_header_and_the_row_with_its_reason(world, capsys):
@@ -105,8 +106,9 @@ def test_a_standing_state_prints_once_per_30_minutes_never_per_tick(world, capsy
     out = capsys.readouterr().out
     rows = [ln for ln in out.splitlines() if "lv0001 abstained" in ln]
     assert len(rows) == 2 and out.count("[Live Bridge] live account tick:") == 2      # 11:05 and 11:35
+    # the 11:01-11:04 marks were on the 11:00 chain: last mark = that chain's time (audit F19)
     assert rows[0] == ("  (live account: lv0001 abstained: SELL 24200CE: quote 230 is >50% off last 60; "
-                       "last mark 2026-09-29T11:04:00)")
+                       "last mark 2026-09-29T11:00:00)")
     assert "quote 230" in rows[1] or "quote 231" in rows[1]
     # a DIFFERENT reason for the same row is news: printed at once
     lp.reset_cache()

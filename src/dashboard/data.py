@@ -210,6 +210,34 @@ def _live_mark_stale(r, ref: datetime, max_age_s: float):
     return _market_seconds(min(stamps), ref, max_age_s) > max_age_s
 
 
+def _live_positions(conn):
+    """THE one reader of PAPER_2L_LIVE's own book (`paper_live_positions`,
+    decision #120) on this page — the treasury card's unrealized P&L and
+    staleness (audit F02, Fix D) and the open-trades table's live rows
+    (audit F10) both read it. Every open or exiting row, oldest first; a
+    `{"error": ...}` dict when the table cannot be read."""
+    return _q(conn, "SELECT account_id, journal_ref, ticker, strategy, direction, expiry, lots, lot_size, "
+                    "entry_mark_ps, max_profit_ps, max_loss_ps, opened_at, ratchet_peak_pct, "
+                    "ratchet_lock_pct, last_mark_ts, last_mark_ps, last_profit_ps, last_capture_pct, "
+                    "quote_ts, state FROM paper_live_positions WHERE state != 'closed' "
+                    "ORDER BY opened_at, rowid")
+
+
+def _stale_policy(now: datetime = None, captured_at: datetime = None) -> tuple:
+    """(max_age_s, ref) for `_live_mark_stale`: 2 x LIVE_QUOTE_INTERVAL_SECONDS
+    of market time (None = unknown, never guessed), judged as of the earlier
+    of `now` and the copy's capture time (review of Fix D)."""
+    try:
+        from src.config import LIVE_QUOTE_INTERVAL_SECONDS
+        max_age_s = 2.0 * float(LIVE_QUOTE_INTERVAL_SECONDS)
+    except Exception:
+        max_age_s = None                # unknown interval -> staleness unknown, never guessed
+    ref = _as_naive_ist(now or datetime.now(IST))
+    if captured_at is not None:
+        ref = min(ref, _as_naive_ist(captured_at))
+    return max_age_s, ref
+
+
 def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: datetime = None,
                           captured_at: datetime = None) -> dict:
     """{account: {unrealized_pnl, marked_positions, open_positions}} from the
@@ -236,7 +264,11 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
     marks in them do not."""
     snap = _snapshot() if snapshot is None else snapshot
     marks = {m.get("short_id"): m for m in (snap or {}).get("marks") or [] if isinstance(m, dict)}
-    rows = open_trades(snapshot_marks=marks) if rows is None else rows
+    live = _live_positions(conn)
+    rows = open_trades(snapshot_marks=marks, live=live, now=now, captured_at=captured_at) \
+        if rows is None else rows
+    # the PRIMARY's rows only: the live arm's own rows (audit F10) are priced below
+    rows = [r for r in rows if r.get("account", "PAPER_10L") == "PAPER_10L"]
     priced = [float(r["mtm_rs"]) for r in rows if r.get("mtm_rs") is not None]
     out = {"PAPER_10L": {"unrealized_pnl": round(sum(priced), 2) if priced else None,
                          "marked_positions": len(priced), "open_positions": len(rows)}}
@@ -256,16 +288,7 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
         a["marked_positions"] += 1
     # decision #120: the live-quote arm marks itself on crossed bid/ask —
     # its unrealized is last_profit_ps x qty from paper_live_positions.
-    live = _q(conn, "SELECT account_id, lots, lot_size, last_profit_ps, last_mark_ts, quote_ts, opened_at "
-                    "FROM paper_live_positions WHERE state != 'closed'")
-    try:
-        from src.config import LIVE_QUOTE_INTERVAL_SECONDS
-        max_age_s = 2.0 * float(LIVE_QUOTE_INTERVAL_SECONDS)
-    except Exception:
-        max_age_s = None                # unknown interval -> staleness unknown, never guessed
-    ref = _as_naive_ist(now or datetime.now(IST))
-    if captured_at is not None:
-        ref = min(ref, _as_naive_ist(captured_at))
+    max_age_s, ref = _stale_policy(now, captured_at)
     flags, oldest = {}, {}
     for r in (live if isinstance(live, list) else []):
         a = out.setdefault(r["account_id"], {"unrealized_pnl": None, "marked_positions": 0,
@@ -419,22 +442,103 @@ def _snapshot_marks() -> dict:
         return {}
 
 
-def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict = None) -> list:
+# A verdict under which the account HOLDS the trade: an approval, or the
+# live arm's `already_open` (a re-approval that found its position already
+# recorded — L3 residual (c): it was missing from the table until it closed).
+HOLDING_VERDICTS = ("approved", "already_open")
+DIRECTIONAL = ("bear_put_spread", "bull_call_spread")
+
+
+def _exit_rule(strategy, armed: bool, lock) -> str:
+    return ("armed → lock %s%%" % lock if armed
+            else ("unarmed" if strategy in DIRECTIONAL else "static 65% take"))
+
+
+def _read_live(db_path=None) -> tuple:
+    """(rows | {"error"}, captured_at) from a read-only connection — the
+    open-trades table's own read of `_live_positions` when the caller did
+    not pass one."""
+    conn = connect_ro(db_path)
+    if conn is None:
+        return {"error": f"database unavailable or locked: {db_path or DB_PATH}"}, None
+    try:
+        return _live_positions(conn), _captured_at(db_path or DB_PATH)
+    finally:
+        conn.close()
+
+
+def _live_row(r: dict, settled: dict, max_age_s, ref) -> dict:
+    """Audit F10: one PAPER_2L_LIVE position on its OWN figures (#120) —
+    its last crossed mark, capture, ratchet peak/lock, the time of the
+    quotes behind that mark and the Fix D staleness flag — never the
+    primary's model mark or the journal's ratchet block."""
+    qty = int(r["lots"] or 0) * int(r["lot_size"] or 0)
+    lock = r["ratchet_lock_pct"]
+    o = settled.get(r["journal_ref"])
+    note = "live arm's own position — crossed bid/ask marks (#120)"
+    if o is not None:
+        # the primary's settlement leaves the live arm's position and lock
+        # open (release_shadow_locks): it stays a row of its own here
+        note += (f"; the primary settled ({o.get('resolution') or 'resolved'}"
+                 + (f", {str(o['settled_at'])[:10]}" if o.get("settled_at") else "")
+                 + ") — this position is still open")
+    if r["state"] == "exiting":
+        note += "; exit in progress"
+    # its own id (the React desk keys rows by `id`): the primary's row of the
+    # same trade carries the bare ref
+    return {"id": f"{r['account_id']}:{r['journal_ref']}", "journal_ref": r["journal_ref"],
+            "account": r["account_id"], "symbol": r["ticker"],
+            "strategy": STRATEGY_LABELS.get(r["strategy"], r["strategy"]), "direction": r["direction"],
+            "accounts": r["account_id"], "lots": r["lots"], "entered": str(r["opened_at"] or "")[:10] or None,
+            "expiry": r["expiry"],
+            "max_loss_rs": round(float(r["max_loss_ps"] or 0) * qty, 2),
+            "mtm_rs": round(float(r["last_profit_ps"]) * qty, 2) if r["last_profit_ps"] is not None else None,
+            "capture_pct": r["last_capture_pct"],
+            "ratchet_peak_pct": r["ratchet_peak_pct"], "ratchet_lock_pct": lock,
+            "ratchet": _exit_rule(r["strategy"], lock is not None, lock),
+            "sizing": None, "note": note, "state": r["state"],
+            "primary_settled": o is not None,
+            "last_mark_ts": r["last_mark_ts"],
+            "mark_stale": _live_mark_stale(r, ref, max_age_s) if max_age_s is not None else None}
+
+
+def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict = None,
+                db_path=None, live=None, now: datetime = None, captured_at: datetime = None) -> list:
     """One row per open position: symbol, strategy, account(s), lots/qty,
     entry, MTM (engine snapshot when present — never a fresh quote here),
     and the profit-ratchet state (peak / lock / armed) for directional
-    spreads."""
+    spreads. Every row names its `account` (the book it is priced on).
+
+    Audit F10 (2026-10-06): PAPER_2L_LIVE marks itself on crossed quotes
+    (#120), so its position is a row of its OWN from `paper_live_positions`
+    (`_live_positions`, read-only: `live` when the caller already read it,
+    else `db_path` / DB_PATH) — its last mark, capture, ratchet peak/lock,
+    `last_mark_ts` and the Fix D `mark_stale` flag — and is not listed on
+    the primary's row, whose figures are the model's. It stays as an open
+    row after the primary settles (the arm settles itself). When its book
+    cannot be read, the arm stays named on the primary's row as before
+    (never silently dropped). The model-priced shadows (PAPER_2L, ROT)
+    keep sharing the primary's row (#102: they settle at its P&L)."""
     marks = _snapshot_marks() if snapshot_marks is None else snapshot_marks
-    rows = []
+    if live is None:
+        live, read_at = _read_live(db_path)
+        captured_at = captured_at or read_at
+    live = live if isinstance(live, list) else []          # unreadable: no live row is invented
+    shown = {(r["account_id"], r["journal_ref"]) for r in live}
+    max_age_s, ref = _stale_policy(now, captured_at)
+    rows, settled = [], {}
     for e in _jsonl(journal_path or JOURNAL_PATH):
         s = e.get("spread")
+        if s and e.get("outcome") is not None:
+            settled[e.get("short_id")] = e["outcome"]
         if not s or e.get("decision") != "approved" or e.get("outcome") is not None:
             continue
         r = e.get("ratchet") or {}
         m = marks.get(e.get("short_id")) or {}
         accounts = ["PAPER_10L"] + [a for a, v in (e.get("accounts") or {}).items()
-                                    if (v or {}).get("status") == "approved"]
-        rows.append({"id": e.get("short_id"), "symbol": e.get("ticker"),
+                                    if (v or {}).get("status") in HOLDING_VERDICTS
+                                    and (a, e.get("short_id")) not in shown]
+        rows.append({"id": e.get("short_id"), "account": "PAPER_10L", "symbol": e.get("ticker"),
                      "strategy": STRATEGY_LABELS.get(s.get("strategy"), s.get("strategy")),
                      "direction": s.get("direction"), "accounts": ", ".join(accounts),
                      "lots": s.get("lots"), "entered": e.get("date"), "expiry": s.get("expiry"),
@@ -442,10 +546,9 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                      "mtm_rs": m.get("live_pnl_rs"), "capture_pct": m.get("capture_pct"),
                      "ratchet_peak_pct": r.get("peak_capture_pct"),
                      "ratchet_lock_pct": r.get("locked_pct"),
-                     "ratchet": ("armed → lock %s%%" % r.get("locked_pct") if r.get("armed")
-                                 else ("unarmed" if s.get("strategy") in ("bear_put_spread", "bull_call_spread")
-                                       else "static 65% take")),
+                     "ratchet": _exit_rule(s.get("strategy"), bool(r.get("armed")), r.get("locked_pct")),
                      "sizing": ((e.get("sizing") or {}).get("reason") or None)})
+    rows += [_live_row(r, settled, max_age_s, ref) for r in live]
     entries = {}
     from src.knowledge_graph_logger import apply_corrections       # funding_revoked (#123)
     for x in apply_corrections(_jsonl(equity_ledger_path or EQUITY_LEDGER_PATH)):
@@ -456,6 +559,7 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
     for x in entries.values():
         a = x.get("kya_kara_action") or {}
         rows.append({"id": (x.get("funding") or {}).get("lock_ref") or f"eqd:{x.get('id')}",
+                     "account": "PAPER_10L",
                      "symbol": x.get("ticker"), "strategy": "Equity Long", "direction": "bullish",
                      "accounts": "PAPER_10L", "lots": (x.get("funding") or {}).get("qty"),
                      "entered": x.get("as_of"), "expiry": None,

@@ -1619,11 +1619,12 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
                            "vix": (target.get("receipt") or {}).get("vix")},
                 risk_pct=_proposal_risk_pct(target),
                 allow_rotation=True, marks_fn=marks_fn, evict_fn=evict_fn)
-        # Audit F14 (L3 review): the live arm switched OFF since the
-        # proposal opens nothing now — its proposal-time lock is released
-        # here, named, like the venue-off case (not held until the primary
-        # exits).
-        _live_switch_off(target, proposed)
+        # Audit F14 (L3 review) + L3 residual (a): a shadow account (the
+        # live arm, PAPER_2L, PAPER_2L_ROT) switched OFF since the proposal
+        # takes nothing now — refused by name on the row, its proposal-time
+        # lock released at zero here (not held until the primary exits, and
+        # never settled at the primary's scaled P&L).
+        _switched_off_refusals(target, proposed)
 
     decision = "approved" if approve else "rejected"
     target["decision"] = decision
@@ -1711,33 +1712,75 @@ _LIVE_CHAIN_FN = None              # test seam: the live arm's chain source (Non
 LIVE_ALREADY_OPEN = "already_open"
 
 
+def _lock_text(rel: dict) -> str:
+    """How pm.release_unopened_lock left a refused account's lock, for its event."""
+    return ("released at zero" if rel.get("released") else
+            "not held" if rel.get("reason") == "no active lock for this ref" else
+            f"kept ({rel.get('reason')})")
+
+
 def _live_refuse(conn, acct: str, entry: dict, why: str, status: str = "rejected") -> None:
     """The live arm (#120) declines this entry at approval: verdict rejected,
     its proposal-time lock released at zero, one named event. Through
     pm.release_unopened_lock: a lock that backs a recorded or FILLED live
     position (L2 residual (b), F15) is kept, and the event says so.
     `status` LIVE_ALREADY_OPEN (L3 review): the ref was already opened —
-    the verdict keeps the lots and margin of the lock that backs that
-    position and is stamped `already_open`, not 'rejected'."""
+    the verdict is stamped `already_open`, not 'rejected', with the lots
+    and margin of the lock that backs that position. L3 residual (b): the
+    same holds whatever the refusal's cause (the arm or the venue switched
+    off) — a lock KEPT because it backs a recorded or FILLED position is an
+    open position, never a 'rejected' verdict with 0 lots (the dashboard
+    and the A/B read the row)."""
     from src import portfolio_manager as pm
     ref = entry.get("short_id")
+    rel = None
+    try:
+        rel = pm.release_unopened_lock(conn, acct, ref)
+        pm.paper_log_event(conn, acct, "live_entry_refused", ref, f"{why} — lock {_lock_text(rel)}")
+    except Exception as e:
+        print(f"  [{acct}] {ref}: refusal bookkeeping failed ({e})")
+    if status != LIVE_ALREADY_OPEN and (rel or {}).get("backs_position"):
+        status, why = LIVE_ALREADY_OPEN, f"{why}; {rel.get('reason')}"
     if isinstance(entry.get("accounts"), dict):
         if status == LIVE_ALREADY_OPEN:
-            entry["accounts"][acct] = dict(entry["accounts"].get(acct) or {}, status=status,
-                                           reason=f"no second live entry: {why}")
+            verdict = dict(entry["accounts"].get(acct) or {}, status=status, reason=f"no second live entry: {why}")
+            try:
+                held = pm._active_shadow_lock(conn, acct, ref)
+            except Exception:
+                held = None                      # unreadable: the verdict keeps what it had
+            if held is not None:
+                verdict.update(margin_rs=held[0], lots=held[1])
+            entry["accounts"][acct] = verdict
         else:
             entry["accounts"][acct] = dict(entry["accounts"].get(acct) or {}, status="rejected", lots=0,
                                            margin_rs=None, ticket_id=None, reason=f"live entry refused: {why}")
-    try:
-        rel = pm.release_unopened_lock(conn, acct, ref)
-        lock = ("released at zero" if rel.get("released") else
-                "not held" if rel.get("reason") == "no active lock for this ref" else
-                f"kept ({rel.get('reason')})")
-        pm.paper_log_event(conn, acct, "live_entry_refused", ref, f"{why} — lock {lock}")
-    except Exception as e:
-        print(f"  [{acct}] {ref}: refusal bookkeeping failed ({e})")
     print(f"  [{acct}] {ref}: {'NO SECOND ENTRY' if status == LIVE_ALREADY_OPEN else 'REFUSED'} "
           f"at approval — {why}")
+
+
+# L3 residual (a): the event of a model-priced shadow account (PAPER_2L /
+# PAPER_2L_ROT) refused at approval because its switch went off after the
+# proposal (the live arm's own refusals write `live_entry_refused`).
+EVENT_SWITCHED_OFF = "entry_refused_switched_off"
+
+
+def _shadow_refuse(conn, acct: str, entry: dict, proposed: dict, why: str) -> None:
+    """L3 residual (a): a model-priced shadow account declines this entry
+    at approval. Its proposal-time verdict stays on the row as REFUSED
+    (status rejected, 0 lots, no margin, no ticket; the lots it was
+    proposed for kept as `proposed_lots`), its lock released at zero
+    through pm.release_unopened_lock, one named event."""
+    from src import portfolio_manager as pm
+    ref = entry.get("short_id")
+    entry["accounts"][acct] = dict(proposed or {}, status="rejected", lots=0, margin_rs=None, ticket_id=None,
+                                   proposed_lots=(proposed or {}).get("lots"),
+                                   reason=f"refused at approval: {why}")
+    try:
+        rel = pm.release_unopened_lock(conn, acct, ref)
+        pm.paper_log_event(conn, acct, EVENT_SWITCHED_OFF, ref, f"{why} — lock {_lock_text(rel)}")
+    except Exception as e:
+        print(f"  [{acct}] {ref}: refusal bookkeeping failed ({e})")
+    print(f"  [{acct}] {ref}: REFUSED at approval — {why}")
 
 
 def _live_entry_rules(conn, acct: str, entry: dict, rq: dict, lots: int) -> int | None:
@@ -1922,29 +1965,69 @@ def _live_venue_off(entry: dict, conn=None) -> None:
         print(f"  (live account: venue-off release skipped: {e})")
 
 
-def _live_switch_off(entry: dict, proposed: dict, conn=None) -> None:
-    """Audit F14 (L3 review): the live arm's own SWITCH (or the 2L
-    experiment's) is OFF at approval. The approval judgement never sees the
-    arm then (shadow_account_ids leaves it out), so the lock it took at
-    proposal time stayed held until the primary exited — capital of an
-    arm that will open nothing. Like the venue-off case: every LIVE
-    account `proposed` (the row's proposal-time verdicts) approved is
-    refused now — verdict rejected and named, its lock released at zero
-    through pm.release_unopened_lock (a lock that backs a recorded or
-    FILLED live position is kept, named). Switch on → nothing. Fail-open:
-    a failure leaves the old behaviour (released when the primary exits)."""
+def _switch_of(acct: str) -> str:
+    """The config key that switches `acct` off right now (the 2L
+    experiment's own switch first: it turns every shadow arm off)."""
+    from src import portfolio_manager as pm
+    if not pm.shadow_accounts_enabled():
+        return "paper_2l_account_enabled"
+    if acct in pm.LIVE_ACCOUNTS:
+        return "paper_2l_live_account_enabled"
+    if acct in pm.ROTATION_ACCOUNTS:
+        return "capital_rotation_enabled"
+    return "paper_2l_account_enabled"
+
+
+def _switched_off_refusals(entry: dict, proposed: dict, conn=None) -> None:
+    """A shadow account whose SWITCH went off between the proposal and this
+    approval. The approval judgement never sees it then (shadow_account_ids
+    leaves it out — with the whole 2L experiment off, _judge_shadow_accounts
+    returns {}), so its proposal-time verdict was dropped from the row, it
+    got no ticket, and the lock it took at proposal stayed held:
+      * the live arm (audit F14, L3 review) — capital of an arm that opens
+        nothing, held until the primary exited;
+      * PAPER_2L / PAPER_2L_ROT (L3 residual (a), the same class) — worse:
+        the primary's exit then settled that lock at the SCALED primary
+        P&L, booking a trade the account never ticketed.
+    Every account `proposed` (the row's proposal-time verdicts) APPROVED
+    and switched off now is refused by name: its verdict stays on the row
+    as refused, its lock released at zero through pm.release_unopened_lock
+    (a lock backing a recorded or FILLED live position is kept, named —
+    `already_open`). A proposal-time verdict that was not an approval holds
+    no lock and is left alone. Runs whether or not the entry carries a
+    margin field (the judgement does not). Fail-open: a failure leaves the
+    old path, and release_shadow_locks still settles a model-priced shadow
+    with no approved verdict at zero (L3 residual (a)), so it books no
+    P&L either way."""
     try:
         from src import portfolio_manager as pm
-        if pm.live_account_enabled():
+        on = set(pm.shadow_account_ids())
+        off = [a for a, v in (proposed or {}).items()
+               if a in pm.PAPER_ACCOUNTS and a not in on and (v or {}).get("status") == "approved"]
+        if not off:
             return
-        live = [a for a, v in (proposed or {}).items()
-                if a in pm.LIVE_ACCOUNTS and (v or {}).get("status") == "approved"]
-        switch = ("paper_2l_account_enabled" if not pm.shadow_accounts_enabled()
-                  else "paper_2l_live_account_enabled")
-        _live_refuse_each(entry, live, f"the live arm is switched off ({switch} false) — no new live entry "
-                                       "opens while it is off, so it takes no position (audit F14)", conn)
+        if not isinstance(entry.get("accounts"), dict):
+            entry["accounts"] = {}
+        own = conn is None
+        if own:
+            from src import brain_map
+            conn = brain_map.connect()
+        try:
+            for acct in off:
+                switch = _switch_of(acct)
+                if acct in pm.LIVE_ACCOUNTS:
+                    _live_refuse(conn, acct, entry, f"the live arm is switched off ({switch} false) — no new "
+                                                    "live entry opens while it is off, so it takes no position "
+                                                    "(audit F14)")
+                else:
+                    _shadow_refuse(conn, acct, entry, proposed[acct],
+                                   f"{acct} is switched off since the proposal ({switch} false) — it takes no "
+                                   "position, so it books none of this trade's P&L (L3 residual (a))")
+        finally:
+            if own and not _PAPER_VENUE_KEEP_CONN:
+                conn.close()
     except Exception as e:
-        print(f"  (live account: switch-off release skipped: {e})")
+        print(f"  (shadow accounts: switch-off refusal skipped: {e})")
 
 
 def _live_refuse_each(entry: dict, accounts: list, why: str, conn=None) -> None:

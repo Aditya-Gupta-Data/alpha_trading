@@ -146,6 +146,16 @@ runs (expire_pending_lock: nothing expires unless all does). The R:R floor
 and risk budget on the re-quote (F12) and the halts on a held lock (F13)
 live in options_proposer / portfolio_manager.
 
+L4 (2026-10-06, audit F19 / F20). A chain fetched BEFORE a position
+existed never marks it or moves its ratchet (`_predates_entry`): the key is
+fetched at once, and until it can be the row abstains, named. A mark's
+time (`last_mark_ts`) is its chain's fetch time, on the tick's clock — a
+failing door no longer re-stamps an old chain as fresh. A chain at least a
+quote interval old that was not refreshed still marks, but moves no peak,
+lock or rung sighting. The ratchet itself is gated by the tracker's own
+predicate, `profit_ratchet.applies` — `ratchet_enabled: false` puts this
+arm on the static 65% take with everyone else.
+
 Fail-open everywhere: a broken tick prints and returns; the live loop and
 the primary account are never touched.
 """
@@ -1505,9 +1515,12 @@ def evaluate(row: dict, chain: dict, today: date) -> dict:
     profit_ps = _clamp(m["mark_ps"] - d, max_loss, max_profit)
     capture = _capture(profit_ps, max_profit)
     peak, lock = row.get("ratchet_peak_pct"), row.get("ratchet_lock_pct")
-    directional = pr.is_directional({"strategy": row.get("strategy"), "direction": row.get("direction")})
     signal, unconfirmed = "hold", None
-    if directional and max_profit > 0:
+    # Audit F20: the tracker's and the advisory's ONE gate, #110 kill switch
+    # included — `ratchet_enabled: false` puts this arm back on the static
+    # 65% take with the primary and the shadows (its stored peak/lock are
+    # kept as they are, unused, exactly as the tracker ignores saved rungs).
+    if pr.applies({"strategy": row.get("strategy"), "direction": row.get("direction")}, max_profit):
         confirmed_lock = pr.state(peak, lock)["locked_pct"]
         new_peak = capture if peak is None else max(float(peak), capture)
         new_lock = pr.state(new_peak, lock)["locked_pct"]
@@ -1576,13 +1589,55 @@ def _confirm_rung(row: dict, ev: dict, src) -> dict:
     return dict(ev, peak=pr.floor2(peak), lock=lock, rung="confirmed")
 
 
-def _record_mark(conn, row: dict, ev: dict, quote_ts: str, now: datetime) -> None:
+def _record_mark(conn, row: dict, ev: dict, quote_ts: str) -> None:
+    """Persist one mark. `last_mark_ts` is the CHAIN's fetch time (audit
+    F19), the same stamp as `quote_ts`: a mark is as old as the quotes it
+    was priced on. It used to be the tick's clock, so a chain left cached
+    by a failing door was re-stamped as a fresh mark on every 60-s tick
+    for as long as the door stayed down."""
     conn.execute("UPDATE paper_live_positions SET last_mark_ts = ?, last_mark_ps = ?, last_profit_ps = ?, "
                  "last_capture_pct = ?, quote_ts = ?, ratchet_peak_pct = ?, ratchet_lock_pct = ? "
                  "WHERE account_id = ? AND journal_ref = ? AND state = ?",
-                 (_iso(now), ev["mark_ps"], ev["profit_ps"], ev["capture_pct"], quote_ts, ev["peak"], ev["lock"],
+                 (quote_ts, ev["mark_ps"], ev["profit_ps"], ev["capture_pct"], quote_ts, ev["peak"], ev["lock"],
                   row["account_id"], row["journal_ref"], STATE_OPEN))
     conn.commit()
+
+
+# ------------------------------------------------------------- chain age (audit F19)
+
+def _ts(value):
+    """A stamp this module wrote (`_iso`: naive IST, seconds) as a naive
+    datetime, or None when it is absent or does not parse."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def _entered_at(row: dict):
+    """When the position came to exist: the later of `opened_at` and
+    `entry_quote_ts` (the approval re-quote's moment), or None when neither
+    parses."""
+    stamps = [t for t in (_ts(row.get("opened_at")), _ts(row.get("entry_quote_ts"))) if t is not None]
+    return max(stamps) if stamps else None
+
+
+def _predates_entry(row: dict, quote_ts) -> bool:
+    """Audit F19: True when the chain stamped `quote_ts` was fetched BEFORE
+    this position existed. `_CHAIN_CACHE` is shared by every row on its
+    (ticker, expiry) and the approval re-quote never seeds it, so a second
+    position on a cached key used to be marked first on quotes from before
+    its own entry — a market that moved against it since the fetch read as
+    a profit, a peak it never had and a rung sighting `_confirm_rung` then
+    counted as one of its two reads. Both stamps are on the tick's clock
+    (`_fetch` stamps the tick's `now`, which is never later than the real
+    fetch — the safe direction). A stamp that does not parse cannot order
+    the two: the row is marked as before (refusing it for good would leave
+    it with no pre-expiry exit at all)."""
+    entered, fetched = _entered_at(row), _ts(quote_ts)
+    return entered is not None and fetched is not None and fetched < entered
 
 
 # ------------------------------------------------------------- visibility (audit F02)
@@ -1688,8 +1743,11 @@ def _standing_hold(row: dict, ev: dict, src, now: datetime, interval_s: int):
     return None
 
 
-def _fetch(key: tuple, chain_fn, sleep_fn, now_epoch_fn) -> tuple | None:
-    """One paced chain fetch; returns (iso, chain) or None."""
+def _fetch(key: tuple, chain_fn, sleep_fn, now_epoch_fn, now: datetime = None) -> tuple | None:
+    """One paced chain fetch; returns (iso, chain) or None. A failed fetch
+    leaves the cache as it was. The iso stamp is on the TICK's clock (`now`,
+    the clock `opened_at` / `entry_quote_ts` / `last_mark_ts` are written
+    on — audit F19 compares them); the epoch is the pacing/age clock."""
     _pace(sleep_fn, now_epoch_fn)
     try:
         chain = chain_fn(key[0], key[1])
@@ -1698,7 +1756,7 @@ def _fetch(key: tuple, chain_fn, sleep_fn, now_epoch_fn) -> tuple | None:
         chain = None
     if not chain:
         return None
-    stamp = datetime.fromtimestamp(now_epoch_fn(), IST)
+    stamp = now if now is not None else datetime.fromtimestamp(now_epoch_fn(), IST)
     _CHAIN_CACHE[key] = (now_epoch_fn(), _iso(stamp), chain)
     return _CHAIN_CACHE[key][1], chain
 
@@ -1818,15 +1876,20 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
         past_cutoff = (now.hour, now.minute) >= cutoff
         keys = sorted({(r["ticker"], r["expiry"]) for r in rows + completing},
                       key=lambda k: _CHAIN_CACHE.get(k, (0.0,))[0])
+        # Audit F19: a key whose cached chain predates one of its open rows
+        # is due NOW, whatever its age — that row may not be marked on it.
+        behind = {(r["ticker"], r["expiry"]) for r in rows
+                  if (r["ticker"], r["expiry"]) in _CHAIN_CACHE
+                  and _predates_entry(r, _CHAIN_CACHE[(r["ticker"], r["expiry"])][1])}
         fresh, failed = set(), set()
         for key in keys:
             age = now_epoch_fn() - _CHAIN_CACHE.get(key, (0.0,))[0]
-            if key in _CHAIN_CACHE and age < interval_s:
+            if key in _CHAIN_CACHE and age < interval_s and key not in behind:
                 continue
             if past_cutoff or out["fetched"] >= max_fetches \
                     or now_epoch_fn() - start + CHAIN_PACE_SECONDS > budget_s:
                 break
-            if _fetch(key, chain_fn, sleep_fn, now_epoch_fn):
+            if _fetch(key, chain_fn, sleep_fn, now_epoch_fn, now):
                 fresh.add(key)
             else:
                 failed.add(key)
@@ -1844,6 +1907,24 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                     continue
                 src = cached                 # which fetch this read is on (F01 rung confirmation)
                 _, quote_ts, chain = cached
+                if _predates_entry(row, quote_ts):
+                    # Audit F19: quotes from before this position existed
+                    # never mark it or move its ratchet — it waits for the
+                    # fresh fetch its key is now due for (above).
+                    why = ("the fetch failed this tick" if key in failed else
+                           "past the fetch cutoff" if past_cutoff else
+                           "the per-tick fetch cap or time budget was reached")
+                    _note_abstained(conn, out, row,
+                                    f"no chain since this position opened: the cached chain ({quote_ts}) "
+                                    f"predates its entry ({_iso(_entered_at(row))}) and {why} — it waits "
+                                    "for a fresh fetch", now.date())
+                    continue
+                # Audit F19: a chain at least a quote interval old here was
+                # due and NOT refreshed (the fetch failed, the per-tick cap or
+                # budget ran out, or it is past the cutoff). It may still
+                # MARK the row — stamped with its own fetch time — but it
+                # does not move the ratchet.
+                stale = key not in fresh and now_epoch_fn() - cached[0] >= interval_s
                 ev = evaluate(row, chain, now.date())
                 if not ev["ok"]:
                     _note_abstained(conn, out, row, ev["reason"], now.date())
@@ -1865,12 +1946,13 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                     got, attempted = None, False
                     if not past_cutoff and out["fetched"] < max_fetches \
                             and now_epoch_fn() - start + CHAIN_PACE_SECONDS <= budget_s:
-                        got, attempted = _fetch(key, chain_fn, sleep_fn, now_epoch_fn), True
+                        got, attempted = _fetch(key, chain_fn, sleep_fn, now_epoch_fn, now), True
                         out["fetched"] += 1
                     if got:
                         fresh.add(key)
                         quote_ts, chain = got
                         src = _CHAIN_CACHE.get(key)
+                        stale = False
                         ev2 = evaluate(row, chain, now.date())
                         if not ev2["ok"]:
                             _note_abstained(conn, out, row, f"re-verify of {ev['signal']}: {ev2['reason']}",
@@ -1888,12 +1970,22 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                                        "— held for the next tick's fresh chain"})
                         ev = dict(ev, signal="hold")
                         out["unconfirmed"] = out.get("unconfirmed", 0) + 1
-                # A new ratchet rung is persisted only on a second, later
-                # fetch (F01); the mark itself is recorded either way.
-                ev = _confirm_rung(row, ev, src)
+                if stale:
+                    # Audit F19: the record keeps its peak and lock, and a
+                    # pending rung sighting is neither added nor forgotten —
+                    # an old snapshot is no evidence either way (like an
+                    # abstaining read; a cached predicate on it was already
+                    # held above for a fresh chain).
+                    ev = dict(ev, peak=row.get("ratchet_peak_pct"), lock=row.get("ratchet_lock_pct"),
+                              unconfirmed=None)
+                    out["stale_marks"] = out.get("stale_marks", 0) + 1
+                else:
+                    # A new ratchet rung is persisted only on a second, later
+                    # fetch (F01); the mark itself is recorded either way.
+                    ev = _confirm_rung(row, ev, src)
                 if ev.get("rung"):
                     out[f"rung_{ev['rung']}"] = out.get(f"rung_{ev['rung']}", 0) + 1
-                _record_mark(conn, row, ev, quote_ts, now)
+                _record_mark(conn, row, ev, quote_ts)
                 out["marked"] += 1
                 if standing:
                     out["exits"].append({"account_id": row["account_id"], "journal_ref": row["journal_ref"],

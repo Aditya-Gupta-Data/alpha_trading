@@ -1483,7 +1483,9 @@ def release_unopened_lock(conn, account: str, journal_ref: str) -> dict:
     closed with its lock not yet settled) or a FILLED entry ticket (F15)
     means the lock backs a real trade — KEPT, named; an unreadable state is
     kept too (never money on a guess). Returns paper_release_margin's dict,
-    or {released: False, reason}."""
+    or {released: False, reason}; a lock kept because it backs a recorded
+    or FILLED live position also carries `backs_position: True` (L3
+    residual (b): the refusal's verdict then says the position stands)."""
     if account in LIVE_ACCOUNTS:
         try:
             from src.execution import live_pricer
@@ -1492,10 +1494,10 @@ def release_unopened_lock(conn, account: str, journal_ref: str) -> dict:
         except Exception as exc:
             return {"released": False, "reason": f"live position lookup failed ({exc}) — lock kept"}
         if state:
-            return {"released": False,
+            return {"released": False, "backs_position": True,
                     "reason": f"a live position for this entry is recorded ({state}) — the lock backs it"}
         if filled:
-            return {"released": False,
+            return {"released": False, "backs_position": True,
                     "reason": live_pricer.keep_filled_entry_lock(conn, account, journal_ref, filled)}
     return paper_release_margin(conn, account, journal_ref, 0.0)
 
@@ -1697,12 +1699,28 @@ def shadow_pnl(primary_pnl_net: float, lots: int, primary_lots: int,
     return round(ratio * (float(primary_pnl_net) + flat) - flat, 2)
 
 
+EVENT_LOCK_NOT_TAKEN = "lock_released_trade_not_taken"
+
+
 def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
-                         flat_frictions_rs: float = 0.0) -> dict:
+                         flat_frictions_rs: float = 0.0, verdicts: dict = None) -> dict:
     """Settle every shadow lock on `journal_ref` in the same call that
     settled the primary: P&L scaled by lot ratio, each account paying its
     own flat brokerage (`flat_frictions_rs` = the primary's flat part, the
-    same order count at any size — D13). Safe on unknown refs."""
+    same order count at any size — D13). Safe on unknown refs.
+
+    `verdicts` = the journal row's `accounts` block, passed by every
+    settlement of a real trade (L3 residual (a), 2026-10-06): a
+    model-priced shadow account books the scaled primary P&L ONLY when its
+    verdict on the row is 'approved' — the account took (was ticketed for)
+    this trade. Any other verdict, or none, means it never did: its lock is
+    released at ZERO, named (`lock_released_trade_not_taken`). Before this
+    an account switched off between proposal and approval kept its
+    proposal-time lock with its verdict dropped and no ticket, and the
+    primary's exit settled that lock at the scaled P&L of a trade it never
+    took. None (a rejection, a void, a caller with no row) settles as
+    before. The live arm (#120) settles itself and is judged below, not
+    here."""
     out = {}
     ensure_accounts_schema(conn)
     rows = conn.execute("SELECT account_id, lots, primary_lots FROM paper_margin_locks "
@@ -1755,6 +1773,15 @@ def release_shadow_locks(conn, journal_ref: str, primary_pnl_net: float = 0.0,
                 paper_log_event(conn, account, "live_lock_released_no_position", journal_ref,
                                 "lock released at zero: no live position was ever opened for this entry")
             continue
+        status = ((verdicts or {}).get(account) or {}).get("status") if verdicts is not None else "approved"
+        if status != "approved":
+            out[account] = paper_release_margin(conn, account, journal_ref, 0.0)
+            if out[account].get("released"):
+                paper_log_event(conn, account, EVENT_LOCK_NOT_TAKEN, journal_ref,
+                                f"lock released at zero: this account's verdict on the entry is "
+                                f"'{status or 'missing'}' — it never took the trade, so it books none of "
+                                "the primary's P&L (L3 residual (a))")
+            continue
         pnl = shadow_pnl(primary_pnl_net, lots, primary_lots, flat_frictions_rs)
         out[account] = paper_release_margin(conn, account, journal_ref, pnl)
     return out
@@ -1804,8 +1831,12 @@ def gate_headless_entry(journal_ref: str, required_margin: float,
 
 
 def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None,
-                  flat_frictions_rs: float = 0.0, wealth_sweep: bool = True) -> dict:
+                  flat_frictions_rs: float = 0.0, wealth_sweep: bool = True,
+                  verdicts: dict = None) -> dict:
     """Settle a resolved/rejected entry's lock; safe on unknown refs.
+    `verdicts` (the row's `accounts` block) reaches release_shadow_locks:
+    a shadow whose verdict is not 'approved' settles at zero (L3 residual
+    (a)).
 
     D3 (decision #122): a FAILED release is no longer silent — the result
     carries `error` (callers name it on the row, and
@@ -1843,7 +1874,7 @@ def release_entry(journal_ref: str, pnl_net: float = 0.0, conn=None,
     # primary had a lock, or its release failed (a human rejection
     # releases all at zero); fail-open, recorded on the result.
     try:
-        shadow = release_shadow_locks(conn, journal_ref, pnl_net, flat_frictions_rs)
+        shadow = release_shadow_locks(conn, journal_ref, pnl_net, flat_frictions_rs, verdicts=verdicts)
         if shadow:
             result["shadow_accounts"] = shadow
     except Exception as e:

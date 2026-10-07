@@ -282,8 +282,7 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
     capture = (profit_ps / max_profit_ps * 100) if max_profit_ps > 0 else 0.0
     ratchet = None
     from src import profit_ratchet as pr
-    from src.config import RATCHET_ENABLED
-    if RATCHET_ENABLED and pr.is_directional(spread) and max_profit_ps > 0:
+    if pr.applies(spread, max_profit_ps):      # the ONE gate (#110 switch; audit F20)
         # decision #110: directional spreads ride the profit ratchet — the
         # persisted peak (EOD walk / intraday rung notes) plus the live mark.
         prior = entry.get("ratchet") or {}
@@ -337,10 +336,28 @@ def evaluate_open_positions(spot_by_ticker: dict, entries=None,
 
 class AlertRegistry:
     """Remembers (short_id, signal) pairs already alerted so a live exit
-    condition fires ONE Discord note, not one per polling minute."""
+    condition fires ONE Discord note, not one per polling minute.
 
-    def __init__(self):
+    Audit F24 (2026-10-06): it also paces the intraday SQUARE-OFF, which
+    is not an alert. The square-off used to sit behind `fresh()`, so it got
+    ONE look per (trade, signal) per session: a decline at that minute —
+    the chain door failing, a leg not traded yet at 09:15, real capture a
+    hair above the lock — handed the exit to the next morning's EOD walk
+    even while the signal persisted (the fade hole #69 exists to close).
+    Now a declined square-off is retried on later cycles while the signal
+    persists, at most once per `retry_s` per TRADE (default
+    LIVE_QUOTE_INTERVAL_SECONDS — the live arm's own refresh; every retry
+    goes through the one chain lane in dhan_client), and its outcome is
+    reported once per change of (signal, status), never per cycle. A
+    square-off that filled — or found the trade already settled — is
+    final. Process memory, like the alert de-dup: a restart looks again."""
+
+    FINAL = ("squared_off", "already_resolved")
+
+    def __init__(self, retry_s: float = None):
         self._seen: set = set()
+        self._squares: dict = {}         # short_id -> {"at": datetime, "state": (signal, status)}
+        self.retry_s = retry_s
 
     def fresh(self, sig: dict) -> bool:
         key = (sig["short_id"], sig["signal"])
@@ -348,6 +365,31 @@ class AlertRegistry:
             return False
         self._seen.add(key)
         return True
+
+    def _retry_seconds(self) -> float:
+        if self.retry_s is not None:
+            return float(self.retry_s)
+        from src.config import LIVE_QUOTE_INTERVAL_SECONDS
+        return float(LIVE_QUOTE_INTERVAL_SECONDS)
+
+    def square_off_due(self, sig: dict, now: datetime) -> bool:
+        """True when this trade may try the square-off now: never tried this
+        session, or its last try declined at least `retry_s` ago (on the
+        cycle clock). Never again once it filled or found the trade gone."""
+        last = self._squares.get(sig["short_id"])
+        if last is None:
+            return True
+        if last["state"][1] in self.FINAL:
+            return False
+        return (now - last["at"]).total_seconds() >= self._retry_seconds()
+
+    def note_square_off(self, sig: dict, status, now: datetime) -> bool:
+        """Record one attempt; True when its (signal, status) differs from
+        this trade's previous attempt — the caller reports only then."""
+        state = (sig["signal"], status)
+        last = self._squares.get(sig["short_id"])
+        self._squares[sig["short_id"]] = {"at": now, "state": state}
+        return last is None or last["state"] != state
 
 
 # --------------------------------------------- intraday square-off (#69)
@@ -595,8 +637,11 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                live_log: "LiveTickLog" = None) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
-    push an advisory alert for each NEW exit signal. Returns the alerts
-    fired this cycle (empty outside market hours). Fully injectable —
+    push an advisory alert for each NEW exit signal — and, with the
+    square-off armed, retry a DECLINED square-off while its signal
+    persists (audit F24: paced by `registry`, printed once per change of
+    outcome, never a second alert). Returns the alerts fired this cycle
+    (empty outside market hours). Fully injectable —
     the async daemon and the offline playback tests share this body.
 
     `publish_snapshot` (the production daemon passes True) writes this
@@ -670,41 +715,32 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                 except Exception:
                     pass
     for sig in marks:
-        if sig["signal"] == "hold" or not registry.fresh(sig):
+        if sig["signal"] == "hold":
             continue
-        fired.append(sig)
         # Decision #69: with a square_off_fn armed (the production daemon,
         # config-gated), a profit-take signal is EXECUTED intraday on real
         # chain quotes instead of advised. None (the default — offline
         # tests, legacy callers) keeps the loop byte-identical read-only
         # advisory (#41). Every non-squared status falls back to the
         # advisory + the EOD path untouched.
+        squarable = square_off_fn is not None and sig["signal"] in ("profit_take", "ratchet_hit")
+        if not registry.fresh(sig):
+            # Audit F24: the alert went out on the signal's first cycle and
+            # is never repeated; a DECLINED square-off is retried while the
+            # signal persists — paced per trade by the registry (one try
+            # per quote interval), its outcome printed once per change.
+            if squarable and registry.square_off_due(sig, now):
+                _retry_square_off(sig, square_off_fn, registry, now, notify_fn)
+            continue
+        fired.append(sig)
         squared = None
-        if square_off_fn is not None and sig["signal"] in ("profit_take", "ratchet_hit"):
-            try:
-                squared = square_off_fn(sig)
-            except Exception as exc:
-                squared = {"status": "error", "reason": str(exc)}
-            # Ledger Issue 44: the outcome reaches the LOG, not only Discord —
-            # the dead quote door hid for 81 days because a decline was
-            # written nowhere a sweep could read it.
-            sig["square_off_status"] = (squared or {}).get("status")
-            if (squared or {}).get("reason"):
-                sig["square_off_reason"] = squared["reason"]
-            if (squared or {}).get("real_capture_pct") is not None:
-                sig["square_off_real_capture_pct"] = squared["real_capture_pct"]
+        if squarable and registry.square_off_due(sig, now):
+            squared = _attempt_square_off(sig, square_off_fn)
+            registry.note_square_off(sig, (squared or {}).get("status"), now)
         if squared and squared.get("status") == "squared_off":
             sig["squared_off"] = True
             if notify_fn:
-                notify_fn(
-                    f"✅ **SQUARED OFF intraday — {sig['ticker']} "
-                    f"{(sig['strategy'] or 'spread').replace('_', ' ')}** "
-                    f"(`{sig['short_id']}`)\n"
-                    f"{sig['signal'].replace('_', ' ')} filled at {squared['capture_pct']:.0f}% "
-                    f"of max profit on REAL chain quotes — P&L "
-                    f"Rs.{squared['pnl_rs']:,.2f} net (booked now, "
-                    "decision #69; model had said "
-                    f"{sig['capture_pct']:.0f}%).")
+                notify_fn(_squared_off_card(sig, squared))
             continue
         if notify_fn:
             emoji = {"profit_take": "🎯", "ratchet_hit": "🔒"}.get(sig["signal"], "⏳")
@@ -738,6 +774,57 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
         except Exception as e:
             print(f"  (trend-flip advisory skipped: {e})")
     return fired
+
+
+def _attempt_square_off(sig: dict, square_off_fn) -> dict | None:
+    """One square-off attempt for a profit_take / ratchet_hit signal; never
+    raises. Ledger Issue 44: the outcome is written onto the signal so it
+    reaches the LOG, not only Discord — the dead quote door hid for 81
+    days because a decline was written nowhere a sweep could read it."""
+    try:
+        squared = square_off_fn(sig)
+    except Exception as exc:
+        squared = {"status": "error", "reason": str(exc)}
+    sig["square_off_status"] = (squared or {}).get("status")
+    sig.pop("square_off_reason", None)
+    sig.pop("square_off_real_capture_pct", None)
+    if (squared or {}).get("reason"):
+        sig["square_off_reason"] = squared["reason"]
+    if (squared or {}).get("real_capture_pct") is not None:
+        sig["square_off_real_capture_pct"] = squared["real_capture_pct"]
+    return squared
+
+
+def _squared_off_card(sig: dict, squared: dict) -> str:
+    return (f"✅ **SQUARED OFF intraday — {sig['ticker']} "
+            f"{(sig['strategy'] or 'spread').replace('_', ' ')}** "
+            f"(`{sig['short_id']}`)\n"
+            f"{sig['signal'].replace('_', ' ')} filled at {squared['capture_pct']:.0f}% "
+            f"of max profit on REAL chain quotes — P&L "
+            f"Rs.{squared['pnl_rs']:,.2f} net (booked now, "
+            "decision #69; model had said "
+            f"{sig['capture_pct']:.0f}%).")
+
+
+def _retry_square_off(sig: dict, square_off_fn, registry: AlertRegistry, now: datetime,
+                      notify_fn) -> dict | None:
+    """Audit F24: a later look at a square-off that declined earlier this
+    session, while its signal persists (the registry has paced it). A fill
+    sends the one ✅ card a first-cycle fill would have sent (no advisory
+    card again: that went out with the signal). The outcome is printed
+    only when this trade's (signal, status) changed since its last try —
+    a decline repeating every quote interval is one line, not one a try."""
+    squared = _attempt_square_off(sig, square_off_fn)
+    status = (squared or {}).get("status")
+    changed = registry.note_square_off(sig, status, now)
+    if status == "squared_off":
+        sig["squared_off"] = True
+        if notify_fn:
+            notify_fn(_squared_off_card(sig, squared))
+    if changed:
+        print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} square-off retried "
+              f"({sig['capture_pct']:.0f}% capture){_square_off_note(sig)}.", flush=True)
+    return squared
 
 
 def _notify_discord(text: str) -> bool:

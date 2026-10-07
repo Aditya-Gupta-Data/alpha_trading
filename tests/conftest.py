@@ -172,6 +172,25 @@ def _isolated_brain_map(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_dashboard_reads(monkeypatch, tmp_path):
+    """The showcase dashboard's readers default to the REAL data/ + logs/
+    files (read-only, so the write guard never sees them). Since audit F10
+    (2026-10-06) `open_trades()` also reads the live arm's book from its
+    DB_PATH, so a test that injects only a journal read the owner's
+    brain_map.db on the Mac — and would read the VM's on the VM. Every
+    default points at this test's tmp dir; the database is the same file
+    `brain_map.connect()` opens here, so a test's own book is what the
+    page reads. A test that wants other files passes them."""
+    from src.dashboard import data as dashboard_data
+    monkeypatch.setattr(dashboard_data, "DB_PATH", tmp_path / "brain_map.db")
+    monkeypatch.setattr(dashboard_data, "JOURNAL_PATH", tmp_path / "journal.jsonl")
+    monkeypatch.setattr(dashboard_data, "EQUITY_LEDGER_PATH", tmp_path / "equity_shadow_journal.jsonl")
+    monkeypatch.setattr(dashboard_data, "SNAPSHOT_PATH", tmp_path / "market_snapshot.json")
+    monkeypatch.setattr(dashboard_data, "BENCHMARKS_PATH", tmp_path / "dashboard_benchmarks.json")
+    monkeypatch.setattr(dashboard_data, "RECON_PATH", tmp_path / "recon.jsonl")
+
+
+@pytest.fixture(autouse=True)
 def _isolated_shared_runtime_files(monkeypatch, tmp_path):
     """Host-wide state files any test can reach through a real code path
     (Issue 37): the Discord daily budget (an unmuzzled dispatch in a test

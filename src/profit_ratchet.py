@@ -41,6 +41,26 @@ def is_directional(spread: dict) -> bool:
     return family_of(str((spread or {}).get("strategy") or "")) == "directional"
 
 
+def applies(spread: dict, max_profit_ps) -> bool:
+    """THE one gate for the ratchet (audit F20, 2026-10-06): the #110 kill
+    switch (config `ratchet_enabled` → RATCHET_ENABLED) is on, the
+    structure is directional, and it has a profit to lock. Every exit path
+    asks this one predicate — the tracker's EOD walk
+    (plan_tracker._resolve_spread), the primary's live advisory
+    (live_bridge.evaluate_position) and PAPER_2L_LIVE's own marks
+    (live_pricer.evaluate) — so `ratchet_enabled: false` returns ALL of
+    them to the static 65% take together. Before F20 the live arm had its
+    own copy without the switch and kept ratcheting (#120's A/B then
+    silently compared two exit policies). The switch is read at call
+    time: config.json is loaded once per process, and a test sets it."""
+    from src.config import RATCHET_ENABLED
+    try:
+        positive = float(max_profit_ps) > 0
+    except (TypeError, ValueError):
+        return False
+    return bool(RATCHET_ENABLED) and positive and is_directional(spread)
+
+
 def locked_pct(peak_capture_pct: float | None, rungs: tuple = None) -> float | None:
     """The locked floor for a given peak capture; None while unarmed."""
     if peak_capture_pct is None:

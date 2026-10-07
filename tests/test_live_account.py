@@ -801,7 +801,8 @@ def test_budget_and_cutoff_boundaries_and_reverify_counts_against_the_cap(world)
     lp.reset_cache()
     down = _chain({(24000, "CE"): (90.0, 92.0, 91.0), (24200, "CE"): (24.0, 26.0, 25.0)})
     for tk in ("A", "B", "C", "D"):
-        lp._CHAIN_CACHE[(tk, "2026-10-28")] = (900.0, "2026-09-29T10:59:00", down)
+        # fetched at the entries' own minute: a chain from BEFORE a row opened is never used on it (F19)
+        lp._CHAIN_CACHE[(tk, "2026-10-28")] = (900.0, "2026-09-29T11:00:00", down)
     c.execute("UPDATE paper_live_positions SET ratchet_lock_pct = 0.0, ratchet_peak_pct = 45.0")
     c.commit()
     calls = []

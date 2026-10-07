@@ -193,15 +193,23 @@ def _body():
       rows = d.open_trades()
       st.subheader(f"Open positions — {len(rows)}")
       if rows:
+          # audit F10: a PAPER_2L_LIVE row carries the arm's OWN crossed mark,
+          # its quotes' time and the Fix D stale flag (the primary's rows are
+          # priced on the engine snapshot, so those two cells read "—")
           st.dataframe([{"Symbol": r["symbol"], "Strategy": r["strategy"], "Dir": r["direction"],
                          "Accounts": r["accounts"], "Lots/Qty": r["lots"], "Entered": r["entered"],
                          "Expiry": r["expiry"] or "—", "Max loss ₹": r["max_loss_rs"],
                          "MTM ₹": r["mtm_rs"], "Capture %": r["capture_pct"],
                          "Ratchet peak %": r["ratchet_peak_pct"], "Ratchet lock %": r["ratchet_lock_pct"],
-                         "Exit rule": r["ratchet"], "Sizing note": r["sizing"] or ""}
+                         "Exit rule": r["ratchet"],
+                         "Mark as of": r.get("last_mark_ts") or "—",
+                         "Mark stale": ("STALE" if r.get("mark_stale") else
+                                        "unknown" if r.get("account") in d.LIVE_ACCOUNTS
+                                        and r.get("mark_stale") is None else "—"),
+                         "Note": r.get("note") or r["sizing"] or ""}
                         for r in rows], width="stretch", hide_index=True)
       else:
-          st.info("no open positions in the journal / equity ledger")
+          st.info("no open positions in the journal / equity ledger / live arm's book")
       st.caption("Directional spreads ride the asymmetric profit ratchet (decision #110): armed at 40% of max "
                  "profit → breakeven lock; 60→30, 80→50, 90→70; exit when capture falls below the lock. "
                  "Condors keep a static 65% take. Equity darlings trail 3×ATR(14) (decision #107). "

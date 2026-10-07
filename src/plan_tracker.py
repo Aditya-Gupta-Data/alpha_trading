@@ -263,8 +263,8 @@ def _resolve_spread(entry: dict, bars: list):
     max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
     max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
     from src import profit_ratchet as pr
-    from src.config import RATCHET_EFFECTIVE_DATE, RATCHET_ENABLED
-    ratcheted = RATCHET_ENABLED and pr.is_directional(spread) and max_profit_ps > 0
+    from src.config import RATCHET_EFFECTIVE_DATE
+    ratcheted = pr.applies(spread, max_profit_ps)      # the ONE gate (#110 switch; audit F20)
     # SAVED RUNGS judge only the closes from their own date forward (#122
     # panel): each intraday rung the live bridge noted is folded in at the
     # first bar on/after ITS `as_of` (an intraday rung survives that day's
@@ -1061,7 +1061,8 @@ def resolve_intraday_profit_take(short_id: str, leg_quotes: dict,
             from src import portfolio_manager as pm
             release = pm.release_entry(short_id, pnl_net,
                                        flat_frictions_rs=_flat_order_costs(spread, frictions),
-                                       wealth_sweep=False)
+                                       wealth_sweep=False,
+                                       verdicts=entry.get("accounts") or {})   # L3 residual (a)
             if release.get("wealth_sweep_due"):
                 result["_wealth_sweep"] = (short_id, pnl_net)       # run after the lock
 
@@ -1777,7 +1778,8 @@ def _reconcile_locked(now_naive, conn, grace_minutes, out, sweeps) -> None:
                 else:
                     continue                           # pending (D7) or open
                 res = pm.release_entry(ref, pnl, conn=conn, flat_frictions_rs=flat,
-                                       wealth_sweep=False)
+                                       wealth_sweep=False,
+                                       verdicts=None if e is None else (e.get("accounts") or {}))
                 if res.get("wealth_sweep_due"):
                     sweeps.append((ref, pnl))
                 released = [a for a, v in (res.get("shadow_accounts") or {}).items()
@@ -1893,7 +1895,10 @@ def _settle_spread_row(entry: dict, bars: list, seen: dict) -> bool:
                                pnl_net if approved else 0.0,
                                flat_frictions_rs=(_flat_order_costs(spread, total_frictions)
                                                   if approved else 0.0),
-                               wealth_sweep=False)
+                               wealth_sweep=False,
+                               # L3 residual (a): a shadow books the scaled P&L only
+                               # when its verdict on this row is 'approved'
+                               verdicts=entry.get("accounts") or {})
     if release.get("wealth_sweep_due"):
         seen["wealth_sweep"] = (entry.get("short_id", ""), pnl_net)   # run after the lock
 

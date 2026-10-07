@@ -257,8 +257,11 @@ def _lock_age(conn, ref, minutes, now):
 
 def test_reconcile_releases_only_the_locks_the_settlement_path_should_have(conn):
     now = datetime(2026, 9, 30, 12, 0, tzinfo=IST)
+    # the 2L verdict the proposer stamps beside the 2L lock it takes (#102): since L3 residual (a)
+    # a shadow books the scaled P&L only when its verdict on the row is 'approved'
     settled = _spread_row("setl0001", outcome={"resolution": "profit_take", "pnl_rs": 5000.0,
-                                               "frictions_rs": 300.0, "hypothetical": False})
+                                               "frictions_rs": 300.0, "hypothetical": False},
+                          accounts={TWO_L: {"status": "approved", "lots": 1, "margin_rs": 1000.0}})
     for row in (settled,
                 _spread_row("open0001"),
                 _spread_row("pend0001", decision="pending_approval"),

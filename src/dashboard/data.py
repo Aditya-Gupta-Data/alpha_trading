@@ -437,6 +437,18 @@ def treasury(db_path=None, now: datetime = None) -> dict:
 GRAPH_VIZ_PATH = _DATA / "graph_viz.html"
 
 
+# graph_viz lays its nodes out from the window size at LOAD. An embedded copy
+# (a Streamlit tab built while hidden, a srcDoc iframe whose script runs before
+# layout) can load at ~0 px wide — every node then starts in one corner. Such
+# a page reloads itself ONCE, the first time it is shown at a real width.
+_RELAYOUT = ("<script>if(innerWidth<50||innerHeight<50){addEventListener('resize',function r(){"
+             "if(innerWidth>=50&&innerHeight>=50){removeEventListener('resize',r);location.reload();}});}</script>")
+
+
+def _relayout_once(html: str) -> str:
+    return html.replace("<script>", _RELAYOUT + "<script>", 1)
+
+
 def brain_map_html(db_path=None) -> dict:
     """The Brain Map — the knowledge graph's causal edges (src/graph_viz.py:
     one self-contained page, inline JS force layout, no network) — for the
@@ -450,7 +462,7 @@ def brain_map_html(db_path=None) -> dict:
         try:
             from src import graph_viz
             g = graph_viz.build_graph_json(conn)
-            return {"html": graph_viz.render_html(g), "stats": g.get("stats") or {},
+            return {"html": _relayout_once(graph_viz.render_html(g)), "stats": g.get("stats") or {},
                     "source": f"live from {Path(db_path or DB_PATH).name}"}
         except Exception as exc:
             err = f"{type(exc).__name__}: {exc}"
@@ -459,7 +471,7 @@ def brain_map_html(db_path=None) -> dict:
     else:
         err = f"database unavailable or locked: {db_path or DB_PATH}"
     try:
-        html = GRAPH_VIZ_PATH.read_text()
+        html = _relayout_once(GRAPH_VIZ_PATH.read_text())
         mtime = datetime.fromtimestamp(GRAPH_VIZ_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
         return {"html": html, "stats": {}, "source": f"{GRAPH_VIZ_PATH.name} written {mtime} ({err})"}
     except OSError:

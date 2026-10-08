@@ -34,7 +34,7 @@ def client(tmp_path, monkeypatch):
 
 def test_every_route_needs_the_key_and_health_does_not(client):
     for path in ("/api/treasury", "/api/open-trades", "/api/recent-outcomes", "/api/recon/latest",
-                 "/api/recon/history", "/api/audit", "/api/freshness"):
+                 "/api/recon/history", "/api/audit", "/api/freshness", "/api/equity-history", "/api/brain-map"):
         assert client.get(path).status_code == 401, path
         assert client.get(path, headers={"X-Access-Key": "wrong"}).status_code == 401, path
         assert client.get(path, headers={"X-Access-Key": "s3cret"}).status_code == 200, path
@@ -66,8 +66,9 @@ def test_bridge_is_get_only_and_imports_no_execution_path():
     for pat in ("paper_venue", "strategy_router", "oms", "dhan_client", "fire_broadcast", "journal.rewrite"):
         assert not re.search(r"\b" + pat + r"\b", src), pat
     routes = sorted(r.path for r in api_bridge.app.routes if r.path.startswith("/api"))
-    assert routes == ["/api/audit", "/api/freshness", "/api/health", "/api/open-trades",
-                      "/api/recent-outcomes", "/api/recon/history", "/api/recon/latest", "/api/treasury"]
+    assert routes == ["/api/audit", "/api/brain-map", "/api/equity-history", "/api/freshness", "/api/health",
+                      "/api/open-trades", "/api/recent-outcomes", "/api/recon/history", "/api/recon/latest",
+                      "/api/treasury"]
 
 
 def test_naive_ist_timestamps_are_stamped_and_dates_untouched(client):
@@ -93,3 +94,22 @@ def test_every_response_is_no_store_and_read_fresh_per_request(client, tmp_path,
          "mismatches": [{"detail": "x"}]}) + "\n")
     r2 = client.get("/api/recon/latest", headers=h).json()
     assert r2["verdict"] == "MISMATCH" and r2["ts"].endswith("+05:30")
+
+
+def test_equity_history_and_brain_map_for_the_desk(client, monkeypatch, tmp_path):
+    """2026-10-09: the four-portfolio graph and the Brain Map page."""
+    h = {"X-Access-Key": "s3cret"}
+    e = client.get("/api/equity-history", headers=h).json()
+    accts = {p["account"] for p in e["realized"]}
+    assert "PAPER_2L" in accts and e["net"] == []                            # a fresh 10L book has no curve point yet
+    assert all(p["ts"].endswith("+05:30") for p in e["realized"])            # IST-stamped for the browser
+    last = {}
+    for p in e["realized"]:
+        last[p["account"]] = p
+    assert all(v["ts"] >= "2026-10-09" for v in last.values())               # realized lines run to now
+    b = client.get("/api/brain-map", headers=h).json()
+    assert "<html" in b["html"].lower() and b["stats"]["nodes"] == 0
+    monkeypatch.setattr(d, "DB_PATH", tmp_path / "absent.db")
+    monkeypatch.setattr(d, "GRAPH_VIZ_PATH", tmp_path / "absent.html")
+    assert client.get("/api/equity-history", headers=h).status_code == 503
+    assert client.get("/api/brain-map", headers=h).status_code == 503

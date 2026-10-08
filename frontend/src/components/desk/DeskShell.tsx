@@ -29,6 +29,7 @@ const NAV = [
   { to: "/outcomes", label: "Outcomes" },
   { to: "/recon", label: "Recon" },
   { to: "/audit", label: "Audit Log" },
+  { to: "/brain-map", label: "Brain Map" },
 ] as const;
 
 export function DeskShell({ children }: { children: React.ReactNode }) {

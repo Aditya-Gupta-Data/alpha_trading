@@ -197,12 +197,25 @@ def test_dashboard_link_url_reads_the_remembered_file_and_env(tmp_path, monkeypa
 
 
 def test_dashboard_link_lines_fail_open():
-    assert ms._dashboard_link_lines(url_fn=lambda: None)[0].startswith("No dashboard link")
-    lines = ms._dashboard_link_lines(url_fn=lambda: "https://z/streamlit/")
+    no_desk = lambda: None                                                      # noqa: E731
+    assert ms._dashboard_link_lines(url_fn=lambda: None, desk_fn=no_desk)[0].startswith("No dashboard link")
+    lines = ms._dashboard_link_lines(url_fn=lambda: "https://z/streamlit/", desk_fn=no_desk)
     assert lines == ["Open: https://z/streamlit/", "Same access key as before."]
-    assert ms._dashboard_link_lines(url_fn=lambda: "https://z/streamlit/?access_key=k") \
+    assert ms._dashboard_link_lines(url_fn=lambda: "https://z/streamlit/?access_key=k", desk_fn=no_desk) \
         == ["Open: https://z/streamlit/?access_key=k"]
-    assert "unavailable" in ms._dashboard_link_lines(url_fn=lambda: 1 / 0)[0]
+    assert "unavailable" in ms._dashboard_link_lines(url_fn=lambda: 1 / 0, desk_fn=no_desk)[0]
+
+
+def test_the_link_card_leads_with_the_desk_design():
+    """Architect 2026-10-09: the desk's own pages first, Streamlit as the classic view."""
+    lines = ms._dashboard_link_lines(url_fn=lambda: "https://z.trycloudflare.com/streamlit/?access_key=k",
+                                     desk_fn=lambda: "https://z.trycloudflare.com/")
+    assert lines == ["Desk — Overview + the four-portfolio graph: https://z.trycloudflare.com/overview",
+                     "Brain Map: https://z.trycloudflare.com/brain-map",
+                     "Classic view: https://z.trycloudflare.com/streamlit/?access_key=k",
+                     "Same access key as before."]
+    boom = ms._dashboard_link_lines(url_fn=lambda: "https://z/streamlit/", desk_fn=lambda: 1 / 0)
+    assert boom == ["Open: https://z/streamlit/", "Same access key as before."]
 
 
 def test_link_card_is_sent_before_the_wait_for_the_open():

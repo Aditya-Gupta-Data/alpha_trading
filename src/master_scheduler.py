@@ -220,8 +220,16 @@ def dashboard_link_url(remembered_url=None, key=None) -> str | None:
     return f"{url}?access_key={quote(str(key), safe='')}" if key else url
 
 
-def _dashboard_link_lines(url_fn=dashboard_link_url) -> list:
-    """The 09:10 link card body. Never raises."""
+def _desk_base():
+    from src import dashboard_link
+    return dashboard_link.remembered()
+
+
+def _dashboard_link_lines(url_fn=dashboard_link_url, desk_fn=_desk_base) -> list:
+    """The 09:10 link card body. Never raises. Architect 2026-10-09: the
+    desk's own design (the React desk on the same tunnel — Overview with the
+    four-portfolio graph, the Brain Map page) LEADS; the Streamlit page
+    follows as the classic view."""
     try:
         url = url_fn()
     except Exception as e:
@@ -229,8 +237,16 @@ def _dashboard_link_lines(url_fn=dashboard_link_url) -> list:
     if not url:
         return ["No dashboard link is remembered yet — the box's mirror push "
                 "records it (data/dashboard_url.txt) and a 🔗 card follows."]
-    lines = [f"Open: {url}"]
-    if "access_key=" not in url:
+    lines = []
+    try:
+        base = (desk_fn() or "").rstrip("/")
+    except Exception:
+        base = ""
+    if base:
+        lines += [f"Desk — Overview + the four-portfolio graph: {base}/overview",
+                  f"Brain Map: {base}/brain-map"]
+    lines.append(f"{'Classic view' if base else 'Open'}: {url}")
+    if "access_key=" not in url or base:
         lines.append("Same access key as before.")
     return lines
 

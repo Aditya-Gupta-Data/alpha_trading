@@ -213,4 +213,4 @@ def test_brain_map_renders_live_read_only_and_falls_back_to_the_file(tmp_path, m
     assert "error" in d.brain_map_html(tmp_path / "absent.db")
     (tmp_path / "graph_viz.html").write_text("<html>saved</html>")
     B = d.brain_map_html(tmp_path / "absent.db")
-    assert B["html"] == "<html>saved</html>" and B["source"].startswith("graph_viz.html written ")
+    assert B["html"].endswith("<html>saved</html>") and B["source"].startswith("graph_viz.html written ")

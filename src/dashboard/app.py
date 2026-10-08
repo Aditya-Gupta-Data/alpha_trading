@@ -182,14 +182,8 @@ def _brain_map_tab():
     st.caption("Steel-blue = outcome-derived causal links (the only class that may move sizing, decision #38); "
                "gold = smart-money affinity; red core = a loss lesson that never decays. Drag to move nodes, "
                "scroll to zoom. Read-only.")
-    # Streamlit builds every tab's iframe while the tab is HIDDEN (0 px wide),
-    # and graph_viz lays its nodes out from the window size at load — so they
-    # started piled in one corner. A page loaded that narrow reloads itself
-    # ONCE, the first time its tab is shown at a real width.
-    relayout = ("<script>if(innerWidth<50){addEventListener('resize',function r(){if(innerWidth>=50){"
-                "removeEventListener('resize',r);location.reload();}});}</script>")
-    html = B["html"].replace("<script>", relayout + "<script>", 1)
-    components.html(html, height=820, scrolling=True)
+    # (a page loaded inside the hidden tab re-lays itself out when shown: data._relayout_once)
+    components.html(B["html"], height=820, scrolling=True)
 
 
 @st.fragment(run_every="5m")

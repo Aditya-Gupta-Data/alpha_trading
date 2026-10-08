@@ -2,6 +2,8 @@ import { queryOptions } from "@tanstack/react-query";
 
 import {
   getAuditEvents,
+  getBrainMap,
+  getEquityHistory,
   getFreshness,
   getLatestRecon,
   getOpenTrades,
@@ -52,4 +54,19 @@ export const freshnessQuery = queryOptions({
   queryKey: ["freshness"],
   queryFn: getFreshness,
   refetchInterval: REFETCH_MS,
+});
+
+export const equityHistoryQuery = queryOptions({
+  queryKey: ["equity-history"],
+  queryFn: getEquityHistory,
+  refetchInterval: REFETCH_MS,
+});
+
+// The map re-lays itself out whenever its HTML changes, so it is re-read only
+// on the mirror's own cadence (15 min), never every minute.
+export const brainMapQuery = queryOptions({
+  queryKey: ["brain-map"],
+  queryFn: getBrainMap,
+  refetchInterval: 15 * 60_000,
+  staleTime: 15 * 60_000,
 });

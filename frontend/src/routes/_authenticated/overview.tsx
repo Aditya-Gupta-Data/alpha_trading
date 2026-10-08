@@ -16,6 +16,7 @@ import {
 import { Actionables } from "@/components/desk/Actionables";
 import { EmptyState, Panel } from "@/components/desk/Panel";
 import { PageHeader } from "@/components/desk/PageHeader";
+import { PortfoliosPanel } from "@/components/desk/PortfoliosPanel";
 import { StatusPill } from "@/components/desk/StatusPill";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { latestReconQuery, treasuryQuery } from "@/lib/desk-queries";
@@ -81,7 +82,8 @@ function AccountCard({ account }: { account: AccountTreasury }) {
   const unreal = account.unrealized_pnl;
   // an older bridge (before #116) sends no MTM fields: treat as unpriced
   const priced = typeof unreal === "number";
-  const headline = priced && typeof account.net_equity === "number" ? account.net_equity : account.equity;
+  const headline =
+    priced && typeof account.net_equity === "number" ? account.net_equity : account.equity;
   const hasCoverage = typeof account.open_positions === "number";
   return (
     <Panel>
@@ -95,7 +97,9 @@ function AccountCard({ account }: { account: AccountTreasury }) {
       <div className="mt-5 grid grid-cols-2 gap-6 sm:grid-cols-3">
         <div>
           <p className="text-xs text-muted-foreground">Unrealized P&amp;L</p>
-          <p className={`num text-lg font-semibold ${!priced ? "" : (unreal ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}>
+          <p
+            className={`num text-lg font-semibold ${!priced ? "" : (unreal ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}
+          >
             {priced ? formatRupeesSigned(unreal) : EM_DASH}
           </p>
           {hasCoverage && (
@@ -107,7 +111,9 @@ function AccountCard({ account }: { account: AccountTreasury }) {
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Realized P&amp;L</p>
-          <p className={`num text-lg font-semibold ${realizedUp ? "text-pnl-up" : "text-pnl-down"}`}>
+          <p
+            className={`num text-lg font-semibold ${realizedUp ? "text-pnl-up" : "text-pnl-down"}`}
+          >
             {formatRupeesSigned(account.realized_pnl)}
           </p>
           <p className="text-[11px] text-muted-foreground">
@@ -116,7 +122,9 @@ function AccountCard({ account }: { account: AccountTreasury }) {
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Drawdown from peak</p>
-          <p className={`num text-lg font-semibold ${account.drawdown_pct > 0 ? "text-pnl-down" : ""}`}>
+          <p
+            className={`num text-lg font-semibold ${account.drawdown_pct > 0 ? "text-pnl-down" : ""}`}
+          >
             {formatPct(account.drawdown_pct)}
           </p>
           <p className="text-[11px] text-muted-foreground">realized, from the peak</p>
@@ -138,7 +146,13 @@ function AccountCard({ account }: { account: AccountTreasury }) {
   );
 }
 
-function ReconBanner({ recon, isPending }: { recon: ReconRow | null | undefined; isPending: boolean }) {
+function ReconBanner({
+  recon,
+  isPending,
+}: {
+  recon: ReconRow | null | undefined;
+  isPending: boolean;
+}) {
   if (isPending) return null;
   const verdict = recon?.verdict ?? "UNKNOWN";
   const text =
@@ -150,7 +164,10 @@ function ReconBanner({ recon, isPending }: { recon: ReconRow | null | undefined;
   const tone = verdict === "PARITY" ? "ok" : verdict === "MISMATCH" ? "bad" : "warn";
   return (
     <div className="flex items-center gap-3 text-sm text-muted-foreground">
-      <StatusPill label={verdict === "PARITY" ? "OK" : verdict === "MISMATCH" ? "Problem" : "Unsure"} tone={tone} />
+      <StatusPill
+        label={verdict === "PARITY" ? "OK" : verdict === "MISMATCH" ? "Problem" : "Unsure"}
+        tone={tone}
+      />
       {text}
       {recon && <span className="text-xs">· {formatIstDateTime(recon.ts)}</span>}
     </div>
@@ -219,12 +236,15 @@ function OverviewPage() {
             <Panel title="Compounding — PAPER_10L">
               {(() => {
                 const a = treasury.data.PAPER_10L;
-                const cagrTone = a.cagr_pct === null ? "" : a.cagr_pct >= 0 ? "text-pnl-up" : "text-pnl-down";
+                const cagrTone =
+                  a.cagr_pct === null ? "" : a.cagr_pct >= 0 ? "text-pnl-up" : "text-pnl-down";
                 return (
                   <div className="mb-5 grid grid-cols-2 gap-6 sm:grid-cols-4">
                     <div>
                       <p className="text-xs text-muted-foreground">CAGR (annualised)</p>
-                      <p className={`num text-2xl font-semibold ${cagrTone}`}>{formatPct(a.cagr_pct)}</p>
+                      <p className={`num text-2xl font-semibold ${cagrTone}`}>
+                        {formatPct(a.cagr_pct)}
+                      </p>
                       <p className="text-[11px] text-muted-foreground">
                         {a.days_elapsed === null
                           ? "epoch unknown"
@@ -235,14 +255,20 @@ function OverviewPage() {
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Return since the ₹10L base</p>
-                      <p className={`num text-2xl font-semibold ${(a.abs_return_pct ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}>
+                      <p
+                        className={`num text-2xl font-semibold ${(a.abs_return_pct ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}
+                      >
                         {formatPct(a.abs_return_pct)}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">on {formatRupees(a.base_equity ?? a.starting_capital)} contributed</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        on {formatRupees(a.base_equity ?? a.starting_capital)} contributed
+                      </p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Days compounding</p>
-                      <p className="num text-2xl font-semibold">{a.days_elapsed === null ? EM_DASH : a.days_elapsed.toFixed(0)}</p>
+                      <p className="num text-2xl font-semibold">
+                        {a.days_elapsed === null ? EM_DASH : a.days_elapsed.toFixed(0)}
+                      </p>
                       <p className="text-[11px] text-muted-foreground">
                         since {a.base_ts ? formatIstDate(a.base_ts) : "the ₹10L base"}
                       </p>
@@ -250,7 +276,9 @@ function OverviewPage() {
                     <div>
                       <p className="text-xs text-muted-foreground">Formula</p>
                       <p className="num text-sm font-semibold">(E/E₀)^(365/d) − 1</p>
-                      <p className="text-[11px] text-muted-foreground">realized equity, no unrealized marks</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        realized equity, no unrealized marks
+                      </p>
                     </div>
                   </div>
                 );
@@ -274,13 +302,17 @@ function OverviewPage() {
                         title={bench.notes?.[b.key] ?? bench.sources?.[b.key]}
                         className="h-7 px-2 text-xs"
                       >
-                        <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: b.stroke }} />
+                        <span
+                          className="mr-1 inline-block h-2 w-2 rounded-full"
+                          style={{ background: b.stroke }}
+                        />
                         {b.label}
                       </ToggleGroupItem>
                     ))}
                   </ToggleGroup>
                   <span className="text-[11px] text-muted-foreground">
-                    each starts at {formatRupees(bench.base)} on {formatIstDate(`${bench.epoch}T15:30:00+05:30`)}
+                    each starts at {formatRupees(bench.base)} on{" "}
+                    {formatIstDate(`${bench.epoch}T15:30:00+05:30`)}
                   </span>
                 </div>
               )}
@@ -289,14 +321,19 @@ function OverviewPage() {
               ) : (
                 <div className="h-[240px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                    <ComposedChart
+                      data={chartData}
+                      margin={{ top: 6, right: 8, bottom: 0, left: 0 }}
+                    >
                       <CartesianGrid stroke="var(--color-border)" vertical={false} />
                       <XAxis
                         dataKey="t"
                         type="number"
                         scale="time"
                         domain={["dataMin", "dataMax"]}
-                        tickFormatter={(value: number) => formatIstDayMonth(new Date(value).toISOString())}
+                        tickFormatter={(value: number) =>
+                          formatIstDayMonth(new Date(value).toISOString())
+                        }
                         tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
                         stroke="var(--color-border)"
                         minTickGap={64}
@@ -315,9 +352,13 @@ function OverviewPage() {
                           borderRadius: 4,
                           fontSize: 12,
                         }}
-                        labelFormatter={(value) => formatIstDateTime(new Date(Number(value)).toISOString())}
+                        labelFormatter={(value) =>
+                          formatIstDateTime(new Date(Number(value)).toISOString())
+                        }
                         formatter={(value: number, name) =>
-                          name === "Drawdown" ? [formatPct(value), name] : [formatRupees(value), String(name)]
+                          name === "Drawdown"
+                            ? [formatPct(value), name]
+                            : [formatRupees(value), String(name)]
                         }
                       />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -325,7 +366,11 @@ function OverviewPage() {
                         <ReferenceLine
                           key={`${e.kind}-${e.t}`}
                           x={e.t}
-                          stroke={e.kind === "capital_injection" ? "var(--color-chart-2)" : "var(--color-muted-foreground)"}
+                          stroke={
+                            e.kind === "capital_injection"
+                              ? "var(--color-chart-2)"
+                              : "var(--color-muted-foreground)"
+                          }
                           strokeDasharray="4 3"
                           label={{
                             value: e.short ?? e.label,
@@ -366,7 +411,9 @@ function OverviewPage() {
                 <ul className="mt-3 space-y-1 text-xs">
                   {events.map((e) => (
                     <li key={`${e.kind}-${e.t}`} className="flex gap-2">
-                      <span className="num shrink-0 text-muted-foreground">{formatIstDate(e.ts)}</span>
+                      <span className="num shrink-0 text-muted-foreground">
+                        {formatIstDate(e.ts)}
+                      </span>
                       <span>
                         <span className="font-semibold">{e.short ?? e.label}</span> — {e.label}
                       </span>
@@ -376,12 +423,17 @@ function OverviewPage() {
               )}
               {curve.length > 0 && (
                 <p className="mt-2 text-[11px] text-muted-foreground">
-                  Realized equity, full history, on a true time axis. Dashed lines are capital moves, not
-                  trading. Return and CAGR above are measured from the ₹10L base
-                  {treasury.data.PAPER_10L.base_ts ? ` (${formatIstDate(treasury.data.PAPER_10L.base_ts)})` : ""}.
+                  Realized equity, full history, on a true time axis. Dashed lines are capital
+                  moves, not trading. Return and CAGR above are measured from the ₹10L base
+                  {treasury.data.PAPER_10L.base_ts
+                    ? ` (${formatIstDate(treasury.data.PAPER_10L.base_ts)})`
+                    : ""}
+                  .
                 </p>
               )}
             </Panel>
+
+            <PortfoliosPanel />
 
             <ReconBanner recon={recon.data} isPending={recon.isPending} />
           </>

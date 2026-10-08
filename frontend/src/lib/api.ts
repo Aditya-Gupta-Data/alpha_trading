@@ -27,12 +27,7 @@ export const USE_MOCK: boolean = import.meta.env["VITE_USE_MOCK"] === "true";
 
 /* ------------------------------------------------------------------ types */
 
-export type Strategy =
-  | "Bear Put"
-  | "Bull Call"
-  | "Iron Condor"
-  | "Iron Butterfly"
-  | "Equity Long";
+export type Strategy = "Bear Put" | "Bull Call" | "Iron Condor" | "Iron Butterfly" | "Equity Long";
 
 export interface AccountTreasury {
   account_id: string;
@@ -268,15 +263,36 @@ const MOCK_TREASURY: Treasury = {
     as_of: NOW.toISOString(),
     sources: { nifty50: "mock", gold: "mock", fd_7pct: "mock" },
     series: {
-      nifty50: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({ ts: p.ts, value: 1_000_000 * (1 - i * 0.0025) })),
-      gold: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({ ts: p.ts, value: 1_000_000 * (1 + i * 0.001) })),
-      fd_7pct: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({ ts: p.ts, value: 1_000_000 * (1 + i * 0.0002) })),
+      nifty50: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({
+        ts: p.ts,
+        value: 1_000_000 * (1 - i * 0.0025),
+      })),
+      gold: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({
+        ts: p.ts,
+        value: 1_000_000 * (1 + i * 0.001),
+      })),
+      fd_7pct: EQUITY_CURVE.filter((_, i) => i >= 30).map((p, i) => ({
+        ts: p.ts,
+        value: 1_000_000 * (1 + i * 0.0002),
+      })),
     },
     notes: {},
   },
   capital_events: [
-    { ts: EQUITY_CURVE[20]?.ts ?? NOW.toISOString(), kind: "clean_sheet", label: "Pool reset ₹10L → ₹2L", short: "Reset → ₹2L", detail: "mock" },
-    { ts: EQUITY_CURVE[30]?.ts ?? NOW.toISOString(), kind: "capital_injection", label: "₹8L capital injection", short: "+₹8L", detail: "mock" },
+    {
+      ts: EQUITY_CURVE[20]?.ts ?? NOW.toISOString(),
+      kind: "clean_sheet",
+      label: "Pool reset ₹10L → ₹2L",
+      short: "Reset → ₹2L",
+      detail: "mock",
+    },
+    {
+      ts: EQUITY_CURVE[30]?.ts ?? NOW.toISOString(),
+      kind: "capital_injection",
+      label: "₹8L capital injection",
+      short: "+₹8L",
+      detail: "mock",
+    },
   ],
 };
 
@@ -620,6 +636,41 @@ const MOCK_FRESHNESS: Freshness = {
   recon: isoMinutesAgo(12),
 };
 
+/** One point of a portfolio's line: % return on the capital contributed at that time. */
+export interface PortfolioPoint {
+  account: string;
+  ts: string;
+  equity: number;
+  pct: number | null;
+}
+
+/** /api/equity-history — the four portfolios' lines (2026-10-09). */
+export interface EquityHistory {
+  /** A point at every settlement, each account from its start; runs to now. */
+  realized: PortfolioPoint[];
+  /** True Net Equity (realized + open marks), recorded every 15 min on the VM from 2026-10-09. */
+  net: PortfolioPoint[];
+  capital_events: CapitalEvent[];
+  notes: string[];
+}
+
+/** /api/brain-map — the knowledge graph as one self-contained HTML page. */
+export interface BrainMap {
+  html: string;
+  stats: Partial<
+    Record<
+      | "nodes"
+      | "edges_active"
+      | "edges_expired"
+      | "outcome_derived"
+      | "affinity"
+      | "loss_permanent",
+      number
+    >
+  >;
+  source: string;
+}
+
 /* ------------------------------------------------------- swappable readers */
 
 export async function getTreasury(): Promise<Treasury> {
@@ -655,6 +706,18 @@ export async function getAuditEvents(): Promise<AuditEvent[]> {
 export async function getFreshness(): Promise<Freshness> {
   if (USE_MOCK) return delay(MOCK_FRESHNESS);
   return fetchJson<Freshness>("/api/freshness");
+}
+
+export async function getEquityHistory(): Promise<EquityHistory> {
+  if (USE_MOCK)
+    return delay({ realized: [], net: [], capital_events: [], notes: ["mock: no history"] });
+  return fetchJson<EquityHistory>("/api/equity-history");
+}
+
+export async function getBrainMap(): Promise<BrainMap> {
+  if (USE_MOCK)
+    return delay({ html: "<html><body>mock brain map</body></html>", stats: {}, source: "mock" });
+  return fetchJson<BrainMap>("/api/brain-map");
 }
 
 /* ----------------------------------------------------------------- helpers */

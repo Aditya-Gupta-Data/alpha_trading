@@ -1,13 +1,14 @@
 # MANUAL OFFLINE TOOL — the read-only JSON bridge for the desk UI (decision #113).
 #   ALPHA_DATA_DIR=data/vm_mirror DASHBOARD_KEY=… uvicorn src.dashboard.api_bridge:app --port 8600
 """
-src/dashboard/api_bridge.py — SEVEN GET ROUTES, nothing else.
+src/dashboard/api_bridge.py — NINE GET ROUTES, nothing else.
 
 The React desk (`frontend/`) reads exactly the shapes `src/dashboard/data.py`
 already produces for the Streamlit page; this file serves them over HTTP:
 
     /api/treasury   /api/open-trades   /api/recent-outcomes
     /api/recon/latest   /api/recon/history   /api/audit   /api/freshness
+    /api/equity-history (the four portfolios' % lines)   /api/brain-map
 
 Access: every route requires the shared desk key in `X-Access-Key` when
 `DASHBOARD_KEY` is set (constant-time compare); no key configured = open
@@ -134,6 +135,34 @@ def audit(request: Request):
 def freshness(request: Request):
     _check_key(request)
     return d.freshness()
+
+
+@app.get("/api/equity-history")
+def equity_history(request: Request):
+    """The desk's four-portfolio graph (2026-10-09): `data.equity_history`
+    — % return on contributed capital — with each REALIZED line run to now
+    (`extend_to_now`; never the sampled true-net line). The UI windows it."""
+    _check_key(request)
+    h = d.equity_history()
+    if h.get("error"):
+        raise HTTPException(status_code=503, detail=h["error"])
+    h["realized"] = d.extend_to_now(h.get("realized") or [])
+    for key in ("realized", "net", "capital_events"):
+        for p in h.get(key) or []:
+            p["ts"] = _ist(p.get("ts"))
+    return h
+
+
+@app.get("/api/brain-map")
+def brain_map(request: Request):
+    """The Brain Map page (Architect 2026-10-09): {html, stats, source} from
+    `data.brain_map_html` — self-contained HTML the UI shows in a sandboxed
+    iframe (srcDoc), rendered live from the mirror's brain_map.db."""
+    _check_key(request)
+    b = d.brain_map_html()
+    if b.get("error"):
+        raise HTTPException(status_code=503, detail=b["error"])
+    return b
 
 
 @app.get("/api/health")

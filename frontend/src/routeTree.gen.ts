@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedAuditRouteImport } from './routes/_authenticated/audit'
+import { Route as AuthenticatedBrainMapRouteImport } from './routes/_authenticated/brain-map'
 import { Route as AuthenticatedLiveBookRouteImport } from './routes/_authenticated/live-book'
 import { Route as AuthenticatedOutcomesRouteImport } from './routes/_authenticated/outcomes'
 import { Route as AuthenticatedOverviewRouteImport } from './routes/_authenticated/overview'
@@ -35,6 +36,11 @@ const LoginRoute = LoginRouteImport.update({
 const AuthenticatedAuditRoute = AuthenticatedAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedBrainMapRoute = AuthenticatedBrainMapRouteImport.update({
+  id: '/brain-map',
+  path: '/brain-map',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedLiveBookRoute = AuthenticatedLiveBookRouteImport.update({
@@ -62,6 +68,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/audit': typeof AuthenticatedAuditRoute
+  '/brain-map': typeof AuthenticatedBrainMapRoute
   '/live-book': typeof AuthenticatedLiveBookRoute
   '/outcomes': typeof AuthenticatedOutcomesRoute
   '/overview': typeof AuthenticatedOverviewRoute
@@ -71,6 +78,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/audit': typeof AuthenticatedAuditRoute
+  '/brain-map': typeof AuthenticatedBrainMapRoute
   '/live-book': typeof AuthenticatedLiveBookRoute
   '/outcomes': typeof AuthenticatedOutcomesRoute
   '/overview': typeof AuthenticatedOverviewRoute
@@ -82,6 +90,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/audit': typeof AuthenticatedAuditRoute
+  '/_authenticated/brain-map': typeof AuthenticatedBrainMapRoute
   '/_authenticated/live-book': typeof AuthenticatedLiveBookRoute
   '/_authenticated/outcomes': typeof AuthenticatedOutcomesRoute
   '/_authenticated/overview': typeof AuthenticatedOverviewRoute
@@ -93,6 +102,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/audit'
+    | '/brain-map'
     | '/live-book'
     | '/outcomes'
     | '/overview'
@@ -102,6 +112,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/audit'
+    | '/brain-map'
     | '/live-book'
     | '/outcomes'
     | '/overview'
@@ -112,6 +123,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/audit'
+    | '/_authenticated/brain-map'
     | '/_authenticated/live-book'
     | '/_authenticated/outcomes'
     | '/_authenticated/overview'
@@ -154,6 +166,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAuditRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/brain-map': {
+      id: '/_authenticated/brain-map'
+      path: '/brain-map'
+      fullPath: '/brain-map'
+      preLoaderRoute: typeof AuthenticatedBrainMapRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/live-book': {
       id: '/_authenticated/live-book'
       path: '/live-book'
@@ -187,6 +206,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAuditRoute: typeof AuthenticatedAuditRoute
+  AuthenticatedBrainMapRoute: typeof AuthenticatedBrainMapRoute
   AuthenticatedLiveBookRoute: typeof AuthenticatedLiveBookRoute
   AuthenticatedOutcomesRoute: typeof AuthenticatedOutcomesRoute
   AuthenticatedOverviewRoute: typeof AuthenticatedOverviewRoute
@@ -195,6 +215,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAuditRoute: AuthenticatedAuditRoute,
+  AuthenticatedBrainMapRoute: AuthenticatedBrainMapRoute,
   AuthenticatedLiveBookRoute: AuthenticatedLiveBookRoute,
   AuthenticatedOutcomesRoute: AuthenticatedOutcomesRoute,
   AuthenticatedOverviewRoute: AuthenticatedOverviewRoute,

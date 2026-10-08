@@ -42,6 +42,26 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 01:05 IST — DEPLOYED: the Chunk 2 lows, the stuck-exit Discord pages (#133) and the equity recorder (VM `170bb2e`)
+
+**Live now.** The VM went `bc6fbe0` → `170bb2e`; `alpha-trading` and `alpha-discord-bot` restarted at 01:04:53.
+- 423 targeted tests passed on the VM.
+- Health 200; `deploy_log` shows both services on `170bb2e`; the bot reconnected; `src.equity_history` imports.
+- `master_scheduler` runs the new code from the 09:10 session.
+
+**Pre-deploy dry-run (Issue 31 rule).** Read-only snapshot of the VM at 01:03, 15 open primary trades, 5 open PAPER_2L_LIVE rows, 0 pending.
+- Exit decisions are IDENTICAL under `bc6fbe0` and `170bb2e`.
+- No open LIVE row has an EXIT ticket.
+- Every active 2L/ROT lock has an 'approved' verdict.
+- Nothing is exited or blocked by the deploy itself.
+
+**Watch on 10-09:**
+1. The first `net_equity_history` rows from the 09:00 mirror run (`logs/dashboard_mirror.log` shows an `[equity_history]` line).
+2. Any `live_exit_needs_review` card.
+3. PAPER_2L_LIVE's `1cc5214e` (NIFTY 50, expiry 10-13): its own ratchet lock is at 30 on a 63% capture; its forced-exit session is 10-12.
+
+**Not done:** the always-on dashboard box still runs the old Streamlit app, so the new graph appears there only once the app is shipped.
+
 ## 2026-10-09 ~01:30 IST — Architect rulings #133/#134; Discord pages for stuck live exits; the multi-portfolio equity graph — pushed, NOT deployed
 
 **Rulings (recorded as decisions #133 and #134):**

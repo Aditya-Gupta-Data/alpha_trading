@@ -2317,3 +2317,14 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   - The agent restored the queue to its 3 real lines in the same minute. A copy of the polluted file is kept at `.claude/audit_state/chunk2_fixes/scratch/L3m/discord_digest_queue.polluted_by_plain_runner_2026-10-06T2207.jsonl`.
   - The VM was not involved.
 - **Fix:** process only. The fix-agent template now forbids running a test file as plain python. No code change.
+
+## Deploy 2026-10-09 01:05 IST — VM `bc6fbe0` → `170bb2e` (Chunk 2 lows + residuals, decision #133, the equity recorder)
+
+- **Verified:**
+  - The pre-deploy dry-run on a read-only snapshot (15 open primary trades, 5 LIVE rows, 0 pending) gave identical exit decisions under old and new code.
+  - No open LIVE row has an EXIT ticket, and every active 2L/ROT lock has an approved verdict.
+  - 423 targeted tests passed on the VM; both services are active; health 200; `deploy_log` shows `170bb2e`.
+- **Not yet observed live:**
+  - the first `net_equity_history` rows (expected from the 09:00 mirror run);
+  - any `live_exit_needs_review` card;
+  - any of the lows' exit-path changes acting on a real position.

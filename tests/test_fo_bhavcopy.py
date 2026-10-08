@@ -31,6 +31,16 @@ def test_parse_fo_aggregates_stock_fo_only():
     assert agg["BIGLIQ"]["fut_oi"] == 700_000
 
 
+def test_q1_rank_falls_back_to_futures_value_when_no_option_rows():
+    from src.ingestion import fo_bhavcopy as fb
+    per = {"AMBER": {"opt_oi": 0.0, "opt_val": 0.0, "fut_oi": 1.0, "fut_val": 10.0},
+           "ICICIBANK": {"opt_oi": 0.0, "opt_val": 0.0, "fut_oi": 1.0, "fut_val": 1000.0}}
+    basis = "opt_val" if any(v["opt_val"] > 0 for v in per.values()) else "fut_val"
+    ranked = sorted(per, key=lambda s: per[s][basis], reverse=True)
+    assert basis == "fut_val" and ranked[0] == "ICICIBANK"
+    assert fb.parse_secban("hdr\n1,M&M\n2,BAJAJ-AUTO\n3,SAIL\n") == ["M&M", "BAJAJ-AUTO", "SAIL"]   # Q2
+
+
 def test_secban_parse():
     assert FO.parse_secban(SECBAN) == ["CROWDED"]
 

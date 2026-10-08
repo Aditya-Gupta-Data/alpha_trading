@@ -143,7 +143,8 @@ def parse_secban(text: str) -> list:
     for line in text.splitlines():
         parts = [p.strip() for p in line.split(",")]
         cand = parts[-1] if parts else ""
-        if cand and cand.upper() == cand and cand.isalnum() \
+        core = cand.replace("&", "").replace("-", "")       # M&M, BAJAJ-AUTO (Chunk 5 Q2)
+        if cand and cand.upper() == cand and core.isalnum() \
                 and not cand.isdigit() and "SECURIT" not in cand:
             out.append(cand)
     return out
@@ -169,8 +170,10 @@ def liquidity_snapshot(lake_dir=None, out_path=None,
         if sb.exists():
             banned = parse_secban(sb.read_text(errors="replace"))
             break
-    ranked = sorted(per_symbol,
-                    key=lambda s: per_symbol[s]["opt_val"], reverse=True)
+    # Chunk 5 Q1: NSE's fo zip carries FUT rows only, so opt_val is 0 for every
+    # symbol and a sort on it is file order; rank on futures value then.
+    basis = "opt_val" if any(v["opt_val"] > 0 for v in per_symbol.values()) else "fut_val"
+    ranked = sorted(per_symbol, key=lambda s: per_symbol[s][basis], reverse=True)
     symbols = {}
     for i, sym in enumerate(ranked, 1):
         if sym in banned:
@@ -187,6 +190,7 @@ def liquidity_snapshot(lake_dir=None, out_path=None,
     snap = {"as_of": day.name, "generated_at":
             datetime.now(IST).replace(tzinfo=None)
                              .isoformat(timespec="seconds"),
+            "rank_basis": basis,
             "tier_rule": f"tier1 = top {LIQ_TIER1_N} by stock-options "
                          "traded value, not banned; only tier1 is "
                          "option-tradeable",

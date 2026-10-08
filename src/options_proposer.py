@@ -1401,13 +1401,30 @@ INSIDE_EXIT_WINDOW = "inside_exit_window"
 EXPOSURE_BLOCKED = "exposure_blocked"
 # Phase 6J: the capital layer could not grant the approval its margin
 MARGIN_BLOCKED = "margin_blocked"
+# Chunk 4 B1: an approval of an earlier session's proposal would fill at proposal-day prices
+STALE_PROPOSAL = "stale_proposal"
 # Every status an APPROVAL can be refused with: nothing journaled, the entry
 # is still pending, so a reject (or a later approve) still works. The doors
 # (api_server's 409, the Discord bot's kept buttons) read THIS set, so a new
 # refusal cannot be reported as a decision again (Chunk 2 close-out: a
 # margin block used to answer 200 ok:true and retire the buttons).
-APPROVAL_REFUSALS = (INSIDE_EXIT_WINDOW, EXPOSURE_BLOCKED, MARGIN_BLOCKED)
+APPROVAL_REFUSALS = (INSIDE_EXIT_WINDOW, EXPOSURE_BLOCKED, MARGIN_BLOCKED, STALE_PROPOSAL)
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _stale_refusal(target: dict, today: date) -> str | None:
+    """B1: a proposal from an earlier session is refused (its premiums are that day's)."""
+    from src.config import STALE_APPROVAL_MAX_DAYS
+    if STALE_APPROVAL_MAX_DAYS is None:
+        return None
+    try:
+        age = (today - date.fromisoformat(str(target.get("date")))).days
+    except (TypeError, ValueError):
+        return None
+    if age <= STALE_APPROVAL_MAX_DAYS:
+        return None
+    return (f"proposed {target.get('date')}, {age}d ago: an approval would fill at proposal-day "
+            f"premiums (audit Chunk 4 B1) — reject it, or raise stale_approval_max_days")
 
 
 def _today() -> date:
@@ -1578,6 +1595,9 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
         refusal = _exit_window_refusal(target, today)
         if refusal:
             return {"status": INSIDE_EXIT_WINDOW, "entry": target, "reason": refusal}
+        stale = _stale_refusal(target, today)
+        if stale:
+            return {"status": STALE_PROPOSAL, "entry": target, "reason": stale}
 
         # Fix G (Architect ruling 2026-10-06): SECOND — the #68 slot,
         # re-checked FIRM-WIDE on this fresh row before margin, the shadow
@@ -1656,6 +1676,7 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
 
     decision = "approved" if approve else "rejected"
     target["decision"] = decision
+    target["decided_at"] = datetime.now(_IST).replace(tzinfo=None).isoformat(timespec="seconds")
     target["why"] = (why or "").strip() or "(no reason given)"
     if approve:
         # Phase M2 (decision #101): an approved ENTRY becomes an Order

@@ -668,7 +668,7 @@ def _margin_api_row():
 def test_every_approval_refusal_is_one_named_set():
     assert op.MARGIN_BLOCKED == "margin_blocked"
     assert set(op.APPROVAL_REFUSALS) == {op.INSIDE_EXIT_WINDOW, op.EXPOSURE_BLOCKED,
-                                         op.MARGIN_BLOCKED}
+                                         op.MARGIN_BLOCKED, op.STALE_PROPOSAL}
 
 
 def test_the_api_bridge_answers_409_on_a_margin_block_and_writes_nothing(monkeypatch):

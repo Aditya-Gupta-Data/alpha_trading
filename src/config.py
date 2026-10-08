@@ -135,6 +135,9 @@ VOL_RANK_LOOKBACK = int(_CONFIG.get("vol_rank_lookback", 252))
 RATCHET_ENABLED = bool(_CONFIG.get("ratchet_enabled", True))
 # Chunk 3 W1: the regime_filters advisory (smart-money veto, war playbook) on the live fetch.
 REGIME_ADVISORY_ENABLED = bool(_CONFIG.get("regime_advisory_enabled", True))
+# Chunk 4 B1: a pending proposal older than this many days is refused at approval (fills at proposal-day prices).
+_sa = _CONFIG.get("stale_approval_max_days")
+STALE_APPROVAL_MAX_DAYS = None if _sa is None else int(_sa)      # None = off (owner ruling pending)
 RATCHET_LADDER = tuple(tuple(r) for r in _CONFIG.get(
     "ratchet_ladder", [[40, 0], [60, 30], [80, 50], [90, 70]]))
 RATCHET_EFFECTIVE_DATE = str(_CONFIG.get("ratchet_effective_date", "2026-09-24"))

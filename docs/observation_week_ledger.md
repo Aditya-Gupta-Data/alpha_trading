@@ -2328,3 +2328,11 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   - the first `net_equity_history` rows (expected from the 09:00 mirror run);
   - any `live_exit_needs_review` card;
   - any of the lows' exit-path changes acting on a real position.
+
+
+## Audit Chunk 3 — Analytics & Sizing (2026-10-09, code only; NOT deployed)
+
+- 24 findings (`docs/audit_chunk3_analytics_sizing.md`). Verified on the VM mirror snapshot of 10-09 00:52, read-only.
+- Confirmed live effects today: (Z1) the graph polarity bug has every account sizing at 2.0% where the bridge's own rule gives 1.4%; (W2) the Saturday digest, the performance card, deals/scrip/entity review cards and pattern quarantine cards have been going out BLANK (the deals de-dup ledger still marked them announced); (W1) the smart-money veto and war-playbook block never ran in production since 07-17; (Z2) on 09-25 eight proposals were refused `margin_exhaustion` at the door instead of sized down.
+- Fixed in `d7e9ba1`, `4c7e7a4`, `aedbc5e` (decision #136). Deploy pending; the first session after deploy is a watch session for entries.
+- Not fixed (rulings): Stage-B methodology S1/S2/S3/S9 — ledgers untouched.

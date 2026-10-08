@@ -50,7 +50,10 @@ the agent's job under the Session Wrap rule above.
 
 **To make it live:** VM `git fetch && git merge --ff-only origin/main`, scoped tests, `sudo systemctl restart alpha-trading alpha-discord-bot`; add `DASHBOARD_KEY=<the box's key>` to the VM `.env` for the key to ride on the card. #135 changes an EXIT predicate → Issue 31 read-only open-book dry-run first (after 15:30). Watch: extra chain calls per minute (one per directional open spread) against the DH-905 throttle.
 
-**Chunk 3 (Analytics & Sizing):** three finder lenses launched (statistics, sizing arithmetic, wiring/staleness); findings + my refutation go to `docs/audit_chunk3_analytics_sizing.md`.
+**Chunk 3 (Analytics & Sizing) — CLOSED in code (~03:30 IST), NOT deployed.** `docs/audit_chunk3_analytics_sizing.md`: 24 findings from three lenses, lead-verified. Fixed (decision #136): Batch A `d7e9ba1` (W2 eight blank Discord cards, Z1 graph polarity substrings, S4 opportunity cost per host), Batch B `4c7e7a4` (Z2/Z4 margin wall on real cash + VIX-stressed margin, Z3 sizing journaled, S5 duplicate positions = one Wilson trial), Batch C `aedbc5e` (W1 regime advisory on the live fetch, switch `regime_advisory_enabled`). Suite 2,978.
+- **Deploy note:** W1 activates three vetoes dormant since 07-17 and Z2/Z4 changes how many lots the primary takes. Both move ENTRIES → the first live session after deploy is a watch session; `regime_advisory_enabled: false` is the off-ramp.
+- **Open rulings (nothing changed):** Dept 5 — S1 grading window, S2 overlapping nightly calls, S3 drift-aware null, S9 tilt duplicates. Owner — S6/S8 break-even p*, W3 CONTRADICTS inversion, W4 dead macro legs, W5 Mac recalibration clock, Z5 desk boost cap, Z6/W6 shadow penalty, Z7, S7, S10, W7.
+- **Next:** Chunk 4, Dashboard & Bridge.
 
 ## 2026-10-09 ~01:30 IST — the four-portfolio graph + Brain Map in the DESK design; the 09:10 link card leads with the desk — live on the box, pulled on the VM
 

@@ -7,7 +7,9 @@ Pre-audit fix already shipped under this chunk: **#135, the phantom ratchet** �
 ## Scope
 `src/adaptive_sizing.py`, `src/position_sizing.py`, `src/performance.py`, `src/tuner.py`, `src/decay_engine.py`, `src/opportunity_cost.py`, `src/vol_bridge.py`, `src/vol_rank.py`, `src/firm_treasury.py` (routing math), `src/evolution.py`, `src/edge_miner.py`, `src/human_pulse.py`, `src/review.py`, `src/analysis/{strategy_scorer,strategy_scoreboard,strategy_registry,weekly_recalibration,regime_filters,underlying_router}.py`, the Court/Wilson parts of `src/plan_tracker.py` and `src/strategy_router.py`, the sizing parts of `src/options_proposer.py`, `src/portfolio_manager.py`, `src/equity_desk.py`, `src/execution/live_pricer.py`.
 
-## Findings (filled in below as each lens reports)
+**Status (2026-10-09 ~03:30 IST):** Batches A, B, C FIXED and pushed (`d7e9ba1`, `4c7e7a4`, `aedbc5e`; decision #136). NOT deployed. Rulings listed under 'Fix plan' remain open.
+
+## Findings
 
 ### Lens Z — sizing arithmetic & capital invariants (7 raised; lead verified Z1–Z4 on the code, Z5–Z7 on inspection)
 

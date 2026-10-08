@@ -5,6 +5,8 @@ Method: three finder lenses (data truth on the dashboard, the API server + Disco
 ## Scope
 `src/dashboard/{app,data,benchmarks,api_bridge,mirror_snapshot}.py`, `src/equity_history.py`, `scripts/publish_dashboard_mirror.sh`, `src/portfolio_report.py`, `src/market_snapshot.py`, `src/firm_mtm.py`, `src/positions.py`, `src/api.py`, `src/api_server.py`, `src/discord_bot.py`, `src/discord_client.py`, `src/notifier.py` (budget/spool/card builders), `src/human_pulse.py`, `src/ceo_brief.py`, `src/ceo_language.py`, `src/morning_brief.py`, `src/eod_summary.py`, `src/ops_monitor.py`, `src/validation/digest.py`. The React desk (`frontend/`) was being edited by a parallel session and is out of scope.
 
+**Status (2026-10-09 ~05:00 IST):** Batches A–D FIXED and pushed (`dbad814`, `3dfb8d7`, `275d3c1`; decision #137). NOT deployed. Rulings under 'Fix plan' remain open.
+
 ## Findings
 
 ### Lens B — API server & Discord bot (6 raised; lead verified B1, B2, B4 on the code)

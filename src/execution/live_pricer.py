@@ -198,6 +198,12 @@ HELD_ON_PRICE = ("held_loss_beyond_max", "held_impossible_mark")
 # Audit F05: an exit basket that closed SOME legs only — the row stays
 # `exiting` until the rest is closed; one row per position per IST day.
 EVENT_EXIT_PARTIAL = "live_exit_partial"
+# Architect ruling 2026-10-09 (decision #133): a live exit stuck mid-execution
+# needs IMMEDIATE human awareness — a Discord card (sent past the daily
+# budget), not only a ledger row. A row left `exiting` this long is stuck:
+EVENT_EXIT_STUCK = "live_exit_stuck"
+EXIT_STUCK_AFTER_INTERVALS = 2           # x LIVE_QUOTE_INTERVAL_SECONDS
+EXIT_REVIEW_CARD = "live_exit_needs_review"
 # Audit F06: one live-arm tick at a time on the host (beside the brain map,
 # like dhan_client's throttle files). tick reads this constant on every
 # call and has no test branch: the suite's conftest points it at a per-test
@@ -1034,7 +1040,7 @@ def _resolve_attempt(conn, row: dict, ex: dict, now: datetime, exit_ticket_id, e
         left = ", ".join(f"{_leg_label(x['leg'])} {x['remaining']}" for x in ex["legs"] if x["remaining"])
         reason = (f"{row.get('exit_resolution') or 'exit'} basket partly filled: closed {closed}; still open "
                   f"{left} — the row stays 'exiting' and only the open legs are exited, on the next fetched chain")
-        _log_once_a_day(conn, row, EVENT_EXIT_PARTIAL, reason)
+        _alert_exit(conn, row, EVENT_EXIT_PARTIAL, reason)
         return {"status": "partial", "journal_ref": ref, "reason": reason,
                 "remaining": {_leg_label(x["leg"]): x["remaining"] for x in ex["legs"] if x["remaining"]}}
     if _reopen(conn, row, exit_ticket_id, exit_started_at):
@@ -1314,7 +1320,7 @@ def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, v
         reason = ("the open remainder (" + ", ".join(f"{_leg_label(x['leg'])} {x['remaining']}" for x in open_legs)
                   + f") is not one whole-lot basket of lot size {lot} — it cannot be ticketed as one exit; "
                   "held for a human")
-        _log_once_a_day(conn, row, EVENT_EXIT_PARTIAL, reason)
+        _alert_exit(conn, row, EVENT_EXIT_PARTIAL, reason)
         return {"status": "partial_held", "journal_ref": ref, "reason": reason}
     lots = next(iter(qtys)) // lot
     prices = {}
@@ -1518,6 +1524,27 @@ def _repair_unrecorded(conn, account: str, now: datetime) -> list:
             continue
         fixed.append(ref)
     return fixed
+
+
+def _alert_exit(conn, row: dict, event_type: str, detail: str) -> bool:
+    """Decision #133 (Architect ruling 2026-10-09): a half-filled or stuck
+    live exit is written as its once-a-day ledger row AND paged — ONE
+    `live_exit_needs_review` Discord card per position per event type per
+    IST day (the event row is the de-dup, so a state repeated every tick
+    never pages twice). The card is in notifier.BUDGET_ALWAYS: sent at once,
+    never spooled to the evening digest. Fail-open: a failed card never
+    blocks the exit path. True when the row (and so the card) was new."""
+    if not _log_once_a_day(conn, row, event_type, detail):
+        return False
+    try:
+        from src.notifier import fire_broadcast
+        fire_broadcast({"event": EXIT_REVIEW_CARD, "ticker": row.get("ticker") or row["account_id"],
+                        "short_id": row["journal_ref"], "date": _now().date().isoformat(),
+                        "description": f"🚨 {row['account_id']} `{row['journal_ref']}` "
+                                       f"({row.get('ticker') or '?'}): {detail}"})
+    except Exception as exc:
+        print(f"  (live account: exit review card for {row['journal_ref']} skipped: {exc})")
+    return True
 
 
 def note_refused_fill(conn, account: str, journal_ref: str, ticket_id: str, why: str) -> str:
@@ -1975,6 +2002,26 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
             except Exception as exc:
                 print(f"  (live account: resume {row['journal_ref']} failed: {exc})")
         after = open_rows(conn)
+        # decision #133 (Architect ruling 2026-10-09): an exit still not done
+        # EXIT_STUCK_AFTER_INTERVALS quote intervals after it started (a door
+        # error, a failed cancel, a ticket that never resolves) is STUCK —
+        # paged once a day per position. A partly filled basket has its own
+        # card (live_exit_partial), so it is not paged twice.
+        try:
+            stuck_after = EXIT_STUCK_AFTER_INTERVALS * interval_s
+            for r in after:
+                started = _ts(r.get("exit_started_at"))
+                if (r["state"] != STATE_EXITING or started is None
+                        or (r["account_id"], r["journal_ref"]) in partial):
+                    continue
+                age = (now.replace(tzinfo=None) - started).total_seconds()
+                if age >= stuck_after:
+                    _alert_exit(conn, r, EVENT_EXIT_STUCK,
+                                f"{r.get('exit_resolution') or 'exit'} has been 'exiting' since "
+                                f"{r.get('exit_started_at')} ({int(age // 60)} min) and has not completed — "
+                                "the position is not settled and its lock is held: needs a human look")
+        except Exception as exc:
+            print(f"  (live account: stuck-exit check skipped: {exc})")
         rows = [r for r in after if r["state"] == STATE_OPEN]
         completing = [r for r in after if r["state"] == STATE_EXITING
                       and (r["account_id"], r["journal_ref"]) in partial]

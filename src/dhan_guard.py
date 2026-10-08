@@ -287,6 +287,10 @@ class SafeDhanClient:
         resp, last_exc = None, None
         for attempt in range(2):
             try:
+                dc._throttle(chain="chain" in str(endpoint).lower())   # host-wide lane (Chunk 5 F1)
+            except Exception:
+                pass
+            try:
                 resp = fn(*args)
                 last_exc = None
             except Exception as e:          # transport/SDK raise

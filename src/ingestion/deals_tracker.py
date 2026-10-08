@@ -560,7 +560,7 @@ def _notify_review_items(census: dict, ledger_path=None,
             lines.append(f"…and {len(new) - 6} more — see the census lake row.")
         if notify_fn is None:
             from src.notifier import fire_broadcast
-            notify_fn = lambda text: fire_broadcast({"text": text})
+            notify_fn = lambda text: fire_broadcast({"event": "alias_review", "text": text})
         notify_fn("\n".join(lines))
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         with open(ledger_path, "a") as f:

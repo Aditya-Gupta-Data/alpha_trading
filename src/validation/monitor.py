@@ -186,7 +186,7 @@ def run_sweep(conn, today: date = None, notify_fn=None) -> dict:
     if cards and notify_fn is None:
         try:
             from src.notifier import fire_broadcast
-            notify_fn = lambda text: fire_broadcast({"text": text})
+            notify_fn = lambda text: fire_broadcast({"event": "pattern_review", "text": text})
         except Exception:
             notify_fn = None
     for card in cards:

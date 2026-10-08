@@ -82,14 +82,16 @@ BASE_WING_STEPS: int = 4                  # mirrors options_proposer.WING_STEPS
 # ---------------------------------------------------------------------------
 
 def _node_polarity(name: str) -> int:
-    """Return -1 (negative), +1 (positive), or 0 (neutral) for a node name."""
-    token = (name or "").lower()
-    for kw in _NEGATIVE_KEYWORDS:
-        if kw in token:
-            return -1
-    for kw in _POSITIVE_KEYWORDS:
-        if kw in token:
-            return 1
+    """-1 / +1 / 0 for a node name, on whole tokens (Chunk 3 Z1: 'win' is not in 'wing')."""
+    import re
+    joined = "_" + "_".join(t for t in re.split(r"[^a-z0-9]+", (name or "").lower()) if t) + "_"
+
+    def has(kw):
+        return any(f"_{kw}{suf}_" in joined for suf in ("", "s", "es"))
+    if any(has(kw) for kw in _NEGATIVE_KEYWORDS):
+        return -1
+    if any(has(kw) for kw in _POSITIVE_KEYWORDS):
+        return 1
     return 0
 
 

@@ -169,7 +169,7 @@ def run(conn=None, db_path=None, today: date = None, notify_fn=None) -> dict:
     if notify_fn is None:
         try:
             from src.notifier import fire_broadcast
-            notify_fn = lambda text: fire_broadcast({"text": text})
+            notify_fn = lambda text: fire_broadcast({"event": "digest", "text": text})
         except Exception:
             notify_fn = None
     try:

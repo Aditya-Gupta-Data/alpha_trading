@@ -267,6 +267,22 @@ def _fit_embed(embed: dict) -> dict:
     return embed
 
 
+def _normalise_payload(payload: dict) -> dict:
+    """A {"text"}/{"embeds"} payload becomes an event card (Chunk 3 W2)."""
+    if not isinstance(payload, dict) or payload.get("description"):
+        return payload
+    text = payload.get("text")
+    if not text and payload.get("embeds"):
+        first = (payload.get("embeds") or [{}])[0] or {}
+        text = first.get("description") or first.get("title")
+    if not text:
+        return payload
+    return dict(payload, event=payload.get("event") or "note",
+                ticker=payload.get("ticker") or "desk",
+                date=payload.get("date") or _ist_today_str(),
+                description=str(text))
+
+
 def _build_embed(payload: dict) -> dict:
     """payload dict → one Discord embed object.
 
@@ -296,7 +312,7 @@ def _build_embed(payload: dict) -> dict:
         "macro_heartbeat":  f"🫀 Macro Nightly Heartbeat — {today}",
         "dashboard_link":   f"🔗 Dashboard Link Changed — {today}",
     }
-    title = titles.get(event, f"📌 {event.title()} — {ticker}")
+    title = titles.get(event, f"📌 {event.replace('_', ' ').title()} — {ticker}")
 
     fields: list = []
 
@@ -535,6 +551,7 @@ async def broadcast_alert(payload: dict) -> bool:
     Since decision #84 every card passes the daily Discord budget first:
     suppressed cards return True (they reached the owner's digest queue —
     dedup ledgers may honestly mark them announced)."""
+    payload = _normalise_payload(payload)
     if webhooks_muzzled():
         return _muzzle_log(
             "embed broadcast",
@@ -618,6 +635,7 @@ def fire_broadcast(payload: dict) -> None:
     Never raises; any Discord/network failure is printed and swallowed so
     the trade journal is never blocked by a Discord outage.
     """
+    payload = _normalise_payload(payload)
     queue = getattr(_DEFERRED, "queue", None)
     if queue is not None:
         queue.append(payload)

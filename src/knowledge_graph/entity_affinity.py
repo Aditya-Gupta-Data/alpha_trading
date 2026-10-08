@@ -681,7 +681,7 @@ def _notify_new_specialists(rows: list, ledger_path=None,
                          "data/specialist_entities.json")
         if notify_fn is None:
             from src.notifier import fire_broadcast
-            notify_fn = lambda text: fire_broadcast({"text": text})
+            notify_fn = lambda text: fire_broadcast({"event": "entity_review", "text": text})
         notify_fn("\n".join(lines))
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         with open(ledger_path, "a") as f:

@@ -230,8 +230,7 @@ def main() -> None:
             from src import notifier
 
             def notify_fn(msg):
-                notifier.fire_broadcast({"embeds": [{"description": msg,
-                                                     "color": 0x3498DB}]})
+                notifier.fire_broadcast({"event": "performance", "description": msg})
         except Exception:
             notify_fn = None
     out = run(notify_fn=notify_fn)

@@ -48,8 +48,8 @@ def collect(conn=None, db_path=None) -> dict:
             conn = brain_map.connect(db_path)
         trial.ensure_schema(conn)
         rows = conn.execute(
-            "SELECT pattern_id, resolved, result, r_multiple "
-            "FROM shadow_trades WHERE mode = ?",
+            "SELECT pattern_id, resolved, result, r_multiple, host_ref "
+            "FROM shadow_trades WHERE mode = ? ORDER BY rowid",
             (trial.BLOCKED_MODE,)).fetchall()
     except Exception as exc:
         return {"available": False, "reason": str(exc)}
@@ -60,7 +60,7 @@ def collect(conn=None, db_path=None) -> dict:
             except Exception:
                 pass
 
-    by_gate, wins, losses, scratches, rs = {}, 0, 0, 0, []
+    by_gate, wins, losses, scratches, rs, hosts = {}, 0, 0, 0, [], set()
     for r in rows:
         gate = str(r["pattern_id"] or "").replace("blocked:", "") or "unknown"
         g = by_gate.setdefault(gate, {"blocked": 0, "resolved": 0})
@@ -68,6 +68,11 @@ def collect(conn=None, db_path=None) -> dict:
         if not r["resolved"]:
             continue
         g["resolved"] += 1
+        # one host position = one outcome, however many days it blocked (S4)
+        host = r["host_ref"] or f"row:{len(hosts)}"
+        if host in hosts:
+            continue
+        hosts.add(host)
         if r["result"] == "win":
             wins += 1
         elif r["result"] == "loss":
@@ -82,6 +87,7 @@ def collect(conn=None, db_path=None) -> dict:
     return {
         "available": True,
         "blocked_total": len(rows),
+        "resolved_rows": sum(g["resolved"] for g in by_gate.values()),
         "resolved": resolved,
         "wins": wins, "losses": losses, "scratches": scratches,
         "sum_r": sum_r,
@@ -114,8 +120,11 @@ def render_lines(stats: dict = None, **kwargs) -> list:
                 "nothing to weigh."]
 
     lines = [f"The exposure gate has refused **{stats['blocked_total']}** "
-             f"duplicate trade(s); **{stats['resolved']}** of those can now "
-             "be judged (the position that caused the block has resolved)."]
+             f"duplicate trade(s); **{stats['resolved']}** independent host "
+             f"position(s) behind them have resolved"
+             + (f" ({stats['resolved_rows']} blocked rows)"
+                if stats.get("resolved_rows", stats["resolved"]) != stats["resolved"] else "")
+             + "."]
     if stats["verdict"] == "ACCUMULATING":
         lines.append(
             f"Too few resolved to call it — a verdict needs "

@@ -93,7 +93,7 @@ def _notify_new_candidates(runs: list, totals: dict) -> None:
         lines.append("_Inspect any of them: `python3 -m "
                      "src.discovery.inspect <tags or id>`_")
         from src.notifier import fire_broadcast
-        fire_broadcast({"text": "\n".join(lines[:12])})
+        fire_broadcast({"event": "miner_candidates", "text": "\n".join(lines[:12])})
     except Exception:
         pass
 

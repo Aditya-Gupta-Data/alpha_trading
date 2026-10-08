@@ -302,7 +302,7 @@ def notify_problems(report: dict, ledger_path=None, notify_fn=None) -> int:
                          "data/scrip_reconciliation.json.")
         if notify_fn is None:
             from src.notifier import fire_broadcast
-            notify_fn = lambda text: fire_broadcast({"text": text})  # noqa: E731
+            notify_fn = lambda text: fire_broadcast({"event": "scrip_review", "text": text})  # noqa: E731
         notify_fn("\n".join(lines))
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as fh:

@@ -441,8 +441,7 @@ def main() -> None:
             from src import notifier
 
             def notify_fn(msg):
-                notifier.fire_broadcast({"embeds": [{"description": msg,
-                                                     "color": 0xE67E22}]})
+                notifier.fire_broadcast({"event": "greeks_advisory", "description": msg})
         except Exception:
             notify_fn = None
     out = run_advisory(notify_fn=notify_fn)

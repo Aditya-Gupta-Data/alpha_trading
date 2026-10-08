@@ -235,6 +235,15 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-09 · 5 commits · 20 files touched
+
+- `3fd2d7d` docs: Chunk 2 closed in code — all 15 lows + close-out residuals fixed (#130–#132), not deployed; ledger Issue 45; HANDOVER
+- `c2f80a5` fix(chunk2): lows residuals B2 — D7 per-ref isolation; closed live rows never 'already_open'; cards after the journal lock; the dashboard trusts a readable live book
+- `a8a723c` fix(chunk2): lows residuals B1 — one entry basket per account per ref; manage-only per cycle; venue-raise refusal; F16 read errors roll back
+- `3a8fde6` fix(chunk2): lows residuals A2 — the backstop cancels a working exit past expiry (F08); per-ref repair isolation (F15); pins
+- `fe7463f` fix(chunk2): lows residuals A1 — the live arm's exit ownership holds without the tick lock (F06)
+
+
 ### 2026-10-06 · 6 commits · 28 files touched
 
 - `a66423a` docs: DEPLOYED Issue 44 + Chunk 2 fixes A-G + margin-block refusal (VM bc6fbe0, 18:21 IST); Chunk 2 close-out status (15 lows open); HANDOVER

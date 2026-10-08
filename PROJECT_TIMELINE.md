@@ -235,6 +235,15 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-09 · 5 commits · 20 files touched
+
+- `3fd2d7d` docs: Chunk 2 closed in code — all 15 lows + close-out residuals fixed (#130–#132), not deployed; ledger Issue 45; HANDOVER
+- `c2f80a5` fix(chunk2): lows residuals B2 — D7 per-ref isolation; closed live rows never 'already_open'; cards after the journal lock; the dashboard trusts a readable live book
+- `a8a723c` fix(chunk2): lows residuals B1 — one entry basket per account per ref; manage-only per cycle; venue-raise refusal; F16 read errors roll back
+- `3a8fde6` fix(chunk2): lows residuals A2 — the backstop cancels a working exit past expiry (F08); per-ref repair isolation (F15); pins
+- `fe7463f` fix(chunk2): lows residuals A1 — the live arm's exit ownership holds without the tick lock (F06)
+
+
 ### 2026-10-07 · 3 commits · 20 files touched
 
 - `aefd30d` fix(chunk2): L4 review fixes
@@ -255,15 +264,6 @@ regenerates that day's entry rather than duplicating it.
 - `47f807a` fix(chunk2): the #68 one-position slot is re-checked firm-wide at approval (Fix G)
 - `1e3966c` fix(chunk2): no stock-option round trip at entry; no approval inside the forced-exit window (F17 + F18)
 - `d5295e7` fix(chunk2): expiry backstop settles only on the expiry session's own close; the forced pre-expiry exit also fires on the last session before expiry (F22 + F23)
-
-
-### 2026-10-09 · 5 commits · 20 files touched
-
-- `3fd2d7d` docs: Chunk 2 closed in code — all 15 lows + close-out residuals fixed (#130–#132), not deployed; ledger Issue 45; HANDOVER
-- `c2f80a5` fix(chunk2): lows residuals B2 — D7 per-ref isolation; closed live rows never 'already_open'; cards after the journal lock; the dashboard trusts a readable live book
-- `a8a723c` fix(chunk2): lows residuals B1 — one entry basket per account per ref; manage-only per cycle; venue-raise refusal; F16 read errors roll back
-- `3a8fde6` fix(chunk2): lows residuals A2 — the backstop cancels a working exit past expiry (F08); per-ref repair isolation (F15); pins
-- `fe7463f` fix(chunk2): lows residuals A1 — the live arm's exit ownership holds without the tick lock (F06)
 
 
 ### 2026-10-04 · 4 commits · 20 files touched

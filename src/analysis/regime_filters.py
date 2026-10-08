@@ -113,6 +113,39 @@ def crisis_regime(vix, prev_vix=None, as_of=None):
     return {"crisis": bool(reasons), "reason": "; ".join(reasons) or "calm"}
 
 
+def prev_session_vix(as_of, conn=None) -> float | None:
+    """The last daily_context VIX before `as_of` (the chain archiver's close read); None = abstain."""
+    try:
+        from src import brain_map
+        owns = conn is None
+        conn = conn or brain_map.connect()
+        try:
+            row = conn.execute("SELECT vix FROM daily_context WHERE date < ? AND vix IS NOT NULL "
+                               "ORDER BY date DESC LIMIT 1", (str(as_of),)).fetchone()
+        finally:
+            if owns:
+                conn.close()
+        return float(row[0]) if row and row[0] is not None else None
+    except Exception:
+        return None
+
+
+def advisory_for(underlying, vix=None, as_of=None, deals_by_ticker=None, prev_vix=None) -> dict | None:
+    """One door for both market fetches (W1): the advisory, or None when switched off / unavailable."""
+    from src.config import REGIME_ADVISORY_ENABLED
+    if not REGIME_ADVISORY_ENABLED:
+        return None
+    try:
+        if deals_by_ticker is None:
+            from src.analysis import smart_money_trend
+            deals_by_ticker = smart_money_trend.load_deals_by_ticker()
+        if prev_vix is None and as_of is not None:
+            prev_vix = prev_session_vix(as_of)
+        return advise(underlying, vix=vix, prev_vix=prev_vix, as_of=as_of, deals_by_ticker=deals_by_ticker)
+    except Exception:
+        return None
+
+
 def advise(underlying, vix=None, prev_vix=None, as_of=None, deals_by_ticker=None) -> dict:
     """VIEW-INDEPENDENT verdict the proposer applies by view. Fail-open: any
     failure -> a permissive verdict (no block)."""

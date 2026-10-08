@@ -126,12 +126,11 @@ def fetch_market_state(underlying: str) -> dict | None:
     # the deals ledger itself.
     try:
         from src.analysis import regime_filters
-        from src.analysis import smart_money_trend
-        deals = smart_money_trend.load_deals_by_ticker()
-        state["advisory"] = regime_filters.advise(
-            underlying, vix=state["vix"], deals_by_ticker=deals)
+        adv = regime_filters.advisory_for(underlying, vix=state["vix"], as_of=ist_now().date())
+        if adv is not None:
+            state["advisory"] = adv
     except Exception:
-        pass  # radar data unavailable — proposer runs without the advisory
+        pass
     return state
 
 

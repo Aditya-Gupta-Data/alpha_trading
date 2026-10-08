@@ -133,6 +133,8 @@ VOL_RANK_LOOKBACK = int(_CONFIG.get("vol_rank_lookback", 252))
 # Neutral structures keep the static take. Bars before the effective date
 # feed the peak but can never fire the exit (Issue 31 rule).
 RATCHET_ENABLED = bool(_CONFIG.get("ratchet_enabled", True))
+# Chunk 3 W1: the regime_filters advisory (smart-money veto, war playbook) on the live fetch.
+REGIME_ADVISORY_ENABLED = bool(_CONFIG.get("regime_advisory_enabled", True))
 RATCHET_LADDER = tuple(tuple(r) for r in _CONFIG.get(
     "ratchet_ladder", [[40, 0], [60, 30], [80, 50], [90, 70]]))
 RATCHET_EFFECTIVE_DATE = str(_CONFIG.get("ratchet_effective_date", "2026-09-24"))

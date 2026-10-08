@@ -199,7 +199,7 @@ class CandleSink:
 
 def fetch_live_market_state(underlying: str, *, quote_fn=None,
                             closes_fn=None, vix_fn=None,
-                            now_fn=ist_now) -> dict | None:
+                            now_fn=ist_now, advisory_fn=None) -> dict | None:
     """`market_loop.fetch_market_state`'s live twin — same contract
     ({"analysis", "vix"} (+ "vol_overrides") build_proposal overrides, or
     None to skip the cycle), but the trend read includes the CURRENT
@@ -235,6 +235,14 @@ def fetch_live_market_state(underlying: str, *, quote_fn=None,
             state["vol_overrides"] = vol_overrides
     except Exception:
         pass  # bridge unavailable — run with default params
+    try:                                   # Chunk 3 W1: the advisory on the LIVE fetch too
+        from src.analysis import regime_filters
+        adv = (advisory_fn or regime_filters.advisory_for)(
+            underlying, vix=state["vix"], as_of=now_fn().date())
+        if adv is not None:
+            state["advisory"] = adv
+    except Exception:
+        pass
     return state
 
 

@@ -81,6 +81,10 @@ st.caption("Paper money. Read-only. Every entry, size, exit and reconciliation b
 # (which the box pulls every 15 minutes) without anyone touching it.
 PORTFOLIO_COLOURS = {"PAPER_10L": "#4c78a8", "PAPER_2L": "#f58518", "PAPER_2L_ROT": "#54a24b",
                      "PAPER_2L_LIVE": "#e45756"}
+# owner's choice 2026-10-09: human names on the portfolio graph only (the rest
+# of the page keeps the account codes)
+PORTFOLIO_NAMES = {"PAPER_10L": "Model Portfolio", "PAPER_2L": "Small-Account Test",
+                   "PAPER_2L_ROT": "Capital-Rotation Test", "PAPER_2L_LIVE": "Live-Quote Test"}
 
 
 def _all_portfolios_chart():
@@ -116,16 +120,18 @@ def _all_portfolios_chart():
         return
     df = pd.DataFrame({"time": pd.to_datetime([p["ts"] for p in pts]),
                        "return_pct": [p["pct"] for p in pts], "equity": [p["equity"] for p in pts],
-                       "portfolio": [p["account"] for p in pts]})
-    accounts = [a for a in d.EQUITY_ACCOUNTS if a in set(df["portfolio"])]
+                       "portfolio": [PORTFOLIO_NAMES.get(p["account"], p["account"]) for p in pts],
+                       "account": [p["account"] for p in pts]})
+    accounts = [a for a in d.EQUITY_ACCOUNTS if a in set(df["account"])]
     chart = alt.Chart(df).mark_line(interpolate="step-after" if basis == bases[1] else "linear",
                                     point=len(df) < 60).encode(
         x=alt.X("time:T", title=None),
         y=alt.Y("return_pct:Q", title="% return", scale=alt.Scale(zero=False)),
-        color=alt.Color("portfolio:N", scale=alt.Scale(domain=accounts,
+        color=alt.Color("portfolio:N", scale=alt.Scale(domain=[PORTFOLIO_NAMES.get(a, a) for a in accounts],
                                                        range=[PORTFOLIO_COLOURS[a] for a in accounts]),
-                        legend=alt.Legend(orient="bottom", title=None)),
-        tooltip=["portfolio:N", alt.Tooltip("time:T", format="%d %b %Y %H:%M"),
+                        legend=alt.Legend(orient="bottom", title=None, columns=2, labelLimit=0)),
+        tooltip=["portfolio:N", alt.Tooltip("account:N", title="account"),
+                 alt.Tooltip("time:T", format="%d %b %Y %H:%M"),
                  alt.Tooltip("return_pct:Q", format="+.2f", title="% return"),
                  alt.Tooltip("equity:Q", format=",.0f", title="₹ equity")])
     layers = [chart]
@@ -135,9 +141,11 @@ def _all_portfolios_chart():
         layers.append(alt.Chart(edf).mark_rule(strokeDash=[4, 3], color="#22a06b").encode(
             x="time:T", tooltip=["label:N"]))
     st.altair_chart(alt.layer(*layers).properties(height=300), use_container_width=True)
-    st.caption("PAPER_10L's % is measured on the capital contributed at the time: ₹10L until the 21 Jul clean "
+    st.caption("The Model Portfolio's (PAPER_10L) % is measured on the capital contributed at the time: ₹10L until the 21 Jul clean "
                "sheet, ₹2L from it, ₹10L again from the 7 Aug ₹8L injection (dashed markers). The ₹2L books "
-               "start at 0% on the day each was opened (2L 21 Sep, ROT 29 Sep, LIVE 30 Sep).")
+               "start at 0% on the day each was opened (Small-Account Test 21 Sep, Capital-Rotation Test 29 Sep, "
+               "Live-Quote Test 30 Sep). Model Portfolio = PAPER_10L, Small-Account Test = PAPER_2L, "
+               "Capital-Rotation Test = PAPER_2L_ROT, Live-Quote Test = PAPER_2L_LIVE.")
     for n in H.get("notes") or []:
         if basis == bases[1] or "true-net" not in n:
             st.caption(n)

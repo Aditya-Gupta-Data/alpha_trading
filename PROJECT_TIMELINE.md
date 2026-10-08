@@ -235,8 +235,28 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-09 · 8 commits · 27 files touched
+### 2026-10-09 · 28 commits · 73 files touched
 
+- `569a855` docs(audit): Chunk 5 Ingestion & Data Lake — scope skeleton
+- `9af1498` docs: Chunk 4 closed in code — HANDOVER, ledger, audit status (not deployed)
+- `275d3c1` fix(audit-c4): Batch D — decided_at on every decision; stale-proposal refusal behind stale_approval_max_days (B1, default off); decision #137
+- `3dfb8d7` fix(audit-c4): Batch C — chained % across capital moves (T1), partial marks named + flat = realized (T2/T10), crossed capture on the rows (T5); review-card test follows R3
+- `dbad814` fix(audit-c4): Batches A+B — spooled cards keep their content, morning brief scheduled, pages don't burn the budget, digest acks on delivery (R1-R3/B4/R7), W/L approved-only (R4), honest clean-day + MTM lines (R5/R8), /pnl (B2)
+- `f9a45f8` docs(audit): Chunk 4 — 26 findings across three lenses, lead verdicts, fix plan
+- `93106ab` docs(audit): Chunk 4 Dashboard & Bridge — scope skeleton
+- `2511079` docs: Chunk 3 closed in code — HANDOVER, ledger, audit status (not deployed)
+- `aedbc5e` fix(audit-c3): Batch C — the regime advisory reaches the live market fetch (W1), behind regime_advisory_enabled; decision #136
+- `4c7e7a4` fix(audit-c3): Batch B — margin wall on real cash + VIX-stressed margin (Z2/Z4), sizing journaled (Z3), duplicate positions = one Wilson trial (S5)
+- `d7e9ba1` fix(audit-c3): Batch A — named event cards for 8 blank text/embeds callers (W2), whole-token graph polarity (Z1), per-host opportunity-cost verdict (S4)
+- `aea81f0` docs(audit): Chunk 3 Analytics & Sizing — 24 findings across three lenses, lead verdicts, fix plan
+- `948ba4a` docs: HANDOVER — 09:10 link card + #135 phantom-ratchet fix pushed (not deployed); Chunk 3 audit running
+- `1893d5e` docs: HANDOVER — desk graph + Brain Map live on the box; 09:10 link card leads with the desk (66eb660)
+- `66eb660` feat(desk): the four-portfolio graph and the Brain Map in the desk's own design; the 09:10 link card leads with the desk (Architect 2026-10-09)
+- `05a7e3f` feat(scheduler): the 09:10 dashboard-link Discord card — phone-ready link before the open (owner directive 2026-10-09)
+- `e1f8323` feat(dashboard): a Brain Map tab — the knowledge graph's causal edges beside the money (Architect 2026-10-09)
+- `ab49ca9` docs: HANDOVER — the portfolio graph is live on the always-on dashboard box (2fdafcf)
+- `2fdafcf` feat(dashboard): human names on the portfolio graph (owner's choice: by strategy role, graph only)
+- `1fe2c89` docs: DEPLOYED 170bb2e to the VM (Chunk 2 lows, #133 stuck-exit pages, the equity recorder) after an identical-decisions dry-run; HANDOVER + ledger
 - `767e1e7` feat(dashboard): the four paper portfolios on one % graph with a timeframe selector; the VM records true net equity every 15 min
 - `d8d9048` feat(live): a stuck or half-filled live exit pages a human on Discord (decision #133, Architect ruling); #134 recorded
 - `2026461` docs: PROJECT_TIMELINE — keep the daily log newest-first after the 10-06/10-07 backfill

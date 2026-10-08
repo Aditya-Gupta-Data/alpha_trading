@@ -87,6 +87,22 @@ Read-only adversarial audit of the live-quote arm (decision #120) and the exit/s
 6. **F09:** the #68 exposure gate is evaluated per account or firm-wide (owner ruling).
 7. **The remaining lows**, batched: F04–F08, F10–F16, F19, F20, F24.
 
+## Close-out status (2026-10-09 ~01:00 IST) — ALL 24 confirmed findings fixed in code
+
+**The remaining 15 lows are fixed and pushed** (owner directive 2026-10-06). None is deployed; the VM is at `bc6fbe0`.
+- **L1, F05 + F06:** `6896f1f` + `689b700`.
+- **L2, F04 + F07 + F08 + F15 + F16:** `7813529` + `762e868`.
+- **L3, F11–F14:** `b27ad3c` + `a451c04`.
+- **L4, F10 + F19 + F20 + F24:** `c2a9afb` + `aefd30d`.
+- **Close-out verification:** one adversarial verifier per finding, plus a cross-batch critic. Every residual they found is fixed in `fe7463f`, `3a8fde6`, `a8a723c` and `c2f80a5`.
+- **Policy defaults:** recorded as decisions #130, #131 and #132.
+- **Suite:** 2,941 passed.
+
+**Still open:**
+- The data-driven closed-market detector (#124) is not built.
+- One owner question: should the live arm's events-only telemetry yield to the review-flags-to-Discord rule (#130)?
+- F25 and F26 are informational.
+
 ## Close-out status (2026-10-06 ~18:30 IST)
 
 **Fixed and DEPLOYED** (VM `bc6fbe0`, 2026-10-06 18:21 IST). Each fix had an implementer, 3 adversarial reviewers and mutation checks, and the full suite passed (2,724).

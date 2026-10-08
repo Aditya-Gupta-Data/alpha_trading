@@ -2303,3 +2303,17 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
   - The read-only open-book dry-run beforehand (snapshot 15:37, re-checked 16:52 and 18:20; 16 open, 0 pending) showed identical exit decisions under the old and new code.
   - `24f931bb` (model lock 70, capture about −17%) is due as `ratchet_hit` at the next settlement either way.
   - **Not yet observed live:** the first intraday crossed square-off and the first ROT eviction. Check them on 10-07.
+- **Checked on the VM, 10-07 12:20 IST (read-only):**
+  - `24f931bb` settled at 05:15 as `ratchet_hit`, pnl −₹3,598.12.
+  - NIFTY MID SELECT bearish proposals are blocked, held by PAPER_2L_LIVE (`exposure_blocks` 10:23:30).
+  - The live arm names its skipped marks (RELIANCE `62d04919`: no ask on its short 1120PE).
+  - **NOT verified:** a live intraday crossed square-off or a ROT eviction; none was seen in the log at that hour.
+
+## Issue 45 — a test file run as plain python wrote 10 test cards into the Mac's Discord digest queue (2026-10-06 22:07 IST; Mac only; restored the same minute)
+
+- **What happened (verified):**
+  - A fix-up agent working on the Chunk 2 lows ran a test file directly as `python3 tests/...`. That bypasses `tests/conftest.py`, so the write guard was off.
+  - The run appended 10 test 'closed' cards (NIFTY 50 / TCS.NS) to the Mac's `logs/discord_digest_queue.jsonl`.
+  - The agent restored the queue to its 3 real lines in the same minute. A copy of the polluted file is kept at `.claude/audit_state/chunk2_fixes/scratch/L3m/discord_digest_queue.polluted_by_plain_runner_2026-10-06T2207.jsonl`.
+  - The VM was not involved.
+- **Fix:** process only. The fix-agent template now forbids running a test file as plain python. No code change.

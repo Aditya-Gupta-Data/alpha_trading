@@ -42,6 +42,51 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 ~01:00 IST — Chunk 2 CLOSED in code: all 15 lows fixed, verified, pushed (`c2f80a5`); NOT deployed
+
+**State.**
+- `origin/main` is at `c2f80a5` plus docs. Suite: **2,941 passed** (about 40 s).
+- The VM is still at `bc6fbe0`, deployed 10-06 18:21. None of the low fixes are deployed.
+
+**The 15 low findings (owner directive 10-06 "fix the 15 lows in batches with the usage guardrail").** Each batch had an implementer, 3 adversarial reviewers and a review-fix pass. Every fix was mutation-checked in a throwaway worktree, and every mutant was killed.
+- **L1, F05 + F06** (`6896f1f` + `689b700`): exit serialisation and partial baskets.
+- **L2, F04 + F07 + F08 + F15 + F16** (`7813529` + `762e868`): held-exit pacing, an atomic audit event, the backstop for `exiting` rows, a filled-but-unrecorded lock, and one-commit expiry.
+- **L3, F11–F14** (`b27ad3c` + `a451c04`): structure-based bounds, the R:R floor and re-sizing at approval, halts on held locks, manage-only when switched off.
+- **L4, F10 + F19 + F20 + F24** (`c2a9afb` + `aefd30d`): the dashboard's live rows, stale and pre-entry chains, the kill switch reaching the live arm, square-off retries.
+
+**Close-out verification (10-07).** One adversarial verifier per finding, plus one cross-batch critic.
+- 12 of 15 were confirmed fixed. F06, F10 and F16 still reproduced in narrow edge cases, all minor; no blocker or major finding.
+- All of those residuals, and the critic's three minors, are fixed:
+  - **A1** `fe7463f`: exit ownership holds WITHOUT the tick lock. An exit-ticket fence, an attempt-scoped settle, and an unguarded resume that leaves a young attempt alone.
+  - **A2** `3a8fde6`: the backstop cancels a working exit ticket past expiry; per-ref repair isolation; test pins.
+  - **B1** `a8a723c`: one entry basket per account per ref (a killed approval can no longer double an entry); manage-only re-checked every cycle; a venue that raises refuses the live arm; a read error in lock expiry rolls everything back.
+  - **B2** `c2f80a5`: the D7 sweep isolates a failing ref; a closed live position is never relabelled 'already_open'; approval cards are sent only after the journal lock; the dashboard trusts a readable live book.
+- I made the residual fixes directly, after two background agent runs stalled on cut-off model responses. The verifiers' own probes now pass on the fixed code: F06 4/4, and F16's P1/P2 hold under the new no-raise contract.
+- Policy defaults the owner may revise are recorded as decisions **#130** (exit lifecycle), **#131** (approval path) and **#132** (marks, ratchet, square-off, dashboard).
+
+**Deploy (owner's call; not done).**
+- This changes EXIT paths: the fences, F08's backstop for `exiting` rows, the F19 stale and pre-entry chain rules, F20 on the live arm, and the F24 retries. So it also needs the Issue 31 read-only open-book dry-run on the VM first, after 15:30.
+- Steps: `git fetch && git merge --ff-only origin/main`, run the scoped tests on the VM, then `sudo systemctl restart alpha-trading alpha-discord-bot`. The 09:10 scheduler picks up the code itself.
+- In the dry-run, check:
+  - no open LIVE row already has EXIT tickets with fills;
+  - every active 2L/ROT lock has an 'approved' verdict on its row.
+
+**Verified on the VM, 10-07 12:20 IST (the 10-06 deploy):**
+- `24f931bb` settled at 05:15 as `ratchet_hit`, pnl −₹3,598.12, as the dry-run predicted.
+- NIFTY MID SELECT **bearish** proposals are blocked, held by PAPER_2L_LIVE (`exposure_blocks` 10:23:30).
+- The live arm's skipped marks are named in the log: RELIANCE `62d04919`, no ask on its short 1120PE.
+- **NOT verified:** a live intraday crossed square-off, or a ROT eviction. Neither was seen in the log at that hour.
+
+**Open owner questions:**
+1. Should the live arm's events-only telemetry (#102/#120) give way to the review-flags-to-Discord rule for partial or legged settlements, stale-close fallbacks and kept locks that stay unrepaired? (#130)
+2. F12 lets the live arm abstain where the primary trades, which bears on the #120 A/B comparison. (#131)
+3. The primary's halt check is skipped when `gate_headless_entry` fails open on a database error (pre-existing).
+4. A data-driven closed-market detector (queued by #124) is still not built.
+
+**Incident (Mac only, 10-06 22:07).** An agent ran a test file as plain python, which bypasses conftest's write guard, and appended 10 test cards to the Mac's `logs/discord_digest_queue.jsonl`. The queue was restored to its 3 real lines the same minute; the VM was untouched. The fix template now forbids plain-python test runs.
+
+**Next domain:** audit Chunk 3, Analytics & Sizing.
+
 ## 2026-10-06 ~18:30 IST — DEPLOYED: Issue 44 + Chunk 2 fixes A–G + the margin-block refusal (VM `bc6fbe0`)
 
 **Live now.** The VM is at `bc6fbe0`; it was `18178c8`. `alpha-trading` (uvicorn API + hourly Auto-Sync) and `alpha-discord-bot` restarted at 18:21 IST.

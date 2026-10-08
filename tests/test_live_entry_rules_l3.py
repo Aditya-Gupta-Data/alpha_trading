@@ -624,11 +624,27 @@ def test_switching_the_arm_off_still_ticks_what_it_holds_and_says_so_once(desk, 
     assert len(cards) == 1 and len(_events(c, LIVE, lp.EVENT_ARM_OFF)) == 1
 
 
-def test_an_off_arm_holding_nothing_wires_nothing_as_before(desk, monkeypatch):
+def test_an_off_arm_holding_nothing_watches_each_cycle_and_manages_what_appears(desk, monkeypatch):
+    """Lows residual B1 (F14): holding nothing at session open used to wire
+    NOTHING for the whole session — a LIVE position opened later (the API
+    process still had the switch on) went unmarked until the next session.
+    Now a per-cycle watcher ticks only once there is something to manage."""
+    c = desk["c"]
     monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", False)
-    assert _wired(monkeypatch) is None and desk["cards"] == []
+    watch = _wired(monkeypatch)
+    assert getattr(watch, "manage_only_watch", False) and desk["cards"] == []
+    ticks, real_tick = [], lp.tick
+    monkeypatch.setattr(lp, "tick", lambda now=None, **k: ticks.append(now) or {"rows": 1})
+    assert watch(AT) is None and ticks == []                    # nothing to manage: no tick, no card
+    _open_live(c, "f14w0001")                                    # appears mid-session
+    assert watch(AT) == {"rows": 1} and ticks == [AT]
+    (card,) = desk["cards"]
+    assert card["event"] == "live_arm_off_managing" and "f14w0001" in card["description"]
+    watch(AT)
+    assert len(desk["cards"]) == 1                              # one card per IST day
+    monkeypatch.setattr(lp, "tick", real_tick)
     monkeypatch.setattr(pm, "PAPER_2L_LIVE_ACCOUNT_ENABLED", True)
-    assert _wired(monkeypatch) is lp.tick and desk["cards"] == []        # on: the normal arm, no card
+    assert _wired(monkeypatch) is lp.tick                        # on: the normal arm
 
 
 def test_an_off_arm_whose_book_cannot_be_read_is_armed_anyway(desk, monkeypatch, capsys):

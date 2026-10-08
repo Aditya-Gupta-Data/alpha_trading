@@ -344,6 +344,40 @@ def cancel_ticket(conn, ticket_id: str, reason: str = "cancelled") -> dict:
     return {"ok": True, "legs": out, "status": ticket_status(conn, ticket_id)}
 
 
+def withdraw_stale_entry(conn, account_id: str, journal_ref: str,
+                         reason: str = "stale entry ticket withdrawn") -> dict:
+    """ONE entry basket per account per journal ref (Chunk 2 lows, residual
+    B1 / F12): before an approval issues an ENTRY ticket — or releases an
+    account's lock as 'never opened' — every earlier entry ticket of that
+    (account, ref) is looked at. One with ANY fill IS the account's entry
+    (an approval killed after its venue pass): {"filled": its id} — reuse
+    it, never issue a second basket. One still working with nothing filled
+    (killed before its sweep) is cancelled now — left live, any later sweep
+    would fill it beside the new ticket; a fill that beats the cancel makes
+    it the entry after all. Returns {"filled": ticket_id | None,
+    "cancelled": {ticket_id: status after the cancel}}. Exit tickets
+    (note 'EXIT ...') are never touched."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT t.ticket_id, COALESCE(SUM(l.qty_filled), 0) AS filled, "
+        "SUM(CASE WHEN l.state IN (?, ?) THEN 1 ELSE 0 END) AS working "
+        "FROM trade_tickets t JOIN trade_legs l ON l.ticket_id = t.ticket_id "
+        "WHERE t.account_id = ? AND t.journal_ref = ? AND COALESCE(t.note, '') NOT LIKE 'EXIT %' "
+        "GROUP BY t.ticket_id ORDER BY t.issued_at, t.ticket_id",
+        (PENDING, PARTIAL, account_id, journal_ref)).fetchall()
+    out = {"filled": None, "cancelled": {}}
+    for tid, filled, working in (tuple(r) for r in rows):
+        if filled > 0:
+            out["filled"] = out["filled"] or tid
+            continue
+        if working:
+            status = cancel_ticket(conn, tid, reason).get("status")
+            out["cancelled"][tid] = status
+            if status in (FILLED, PARTIAL) and out["filled"] is None:
+                out["filled"] = tid
+    return out
+
+
 # ------------------------------------------------------------------ roll-up
 
 def roll_up_status(leg_states: list, leg_fills: list) -> str:

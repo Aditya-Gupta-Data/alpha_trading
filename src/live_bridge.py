@@ -891,11 +891,46 @@ def _manage_only_arm(lp_mod):
               "armed MANAGE-ONLY so nothing it holds is abandoned (audit F14).", flush=True)
         return lp_mod.tick
     if not refs:
-        return None
+        # lows residual B1 (F14): holding nothing NOW is not holding nothing
+        # all session — the API process reads its switch at import and can
+        # still open a LIVE position after a config edit that restarted only
+        # the scheduler. Watch every cycle instead of deciding once.
+        return _manage_only_watch(lp_mod)
     print(f"[Live Bridge] PAPER_2L_LIVE arm is OFF but holds {len(refs)} position(s) "
           f"({', '.join(refs)}) — armed MANAGE-ONLY: marks + exits of those rows on crossed quotes, "
           "no new live entry (audit F14).", flush=True)
     return lp_mod.tick
+
+
+def _manage_only_watch(lp_mod):
+    """The switch-off arm when it held nothing at session open (lows
+    residual B1, F14): a per-cycle callable that re-reads
+    `refs_to_manage` (one cheap read) and runs the tick MANAGE-ONLY only
+    once a position appears — e.g. one the API process opened mid-session
+    because its own copy of the switch was still on. Announced like the
+    session-open case (one card per IST day). An unreadable book ticks
+    anyway (the tick on an empty book is a no-op). Returns the tick's
+    summary, or None when there is nothing to manage."""
+    def watch(now):
+        try:
+            from src import brain_map
+            conn = brain_map.connect()
+            try:
+                refs = lp_mod.refs_to_manage(conn)
+                if refs:
+                    try:
+                        lp_mod.announce_manage_only(conn, refs)
+                    except Exception as e:
+                        print(f"[Live Bridge] (manage-only notice not recorded: {e})", flush=True)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[Live Bridge] PAPER_2L_LIVE arm is OFF and its book could not be read ({e}) — "
+                  "ticking MANAGE-ONLY this cycle (audit F14).", flush=True)
+            return lp_mod.tick(now)
+        return lp_mod.tick(now) if refs else None
+    watch.manage_only_watch = True
+    return watch
 
 
 async def run_live_loop(underlyings=UNDERLYINGS,

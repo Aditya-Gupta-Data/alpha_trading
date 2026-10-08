@@ -724,13 +724,16 @@ def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
                 # the entry still reads pending; released here at zero, the
                 # filled trade was lost — the tick's repair scans ACTIVE
                 # locks only). READS only, inside this transaction (F16); the
-                # kept lock's named event joins it (commit=False).
-                try:
-                    if live_pricer.has_open_position(conn, account, journal_ref):
-                        continue
-                    filled = live_pricer.filled_entry_ticket(conn, account, journal_ref)
-                except Exception:
+                # kept lock's named event joins it (commit=False). A read
+                # error PROPAGATES (lows residual B1, F16): SQLite rolls the
+                # WHOLE transaction back on an I/O or memory error, even for a
+                # SELECT, so 'keep this lock and carry on' would commit the
+                # rest on a fresh transaction and report expiries that never
+                # happened. The except below rolls back and re-raises — nothing
+                # expired; the next run retries the ref.
+                if live_pricer.has_open_position(conn, account, journal_ref):
                     continue
+                filled = live_pricer.filled_entry_ticket(conn, account, journal_ref)
                 if filled:
                     live_pricer.keep_filled_entry_lock(conn, account, journal_ref, filled, commit=False)
                     continue
@@ -1493,7 +1496,22 @@ def release_unopened_lock(conn, account: str, journal_ref: str) -> dict:
     kept too (never money on a guess). Returns paper_release_margin's dict,
     or {released: False, reason}; a lock kept because it backs a recorded
     or FILLED live position also carries `backs_position: True` (L3
-    residual (b): the refusal's verdict then says the position stands)."""
+    residual (b): the refusal's verdict then says the position stands).
+
+    Lows residual B1 (F12): an entry ticket an earlier, unfinished approval
+    left WORKING for this (account, ref) is withdrawn first — released at
+    zero while it can still fill, any later venue sweep would fill it into
+    an orphan with no lock (and, for the live arm, no row). One that has
+    filled anything means the lock backs a real entry: kept, named."""
+    try:
+        from src import oms
+        prior = oms.withdraw_stale_entry(conn, account, journal_ref,
+                                         "lock released at approval: the entry is not opened for this account")
+    except Exception as exc:
+        return {"released": False, "reason": f"entry ticket lookup failed ({exc}) — lock kept"}
+    if prior["filled"] and account not in LIVE_ACCOUNTS:
+        return {"released": False, "backs_position": True,
+                "reason": f"entry ticket {prior['filled']} for this ref has fills — the lock backs it"}
     if account in LIVE_ACCOUNTS:
         try:
             from src.execution import live_pricer
@@ -1507,6 +1525,10 @@ def release_unopened_lock(conn, account: str, journal_ref: str) -> dict:
         if filled:
             return {"released": False, "backs_position": True,
                     "reason": live_pricer.keep_filled_entry_lock(conn, account, journal_ref, filled)}
+        if prior["filled"]:
+            return {"released": False, "backs_position": True,
+                    "reason": f"entry ticket {prior['filled']} for this ref is partly filled — the lock backs "
+                              "it (held for a human)"}
     return paper_release_margin(conn, account, journal_ref, 0.0)
 
 

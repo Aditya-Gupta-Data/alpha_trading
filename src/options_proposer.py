@@ -2073,6 +2073,7 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: d
         return record
     if not (entry.get("spread") or {}).get("legs"):
         return record
+    caller_conn = conn
     try:
         from src import brain_map, oms, strategy_router
         venue = venue_mod
@@ -2113,6 +2114,17 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: d
                         live_quotes[acct] = rq
             tids = {}
             for acct, lots in tickets:
+                # lows residual B1 (F12): ONE entry basket per account per ref.
+                # An approval killed after its tickets were issued left them
+                # behind: one that filled anything IS this account's entry
+                # (reused — a second basket would double the position); one
+                # still working with nothing filled is withdrawn first, or the
+                # sweep below would fill it beside the new ticket.
+                prior = oms.withdraw_stale_entry(conn, acct, entry.get("short_id"),
+                                                 "re-approval: an earlier, unfinished approval's entry ticket")
+                if prior["filled"]:
+                    tids[acct] = prior["filled"]
+                    continue
                 prop = (dict(proposal, spread=dict(entry["spread"], legs=live_quotes[acct]["legs"]))
                         if acct in live_quotes else proposal)
                 issued = strategy_router.issue(conn, prop, journal_ref=entry.get("short_id"),
@@ -2158,7 +2170,26 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: d
                 conn.close()
     except Exception as e:
         record["error"] = f"{type(e).__name__}: {e}"
+        _live_venue_error(entry, caller_conn, record["error"])
     return record
+
+
+def _live_venue_error(entry: dict, conn, error: str) -> None:
+    """Lows residual B1 (F14): the venue is ON but its run raised before the
+    live arm got a ticket — the same outcome F14(b) removed for a venue
+    switched off: an 'approved' LIVE verdict with no ticket and a lock held
+    until the primary exits. Each such LIVE account is refused now, named,
+    its lock released at zero (KEPT if a recorded position or a FILLED entry
+    ticket backs it — `pm.release_unopened_lock`, which also withdraws a
+    ticket still working). Fail-open."""
+    try:
+        from src import portfolio_manager as pm
+        live = [a for a, v in (entry.get("accounts") or {}).items()
+                if a in pm.LIVE_ACCOUNTS and (v or {}).get("status") == "approved" and not (v or {}).get("ticket_id")]
+        _live_refuse_each(entry, live, f"the paper venue failed before the live arm's ticket ({error}) — it "
+                                       "takes no position on this approval (audit F14)", conn)
+    except Exception as exc:
+        print(f"  (live account: venue-error release skipped: {exc})")
 
 
 def review_pending() -> int:

@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-09 · 5 commits · 20 files touched
+### 2026-10-09 · 8 commits · 27 files touched
 
+- `767e1e7` feat(dashboard): the four paper portfolios on one % graph with a timeframe selector; the VM records true net equity every 15 min
+- `d8d9048` feat(live): a stuck or half-filled live exit pages a human on Discord (decision #133, Architect ruling); #134 recorded
+- `2026461` docs: PROJECT_TIMELINE — keep the daily log newest-first after the 10-06/10-07 backfill
 - `3fd2d7d` docs: Chunk 2 closed in code — all 15 lows + close-out residuals fixed (#130–#132), not deployed; ledger Issue 45; HANDOVER
 - `c2f80a5` fix(chunk2): lows residuals B2 — D7 per-ref isolation; closed live rows never 'already_open'; cards after the journal lock; the dashboard trusts a readable live book
 - `a8a723c` fix(chunk2): lows residuals B1 — one entry basket per account per ref; manage-only per cycle; venue-raise refusal; F16 read errors roll back

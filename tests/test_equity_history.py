@@ -107,7 +107,7 @@ def _book(tmp_path, injection_detail=None):
     c.execute("INSERT INTO paper_equity_curve (account_id, ts, equity, peak_equity, drawdown_pct) "
               "VALUES ('PAPER_2L', '2026-09-25T15:28:58', 206696.18, 0, 0)")
     c.execute("INSERT INTO net_equity_history VALUES ('PAPER_2L', '2026-10-09T09:30:00', 210000, -1000, 209000, "
-              "200000, NULL)")
+              "200000, NULL, NULL)")
     c.commit()
     c.close()
     return p
@@ -125,8 +125,8 @@ def test_paper_10l_is_measured_on_the_capital_contributed_at_the_time(tmp_path):
     assert got["2026-07-21T14:32:30"] == 2.6982            # AT the clean sheet: continues its own line
     assert got["2026-07-23T05:45:10"] == 2.7695            # on ₹2L after the clean sheet
     assert got["2026-08-04T05:07:11"] == 19.712
-    assert got["2026-08-07T16:41:19"] == 3.9424            # AT the injection: on the new ₹10L base
-    assert got["2026-09-28T11:44:41"] == 12.7101
+    assert got["2026-08-07T16:41:19"] == 19.712            # AT the injection: continuous (T1, chained)
+    assert got["2026-09-28T11:44:41"] == round((1.19712 * 1_127_100.62 / 1_039_423.99 - 1) * 100, 4)
     assert [e["kind"] for e in h["capital_events"]] == ["clean_sheet", "capital_injection"]
 
 

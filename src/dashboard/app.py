@@ -212,7 +212,11 @@ def _body():
               cover = f"priced on {a.get('marked_positions', 0)} of {a.get('open_positions', 0)} open"
               c1, c2, c3 = st.columns(3)
               c1.metric("True Net Equity", rs(a["net_equity"]) if a.get("net_equity") is not None else "—",
-                        "realized + unrealized" if u is not None else "no live marks", delta_color="off")
+                        ("⚠️ PARTIAL — " + cover + " (" + ", ".join(a.get("unmarked_names") or []) + " unpriced)")
+                        if a.get("net_equity_partial") else
+                        ("realized + unrealized" if u is not None else
+                         ("flat — realized is net" if not a.get("open_positions") else "no live marks")),
+                        delta_color="off")
               # delta carries the sign so Streamlit colours it green / red
               c2.metric("Unrealized P&L", f"{u:+,.0f}" if u is not None else "—",
                         (f"{u:+,.0f} · {cover}" if u is not None else cover),

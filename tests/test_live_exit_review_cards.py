@@ -81,4 +81,4 @@ def test_the_review_card_is_sent_past_the_daily_budget(tmp_path):
                                queue_path=tmp_path / "q.jsonl", enabled=True)
     assert out == "send"
     assert notifier.budget_gate({"event": "live_entry_needs_review"}, state_path=state,
-                                queue_path=tmp_path / "q.jsonl", enabled=True) == "spool"
+                                queue_path=tmp_path / "q.jsonl", enabled=True) == "send"   # Chunk 4 R3

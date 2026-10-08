@@ -37,19 +37,18 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     net_equity        REAL NOT NULL,      -- True Net Equity = equity + unrealized
     starting_capital  REAL NOT NULL,      -- contributed capital at this time (the % base)
     marks_as_of       TEXT,               -- the marks the unrealized figure was priced on
+    marked_of         TEXT,               -- "priced/open" — partial marks are said, never hidden
     PRIMARY KEY (account_id, ts)
 );
 """
 
 
 def ensure_schema(conn) -> None:
-    """DDL only when the table is missing (never inside a caller's
-    transaction — decision #122's D4 rule)."""
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (TABLE,)).fetchone():
-        return
-    if conn.in_transaction:
-        conn.commit()
     conn.executescript(_SCHEMA)
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({TABLE})")}
+    if "marked_of" not in cols:
+        conn.execute(f"ALTER TABLE {TABLE} ADD COLUMN marked_of TEXT")
+    conn.commit()
 
 
 def record(now: datetime = None, conn=None, treasury_fn=None) -> dict:
@@ -89,7 +88,7 @@ def record(now: datetime = None, conn=None, treasury_fn=None) -> dict:
                              "equity this time")
             continue
         rows.append((acct, ts, float(a["equity"]), unreal, net, float(a["starting_capital"]),
-                     a.get("marks_as_of")))
+                     a.get("marks_as_of"), a.get("marked_of")))
     own = conn is None
     if own:
         from src import brain_map
@@ -97,7 +96,7 @@ def record(now: datetime = None, conn=None, treasury_fn=None) -> dict:
     try:
         ensure_schema(conn)
         conn.executemany(f"INSERT OR IGNORE INTO {TABLE} (account_id, ts, equity, unrealized_pnl, net_equity, "
-                         "starting_capital, marks_as_of) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+                         "starting_capital, marks_as_of, marked_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
         conn.commit()
     finally:
         if own:

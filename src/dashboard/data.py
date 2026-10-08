@@ -271,7 +271,8 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
     rows = [r for r in rows if r.get("account", "PAPER_10L") == "PAPER_10L"]
     priced = [float(r["mtm_rs"]) for r in rows if r.get("mtm_rs") is not None]
     out = {"PAPER_10L": {"unrealized_pnl": round(sum(priced), 2) if priced else None,
-                         "marked_positions": len(priced), "open_positions": len(rows)}}
+                         "marked_positions": len(priced), "open_positions": len(rows),
+                         "unmarked_names": [r.get("symbol") or r.get("id") for r in rows if r.get("mtm_rs") is None]}}
     locks = _q(conn, "SELECT account_id, journal_ref, lots, primary_lots FROM paper_margin_locks "
                      "WHERE released_at IS NULL")
     for l in (locks if isinstance(locks, list) else []):
@@ -327,11 +328,18 @@ def _snapshot() -> dict:
 
 
 def _with_mtm(acct: dict, u: dict | None, as_of) -> dict:
-    """True Net Equity = realized equity + unrealized (None when unpriced)."""
+    """True Net Equity = realized + unrealized; flat book = realized; partial marks are SAID (T2/T10)."""
     u = u or {"unrealized_pnl": None, "marked_positions": 0, "open_positions": 0}
-    acct.update(u, marks_as_of=as_of,
-                net_equity=(round(acct["equity"] + u["unrealized_pnl"], 2)
-                            if u["unrealized_pnl"] is not None else None))
+    open_n, marked = int(u.get("open_positions") or 0), int(u.get("marked_positions") or 0)
+    unreal = u.get("unrealized_pnl")
+    if open_n == 0:
+        net, partial = round(float(acct["equity"]), 2), False
+    elif unreal is not None:
+        net, partial = round(acct["equity"] + unreal, 2), marked < open_n
+    else:
+        net, partial = None, False
+    acct.update(u, marks_as_of=as_of, net_equity=net, net_equity_partial=partial,
+                marked_of=f"{marked}/{open_n}")
     return acct
 
 
@@ -503,7 +511,7 @@ def _capital_bases(conn) -> tuple:
             before, after = ((float(m.group(1)) * 100_000, float(m.group(2)) * 100_000) if m else (None, None))
         if first_base is None and not moves:
             first_base = before
-        moves.append((e["ts"], after))
+        moves.append((e["ts"], after, e["kind"]))
     return first_base, moves
 
 
@@ -511,7 +519,7 @@ def _base_at(ts: str, first_base, moves, current, strictly_before: bool = False)
     """The contributed base in force at `ts` (a move stamped AT `ts` counts,
     unless `strictly_before`)."""
     base = first_base if moves else current
-    for mts, after in moves:
+    for mts, after, *_ in moves:
         if mts < ts or (mts == ts and not strictly_before):
             base = after
     return base
@@ -523,8 +531,8 @@ def equity_history(db_path=None) -> dict:
       "realized" — a point at every settlement (`equity_curve` for PAPER_10L,
                    `paper_equity_curve` for the shadows) plus each account's
                    starting point; PAPER_10L's base follows its capital moves
-                   (the 21 Jul clean sheet to ₹2L, the 7 Aug injection) — so
-                   a clean sheet is a visible break, an injection is not;
+                   (the 21 Jul clean sheet to ₹2L, the 7 Aug injection), CHAINED:
+                   a clean sheet is a visible break to 0, an injection is continuous;
       "net"      — True Net Equity (realized + open positions' marks) as
                    recorded every 15 min on the VM by src.equity_history
                    (from 2026-10-09; empty before its first run).
@@ -544,9 +552,10 @@ def equity_history(db_path=None) -> dict:
         out["capital_events"] = capital_events(conn)
         rows = _q(conn, "SELECT ts, equity FROM equity_curve ORDER BY ts, rowid")
         stopped, last_pct = False, None
+        seg_factor, anchor, prev_base, prev_eq = 1.0, None, None, None   # T1: chained across moves
         for r in (rows if isinstance(rows, list) else []):
             base = _base_at(r["ts"], first_base, moves, cur10)
-            if base is not None and any(mts == r["ts"] for mts, _ in moves):
+            if base is not None and any(mts == r["ts"] for mts, *_ in moves):
                 # a point stamped at the very instant of a capital move can be
                 # the state on either side of it (the 21 Jul clean sheet's
                 # point still holds the pre-reset equity; the 7 Aug
@@ -562,7 +571,16 @@ def equity_history(db_path=None) -> dict:
                                         "amount could not be read, so its % base is unknown")
                     stopped = True
                 continue
-            last_pct = pct(r["equity"], base)
+            if prev_base is None or anchor is None:
+                seg_factor, anchor = 1.0, base
+            elif base != prev_base:
+                kind = next((k for mts, after, k in reversed(moves) if after == base and mts <= r["ts"]), None)
+                if kind == "capital_injection":        # continuous: the P&L carries into the new base
+                    seg_factor, anchor = 1.0 + last_pct / 100.0, base + (prev_eq - prev_base)
+                else:                                   # clean sheet: a visible break to 0 on the new base
+                    seg_factor, anchor = 1.0, base
+            last_pct = round((seg_factor * float(r["equity"]) / float(anchor) - 1) * 100, 4) if anchor else None
+            prev_base, prev_eq = base, float(r["equity"])
             out["realized"].append({"account": "PAPER_10L", "ts": r["ts"], "equity": r["equity"],
                                     "pct": last_pct})
         accts = _q(conn, "SELECT account_id, starting_capital, created_at FROM paper_accounts")
@@ -757,6 +775,8 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                      "lots": s.get("lots"), "entered": e.get("date"), "expiry": s.get("expiry"),
                      "max_loss_rs": round(float(s.get("max_loss") or 0) * int(s.get("lots") or 1), 2),
                      "mtm_rs": m.get("live_pnl_rs"), "capture_pct": m.get("capture_pct"),
+                     "real_capture_pct": m.get("real_capture_pct"),
+                     "capture_basis": "crossed" if m.get("real_capture_pct") is not None else "modeled",
                      "ratchet_peak_pct": r.get("peak_capture_pct"),
                      "ratchet_lock_pct": r.get("locked_pct"),
                      "ratchet": _exit_rule(s.get("strategy"), bool(r.get("armed")), r.get("locked_pct")),

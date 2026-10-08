@@ -184,7 +184,8 @@ def test_unrealized_pnl_and_true_net_equity_come_from_the_engine_snapshot(tmp_pa
             "marks": [{"short_id": "ab12cd34", "live_pnl_rs": 3000.0}]}
     u = d.unrealized_by_account(conn, snap, rows)
     conn.close()
-    assert u["PAPER_10L"] == {"unrealized_pnl": 3000.0, "marked_positions": 1, "open_positions": 2}
+    assert u["PAPER_10L"] == {"unrealized_pnl": 3000.0, "marked_positions": 1, "open_positions": 2,
+                              "unmarked_names": ["eqd:x"]}                   # T2: the unpriced one is NAMED
     assert u["PAPER_2L"] == {"unrealized_pnl": 1500.0, "marked_positions": 1, "open_positions": 1}  # x 1/2 lots
     a = d._with_mtm({"equity": 1_000_000.0}, u["PAPER_10L"], snap["as_of"])
     assert a["net_equity"] == 1_003_000.0 and a["marks_as_of"] == snap["as_of"]

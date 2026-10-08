@@ -42,6 +42,16 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 ~02:00 IST — the 09:10 dashboard-link card + the phantom-ratchet fix (#135) pushed, NOT deployed; Chunk 3 audit running
+
+**Done (owner directive 2026-10-09):**
+- `05a7e3f` — `master_scheduler` sends a `🔗 Dashboard link — <date>` card FIRST, before the 09:15 wait. Link = `<tunnel>/streamlit/?access_key=<DASHBOARD_KEY>`; the key is read from the VM `.env` (`DASHBOARD_KEY=…`, same variable the app gates on). If the VM `.env` has no key the card says "same access key as before". The parallel session (`66eb660`) added the React desk links (`/overview`, `/brain-map`) above it.
+- `1893d5e` (content; the parallel session swept my staged work into its docs commit) — **decision #135**: `live_bridge.evaluate_position` moves the profit ratchet's peak/lock/hit ONLY on crossed bid/ask capture (`real_capture_pct`); modeled mid-price capture is display only. Daemon door `_real_capture_for`, one chain fetch per (ticker, expiry) per cycle, directional spreads only. Suite 2,967 green.
+
+**To make it live:** VM `git fetch && git merge --ff-only origin/main`, scoped tests, `sudo systemctl restart alpha-trading alpha-discord-bot`; add `DASHBOARD_KEY=<the box's key>` to the VM `.env` for the key to ride on the card. #135 changes an EXIT predicate → Issue 31 read-only open-book dry-run first (after 15:30). Watch: extra chain calls per minute (one per directional open spread) against the DH-905 throttle.
+
+**Chunk 3 (Analytics & Sizing):** three finder lenses launched (statistics, sizing arithmetic, wiring/staleness); findings + my refutation go to `docs/audit_chunk3_analytics_sizing.md`.
+
 ## 2026-10-09 ~01:30 IST — the four-portfolio graph + Brain Map in the DESK design; the 09:10 link card leads with the desk — live on the box, pulled on the VM
 
 **The desk is the design (Architect).** The polished site at the tunnel root (`/overview`, `/live-book` …) is the React desk (`frontend/`), not Streamlit. So:

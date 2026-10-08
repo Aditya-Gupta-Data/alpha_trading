@@ -198,3 +198,19 @@ def test_nothing_priced_is_none_never_a_guessed_zero(tmp_path):
     assert u["PAPER_10L"]["unrealized_pnl"] is None and u["PAPER_2L"]["unrealized_pnl"] is None
     a = d._with_mtm({"equity": 200_000.0}, u["PAPER_2L"], None)
     assert a["net_equity"] is None and a["open_positions"] == 1
+
+
+def test_brain_map_renders_live_read_only_and_falls_back_to_the_file(tmp_path, monkeypatch):
+    """Architect 2026-10-09: the Brain Map tab — rendered from the page's own
+    brain_map.db (read-only); the manual tool's graph_viz.html only when the
+    database cannot be read; an error when neither exists."""
+    from src import brain_map
+    p = tmp_path / "bm.db"
+    brain_map.connect(str(p)).close()
+    B = d.brain_map_html(p)
+    assert "<html" in B["html"].lower() and B["stats"]["nodes"] == 0 and B["source"] == "live from bm.db"
+    monkeypatch.setattr(d, "GRAPH_VIZ_PATH", tmp_path / "graph_viz.html")
+    assert "error" in d.brain_map_html(tmp_path / "absent.db")
+    (tmp_path / "graph_viz.html").write_text("<html>saved</html>")
+    B = d.brain_map_html(tmp_path / "absent.db")
+    assert B["html"] == "<html>saved</html>" and B["source"].startswith("graph_viz.html written ")

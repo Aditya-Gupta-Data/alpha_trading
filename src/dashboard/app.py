@@ -151,10 +151,53 @@ def _all_portfolios_chart():
             st.caption(n)
 
 
+@st.cache_data(show_spinner=False)
+def _brain_map_cached(db_mtime):
+    # keyed on the mirror's mtime: the page's 5-min refresh re-sends the SAME
+    # html (the iframe and its layout stay put) until a new mirror lands
+    return d.brain_map_html()
+
+
+def _brain_map_tab():
+    """Architect 2026-10-09: the Brain Map — the system's learning loop and
+    causal edges — beside the money, rendered from the same mirror."""
+    import streamlit.components.v1 as components
+    try:
+        mtime = d.DB_PATH.stat().st_mtime
+    except OSError:
+        mtime = None
+    B = _brain_map_cached(mtime)
+    st.subheader("Brain Map — the knowledge graph's causal edges")
+    if B.get("error"):
+        st.info(f"Brain Map unavailable: {B['error']}")
+        return
+    s = B.get("stats") or {}
+    if s:
+        st.caption(f"{s.get('nodes', 0)} nodes · {s.get('edges_active', 0)} active edges "
+                   f"({s.get('outcome_derived', 0)} outcome-derived, {s.get('affinity', 0)} smart-money affinity, "
+                   f"{s.get('loss_permanent', 0)} permanent loss lessons) · {s.get('edges_expired', 0)} expired "
+                   f"(hidden by default) · {B.get('source')}")
+    else:
+        st.caption(B.get("source") or "")
+    st.caption("Steel-blue = outcome-derived causal links (the only class that may move sizing, decision #38); "
+               "gold = smart-money affinity; red core = a loss lesson that never decays. Drag to move nodes, "
+               "scroll to zoom. Read-only.")
+    # Streamlit builds every tab's iframe while the tab is HIDDEN (0 px wide),
+    # and graph_viz lays its nodes out from the window size at load — so they
+    # started piled in one corner. A page loaded that narrow reloads itself
+    # ONCE, the first time its tab is shown at a real width.
+    relayout = ("<script>if(innerWidth<50){addEventListener('resize',function r(){if(innerWidth>=50){"
+                "removeEventListener('resize',r);location.reload();}});}</script>")
+    html = B["html"].replace("<script>", relayout + "<script>", 1)
+    components.html(html, height=820, scrolling=True)
+
+
 @st.fragment(run_every="5m")
 def _body():
-  tab_t, tab_l, tab_r, tab_a = st.tabs(["🏦 Treasury", "📈 Live Book & Ratchets", "🔍 Compliance & Recon",
-                                         "📜 Event Audit Log"])
+  tab_t, tab_l, tab_r, tab_a, tab_b = st.tabs(["🏦 Treasury", "📈 Live Book & Ratchets", "🔍 Compliance & Recon",
+                                                "📜 Event Audit Log", "🧠 Brain Map"])
+  with tab_b:
+      _brain_map_tab()
 
   # ------------------------------------------------------------- treasury
   with tab_t:

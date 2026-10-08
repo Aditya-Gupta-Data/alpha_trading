@@ -433,6 +433,39 @@ def treasury(db_path=None, now: datetime = None) -> dict:
     return out
 
 
+# ------------------------------------------------------------ brain map
+GRAPH_VIZ_PATH = _DATA / "graph_viz.html"
+
+
+def brain_map_html(db_path=None) -> dict:
+    """The Brain Map — the knowledge graph's causal edges (src/graph_viz.py:
+    one self-contained page, inline JS force layout, no network) — for the
+    dashboard to embed (Architect 2026-10-09). Rendered LIVE from this
+    page's brain_map.db through a read-only connection, so it is as fresh as
+    the mirror; `data/graph_viz.html` (the tool's manual output, written by
+    nothing on a schedule) is used only when the database cannot be read.
+    {"html", "stats", "source"} or {"error"}. Read-only."""
+    conn = connect_ro(db_path)
+    if conn is not None:
+        try:
+            from src import graph_viz
+            g = graph_viz.build_graph_json(conn)
+            return {"html": graph_viz.render_html(g), "stats": g.get("stats") or {},
+                    "source": f"live from {Path(db_path or DB_PATH).name}"}
+        except Exception as exc:
+            err = f"{type(exc).__name__}: {exc}"
+        finally:
+            conn.close()
+    else:
+        err = f"database unavailable or locked: {db_path or DB_PATH}"
+    try:
+        html = GRAPH_VIZ_PATH.read_text()
+        mtime = datetime.fromtimestamp(GRAPH_VIZ_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        return {"html": html, "stats": {}, "source": f"{GRAPH_VIZ_PATH.name} written {mtime} ({err})"}
+    except OSError:
+        return {"error": err}
+
+
 # ------------------------------------------------- equity history (graph)
 EQUITY_ACCOUNTS = ("PAPER_10L", "PAPER_2L", "PAPER_2L_ROT", "PAPER_2L_LIVE")
 EQUITY_WINDOWS = ("Today", "1W", "1M", "YTD", "All time")

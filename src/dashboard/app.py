@@ -79,6 +79,70 @@ st.caption("Paper money. Read-only. Every entry, size, exit and reconciliation b
 # Auto-refresh (decision #112): the body re-runs every 5 minutes on its own,
 # so a browser left open on the always-on box follows the ledger mirror
 # (which the box pulls every 15 minutes) without anyone touching it.
+PORTFOLIO_COLOURS = {"PAPER_10L": "#4c78a8", "PAPER_2L": "#f58518", "PAPER_2L_ROT": "#54a24b",
+                     "PAPER_2L_LIVE": "#e45756"}
+
+
+def _all_portfolios_chart():
+    """The four paper portfolios on ONE axis (owner request 2026-10-09), as %
+    return on each one's contributed capital — ₹10L and ₹2L books are only
+    comparable that way. Realized = a step at every settlement (full history);
+    True net = realized + open positions' marks, recorded every 15 min on the
+    VM from 2026-10-09 (src/equity_history.py)."""
+    import altair as alt
+    import pandas as pd
+    H = d.equity_history()
+    st.subheader("All four portfolios — % return on contributed capital")
+    if H.get("error"):
+        st.info(f"Equity history unavailable: {H['error']}")
+        return
+    c1, c2 = st.columns([3, 2])
+    window = c1.radio("Timeframe", d.EQUITY_WINDOWS, index=len(d.EQUITY_WINDOWS) - 1, horizontal=True,
+                      key="equity_window")
+    start = d.window_start(window)
+    net = d.in_window(H.get("net") or [], start)
+    bases = ["True net equity (every 15 min)", "Realized (settled trades)"]
+    from collections import Counter
+    has_line = any(n >= 2 for n in Counter(p["account"] for p in net).values())
+    basis = c2.radio("Basis", bases, index=0 if has_line else 1, horizontal=True, key="equity_basis",
+                     help="True net includes the open positions' marks; it has been recorded since 9 Oct 2026. "
+                          "Realized moves only when a trade settles, but goes back to July.")
+    pts = net if basis == bases[0] else d.in_window(d.extend_to_now(H.get("realized") or []), start)
+    pts = [p for p in pts if p.get("pct") is not None]
+    if not pts:
+        st.caption("No points in this window yet." if basis == bases[1] else
+                   "No true-net-equity points in this window yet — they are recorded every 15 min on the VM "
+                   "during the session (from 9 Oct 2026). Switch to Realized for the full history.")
+        return
+    df = pd.DataFrame({"time": pd.to_datetime([p["ts"] for p in pts]),
+                       "return_pct": [p["pct"] for p in pts], "equity": [p["equity"] for p in pts],
+                       "portfolio": [p["account"] for p in pts]})
+    accounts = [a for a in d.EQUITY_ACCOUNTS if a in set(df["portfolio"])]
+    chart = alt.Chart(df).mark_line(interpolate="step-after" if basis == bases[1] else "linear",
+                                    point=len(df) < 60).encode(
+        x=alt.X("time:T", title=None),
+        y=alt.Y("return_pct:Q", title="% return", scale=alt.Scale(zero=False)),
+        color=alt.Color("portfolio:N", scale=alt.Scale(domain=accounts,
+                                                       range=[PORTFOLIO_COLOURS[a] for a in accounts]),
+                        legend=alt.Legend(orient="bottom", title=None)),
+        tooltip=["portfolio:N", alt.Tooltip("time:T", format="%d %b %Y %H:%M"),
+                 alt.Tooltip("return_pct:Q", format="+.2f", title="% return"),
+                 alt.Tooltip("equity:Q", format=",.0f", title="₹ equity")])
+    layers = [chart]
+    ev = [e for e in (H.get("capital_events") or []) if basis == bases[1] and (start is None or e["ts"] >= start)]
+    if ev:
+        edf = pd.DataFrame({"time": pd.to_datetime([e["ts"] for e in ev]), "label": [e["label"] for e in ev]})
+        layers.append(alt.Chart(edf).mark_rule(strokeDash=[4, 3], color="#22a06b").encode(
+            x="time:T", tooltip=["label:N"]))
+    st.altair_chart(alt.layer(*layers).properties(height=300), use_container_width=True)
+    st.caption("PAPER_10L's % is measured on the capital contributed at the time: ₹10L until the 21 Jul clean "
+               "sheet, ₹2L from it, ₹10L again from the 7 Aug ₹8L injection (dashed markers). The ₹2L books "
+               "start at 0% on the day each was opened (2L 21 Sep, ROT 29 Sep, LIVE 30 Sep).")
+    for n in H.get("notes") or []:
+        if basis == bases[1] or "true-net" not in n:
+            st.caption(n)
+
+
 @st.fragment(run_every="5m")
 def _body():
   tab_t, tab_l, tab_r, tab_a = st.tabs(["🏦 Treasury", "📈 Live Book & Ratchets", "🔍 Compliance & Recon",
@@ -185,6 +249,7 @@ def _body():
               st.caption("Dashed lines are capital moves (decision #117) — the 21 Jul reset to ₹2L and the "
                          "7 Aug ₹8L injection moved equity with no trade behind them. Return and CAGR are "
                          f"measured from the ₹10L base ({T.get('base_epoch', '')}, decision #116).")
+          _all_portfolios_chart()
           st.caption("Sizing is fixed-fractional per account (decision #106): the same structure is sized on "
                      "each account's own equity, so the ₹2L book refuses what the ₹10L book takes.")
 

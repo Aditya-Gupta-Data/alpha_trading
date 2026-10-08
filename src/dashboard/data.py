@@ -433,6 +433,164 @@ def treasury(db_path=None, now: datetime = None) -> dict:
     return out
 
 
+# ------------------------------------------------- equity history (graph)
+EQUITY_ACCOUNTS = ("PAPER_10L", "PAPER_2L", "PAPER_2L_ROT", "PAPER_2L_LIVE")
+EQUITY_WINDOWS = ("Today", "1W", "1M", "YTD", "All time")
+
+
+def _capital_bases(conn) -> tuple:
+    """PAPER_10L's CONTRIBUTED capital over time, from its own capital
+    events: [(ts, base_rs)] in order, plus the base in force before the
+    first event; (None, ...) for any event whose amount cannot be parsed —
+    the % line then stops there (abstain, never guess). A clean sheet reads
+    '10L->2L' (the base becomes 2L); an injection reads '(200,000.00 ->
+    1,000,000.00 base'."""
+    import re
+    moves, first_base = [], None
+    for e in capital_events(conn):
+        d = e.get("detail") or ""
+        if e["kind"] == "capital_injection":
+            m = re.search(r"\(([\d,]+(?:\.\d+)?)\s*->\s*([\d,]+(?:\.\d+)?)\s*base", d)
+            before, after = ((float(m.group(1).replace(",", "")), float(m.group(2).replace(",", "")))
+                             if m else (None, None))
+        else:
+            m = re.search(r"(\d+(?:\.\d+)?)L\s*->\s*(\d+(?:\.\d+)?)L", d)
+            before, after = ((float(m.group(1)) * 100_000, float(m.group(2)) * 100_000) if m else (None, None))
+        if first_base is None and not moves:
+            first_base = before
+        moves.append((e["ts"], after))
+    return first_base, moves
+
+
+def _base_at(ts: str, first_base, moves, current, strictly_before: bool = False):
+    """The contributed base in force at `ts` (a move stamped AT `ts` counts,
+    unless `strictly_before`)."""
+    base = first_base if moves else current
+    for mts, after in moves:
+        if mts < ts or (mts == ts and not strictly_before):
+            base = after
+    return base
+
+
+def equity_history(db_path=None) -> dict:
+    """The multi-portfolio equity graph's data (owner request 2026-10-09),
+    each point as % return on the account's CONTRIBUTED capital at that time:
+      "realized" — a point at every settlement (`equity_curve` for PAPER_10L,
+                   `paper_equity_curve` for the shadows) plus each account's
+                   starting point; PAPER_10L's base follows its capital moves
+                   (the 21 Jul clean sheet to ₹2L, the 7 Aug injection) — so
+                   a clean sheet is a visible break, an injection is not;
+      "net"      — True Net Equity (realized + open positions' marks) as
+                   recorded every 15 min on the VM by src.equity_history
+                   (from 2026-10-09; empty before its first run).
+    {"realized": [{account, ts, equity, pct}], "net": [...], "capital_events":
+    [...], "notes": [...]} or {"error": ...}. Read-only."""
+    conn = connect_ro(db_path)
+    if conn is None:
+        return {"error": f"database unavailable or locked: {db_path or DB_PATH}"}
+    out = {"realized": [], "net": [], "capital_events": [], "notes": []}
+    try:
+        def pct(eq, base):
+            return round((float(eq) / float(base) - 1) * 100, 4) if base else None
+
+        st = _q(conn, "SELECT starting_capital FROM account_state WHERE id = 1")
+        cur10 = float(st[0]["starting_capital"]) if isinstance(st, list) and st else None
+        first_base, moves = _capital_bases(conn)
+        out["capital_events"] = capital_events(conn)
+        rows = _q(conn, "SELECT ts, equity FROM equity_curve ORDER BY ts, rowid")
+        stopped, last_pct = False, None
+        for r in (rows if isinstance(rows, list) else []):
+            base = _base_at(r["ts"], first_base, moves, cur10)
+            if base is not None and any(mts == r["ts"] for mts, _ in moves):
+                # a point stamped at the very instant of a capital move can be
+                # the state on either side of it (the 21 Jul clean sheet's
+                # point still holds the pre-reset equity; the 7 Aug
+                # injection's already holds the post-injection one): it takes
+                # the base that continues its own line
+                before = _base_at(r["ts"], first_base, moves, cur10, strictly_before=True)
+                if before and last_pct is not None and \
+                        abs(pct(r["equity"], before) - last_pct) < abs(pct(r["equity"], base) - last_pct):
+                    base = before
+            if base is None:
+                if not stopped:
+                    out["notes"].append(f"PAPER_10L's realized line stops at {r['ts']}: a capital move's "
+                                        "amount could not be read, so its % base is unknown")
+                    stopped = True
+                continue
+            last_pct = pct(r["equity"], base)
+            out["realized"].append({"account": "PAPER_10L", "ts": r["ts"], "equity": r["equity"],
+                                    "pct": last_pct})
+        accts = _q(conn, "SELECT account_id, starting_capital, created_at FROM paper_accounts")
+        caps = {a["account_id"]: a for a in (accts if isinstance(accts, list) else [])}
+        for acct, a in sorted(caps.items()):
+            if a.get("created_at"):
+                out["realized"].append({"account": acct, "ts": a["created_at"], "equity": a["starting_capital"],
+                                        "pct": 0.0})
+        pts = _q(conn, "SELECT account_id, ts, equity FROM paper_equity_curve ORDER BY ts, rowid")
+        for r in (pts if isinstance(pts, list) else []):
+            a = caps.get(r["account_id"])
+            if a is None:
+                continue
+            out["realized"].append({"account": r["account_id"], "ts": r["ts"], "equity": r["equity"],
+                                    "pct": pct(r["equity"], a["starting_capital"])})
+        net = _q(conn, "SELECT account_id, ts, net_equity, starting_capital FROM net_equity_history "
+                       "ORDER BY ts, account_id")
+        if isinstance(net, list):
+            out["net"] = [{"account": r["account_id"], "ts": r["ts"], "equity": r["net_equity"],
+                           "pct": pct(r["net_equity"], r["starting_capital"])} for r in net]
+        else:
+            out["notes"].append("no true-net-equity history yet (recorded every 15 min on the VM from 2026-10-09)")
+        out["realized"].sort(key=lambda x: (x["account"], x["ts"]))
+    finally:
+        conn.close()
+    return out
+
+
+def window_start(choice: str, now: datetime = None):
+    """The first instant (naive IST ISO) a timeframe shows; None = All time."""
+    now = _as_naive_ist(now or datetime.now(IST))
+    if choice == "Today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif choice == "1W":
+        start = now - timedelta(days=7)
+    elif choice == "1M":
+        start = now - timedelta(days=30)
+    elif choice == "YTD":
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        return None
+    return start.isoformat(timespec="seconds")
+
+
+def extend_to_now(points: list, now: datetime = None) -> list:
+    """REALIZED lines only: each account's last settled point restated at
+    `now` — realized equity cannot move until the next settlement, so the
+    line runs to the present instead of stopping at an old trade (a quiet
+    account looked dead). Never for true net equity: that is sampled, and
+    a restated sample would be a fabricated reading. Pure."""
+    now_iso = _as_naive_ist(now or datetime.now(IST)).isoformat(timespec="seconds")
+    last = {}
+    for p in points:
+        if p["account"] not in last or p["ts"] >= last[p["account"]]["ts"]:
+            last[p["account"]] = p
+    return list(points) + [dict(p, ts=now_iso) for p in last.values() if p["ts"] < now_iso]
+
+
+def in_window(points: list, start) -> list:
+    """The points inside the window, each account's line CARRIED IN: its last
+    point before the window is restated at the window's start, so a line
+    that did not move inside the window still shows where it stands. Pure."""
+    if start is None:
+        return list(points)
+    out, last_before = [], {}
+    for p in points:
+        if p["ts"] < start:
+            last_before[p["account"]] = p
+        else:
+            out.append(p)
+    return [dict(p, ts=start) for p in last_before.values()] + out
+
+
 # ----------------------------------------------------------- open trades
 def _snapshot_marks() -> dict:
     try:

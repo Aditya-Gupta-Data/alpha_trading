@@ -195,7 +195,7 @@ edge-miner line in its log around login/21:00.
 ## Job 33 — Showcase mirror publish (added 2026-09-24, decision #112)
 
 `*/15 9-16 * * 1-5` and `5 21 * * *` → `bash scripts/publish_dashboard_mirror.sh`
-(log `logs/dashboard_mirror.log`). Rsync-pushes the five ledger files the
+(log `logs/dashboard_mirror.log`). **Since 2026-10-09 it first records each paper account's true net equity** (`python -m src.equity_history --record` → table `net_equity_history` in `brain_map.db`; the dashboard's multi-portfolio graph reads it; fail-open, nothing on a non-trading day). Rsync-pushes the five ledger files the
 always-on dashboard reads (`brain_map.db`, `journal.jsonl`,
 `equity_shadow_journal.jsonl`, `market_snapshot.json`, `recon.jsonl`, plus
 `dashboard_benchmarks.json`, which the script rebuilds from the lakes first — #119) to the

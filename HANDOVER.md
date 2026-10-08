@@ -42,6 +42,28 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 ~01:30 IST — Architect rulings #133/#134; Discord pages for stuck live exits; the multi-portfolio equity graph — pushed, NOT deployed
+
+**Rulings (recorded as decisions #133 and #134):**
+- **#133:** a half-filled or stuck PAPER_2L_LIVE exit pages a human on Discord.
+  - BUILT in `d8d9048`: ONE `live_exit_needs_review` card per position per event per IST day.
+  - It is in `BUDGET_ALWAYS`, so it is sent at once.
+  - A row counts as stuck after 2 quote intervals still `exiting`.
+- **#134:** the live arm skipping a trade the R:R floor rejects on real quotes is a FEATURE. No change.
+
+**The equity graph (owner request):**
+- Built: `src/equity_history.py`, `data.equity_history`, and `app._all_portfolios_chart`. Owner choices, asked first:
+  - **Basis:** both — the realized history now, plus true net equity recorded going forward.
+  - **Scale:** % return.
+  - **'All time':** the full PAPER_10L history.
+- **Why the forward record:** the database never kept true net equity. Only a realized point at each settlement existed; the engine's marks file is overwritten every minute. So the VM now records it every 15 min, first thing in `publish_dashboard_mirror.sh`. That needs no crontab change, only the deploy.
+- **Checked locally** on a fresh mirror of the VM. All four lines render; the timeframes work; PAPER_10L's % follows its capital moves (no fake jump at the 21 Jul clean sheet or the 7 Aug injection).
+- **Suite:** 2,955 passed.
+
+**To make it live (owner's call):**
+1. VM deploy, the usual steps. It now also carries the Chunk 2 lows, so the open-book dry-run comes first; see the block below. The recorder starts on the first 15-min run after the pull.
+2. Ship the Streamlit app to the Oracle box, so the new chart appears on the always-on dashboard.
+
 ## 2026-10-09 ~01:00 IST — Chunk 2 CLOSED in code: all 15 lows fixed, verified, pushed (`c2f80a5`); NOT deployed
 
 **State.**

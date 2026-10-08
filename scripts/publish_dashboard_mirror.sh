@@ -9,6 +9,12 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${DASHBOARD_RSYNC_TARGET:-$(cat "$HOME/.dashboard_target" 2>/dev/null || true)}"
 KEY="${DASHBOARD_PUSH_KEY:-$HOME/.ssh/dashboard_push}"
+# 2026-10-09 (the multi-portfolio equity graph): record each account's TRUE
+# net equity first (src/equity_history.py — the KPI cards' own reader), so the
+# history grows every 15 min whether or not a push target is configured, and
+# the snapshot below carries the newest point. Fail-open.
+PYR="${PYTHON_BIN:-$HERE/venv/bin/python}"; [ -x "$PYR" ] || PYR=python3
+( cd "$HERE" && "$PYR" -m src.equity_history --record ) 2>&1 | tail -1
 if [ -z "$TARGET" ]; then echo "[publish] no target configured (~/.dashboard_target) — nothing pushed"; exit 0; fi
 # decision #119: refresh the benchmark closes (lake reads only) before the push
 PY0="${PYTHON_BIN:-$HERE/venv/bin/python}"; [ -x "$PY0" ] || PY0=python3

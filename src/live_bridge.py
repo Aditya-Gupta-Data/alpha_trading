@@ -249,7 +249,8 @@ def _open_spreads(entries=None) -> list:
             if e.get("decision") == "approved" and pt._spread_trackable(e)]
 
 
-def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
+def evaluate_position(entry: dict, spot: float, today: date = None,
+                      real_capture_pct: float = None) -> dict:
     """One open spread against one live spot: the tracker's exact exit
     arithmetic (modeled mark, no-arbitrage clamp, 65% profit take,
     pre-expiry rule) evaluated NOW instead of at the daily close.
@@ -258,7 +259,11 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
     "capture_pct", "days_left"} where signal is "profit_take" /
     "pre_expiry_exit" / "hold". Purely advisory — nothing is mutated. There
     is no mid-trade stop signal (decision #105): a defined-risk spread is
-    held to target or expiry."""
+    held to target or expiry.
+
+    Phantom ratchet (Chunk 3, 2026-10-09): `capture_pct` is the modeled
+    mid-price capture, display only. The ratchet's peak/lock/hit move ONLY
+    on `real_capture_pct` (crossed bid/ask). No real quote = no change."""
     spread = entry["spread"]
     today = today or date.today()
     expiry = date.fromisoformat(spread["expiry"])
@@ -286,17 +291,30 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
         # decision #110: directional spreads ride the profit ratchet — the
         # persisted peak (EOD walk / intraday rung notes) plus the live mark.
         prior = entry.get("ratchet") or {}
-        peak = max(float(prior.get("peak_capture_pct") or -1e9), capture)
+        prior_peak = prior.get("peak_capture_pct")
+        if real_capture_pct is not None:
+            peak = max(float(prior_peak if prior_peak is not None else -1e9),
+                       float(real_capture_pct))
+            basis = "crossed"
+        else:                      # no real quote: the stored state, untouched
+            peak = float(prior_peak) if prior_peak is not None else None
+            basis = "none"
         ratchet = pr.state(peak, prior.get("locked_pct"))
-        ratchet["capture_pct"] = round(capture, 2)
-        ratchet["new_rung"] = (ratchet["locked_pct"] is not None
+        ratchet["capture_pct"] = round(capture, 2)           # modeled, display
+        ratchet["real_capture_pct"] = (round(float(real_capture_pct), 2)
+                                       if real_capture_pct is not None else None)
+        ratchet["basis"] = basis
+        ratchet["new_rung"] = (basis == "crossed"
+                               and ratchet["locked_pct"] is not None
                                and (prior.get("locked_pct") is None
                                     or float(ratchet["locked_pct"]) > float(prior["locked_pct"])))
     # The tracker's ONE forced-exit predicate (audit F23: it includes the last
     # session before a holiday-moved Monday expiry).
     in_window = pt.in_forced_exit_window(entry.get("ticker"), expiry, today)
     if ratchet is not None:
-        if pr.ratchet_hit(capture, ratchet["locked_pct"]):
+        # the hit is judged on the CROSSED capture only (the square-off
+        # re-verifies on the same basis); no real quote -> no hit this cycle
+        if pr.ratchet_hit(real_capture_pct, ratchet["locked_pct"]):
             signal = "ratchet_hit"
         elif in_window:
             signal = "pre_expiry_exit"
@@ -317,20 +335,102 @@ def evaluate_position(entry: dict, spot: float, today: date = None) -> dict:
             "strategy": spread.get("strategy"), "signal": signal,
             "live_pnl_rs": round(profit_ps * qty, 2),
             "capture_pct": round(capture, 2), "days_left": days_left,
+            "real_capture_pct": (round(float(real_capture_pct), 2)
+                                 if real_capture_pct is not None else None),
             "ratchet": ratchet}
 
 
+def real_capture_from_quotes(spread: dict, leg_quotes: dict) -> float | None:
+    """The capture (% of max profit) a CROSSED exit would realize now, the
+    same clamp arithmetic as plan_tracker.resolve_intraday_profit_take's
+    real-quote gate. `leg_quotes` = {(strike, 'CE'/'PE'): crossed price}
+    for EVERY leg; a missing leg -> None (never a partial basket)."""
+    try:
+        m_exit = sum((1.0 if l["side"].upper() == "BUY" else -1.0)
+                     * float(leg_quotes[(float(l["strike"]), l["option_type"].upper())])
+                     for l in spread["legs"])
+        lot = int(spread["lot_size"])
+        max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+        max_loss_ps = float(spread["max_loss"]) / lot if lot else 0.0
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    if max_profit_ps <= 0:
+        return None
+    profit_ps = max(-max_loss_ps, min(m_exit - pt._spread_entry_mark(spread), max_profit_ps))
+    return profit_ps / max_profit_ps * 100
+
+
+def _ratchet_applies(entry: dict) -> bool:
+    from src import profit_ratchet as pr
+    spread = entry.get("spread") or {}
+    try:
+        lot = int(spread["lot_size"])
+        max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+    except (KeyError, TypeError, ValueError):
+        return False
+    return pr.applies(spread, max_profit_ps)
+
+
+# (ticker, expiry) -> chain, for ONE live cycle: every directional spread on
+# the same chain shares one fetch. Cleared by live_cycle; never read across
+# cycles (a stale chain is no evidence).
+_CYCLE_CHAINS: dict = {}
+
+
+def _real_capture_for(entry: dict, chains: dict = None) -> float | None:
+    """The production door for the ratchet's real capture: the live option
+    chain (one fetch per (ticker, expiry) per cycle), every leg crossed by
+    `_crossed_exit_price` (the square-off's own rule — a leg it cannot
+    cross refuses the whole read). None = abstain, printed once with its
+    reason."""
+    from src import dhan_client
+    chains = _CYCLE_CHAINS if chains is None else chains
+    spread = entry.get("spread") or {}
+    key = (entry.get("ticker"), spread.get("expiry"))
+    ref = entry.get("short_id")
+    if key not in chains:
+        try:
+            chains[key] = dhan_client.get_option_chain(key[0], key[1]) or None
+        except Exception as exc:
+            print(f"  (ratchet real capture for {ref}: chain fetch failed: {exc})", flush=True)
+            chains[key] = None
+    chain = chains[key]
+    if not chain:
+        print(f"  (ratchet real capture for {ref}: option chain unavailable)", flush=True)
+        return None
+    quotes = {}
+    for leg in spread.get("legs") or []:
+        price, why = _crossed_exit_price(leg, leg_quote(chain, leg))
+        if price is None:
+            print(f"  (ratchet real capture for {ref}: refused on "
+                  f"{float(leg['strike']):g}{str(leg['option_type']).upper()}: {why})", flush=True)
+            return None
+        quotes[(float(leg["strike"]), str(leg["option_type"]).upper())] = price
+    return real_capture_from_quotes(spread, quotes)
+
+
 def evaluate_open_positions(spot_by_ticker: dict, entries=None,
-                            today: date = None) -> list:
+                            today: date = None, real_capture_fn=None) -> list:
     """Every active open spread whose underlying has a live spot, marked
     in real time. Positions with no quote this cycle are skipped (never
-    guessed). Read-only by hard rule — see the module docstring."""
+    guessed). Read-only by hard rule — see the module docstring.
+    `real_capture_fn(entry) -> float | None` (the daemon passes
+    `_real_capture_for`) supplies the CROSSED capture the ratchet moves on;
+    it is asked only for spreads the ratchet applies to. None (offline
+    callers, the dashboard) = the ratchet neither rises nor fires here."""
     results = []
     for entry in _open_spreads(entries):
         spot = spot_by_ticker.get(entry["ticker"])
         if spot is None:
             continue
-        results.append(evaluate_position(entry, float(spot), today))
+        real = None
+        if real_capture_fn is not None and _ratchet_applies(entry):
+            try:
+                real = real_capture_fn(entry)
+            except Exception as exc:          # abstain, never a modeled stand-in
+                print(f"  (ratchet real capture for {entry.get('short_id')} skipped: {exc})", flush=True)
+                real = None
+        results.append(evaluate_position(entry, float(spot), today, real_capture_pct=real))
     return results
 
 
@@ -657,7 +757,7 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                candle_sink: "CandleSink" = None,
                flip_registry=None, closes_fn=None,
                square_off_fn=None, live_account_fn=None,
-               live_log: "LiveTickLog" = None) -> list:
+               live_log: "LiveTickLog" = None, real_capture_fn=None) -> list:
     """One synchronous pass of the live loop: snapshot each underlying,
     fold it into its candle aggregator, mark every open position, and
     push an advisory alert for each NEW exit signal — and, with the
@@ -701,7 +801,9 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
 
     # Mark every open position ONCE, then reuse the list for both the
     # published snapshot and the alert scan below.
-    marks = evaluate_open_positions(spots, entries, today=now.date())
+    _CYCLE_CHAINS.clear()          # one chain fetch per key per cycle, never stale
+    marks = evaluate_open_positions(spots, entries, today=now.date(),
+                                    real_capture_fn=real_capture_fn)
     if publish_snapshot:
         from src import market_snapshot
         market_snapshot.write(spots, marks, now=now)
@@ -959,10 +1061,13 @@ async def run_live_loop(underlyings=UNDERLYINGS,
                             / "config.json").read_text())
     except Exception:
         _cfg = {}
+    real_capture_fn = None
     if _cfg.get("intraday_profit_take", True):
         square_off_fn = intraday_square_off
+        real_capture_fn = _real_capture_for      # the ratchet moves on crossed quotes only
         print("[Live Bridge] intraday profit-take square-off ARMED "
-              "(crossed bid/ask chain quotes, decision #69 + ruling 2026-10-05).", flush=True)
+              "(crossed bid/ask chain quotes, decision #69 + ruling 2026-10-05); "
+              "the profit ratchet reads CROSSED capture (audit Chunk 3).", flush=True)
     live_account_fn = None
     live_log = LiveTickLog()     # audit F02: the arm's tick summary -> this log, de-duplicated
     try:
@@ -989,7 +1094,7 @@ async def run_live_loop(underlyings=UNDERLYINGS,
                 notify_fn=notify_fn, now_fn=now_fn, publish_snapshot=True,
                 candle_sink=candle_sink, flip_registry=flip_registry,
                 square_off_fn=square_off_fn, live_account_fn=live_account_fn,
-                live_log=live_log)
+                live_log=live_log, real_capture_fn=real_capture_fn)
             for sig in fired:
                 print(f"[Live Bridge] {sig['ticker']}: {sig['signal']} "
                       f"({sig['capture_pct']:.0f}% capture){_square_off_note(sig)}.",

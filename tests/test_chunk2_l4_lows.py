@@ -642,7 +642,8 @@ def _cycles(entries, registry, square_off, minutes, spot=lambda m: 24000.0, note
         now = datetime(2026, 10, 5, start[0], start[1], 30, tzinfo=IST) + timedelta(minutes=m)
         lb.live_cycle(("NIFTY 50",), quote_fn=lambda u, m=m: {"last_price": spot(m)}, entries=entries,
                       aggregators={}, registry=registry, notify_fn=(notes.append if notes is not None else None),
-                      now_fn=lambda now=now: now, square_off_fn=square_off)
+                      now_fn=lambda now=now: now, square_off_fn=square_off,
+                      real_capture_fn=lambda e: 20.0)      # crossed capture under the 70 lock
 
 
 def test_f24_a_declined_square_off_is_retried_while_the_signal_persists(monkeypatch, capsys):
@@ -800,7 +801,8 @@ def test_f24_review_a_refusing_door_prints_once_per_change_not_once_per_retry(mo
         now = datetime(2026, 10, 5, 9, 15, 30, tzinfo=IST) + timedelta(minutes=m)
         fired += lb.live_cycle(("NIFTY 50",), quote_fn=lambda u: {"last_price": 24000.0}, entries=entries,
                                aggregators={}, registry=reg, now_fn=lambda now=now: now,
-                               square_off_fn=lambda sig: lb.intraday_square_off(sig, entries=entries))
+                               square_off_fn=lambda sig: lb.intraday_square_off(sig, entries=entries),
+                               real_capture_fn=lambda e: 20.0)
     assert len(asked) == 6 and len(fired) == 1
     assert fired[0]["square_off_status"] == "above_lock_on_real_quotes"
     out = capsys.readouterr().out

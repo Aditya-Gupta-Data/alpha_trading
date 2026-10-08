@@ -42,6 +42,22 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 ~01:30 IST — the four-portfolio graph + Brain Map in the DESK design; the 09:10 link card leads with the desk — live on the box, pulled on the VM
+
+**The desk is the design (Architect).** The polished site at the tunnel root (`/overview`, `/live-book` …) is the React desk (`frontend/`), not Streamlit. So:
+- **Overview:** now has the four-portfolio panel, with the owner's names, Timeframe and Basis toggles, in the desk's chart style.
+- **New `/brain-map` page:** in the nav.
+- **Data:** both are fed by two new bridge routes, `/api/equity-history` and `/api/brain-map`.
+- **Streamlit:** keeps its versions at `/streamlit/`.
+
+**The daily link.** A parallel session (Claude Fable) had already built the 09:10 link card (`05a7e3f`: `master_scheduler._dashboard_link_lines`, sent at session start). No second card was added. It now LEADS with `<tunnel>/overview` and `<tunnel>/brain-map`, then the Streamlit link as 'Classic view'.
+
+**Live.**
+- **Box:** desk bundle shipped (`ship_ui.sh`), code at `66eb660`; `alpha-api-bridge` and `alpha-dashboard` restarted. `/`, `/overview`, `/brain-map` and `/streamlit/` answer 200; the API answers 401 without the key.
+- **VM:** pulled to `66eb660` (no restart needed; the scheduler is cron). 48 targeted tests passed. The card preview reads the remembered link.
+
+**Note:** the parallel session was editing `src/live_bridge.py` (uncommitted) while this landed. It is untouched here.
+
 ## 2026-10-09 01:05 IST — DEPLOYED: the Chunk 2 lows, the stuck-exit Discord pages (#133) and the equity recorder (VM `170bb2e`)
 
 **Live now.** The VM went `bc6fbe0` → `170bb2e`; `alpha-trading` and `alpha-discord-bot` restarted at 01:04:53.

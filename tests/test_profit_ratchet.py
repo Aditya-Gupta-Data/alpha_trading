@@ -132,12 +132,13 @@ def test_ratchet_can_be_switched_off_back_to_the_static_take(monkeypatch):
 def test_live_bridge_signals_ratchet_hit_from_the_persisted_state():
     e = _bear_put(entry_date="2026-09-24", expiry="2026-10-29")
     e["ratchet"] = {"peak_capture_pct": 85.0, "locked_pct": 50.0, "armed": True}
-    sig = lb.evaluate_position(e, spot=98.0, today=date(2026, 9, 25))    # capture well under 50%
+    # the hit is judged on the CROSSED capture (Chunk 3 phantom-ratchet fix)
+    sig = lb.evaluate_position(e, spot=98.0, today=date(2026, 9, 25), real_capture_pct=20.0)
     assert sig["signal"] == "ratchet_hit" and sig["ratchet"]["locked_pct"] == 50.0
-    strong = lb.evaluate_position(e, spot=85.0, today=date(2026, 9, 25))
+    strong = lb.evaluate_position(e, spot=85.0, today=date(2026, 9, 25), real_capture_pct=60.0)
     assert strong["signal"] == "hold" and strong["capture_pct"] > 50.0
     fresh = lb.evaluate_position(_bear_put(entry_date="2026-09-24", expiry="2026-10-29"),
-                                 spot=85.0, today=date(2026, 9, 25))
+                                 spot=85.0, today=date(2026, 9, 25), real_capture_pct=62.0)
     assert fresh["signal"] == "hold" and fresh["ratchet"]["new_rung"] and fresh["ratchet"]["armed"]
     assert lb.evaluate_position(_condor(entry_date="2026-09-24", expiry="2026-10-29"),
                                 spot=100.0, today=date(2026, 10, 20))["ratchet"] is None
@@ -183,3 +184,82 @@ def test_note_ratchet_only_ever_raises_the_stored_state(monkeypatch):
         assert pt.note_ratchet("rt000001", 91.0, 70.0)
         r = journal.read_all()[0]["ratchet"]
         assert r["peak_capture_pct"] == 91.0 and r["locked_pct"] == 70.0 and r["source"] == "live_bridge"
+
+
+# --- the phantom ratchet (audit Chunk 3, 2026-10-09) ------------------------
+
+def test_modeled_capture_never_moves_the_ratchet():
+    """A modeled 70% with no real quote raises nothing: peak/lock stay as
+    stored (None here), new_rung is False, and the signal is hold."""
+    e = _bear_put(entry_date="2026-09-24", expiry="2026-10-29")
+    sig = lb.evaluate_position(e, spot=85.0, today=date(2026, 9, 25))
+    assert sig["capture_pct"] > 60.0                        # the model's view (display)
+    r = sig["ratchet"]
+    assert r["basis"] == "none" and r["peak_capture_pct"] is None and r["locked_pct"] is None
+    assert not r["new_rung"] and not r["armed"] and sig["signal"] == "hold"
+    assert sig["real_capture_pct"] is None
+    # a stored lock is kept but, with no real quote, never fires on the model
+    e["ratchet"] = {"peak_capture_pct": 85.0, "locked_pct": 50.0, "armed": True}
+    held = lb.evaluate_position(e, spot=98.0, today=date(2026, 9, 25))   # modeled << 50
+    assert held["signal"] == "hold" and held["ratchet"]["locked_pct"] == 50.0
+    assert held["ratchet"]["peak_capture_pct"] == 85.0 and not held["ratchet"]["new_rung"]
+
+
+def test_real_capture_arms_and_the_rung_persists_only_from_crossed_quotes():
+    e = _bear_put(entry_date="2026-09-24", expiry="2026-10-29")
+    # the model says 70%+, the crossed quotes say 29%: no rung
+    sig = lb.evaluate_position(e, spot=85.0, today=date(2026, 9, 25), real_capture_pct=29.0)
+    assert sig["ratchet"]["basis"] == "crossed" and sig["ratchet"]["peak_capture_pct"] == 29.0
+    assert sig["ratchet"]["locked_pct"] is None and not sig["ratchet"]["new_rung"]
+    # crossed 41% arms breakeven
+    sig = lb.evaluate_position(e, spot=85.0, today=date(2026, 9, 25), real_capture_pct=41.0)
+    assert sig["ratchet"]["locked_pct"] == 0.0 and sig["ratchet"]["new_rung"]
+    assert sig["ratchet"]["capture_pct"] == sig["capture_pct"] and sig["real_capture_pct"] == 41.0
+
+
+def test_real_capture_from_quotes_matches_the_settlement_gate():
+    s = _bear_put()["spread"]                     # entry d = 10 - 4 = 6/share, max profit 4/share
+    assert lb.real_capture_from_quotes(s, {(100.0, "PE"): 10.0, (90.0, "PE"): 1.0}) == 75.0
+    assert lb.real_capture_from_quotes(s, {(100.0, "PE"): 8.0, (90.0, "PE"): 1.0}) == 25.0
+    assert lb.real_capture_from_quotes(s, {(100.0, "PE"): 8.0}) is None          # a leg missing
+    assert lb.real_capture_from_quotes(s, {(100.0, "PE"): 90.0, (90.0, "PE"): 1.0}) == 100.0  # clamped
+
+
+def test_evaluate_open_positions_asks_real_capture_only_for_ratchet_spreads():
+    asked = []
+
+    def fn(entry):
+        asked.append(entry["short_id"])
+        return 45.0
+    bp, cd = _bear_put(entry_date="2026-09-24", expiry="2026-10-29"), _condor(entry_date="2026-09-24", expiry="2026-10-29")
+    bp["short_id"], cd["short_id"] = "bp000001", "cd000001"
+    out = lb.evaluate_open_positions({"NIFTY 50": 85.0}, [bp, cd], today=date(2026, 9, 25), real_capture_fn=fn)
+    assert asked == ["bp000001"]                   # the condor never costs a chain fetch
+    by = {o["short_id"]: o for o in out}
+    assert by["bp000001"]["ratchet"]["locked_pct"] == 0.0 and by["cd000001"]["ratchet"] is None
+    # a raising door is an abstention, never a modeled stand-in
+    out = lb.evaluate_open_positions({"NIFTY 50": 85.0}, [bp], today=date(2026, 9, 25),
+                                     real_capture_fn=lambda e: 1 / 0)
+    assert out[0]["ratchet"]["basis"] == "none" and not out[0]["ratchet"]["new_rung"]
+
+
+def test_real_capture_door_crosses_every_leg_and_shares_one_chain(monkeypatch):
+    from src import dhan_client
+    calls = []
+    def _oc(q):
+        oc = {}
+        for (k, ty), (bid, ask, ltp) in q.items():
+            oc.setdefault(f"{k:.6f}", {})[ty] = {"top_bid_price": bid, "top_ask_price": ask, "last_price": ltp}
+        return {"last_price": 85.0, "oc": oc}
+    chain = _oc({(100.0, "pe"): (8.0, 8.5, 8.2), (90.0, "pe"): (0.9, 1.0, 0.95)})
+    monkeypatch.setattr(dhan_client, "get_option_chain", lambda t, x: calls.append((t, x)) or chain)
+    e = _bear_put(entry_date="2026-09-24", expiry="2026-10-29")
+    chains = {}
+    cap = lb._real_capture_for(e, chains)
+    # long 100PE sold at the bid 8.0, short 90PE bought at the ask 1.0 -> exit 7.0, d 6 -> 1/4 = 25%
+    assert cap == 25.0 and len(calls) == 1
+    assert lb._real_capture_for(e, chains) == 25.0 and len(calls) == 1   # shared within the cycle
+    # a leg with no bid refuses the whole read
+    chain2 = _oc({(100.0, "pe"): (0.0, 8.5, 8.2), (90.0, "pe"): (0.9, 1.0, 0.95)})
+    assert lb._real_capture_for(e, {("NIFTY 50", "2026-10-29"): chain2}) is None
+    assert lb._real_capture_for(e, {("NIFTY 50", "2026-10-29"): None}) is None

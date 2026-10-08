@@ -235,6 +235,21 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-06 · 11 commits · 38 files touched
+
+- `b27ad3c` fix(chunk2): L3 lows — F11, F12, F13, F14 and the L2 residuals
+- `762e868` fix(chunk2): L2 review fixes
+- `7813529` fix(chunk2): L2 lows — F04, F07, F08, F15, F16 and the L1 claim and floor residuals
+- `689b700` fix(chunk2): L1 review fixes
+- `6896f1f` fix(chunk2): live arm exits are serialised and never reopen a row they do not own or a basket that partly filled (L1: F05 + F06)
+- `a66423a` docs: DEPLOYED Issue 44 + Chunk 2 fixes A-G + margin-block refusal (VM bc6fbe0, 18:21 IST); Chunk 2 close-out status (15 lows open); HANDOVER
+- `bc6fbe0` fix(chunk2): a margin-blocked approval is a refusal, not a decision — API 409, the Discord bot keeps the buttons
+- `8de274c` docs: Chunk 2 fixes E-G done (#128 approval re-checks, #129 expiry timing); open-book dry-run on the VM snapshot; HANDOVER
+- `47f807a` fix(chunk2): the #68 one-position slot is re-checked firm-wide at approval (Fix G)
+- `1e3966c` fix(chunk2): no stock-option round trip at entry; no approval inside the forced-exit window (F17 + F18)
+- `d5295e7` fix(chunk2): expiry backstop settles only on the expiry session's own close; the forced pre-expiry exit also fires on the last session before expiry (F22 + F23)
+
+
 ### 2026-10-09 · 5 commits · 20 files touched
 
 - `3fd2d7d` docs: Chunk 2 closed in code — all 15 lows + close-out residuals fixed (#130–#132), not deployed; ledger Issue 45; HANDOVER
@@ -242,16 +257,6 @@ regenerates that day's entry rather than duplicating it.
 - `a8a723c` fix(chunk2): lows residuals B1 — one entry basket per account per ref; manage-only per cycle; venue-raise refusal; F16 read errors roll back
 - `3a8fde6` fix(chunk2): lows residuals A2 — the backstop cancels a working exit past expiry (F08); per-ref repair isolation (F15); pins
 - `fe7463f` fix(chunk2): lows residuals A1 — the live arm's exit ownership holds without the tick lock (F06)
-
-
-### 2026-10-06 · 6 commits · 28 files touched
-
-- `a66423a` docs: DEPLOYED Issue 44 + Chunk 2 fixes A-G + margin-block refusal (VM bc6fbe0, 18:21 IST); Chunk 2 close-out status (15 lows open); HANDOVER
-- `bc6fbe0` fix(chunk2): a margin-blocked approval is a refusal, not a decision — API 409, the Discord bot keeps the buttons
-- `8de274c` docs: Chunk 2 fixes E-G done (#128 approval re-checks, #129 expiry timing); open-book dry-run on the VM snapshot; HANDOVER
-- `47f807a` fix(chunk2): the #68 one-position slot is re-checked firm-wide at approval (Fix G)
-- `1e3966c` fix(chunk2): no stock-option round trip at entry; no approval inside the forced-exit window (F17 + F18)
-- `d5295e7` fix(chunk2): expiry backstop settles only on the expiry session's own close; the forced pre-expiry exit also fires on the last session before expiry (F22 + F23)
 
 
 ### 2026-10-04 · 4 commits · 20 files touched

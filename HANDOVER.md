@@ -60,7 +60,11 @@ the agent's job under the Session Wrap rule above.
 2. Any `live_exit_needs_review` card.
 3. PAPER_2L_LIVE's `1cc5214e` (NIFTY 50, expiry 10-13): its own ratchet lock is at 30 on a 63% capture; its forced-exit session is 10-12.
 
-**Not done:** the always-on dashboard box still runs the old Streamlit app, so the new graph appears there only once the app is shipped.
+**Dashboard box (01:15):**
+- The box is on `2fdafcf`: pulled (its nightly 03:05 pull-and-restart, run by hand) and `alpha-dashboard` restarted.
+- The public link is unchanged (https://amanda-vegetarian-badge-carriers.trycloudflare.com); `/streamlit/` answers 200.
+- The graph is on the 🏦 Treasury tab, under the PAPER_10L curve, with the owner's names (graph only): Model Portfolio, Small-Account Test, Capital-Rotation Test, Live-Quote Test.
+- Its 'True net' basis fills in from the first 09:00 mirror run on 10-09.
 
 ## 2026-10-09 ~01:30 IST — Architect rulings #133/#134; Discord pages for stuck live exits; the multi-portfolio equity graph — pushed, NOT deployed
 

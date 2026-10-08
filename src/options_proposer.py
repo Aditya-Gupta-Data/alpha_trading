@@ -468,6 +468,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                    book: dict = None, prices: dict = None,
                    risk_pct: float = None,
                    account_equity: float = None,
+                   account_cash: float = None,
                    short_strike_otm_pct: float = None,
                    advisory: dict = None, today: date = None,
                    horizon: str = None, macro_score: float = None) -> dict:
@@ -667,9 +668,11 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
     # portfolio_manager.evaluate_shadow_accounts. `account_equity` is the
     # injectable seam; live it is the paper account's equity.
     equity = account_equity if account_equity is not None else _primary_equity(book, prices)
+    cash = account_cash if account_cash is not None else _primary_available_cash(book)
+    # margin wall on the primary's own liquid cash and the VIX-stressed ask (Chunk 3 Z2/Z4)
     sizing = fractional_lots(equity, spread["max_loss"], _risk_pct,
-                             margin_per_lot=spread["margin"]["total_margin"],
-                             available_cash=book["cash"])
+                             margin_per_lot=spread["margin"]["total_margin"] * pf.span_stress_factor(vix),
+                             available_cash=cash)
     lots = sizing["lots"]
     if lots <= 0:
         # `rejected_spread` (2026-08-07) is ADDITIVE OBSERVABILITY: the
@@ -719,6 +722,21 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
             "horizon": horizon}
 
 
+def _primary_available_cash(book: dict) -> float:
+    """The primary's liquid cash (equity minus locks); the legacy book's cash only when the ledger is unreadable."""
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from src import brain_map, portfolio_manager as pm
+            conn = brain_map.connect()
+            try:
+                return float(pm.available_cash(conn))
+            finally:
+                conn.close()
+        except Exception:
+            pass
+    return float(book.get("cash") or 0.0)
+
+
 def _primary_equity(book: dict, prices: dict) -> float:
     """The primary paper account's total equity for sizing (decision #106).
     Live: `portfolio_manager` (starting capital + realized P&L). Under
@@ -747,6 +765,8 @@ def to_journal_entry(proposal: dict, decision: str, why: str) -> dict:
     entry = journal.new_entry(proposal, decision, why,
                               pattern_tags=[proposal["spread"]["strategy"]])
     entry["spread"] = proposal["spread"]
+    if proposal.get("sizing") is not None:
+        entry["sizing"] = proposal["sizing"]
     entry["regime"] = regime_for(proposal.get("view"), proposal.get("vix"))
     return entry
 

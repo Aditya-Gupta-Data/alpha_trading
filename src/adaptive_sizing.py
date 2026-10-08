@@ -111,8 +111,10 @@ def equity_history(events=None, ledger_path=None) -> list:
                   if float(r) <= 0 and "Gap-down shock" in category else 1.0)
         rows.append({"key": (trig.get("setup"), trig.get("tier")),
                      "ticker": e.get("ticker"), "r": float(r),
-                     "weight": weight})
-    return rows
+                     "weight": weight,
+                     "_dup": (e.get("ticker"), trig.get("setup"), trig.get("tier"),
+                              str(host.get("ts") or "")[:10], str(e.get("ts") or "")[:10])})
+    return _collapse_duplicates(rows)
 
 
 def options_history(entries=None) -> list:
@@ -134,9 +136,25 @@ def options_history(entries=None) -> list:
         strategy = (e.get("spread") or {}).get("strategy")
         if not strategy:
             continue
+        sp = e.get("spread") or {}
+        dup = (e.get("ticker"), strategy, sp.get("expiry"), e.get("date"), o.get("exit_date"),
+               tuple((l.get("side"), l.get("strike"), l.get("option_type")) for l in sp.get("legs") or []))
         rows.append({"key": ("option", strategy), "ticker": e.get("ticker"),
-                     "r": float(r), "weight": 1.0})
-    return rows
+                     "r": float(r), "weight": 1.0, "_dup": dup})
+    return _collapse_duplicates(rows)
+
+
+def _collapse_duplicates(rows: list) -> list:
+    """Identical positions (same structure, entry and exit) are ONE trial (Chunk 3 S5)."""
+    groups: dict = {}
+    for r in rows:
+        groups.setdefault(r.pop("_dup"), []).append(r)
+    out = []
+    for g in groups.values():
+        w = sum(x["weight"] for x in g)
+        out.append(dict(g[0], r=sum(x["r"] * x["weight"] for x in g) / w if w else g[0]["r"],
+                        weight=g[0]["weight"], n_rows=len(g)))
+    return out
 
 
 # ---------------------------------------------------------------- math

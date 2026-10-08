@@ -176,6 +176,10 @@ def test_fund_entry_applies_multiplier_and_veto():
         conn.close()
 
 
+def _distinct(row, n):
+    return [dict(row, date=f"2026-01-{i + 1:02d}") for i in range(n)]   # S5: distinct trials
+
+
 def test_adjust_option_lots_floors_and_vetoes():
     win = {"spread": {"strategy": "iron_condor"}, "ticker": "N",
            "outcome": {"r_multiple": 0.5}}
@@ -185,19 +189,19 @@ def test_adjust_option_lots_floors_and_vetoes():
         adj = Path(tmp) / "adj.jsonl"
         # Penalty (6 losses) floors at 1 lot, never 0.
         lots, v = az.adjust_option_lots("iron_condor", 2,
-                                        entries=[loss] * 6,
+                                        entries=_distinct(loss, 6),
                                         adjustments_path=adj,
                                         broadcast_fn=lambda c: None)
         assert v["action"] == "penalty" and lots == 1
         # Earned veto (8 losses) zeroes.
         lots, v = az.adjust_option_lots("iron_condor", 2,
-                                        entries=[loss] * 8,
+                                        entries=_distinct(loss, 8),
                                         adjustments_path=adj,
                                         broadcast_fn=lambda c: None)
         assert v["action"] == "veto" and lots == 0
         # Healthy record: untouched (and no boost — size_lots is the cap).
         lots, v = az.adjust_option_lots("iron_condor", 2,
-                                        entries=[win] * 12,
+                                        entries=_distinct(win, 12),
                                         adjustments_path=adj,
                                         broadcast_fn=lambda c: None)
         assert lots == 2

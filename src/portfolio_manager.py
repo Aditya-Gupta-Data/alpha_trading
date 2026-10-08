@@ -1171,7 +1171,7 @@ def paper_daily_breaker_status(conn, account: str, today: str = None) -> dict:
 
 
 def size_for_account(conn, account: str, spread: dict, primary_lots: int = None,
-                     risk_pct: float = None) -> dict:
+                     risk_pct: float = None, vix: float = None) -> dict:
     """Lots THIS account would take of the structure (decision #106):
     `position_sizing.fractional_lots` on the account's OWN equity and
     liquid cash — independent of the primary (`primary_lots` is accepted
@@ -1180,7 +1180,7 @@ def size_for_account(conn, account: str, spread: dict, primary_lots: int = None,
     Returns the fractional_lots dict (+ account); lots 0 = refused."""
     risk_pct = ACCOUNT_RISK_PER_TRADE_PCT if risk_pct is None else float(risk_pct)
     max_loss = float(spread.get("max_loss") or 0)
-    per_lot = float((spread.get("margin") or {}).get("total_margin") or 0)
+    per_lot = float((spread.get("margin") or {}).get("total_margin") or 0) * span_stress_factor(vix)
     sized = fractional_lots(paper_equity(conn, account), max_loss, risk_pct,
                             margin_per_lot=per_lot if per_lot > 0 else None,
                             available_cash=paper_available_cash(conn, account))
@@ -1638,7 +1638,7 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                     continue
                 vix = proposal.get("vix")
                 rotation = None
-                sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
+                sized = size_for_account(conn, account, spread, primary_lots, risk_pct, vix=vix)
                 walled = (sized["lots"] <= 0 and account in ROTATION_ACCOUNTS
                           and sized.get("by_margin") == 0 and not paper_trading_halted(conn, account)
                           and not paper_daily_breaker_status(conn, account)["halted"])
@@ -1649,7 +1649,7 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                     rotation = _try_rotation(conn, account, journal_ref, spread, vix,
                                              marks_fn=marks_fn, evict_fn=evict_fn)
                     if rotation.get("evicted"):
-                        sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
+                        sized = size_for_account(conn, account, spread, primary_lots, risk_pct, vix=vix)
                 if sized["lots"] <= 0:
                     paper_log_event(conn, account, "sizing_refused", journal_ref,
                                     f"entry {journal_ref} refused ({sized['reason']})")
@@ -1673,7 +1673,7 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                     rotation = _try_rotation(conn, account, journal_ref, spread, vix,
                                              marks_fn=marks_fn, evict_fn=evict_fn)
                     if rotation.get("evicted"):
-                        sized = size_for_account(conn, account, spread, primary_lots, risk_pct)
+                        sized = size_for_account(conn, account, spread, primary_lots, risk_pct, vix=vix)
                         required = required_margin_for(
                             {"spread": dict(spread, lots=max(1, sized["lots"])), "vix": vix})
                 if rotation is not None and rotation.get("evicted"):
@@ -1693,7 +1693,9 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                 out[account] = {"status": "approved" if verdict["approved"] else "rejected",
                                 "lots": sized["lots"] if verdict["approved"] else 0,
                                 "margin_rs": required if verdict["approved"] else None,
-                                "reason": verdict["reason"]}
+                                "reason": verdict["reason"],
+                                "sizing": {k: sized.get(k) for k in
+                                           ("by_risk", "by_margin", "floor_applied", "risk_pct", "equity")}}
                 if rotation is not None:
                     out[account]["rotation"] = _rotation_stamp(rotation)
             except Exception as e:

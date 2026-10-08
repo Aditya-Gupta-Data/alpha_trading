@@ -213,6 +213,8 @@ EVENT_FILLED_REFUSED = "live_filled_entry_refused"
 # Audit F14: the arm is switched off while it still holds positions (one
 # row + one card per IST day — `announce_manage_only`).
 EVENT_ARM_OFF = "live_arm_off_managing"
+# a FILLED-but-unrecorded entry whose repair raised (lows residual A2, F15)
+EVENT_REPAIR_FAILED = "live_unrecorded_repair_failed"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_live_positions (
@@ -1501,6 +1503,19 @@ def _repair_unrecorded(conn, account: str, now: datetime) -> list:
             # day), the lock kept, and the next ref is still repaired
             note_refused_fill(conn, account, ref, tid, str(exc))
             continue
+        except Exception as exc:
+            # lows residual A2 (F15): ONE ref's failure is that ref's alone —
+            # it used to escape the loop, so every other filled-but-unrecorded
+            # position of the account (and _repair_late_locks) waited behind
+            # it for as long as it kept failing. Named once a day; the lock
+            # is kept, and the next tick tries this ref again.
+            if conn.in_transaction:
+                conn.rollback()
+            print(f"  (live account: repair of {ref} failed: {exc} — lock kept, retried next tick)")
+            _log_once_a_day(conn, {"account_id": account, "journal_ref": ref}, EVENT_REPAIR_FAILED,
+                            f"FILLED entry ticket {tid} could not be recorded as a position ({exc}) — "
+                            "lock kept; retried every tick")
+            continue
         fixed.append(ref)
     return fixed
 
@@ -2249,8 +2264,13 @@ def _expire_exiting(conn, row: dict, res, now: datetime, interval_s: int = None)
     from src import oms
     ref = row["journal_ref"]
     ex = _exit_fills(conn, row)
-    if res is None and not (ex["complete"] and not ex["in_flight"]):
+    if res is None and not ex["complete"] and not ex["in_flight"]:
         return {"status": "waiting", "journal_ref": ref, "filled_any": ex["filled_any"]}
+    # A ticket still WORKING past expiry is cancelled now, even while the
+    # expiry session's close has not arrived (lows residual A2, F08): left
+    # live, any later venue sweep (the primary's exits run one) would fill it
+    # at a limit priced before expiry, and the backstop would then book those
+    # fills instead of the expiry close's intrinsic.
     got = _claim(conn, row, now, interval_s, actor="the expiry backstop")
     if not got["owned"]:
         return {"status": got["status"], "journal_ref": ref, "reason": got["reason"]}
@@ -2271,7 +2291,10 @@ def _expire_exiting(conn, row: dict, res, now: datetime, interval_s: int = None)
     if ex["complete"]:
         return _settle_from_fills(conn, row, ex, now, detail, expect_state=STATE_EXITING)
     if res is None:
-        return {"status": "waiting", "journal_ref": ref, "filled_any": ex["filled_any"]}
+        out = {"status": "waiting", "journal_ref": ref, "filled_any": ex["filled_any"]}
+        if cancelled:
+            out["cancelled"] = cancelled
+        return out
     resolution, exit_mark_ps, _frac, _day, close, basis, close_day = res
     detail.update(close=close, settlement_close_date=close_day)
     if not ex["filled_any"]:

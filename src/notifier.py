@@ -23,6 +23,8 @@ calls asyncio.run() (CLI). Never raises — trade journal is never blocked.
 
 import os
 import smtplib
+import threading
+from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -576,6 +578,30 @@ async def broadcast_alert(payload: dict) -> bool:
         return False
 
 
+_DEFERRED = threading.local()
+
+
+@contextmanager
+def deferred_broadcasts():
+    """Queue every `fire_broadcast` made inside the block (this thread) and
+    send them, in order, when the block exits — for a caller holding a lock
+    that must not wait on the network (decision #122: no network inside the
+    journal lock; lows residual B2: two rare approval paths — a refused
+    live fill's review card and the F13 held-lock halt cards — fired from
+    inside decide_pending's lock). Nested blocks: the outermost one sends.
+    The de-dup ledgers those cards keep are written as before."""
+    if getattr(_DEFERRED, "queue", None) is not None:
+        yield _DEFERRED.queue
+        return
+    _DEFERRED.queue = []
+    try:
+        yield _DEFERRED.queue
+    finally:
+        queued, _DEFERRED.queue = _DEFERRED.queue, None
+        for payload in queued:
+            fire_broadcast(payload)
+
+
 def fire_broadcast(payload: dict) -> None:
     """Sync bridge: dispatch broadcast_alert from any calling context.
 
@@ -584,9 +610,16 @@ def fire_broadcast(payload: dict) -> None:
         (fire-and-forget — caller does not await the result).
       * no running loop (CLI, plan_tracker direct): asyncio.run().
 
+    Inside `deferred_broadcasts()` the payload is queued instead and sent
+    when that block exits.
+
     Never raises; any Discord/network failure is printed and swallowed so
     the trade journal is never blocked by a Discord outage.
     """
+    queue = getattr(_DEFERRED, "queue", None)
+    if queue is not None:
+        queue.append(payload)
+        return
     import asyncio
     try:
         loop = asyncio.get_running_loop()

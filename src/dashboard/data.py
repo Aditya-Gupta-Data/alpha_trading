@@ -523,7 +523,15 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
     if live is None:
         live, read_at = _read_live(db_path)
         captured_at = captured_at or read_at
-    live = live if isinstance(live, list) else []          # unreadable: no live row is invented
+    # Lows residual B2 (F10): a READABLE live book is the truth for the live
+    # arm — it is a holder only through its own open/exiting rows, never
+    # through the journal verdict (a closed position, an 'already_open'
+    # stamp over a closed row, a missed journal stamp or a fill not yet
+    # recorded all left it listed on the primary's row on the primary's
+    # figures). Only an UNREADABLE book falls back to the journal verdict,
+    # and that row then says so.
+    book_readable = isinstance(live, list)
+    live = live if book_readable else []                 # unreadable: no live row is invented
     shown = {(r["account_id"], r["journal_ref"]) for r in live}
     max_age_s, ref = _stale_policy(now, captured_at)
     rows, settled = [], {}
@@ -537,7 +545,9 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
         m = marks.get(e.get("short_id")) or {}
         accounts = ["PAPER_10L"] + [a for a, v in (e.get("accounts") or {}).items()
                                     if (v or {}).get("status") in HOLDING_VERDICTS
-                                    and (a, e.get("short_id")) not in shown]
+                                    and (a, e.get("short_id")) not in shown
+                                    and not (book_readable and a in LIVE_ACCOUNTS)]
+        live_named = [a for a in accounts if a in LIVE_ACCOUNTS]
         rows.append({"id": e.get("short_id"), "account": "PAPER_10L", "symbol": e.get("ticker"),
                      "strategy": STRATEGY_LABELS.get(s.get("strategy"), s.get("strategy")),
                      "direction": s.get("direction"), "accounts": ", ".join(accounts),
@@ -547,7 +557,9 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                      "ratchet_peak_pct": r.get("peak_capture_pct"),
                      "ratchet_lock_pct": r.get("locked_pct"),
                      "ratchet": _exit_rule(s.get("strategy"), bool(r.get("armed")), r.get("locked_pct")),
-                     "sizing": ((e.get("sizing") or {}).get("reason") or None)})
+                     "sizing": ((e.get("sizing") or {}).get("reason") or None),
+                     **({"note": f"live book unreadable — {', '.join(live_named)} named from the journal "
+                                 "verdict, on the primary's figures"} if live_named else {})})
     rows += [_live_row(r, settled, max_age_s, ref) for r in live]
     entries = {}
     from src.knowledge_graph_logger import apply_corrections       # funding_revoked (#123)

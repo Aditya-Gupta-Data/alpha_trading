@@ -1520,6 +1520,13 @@ def release_unopened_lock(conn, account: str, journal_ref: str) -> dict:
         except Exception as exc:
             return {"released": False, "reason": f"live position lookup failed ({exc}) — lock kept"}
         if state:
+            if state == live_pricer.STATE_CLOSED and _active_shadow_lock(conn, account, journal_ref) is None:
+                # lows residual B2 (cross-batch critic): a position that
+                # already CLOSED with its lock settled backs nothing — it is
+                # not 'open', and no lock is held to keep
+                return {"released": False, "closed_position": True,
+                        "reason": "the live position for this entry already CLOSED and its lock settled at its "
+                                  "P&L — nothing to release"}
             return {"released": False, "backs_position": True,
                     "reason": f"a live position for this entry is recorded ({state}) — the lock backs it"}
         if filled:

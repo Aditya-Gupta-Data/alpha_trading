@@ -792,8 +792,9 @@ def test_a_failed_live_expiry_expires_nothing_and_the_next_run_expires_all(pendi
         return held
     monkeypatch.setattr(lp, "has_open_position", spy)
     now = datetime(2026, 10, 5, 15, 31, tzinfo=pm.IST)
-    with pytest.raises(Exception, match="simulated busy/disk"):
-        pt.expire_pending_margin(now=now)
+    # lows residual B2: the sweep isolates the failing ref (named, skipped,
+    # retried next run) instead of raising out of the whole run
+    assert pt.expire_pending_margin(now=now) == {}
     assert seen == [(LIVE, True, True)]              # the guard read INSIDE the transaction and committed nothing
     assert _expiry_state(db, ref) == (None, {TWO_L: None, LIVE: None}, 0)           # NOTHING expired
     c = brain_map.connect(str(db))

@@ -1708,10 +1708,20 @@ def expire_pending_margin(now: datetime = None, conn=None) -> dict:
             conn = _brain_connect()
         try:
             for e, cutoff in due:
-                freed = pm.expire_pending_lock(
-                    conn, e["short_id"],
-                    why=f"proposed {e.get('created_at') or e.get('date')}, not approved by "
-                        f"{cutoff:%Y-%m-%d %H:%M} IST")
+                # lows residual B2 (cross-batch critic): ONE ref's failure is
+                # that ref's alone. expire_pending_lock is all-or-nothing and
+                # RAISES (F16: a read error rolls it back), and it used to stop
+                # every later ref of the run; each is now named and the rest
+                # still expire. The failed ref is retried on the next run.
+                try:
+                    freed = pm.expire_pending_lock(
+                        conn, e["short_id"],
+                        why=f"proposed {e.get('created_at') or e.get('date')}, not approved by "
+                            f"{cutoff:%Y-%m-%d %H:%M} IST")
+                except Exception as exc:
+                    print(f"Plan tracker: pending {e['short_id']} ({e.get('ticker')}) — margin expiry "
+                          f"FAILED, nothing expired for it, retried next run: {exc}")
+                    continue
                 if freed:
                     out[e["short_id"]] = freed
                     print(f"Plan tracker: pending {e['short_id']} ({e.get('ticker')}) — margin "

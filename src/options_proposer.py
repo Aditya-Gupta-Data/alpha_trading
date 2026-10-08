@@ -1323,9 +1323,15 @@ def decide_pending(trade_id: str, approve: bool, why: str = "",
     # it the eviction only re-verifies on these quotes (a candidate that
     # changed meanwhile has none, so it is simply not evicted).
     rotation = _prefetch_rotation(trade_id) if fetch else None
-    with journal.locked():
-        verdict = _decide_pending_locked(trade_id, approve, why, live_requote=prefetched,
-                                         rotation=rotation, today=today)
+    # lows residual B2 (cross-batch critic): a card fired from inside the lock
+    # (a refused live fill's review card, the F13 held-lock halt cards) is
+    # queued and sent only once the journal lock is released (#122: no
+    # network inside it).
+    from src import notifier
+    with notifier.deferred_broadcasts():
+        with journal.locked():
+            verdict = _decide_pending_locked(trade_id, approve, why, live_requote=prefetched,
+                                             rotation=rotation, today=today)
     # Fix G: the #68 block's one card, after the lock (D1). Only for an
     # AUTO-approval — its proposal card said "being journaled as APPROVED"
     # and nobody is looking at a reply — and only on the first block of
@@ -1746,6 +1752,12 @@ def _live_refuse(conn, acct: str, entry: dict, why: str, status: str = "rejected
         print(f"  [{acct}] {ref}: refusal bookkeeping failed ({e})")
     if status != LIVE_ALREADY_OPEN and (rel or {}).get("backs_position"):
         status, why = LIVE_ALREADY_OPEN, f"{why}; {rel.get('reason')}"
+    if (rel or {}).get("closed_position"):
+        # lows residual B2: the arm traded this ref and already CLOSED it —
+        # its verdict (stamped closed with its P&L) stands; never relabelled
+        # 'already_open' (a holder) nor 'rejected' (never traded)
+        print(f"  [{acct}] {ref}: NO SECOND ENTRY — {why}; {rel.get('reason')}")
+        return
     if isinstance(entry.get("accounts"), dict):
         if status == LIVE_ALREADY_OPEN:
             verdict = dict(entry["accounts"].get(acct) or {}, status=status, reason=f"no second live entry: {why}")

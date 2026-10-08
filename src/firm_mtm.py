@@ -80,7 +80,7 @@ def _options_unrealized(entries=None, marks=None):
         return (round(sum(m["live_pnl_rs"] for m in marks), 2),
                 len(marks), open_count, missing)
     except Exception:
-        return None, 0, 0, []
+        return None, 0, 1, ["options book unreadable"]    # never "no open positions" (R8)
 
 
 def _equity_unrealized(ledger_path=None, quote_fn=None):

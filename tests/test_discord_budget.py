@@ -96,11 +96,11 @@ def test_drain_renders_truncates_and_archives():
 
 def test_eod_and_ceo_cards_carry_the_batched_section():
     from src import ceo_brief, eod_summary
-    real_drain = nt.drain_digest_queue
+    real_drain = nt.peek_digest_queue
     real_read = eod_summary._read_journal
     real_q = eod_summary.query_todays_resolutions
     try:
-        nt.drain_digest_queue = lambda *a, **k: "12:01 · opened: BUY X"
+        nt.peek_digest_queue = lambda *a, **k: ("12:01 · opened: BUY X", 1)
         eod_summary._read_journal = lambda path=None: []
         eod_summary.query_todays_resolutions = lambda db_path=None: []
         card = eod_summary.build_eod_card()
@@ -114,8 +114,9 @@ def test_eod_and_ceo_cards_carry_the_batched_section():
         [f] = [f for f in brief["fields"]
                if f["name"] == "📦 Batched signals"]
         assert "opened: BUY X" in f["value"]
+        assert brief["drains_digest"]["rows"] == 1          # acked only on delivery (B4)
     finally:
-        nt.drain_digest_queue = real_drain
+        nt.peek_digest_queue = real_drain
         eod_summary._read_journal = real_read
         eod_summary.query_todays_resolutions = real_q
 

@@ -417,8 +417,8 @@ BUDGET_STATE_PATH = ROOT / "logs" / ".discord_budget.json"
 DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
 # decision #133 (Architect ruling 2026-10-09): a stuck or half-filled live exit
 # pages at once — it needs a human now, not in the evening digest
-BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review"}
-BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest", "dashboard_link",
+BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review", "live_entry_needs_review"}
+BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest", "dashboard_link", "morning_brief",
                     "performance", "weekly_digest", "macro_heartbeat"}
 BUDGET_DROP = {"portfolio_report"}
 
@@ -480,6 +480,20 @@ def budget_gate(payload: dict, state_path=None, queue_path=None,
     return "spool"
 
 
+def _spool_summary(payload: dict) -> str:
+    """One line for the digest: the description's first line, else the card's fields (Chunk 4 R1)."""
+    first = str(payload.get("description") or "").split("\n")[0].strip()
+    if first:
+        return first[:160]
+    try:
+        e = _build_embed(payload)
+        bits = [f"{f.get('name')} {f.get('value')}" for f in e.get("fields") or [] if f.get("value")]
+    except Exception:
+        bits = []
+    t = payload.get("ticker")
+    return ((f"{t} · " if t and t != "?" else "") + " · ".join(bits))[:160]
+
+
 def _spool(payload: dict, queue_path=None) -> None:
     import json
     p = Path(queue_path) if queue_path else DIGEST_QUEUE_PATH
@@ -490,7 +504,9 @@ def _spool(payload: dict, queue_path=None) -> None:
                                 "event": payload.get("event"),
                                 "ticker": payload.get("ticker"),
                                 "description":
-                                    str(payload.get("description") or "")[:400]
+                                    str(payload.get("description") or "")[:400],
+                                "summary": _spool_summary(payload),
+                                "payload": json.loads(json.dumps(payload, default=str)),
                                 }) + "\n")
     except OSError:
         pass                                # spooling is best-effort
@@ -502,18 +518,16 @@ def _budget_count_send(state_path=None) -> None:
     _budget_save(state, state_path)
 
 
-def drain_digest_queue(queue_path=None, max_lines: int = 12) -> str | None:
-    """Everything spooled since the last digest, as compact lines — then
-    the queue archives and truncates (the digest that drained it is the
-    one place the owner reads it). None when nothing waited."""
+def peek_digest_queue(queue_path=None, max_lines: int = 12) -> tuple:
+    """(rendered lines | None, raw line count) — reads only (Chunk 4 B4/R3)."""
     import json
     p = Path(queue_path) if queue_path else DIGEST_QUEUE_PATH
     try:
         raw = [ln for ln in p.read_text().splitlines() if ln.strip()]
     except OSError:
-        return None
+        return None, 0
     if not raw:
-        return None
+        return None, 0
     rows = []
     for ln in raw:
         try:
@@ -522,20 +536,43 @@ def drain_digest_queue(queue_path=None, max_lines: int = 12) -> str | None:
             continue
     lines = []
     for r in rows[:max_lines]:
-        first = str(r.get("description") or "").split("\n")[0][:80]
+        first = (r.get("summary") or str(r.get("description") or "").split("\n")[0])[:80]
         lines.append(f"{str(r.get('ts', ''))[11:16]} · "
                      f"{r.get('event', '?')}: {first}")
     if len(rows) > max_lines:
-        lines.append(f"…and {len(rows) - max_lines} more (full text in "
-                     f"the drained ledger)")
+        lines.append(f"…and {len(rows) - max_lines} more (kept in the drained ledger)")
+    return "\n".join(lines), len(raw)
+
+
+def ack_digest_queue(queue_path=None, rows: int = None) -> int:
+    """Archive the first `rows` queued lines (all when None) once a digest DELIVERED them."""
+    p = Path(queue_path) if queue_path else DIGEST_QUEUE_PATH
+    try:
+        raw = [ln for ln in p.read_text().splitlines() if ln.strip()]
+    except OSError:
+        return 0
+    if not raw:
+        return 0
+    n = len(raw) if rows is None else max(0, min(int(rows), len(raw)))
     try:
         with (p.parent / (p.name + ".drained")).open("a") as f:
-            for ln in raw:
-                f.write(ln + "\n")
-        p.write_text("")
+            f.write("\n".join(raw[:n]) + ("\n" if n else ""))
+        p.write_text("".join(ln + "\n" for ln in raw[n:]))
     except OSError:
-        pass
-    return "\n".join(lines)
+        return 0
+    return n
+
+
+def drain_digest_queue(queue_path=None, max_lines: int = 12) -> str | None:
+    """peek + ack in one step (offline/CLI use); digests ack on delivery instead."""
+    text, n = peek_digest_queue(queue_path, max_lines)
+    if text is None:
+        return None
+    ack_digest_queue(queue_path, n)
+    return text
+
+
+# (legacy drain tail removed — Chunk 4 B4)
 
 
 async def broadcast_alert(payload: dict) -> bool:
@@ -588,8 +625,15 @@ async def broadcast_alert(payload: dict) -> bool:
             print(f"  (broadcast_alert: HTTP {resp.status_code})")
             return False
         try:
-            _budget_count_send()            # only a DELIVERED card burns
-        except Exception:                   # budget; a failed post doesn't
+            if str(payload.get("event") or "") not in BUDGET_ALWAYS:
+                _budget_count_send()        # only a DELIVERED, budgeted card burns
+        except Exception:
+            pass
+        try:                                # a delivered digest acks what it carried
+            d = payload.get("drains_digest") or {}
+            if d.get("rows"):
+                ack_digest_queue(d.get("queue_path"), int(d["rows"]))
+        except Exception:
             pass
         return True
     except Exception as exc:

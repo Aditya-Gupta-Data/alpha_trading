@@ -495,8 +495,8 @@ def _fetch_pnl() -> dict:
     """GET /api/discord/pnl -> the realized + live-marked P&L card."""
     status, body = _bridge_call("GET", "/api/discord/pnl")
     if status != 200:
-        raise RuntimeError(f"gateway answered {status}: {body[:200]}")
-    data = json.loads(body)
+        raise RuntimeError(f"gateway answered {status}: {str(body)[:200]}")
+    data = body if isinstance(body, dict) else json.loads(body)
     return data.get("card") or {}
 
 

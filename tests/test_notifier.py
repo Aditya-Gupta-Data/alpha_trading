@@ -438,7 +438,9 @@ def test_eod_query_returns_todays_rows():
             "INSERT INTO outcomes VALUES (2,'ref2','2026-07-07','TCS.NS',NULL,-1.0,'loss',NULL)")
         conn.commit()
         conn.close()
-        rows = query_todays_resolutions(db_path=db_path)
+        rows = query_todays_resolutions(db_path=db_path, entries=[
+            {"short_id": "ref1", "decision": "approved", "outcome": {"r_multiple": 1.5}},
+            {"short_id": "ref2", "decision": "approved", "outcome": {"r_multiple": -1.0}}])
         assert len(rows) == 1
         assert rows[0]["ticker"] == "NIFTY 50"
         assert rows[0]["result"] == "win"

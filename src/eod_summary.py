@@ -99,21 +99,25 @@ def _open_approved_equities(entries: list) -> list:
     ]
 
 
-def query_todays_resolutions(db_path=None) -> list:
-    """Rows from brain_map.db outcomes table resolved on today's date."""
+def query_todays_resolutions(db_path=None, entries=None) -> list:
+    """Today's outcomes for APPROVED, non-hypothetical journal rows (Chunk 4 R4)."""
     path = Path(db_path or DEFAULT_DB_PATH)
     if not path.exists():
         return []
     today = _today()
     try:
+        from src import journal
+        entries = journal.read_all() if entries is None else entries
+        real = {e.get("short_id") for e in entries
+                if e.get("decision") == "approved" and not (e.get("outcome") or {}).get("hypothetical")}
         conn = sqlite3.connect(str(path))
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT ticker, archetype, r_multiple, result FROM outcomes WHERE date = ?",
+            "SELECT journal_ref, ticker, archetype, r_multiple, result FROM outcomes WHERE date = ?",
             (today,),
         ).fetchall()
         conn.close()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in rows if r["journal_ref"] in real]
     except Exception as exc:
         print(f"  (eod_summary: brain_map query failed: {exc})")
         return []
@@ -453,12 +457,13 @@ def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None,
 
     # Directive 4 (#84): everything the daily Discord budget spooled —
     # trades, rotations, sizing changes, review flags — lands HERE.
+    drains = None
     try:
-        from src.notifier import drain_digest_queue
-        batched = drain_digest_queue()
+        from src.notifier import peek_digest_queue, DIGEST_QUEUE_PATH
+        batched, n_rows = peek_digest_queue()
         if batched:
-            fields.append({"name": "📦 Batched signals",
-                           "value": batched[:1024], "inline": False})
+            fields.append({"name": "📦 Batched signals", "value": batched, "inline": False})
+            drains = {"queue_path": str(DIGEST_QUEUE_PATH), "rows": n_rows}
     except Exception:
         pass
 
@@ -468,6 +473,7 @@ def build_eod_card(db_path=None, halt_lines_fn=None, blocks_path=None,
         description = "Market closed. Open positions monitored by plan_tracker."
 
     return {
+        "drains_digest": drains,
         "event":       "eod",
         "ticker":      "",
         "date":        today,

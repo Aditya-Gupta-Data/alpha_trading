@@ -996,7 +996,7 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
     if issues.get("cold_start"):
         description = ("📍 First brief on this box — issue reporting starts "
                        "from here.")
-    elif ops.get("ok") and not issues.get("total"):
+    elif ops.get("ok") and issues.get("available", True) and not issues.get("total"):
         description = "✅ Clean day — everything ran, nothing broke."
     else:
         description = "⚠️ Attention needed — see the sections below."
@@ -1070,17 +1070,19 @@ def build_brief_card(logs_dir: Path = LOGS_DIR,
     # honors the same sandbox as every other collector (2026-07-23: this
     # read used to escape to the real logs/ and pick up live-spooled
     # signals mid-test — the 07-22 journal-drift lesson, one door over).
+    drains = None
     try:
-        from src.notifier import drain_digest_queue
-        batched = drain_digest_queue(
-            queue_path=logs_dir / "discord_digest_queue.jsonl")
+        from src.notifier import peek_digest_queue
+        qp = logs_dir / "discord_digest_queue.jsonl"
+        batched, n_rows = peek_digest_queue(queue_path=qp)
         if batched:
-            fields.append({"name": "📦 Batched signals",
-                           "value": batched[:1024], "inline": False})
+            fields.append({"name": "📦 Batched signals", "value": batched, "inline": False})
+            drains = {"queue_path": str(qp), "rows": n_rows}
     except Exception:
         pass
 
     return {
+        "drains_digest": drains,
         "event": "ceo_brief",
         "ticker": "",
         "date": _today(clock),

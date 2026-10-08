@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-09 · 28 commits · 73 files touched
+### 2026-10-09 · 31 commits · 77 files touched
 
+- `13476ac` docs: HANDOVER — Chunk 5 status, the pending deploy bundle, Dhan data-plan expiry 10-10
+- `8ad0373` fix(audit-c5): SafeDhanClient reserves the host-wide throttle (F1) — the 2-hourly report/greeks jobs had bypassed it; lens F recorded
+- `860f910` fix(audit-c5): liquidity tiers rank on futures value when NSE's fo zip has no option rows — tier1 had been file order (Q1, blocker); ban list reads M&M/BAJAJ-AUTO (Q2); lens Q recorded
 - `569a855` docs(audit): Chunk 5 Ingestion & Data Lake — scope skeleton
 - `9af1498` docs: Chunk 4 closed in code — HANDOVER, ledger, audit status (not deployed)
 - `275d3c1` fix(audit-c4): Batch D — decided_at on every decision; stale-proposal refusal behind stale_approval_max_days (B1, default off); decision #137

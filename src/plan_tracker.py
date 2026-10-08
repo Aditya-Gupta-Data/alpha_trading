@@ -605,7 +605,7 @@ def _spread_exit_costs_quoted(spread: dict, leg_exit_premiums: dict,
 
 def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
                         conn=None, venue_mod=None, today: date = None,
-                        accounts: list = None) -> dict:
+                        accounts: list = None, fence=None) -> dict:
     """Issue + fill the exit ticket(s) — the primary's, and one per shadow
     paper account holding this entry (#102). Returns {mode, ticket_id,
     status, exit_mark, venue_slippage_ps, fills, accounts, error}.
@@ -619,7 +619,14 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
     primary + shadows — a capital-rotation eviction closes one shadow
     account's position alone; the first account is the one reported on.
     On the normal path a shadow account whose lock is already released
-    (evicted) gets no second exit ticket."""
+    (evicted) gets no second exit ticket.
+
+    `fence` (Chunk 2 lows, F06 residual — the live arm only): a callable
+    given {account: ticket_id} AFTER the tickets are issued and BEFORE the
+    venue sweep. It returns False when the caller no longer owns the exit
+    (another actor took it over while this one was in its door); every
+    ticket just issued is then cancelled, nothing is swept, and the record
+    says `fenced` — so a stale actor's ticket can never fill."""
     from src.config import PAPER_VENUE_ENABLED
     record = {"mode": "model", "ticket_id": None, "status": None, "exit_mark": None,
               "venue_slippage_ps": None, "fills": {}, "accounts": {}, "error": None}
@@ -652,6 +659,12 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
                                                     source=f"plan_tracker.{resolution}",
                                                     account_id=acct, lots=lots)
                 tids[acct] = issued["ticket_id"]
+            if fence is not None and not fence(dict(tids)):
+                for stid in tids.values():
+                    oms.cancel_ticket(conn, stid, "exit fenced: the caller no longer owns this exit")
+                record.update(mode="paper_venue", ticket_id=tids[lead], fenced=True,
+                              status=(oms.ticket_view(conn, tids[lead]) or {}).get("status"))
+                return record
             venue.sweep(conn, today=today, stamp=False)
             tid = tids[lead]
             view = oms.ticket_view(conn, tid) or {}

@@ -291,8 +291,11 @@ def test_the_unfilled_branch_never_reopens_a_row_closed_under_it(world):
     assert res["status"] == "not_reopened"
     assert _state(c, ref)[0] == "closed" and lp.has_open_position(c, LIVE, ref) is False
     assert _events(c, lp.EVENT_UNFILLED, ref) == 0                     # no "position kept" claim
-    # the withdrawn ticket is not stamped onto the row another actor closed
-    assert c.execute("SELECT exit_ticket_id FROM paper_live_positions").fetchone()[0] is None
+    # the fence attached the ticket BEFORE the sweep, while the attempt was
+    # still this one's (F06 residual); it was then cancelled with nothing
+    # filled on it — the other actor's close stands, and it booked alone
+    tid = c.execute("SELECT exit_ticket_id FROM paper_live_positions").fetchone()[0]
+    assert tid == res["ticket_id"] and (oms.ticket_view(c, tid) or {}).get("status") == oms.CANCELLED
 
 
 def test_reopen_is_a_compare_and_set_on_the_attempt_it_undoes(world):

@@ -684,7 +684,7 @@ def _frictions(row: dict, exit_prices: dict | None) -> float:
 
 def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, frictions: float,
             now: datetime, ticket_id: str = None, detail: dict = None, clamp: bool = True,
-            expect_state: str = None) -> dict:
+            expect_state: str = None, expect_attempt: str = None) -> dict:
     """Close the row and settle ONLY this account's lock. Idempotent: an
     already-closed row settles nothing. `clamp=False` books the mark as it
     is, beyond the structure's bounds — only a legged exit's actual fills
@@ -694,7 +694,11 @@ def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, f
     `expect_state` makes the close a compare-and-set on the state the
     caller READ (L2: eod_sweep's backstop, which runs in the API process
     without the tick lock) — a row another actor moved since (reopened,
-    stamped `exiting`) settles nothing and answers `state_moved`, named."""
+    stamped `exiting`) settles nothing and answers `state_moved`, named.
+    `expect_attempt` (with `expect_state='exiting'`) narrows it to ONE exit
+    attempt — the row's `exit_started_at` (F06 residual: `_exit`'s FILLED
+    path settles only the attempt it stamped, never one another actor
+    stamped since)."""
     from src import portfolio_manager as pm
     qty = int(row["lots"]) * int(row["lot_size"])
     d = float(row["entry_mark_ps"])
@@ -709,7 +713,9 @@ def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, f
     if conn.in_transaction:
         conn.commit()
     was_halted = pm.paper_trading_halted(conn, row["account_id"])
-    guard, guard_arg = ("state = ?", expect_state) if expect_state else ("state != ?", STATE_CLOSED)
+    guard, guard_args = ("state = ?", (expect_state,)) if expect_state else ("state != ?", (STATE_CLOSED,))
+    if expect_attempt is not None:
+        guard, guard_args = guard + " AND exit_started_at IS ?", guard_args + (expect_attempt,)
     cur = conn.execute("UPDATE paper_live_positions SET state = ?, closed_at = ?, resolution = ?, "
                        "exit_mark_ps = ?, settlement_basis = ?, frictions_rs = ?, pnl_net = ?, "
                        "exit_ticket_id = COALESCE(?, exit_ticket_id), last_profit_ps = ?, "
@@ -719,13 +725,15 @@ def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, f
                         float(frictions), pnl, ticket_id, round(profit_ps, 4),
                         round(_capture(profit_ps, float(row["max_profit_ps"])), 2),
                         round(float(exit_mark_ps), 4), _iso(now),
-                        row["account_id"], row["journal_ref"], guard_arg))
+                        row["account_id"], row["journal_ref"], *guard_args))
     if cur.rowcount == 0:
         conn.rollback()
         state = _row_state(conn, row)
         if expect_state and state != STATE_CLOSED:
+            as_read = f"'{expect_state}'" + (f" on the attempt stamped {expect_attempt}"
+                                            if expect_attempt is not None else "")
             return {"status": "state_moved", "journal_ref": row["journal_ref"],
-                    "reason": f"row is '{state}' now, not '{expect_state}' as read — another actor moved it; "
+                    "reason": f"row is '{state}' now, not {as_read} as read — another actor moved it; "
                               "nothing settled"}
         return {"status": "already_closed", "journal_ref": row["journal_ref"]}
     payload = {"resolution": resolution, "basis": basis, "closed_at": _iso(now), "ticker": row["ticker"],
@@ -1033,7 +1041,18 @@ def _resolve_attempt(conn, row: dict, ex: dict, now: datetime, exit_ticket_id, e
             "reason": f"row is '{_row_state(conn, row)}' now — another actor moved it; nothing reopened"}
 
 
-def _resume_exiting(conn, row: dict, now: datetime) -> dict:
+def _attempt_age_s(row: dict, now: datetime):
+    """Seconds since the row's exit attempt last moved (its claim /
+    ticket stamp `last_exit_attempt_ts`, else its `exit_started_at`);
+    None when neither parses (a legacy row: treated as old)."""
+    for key in ("last_exit_attempt_ts", "exit_started_at"):
+        ts = _ts(row.get(key))
+        if ts is not None:
+            return (now.replace(tzinfo=None) - ts.replace(tzinfo=None)).total_seconds()
+    return None
+
+
+def _resume_exiting(conn, row: dict, now: datetime, interval_s: int = None, guarded: bool = True) -> dict:
     """A row left in `exiting` — a crash or a door error mid-exit, or a
     basket that only partly filled: cancel whatever is still in flight
     (keeping what each cancel returns), then resolve on what the OMS says
@@ -1041,9 +1060,33 @@ def _resume_exiting(conn, row: dict, now: datetime) -> dict:
     used to reopen the FULL position on any non-FILLED read, so a
     half-filled basket — or a ticket filled under the cancel — was closed
     a second time later). Never issues a ticket: closing the legs a
-    partial basket left open is tick's job, on a freshly fetched chain."""
+    partial basket left open is tick's job, on a freshly fetched chain.
+
+    F06 residual — only when the tick runs UNGUARDED (`guarded=False`: the
+    single-instance lock could not be taken and the tick failed open). With
+    the lock held no other tick can be in its door, so a crash is resumed at
+    once, as before. Unguarded, an attempt that moved inside the last quote
+    interval may be ANOTHER actor's, in its door right now. Of what a
+    resume does, two things would break that actor: it
+    cancels a ticket that still has a leg working (its exit is lost), and
+    it reopens an attempt that has no ticket yet (its ticket would then be
+    fenced off and cancelled). Such a young attempt is left untouched —
+    `exit_in_flight` with `young=True` — and resolved once it is older,
+    the column's own rule (an exit attempt is not retried, nor undone,
+    inside one quote interval). Settling an exit whose legs all filled, or
+    naming a partly filled one, is safe at any age and runs as before."""
     from src import oms
+    from src.config import LIVE_QUOTE_INTERVAL_SECONDS
+    interval_s = LIVE_QUOTE_INTERVAL_SECONDS if interval_s is None else int(interval_s)
     ex = _exit_fills(conn, row)
+    age = None if guarded else _attempt_age_s(row, now)
+    if age is not None and age < interval_s and (
+            ex["in_flight"] or (not ex["filled_any"] and not row.get("exit_ticket_id"))):
+        what = (f"ticket(s) {', '.join(ex['in_flight'])} still working" if ex["in_flight"]
+                else "no exit ticket yet")
+        return {"status": "exit_in_flight", "journal_ref": row["journal_ref"], "young": True,
+                "reason": f"exit attempt last moved {int(age)}s ago ({what}), inside the {interval_s}-s quote "
+                          "interval — in flight (possibly another actor's), left untouched"}
     cancelled = {}
     for tid in ex["in_flight"]:
         cancelled[tid] = oms.cancel_ticket(conn, tid, "live account: exit resumed unfilled").get("status")
@@ -1108,13 +1151,31 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
         return {"status": "exit_not_owned", "journal_ref": row["journal_ref"],
                 "reason": f"row is '{_row_state(conn, row)}', not 'open' — another actor owns this exit; "
                           "no ticket issued"}
-    rec = pt._execute_paper_exit(_entry_like(row), limits, resolution, conn=conn, venue_mod=venue_mod,
-                                 today=now.date(), accounts=[(row["account_id"], int(row["lots"]))])
-    tid = rec.get("ticket_id")
-    if tid:
-        conn.execute("UPDATE paper_live_positions SET exit_ticket_id = ? WHERE account_id = ? AND journal_ref = ? "
-                     "AND state = ?", (tid, row["account_id"], row["journal_ref"], STATE_EXITING))
+    def _fence(tids: dict) -> bool:
+        # F06 residual: the ticket is attached to THIS attempt by a
+        # compare-and-set BEFORE the venue may fill it. An actor frozen
+        # between its stamp and its ticket (a stall past one quote interval
+        # lets another actor's resume treat the attempt as a crash, reopen
+        # it and exit) finds the row no longer its own and its ticket is
+        # cancelled unswept — it can never fill a second basket. The same
+        # write refreshes last_exit_attempt_ts, so a resume sees a ticket
+        # just attached as IN FLIGHT for one more interval.
+        cur = conn.execute("UPDATE paper_live_positions SET exit_ticket_id = ?, last_exit_attempt_ts = ? "
+                           "WHERE account_id = ? AND journal_ref = ? AND state = ? AND exit_started_at IS ? "
+                           "AND exit_ticket_id IS NULL",
+                           (tids.get(row["account_id"]), _iso(now), row["account_id"], row["journal_ref"],
+                            STATE_EXITING, started))
         conn.commit()
+        return cur.rowcount == 1
+
+    rec = pt._execute_paper_exit(_entry_like(row), limits, resolution, conn=conn, venue_mod=venue_mod,
+                                 today=now.date(), accounts=[(row["account_id"], int(row["lots"]))],
+                                 fence=_fence)
+    tid = rec.get("ticket_id")
+    if rec.get("fenced"):
+        return {"status": "exit_not_owned", "journal_ref": row["journal_ref"], "ticket_id": tid,
+                "reason": f"another actor took this exit over while this attempt (stamped {started}) was in "
+                          f"its door — row is '{_row_state(conn, row)}'; ticket {tid} cancelled unfilled"}
     if rec.get("mode") == "paper_venue" and rec.get("status") == oms.FILLED:
         view = oms.ticket_view(conn, tid) or {}
         _, fills = _mark_from_ticket(view)
@@ -1122,8 +1183,11 @@ def _exit(conn, row: dict, prices: dict, resolution: str, now: datetime, venue_m
         # settle on the crossed quotes (the venue filled at exactly them; a
         # floored zero-bid leg is a venue constraint, not a price)
         try:
+            # only the attempt THIS call stamped (F06 residual): a row another
+            # actor has since reopened or re-stamped answers state_moved, and
+            # its own resume books these fills with the rest of its tickets
             return _settle(conn, row, would, resolution, "live_bid_ask", frictions, now, ticket_id=tid,
-                           detail=detail)
+                           detail=detail, expect_state=STATE_EXITING, expect_attempt=started)
         except Exception as exc:
             # Audit F07: the settlement is ONE transaction (row, lock, P&L,
             # live_exit event), so a failure here booked nothing — say that,
@@ -1264,10 +1328,31 @@ def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, v
     if not got["owned"]:
         return {"status": got["status"], "journal_ref": ref, "reason": got["reason"]}
     claim = got["claim"]
+
+    def _fence(tids: dict) -> bool:
+        # F06 residual, as in _exit: the completion ticket is attached to
+        # THIS claim (the row unchanged since it, the claim stamp still
+        # ours) before the venue may fill it; otherwise it is cancelled
+        # unswept. A ticket id this row already has is left alone (below).
+        new = tids.get(row["account_id"])
+        if new in ex["tickets"]:
+            return True
+        cur = conn.execute("UPDATE paper_live_positions SET exit_ticket_id = ? WHERE account_id = ? "
+                           "AND journal_ref = ? AND state = ? AND exit_started_at IS ? AND exit_ticket_id IS ? "
+                           "AND last_exit_attempt_ts IS ?",
+                           (new, row["account_id"], ref, STATE_EXITING, row.get("exit_started_at"),
+                            row.get("exit_ticket_id"), claim))
+        conn.commit()
+        return cur.rowcount == 1
+
     rec = pt._execute_paper_exit(_entry_like(row, legs=[x["leg"] for x in open_legs], lots=lots), limits,
                                  resolution, conn=conn, venue_mod=venue_mod, today=now.date(),
-                                 accounts=[(row["account_id"], lots)])
+                                 accounts=[(row["account_id"], lots)], fence=_fence)
     tid = rec.get("ticket_id")
+    if rec.get("fenced"):
+        return {"status": "exit_not_owned", "journal_ref": ref, "ticket_id": tid,
+                "reason": f"another actor moved this partly filled exit after this completion's claim "
+                          f"({claim}) — row is '{_row_state(conn, row)}'; ticket {tid} cancelled unfilled"}
     if tid in ex["tickets"]:
         # exit ticket ids are keyed to the wall-clock second, and issuing is
         # idempotent: an id this row already has means NOTHING new was issued
@@ -1275,10 +1360,6 @@ def _complete_exit(conn, row: dict, chain: dict, quote_ts: str, now: datetime, v
         return {"status": "partial_held", "journal_ref": ref,
                 "reason": f"the completion ticket's id {tid} is an earlier exit ticket's (same wall-clock "
                           "second) — nothing new was issued; retried on the next fetched chain"}
-    if tid:
-        conn.execute("UPDATE paper_live_positions SET exit_ticket_id = ? WHERE account_id = ? AND journal_ref = ? "
-                     "AND state = ?", (tid, row["account_id"], ref, STATE_EXITING))
-        conn.commit()
     if rec.get("error") and not tid:
         pm.paper_log_event(conn, row["account_id"], EVENT_UNFILLED, ref,
                            f"{resolution}: completion of a partly filled exit — door error "
@@ -1770,9 +1851,14 @@ def _tick_lock(path):
     """Take the host-wide single-instance tick lock without waiting (audit
     F06). Returns (handle, None) when held; (None, reason) when another
     process holds it; (None, None) when no guard can be taken (no fcntl,
-    or the file cannot be opened) — fail-open, because the compare-and-set
-    transitions keep a second tick from double-exiting on their own; the
-    lock only keeps a second tick from running at all."""
+    or the file cannot be opened) — fail-open, so the live arm's positions
+    are still marked and exited. Unguarded, ownership rests on the
+    compare-and-set chain alone, which the F06 residual fix made
+    sufficient: every exit ticket is attached to its attempt by a fence
+    BEFORE the venue may fill it (a stale actor's ticket is cancelled
+    unswept), `_exit` settles only the attempt it stamped, and an
+    unguarded resume leaves a young attempt (working ticket, or none yet)
+    untouched for one quote interval."""
     if fcntl is None:
         return None, None
     try:
@@ -1858,7 +1944,9 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
         partial = set()
         for row in [r for r in rows if r["state"] == STATE_EXITING]:
             try:
-                res = _resume_exiting(conn, row, now)
+                res = _resume_exiting(conn, row, now, interval_s, guarded=lock is not None)
+                if res.get("young"):
+                    continue        # in flight inside its quote interval (F06 residual): untouched
                 if res.get("status") == "partial":
                     partial.add((row["account_id"], row["journal_ref"]))
                     if not res.get("cancelled"):

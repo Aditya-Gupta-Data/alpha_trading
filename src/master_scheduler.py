@@ -57,6 +57,16 @@ is per-call scoped (async with), every SQLite touch opens, commits
 atomically, and closes inside the call that made it; there are no
 long-lived handles for a cancellation to strand mid-write.
 
+THE 09:10 DASHBOARD LINK (owner directive 2026-10-09): the first thing
+this process does on a trading day — BEFORE the wait for the open — is
+send the desk's dashboard link to Discord, so it is on the owner's phone
+before 09:15. The URL is the one `src.dashboard_link` remembered from the
+last mirror push (`data/dashboard_url.txt`); the Streamlit path and the
+access key are appended when the key is in this VM's environment
+(DASHBOARD_KEY — the same variable the app itself gates on), else the
+card says "same access key as before". Fail-open like every bookend: no
+remembered link = a card that says so; never a blocked session.
+
 Everything (clock, loops, notifier, account reader) is injectable —
 tests drive whole sessions offline in milliseconds.
 """
@@ -188,6 +198,43 @@ def _account_lines() -> list:
         return [f"(account snapshot unavailable: {e})"]
 
 
+def dashboard_link_url(remembered_url=None, key=None) -> str | None:
+    """The full phone-ready link: `<tunnel>/streamlit/?access_key=<key>` —
+    or `<tunnel>/streamlit/` when no key is known here. None = no link
+    remembered yet (the mirror push has not told us one)."""
+    if remembered_url is None:
+        from src import dashboard_link
+        remembered_url = dashboard_link.remembered()
+    if not remembered_url:
+        return None
+    import os
+    from urllib.parse import quote
+    if key is None:
+        try:                       # the VM's .env (same loader as the Dhan token)
+            from src.dhan_client import _load_env
+            _load_env()
+        except Exception:
+            pass
+        key = os.environ.get("DASHBOARD_KEY")
+    url = remembered_url.rstrip("/") + "/streamlit/"
+    return f"{url}?access_key={quote(str(key), safe='')}" if key else url
+
+
+def _dashboard_link_lines(url_fn=dashboard_link_url) -> list:
+    """The 09:10 link card body. Never raises."""
+    try:
+        url = url_fn()
+    except Exception as e:
+        return [f"(dashboard link unavailable this morning: {e})"]
+    if not url:
+        return ["No dashboard link is remembered yet — the box's mirror push "
+                "records it (data/dashboard_url.txt) and a 🔗 card follows."]
+    lines = [f"Open: {url}"]
+    if "access_key=" not in url:
+        lines.append("Same access key as before.")
+    return lines
+
+
 def _playbook_lines(underlyings, fetch_fn=None) -> list:
     """The Phase 6I planner's advisory read per underlying, from the same
     live state the entry loop trades on. The proposer's market_view is
@@ -243,6 +290,7 @@ async def run_trading_session(underlyings=UNDERLYINGS, *, now_fn=ist_now,
                               entry_loop=None, exit_loop=None,
                               notify_fn=None, playbook_fn=_playbook_lines,
                               account_fn=_account_lines,
+                              link_fn=_dashboard_link_lines,
                               stop_event: asyncio.Event = None,
                               poll_seconds: float = SESSION_POLL_SECONDS) -> dict:
     """One full automated session (see module docstring). Returns a
@@ -261,6 +309,11 @@ async def run_trading_session(underlyings=UNDERLYINGS, *, now_fn=ist_now,
         print(f"[Scheduler] {now:%Y-%m-%d %H:%M} IST — market day over; "
               "nothing to run.", flush=True)
         return {"status": "market_closed", "started": None, "ended": None}
+
+    # The dashboard link first, before the wait for the open (see the
+    # module docstring): the owner has it on the phone by 09:15.
+    if link_fn is not None:
+        await _notify(notify_fn, f"🔗 Dashboard link — {now:%d %b}", link_fn())
 
     wait = seconds_until_open(now)
     if wait > 0:

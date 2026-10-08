@@ -100,7 +100,9 @@ def test_session_runs_loops_and_closes_itself_at_1530():
             ("NIFTY BANK",), now_fn=clock, entry_loop=entry,
             exit_loop=exit_, notify_fn=notes.append,
             playbook_fn=lambda u, **k: ["playbook line"],
-            account_fn=lambda: ["account line"], poll_seconds=0.02))
+            account_fn=lambda: ["account line"],
+            link_fn=lambda: ["Open: https://x.trycloudflare.com/streamlit/?access_key=k"],
+            poll_seconds=0.02))
         await asyncio.sleep(0.05)
         assert alive["entry"] and alive["exit"]   # both loops armed
         clock.advance(hours=5)                    # 16:00 — past the close
@@ -109,10 +111,11 @@ def test_session_runs_loops_and_closes_itself_at_1530():
     summary = run(scenario())
     assert summary["status"] == "completed"
     assert not alive["entry"] and not alive["exit"]  # cleanly cancelled
-    # bookends: one OPEN card (with playbook), one CLOSED card
-    assert len(notes) == 2
-    assert "OPEN" in notes[0] and "playbook line" in notes[0]
-    assert "CLOSED" in notes[1] and "account line" in notes[1]
+    # the 09:10 link card, then the bookends: OPEN (with playbook), CLOSED
+    assert len(notes) == 3
+    assert "Dashboard link" in notes[0] and "access_key=k" in notes[0]
+    assert "OPEN" in notes[1] and "playbook line" in notes[1]
+    assert "CLOSED" in notes[2] and "account line" in notes[2]
 
 
 def test_stop_event_shuts_the_session_down_gracefully():
@@ -171,6 +174,56 @@ def test_a_dying_loop_brings_the_session_down_safely():
 
     summary = run(scenario())
     assert summary["status"] == "stopped"         # never a zombie session
+
+
+# --- the 09:10 dashboard link card (owner directive 2026-10-09) -------------
+
+def test_dashboard_link_url_appends_streamlit_path_and_key():
+    u = ms.dashboard_link_url("https://abc.trycloudflare.com", key="s3cr/et")
+    assert u == "https://abc.trycloudflare.com/streamlit/?access_key=s3cr%2Fet"
+    # no key known on this host -> path only (the card says 'same key')
+    assert ms.dashboard_link_url("https://abc.trycloudflare.com/", key="") \
+        == "https://abc.trycloudflare.com/streamlit/"
+    assert ms.dashboard_link_url("", key="k") is None
+
+
+def test_dashboard_link_url_reads_the_remembered_file_and_env(tmp_path, monkeypatch):
+    from src import dashboard_link as dl
+    monkeypatch.setattr(dl, "STATE_PATH", tmp_path / "url.txt")
+    monkeypatch.setenv("DASHBOARD_KEY", "kk")
+    assert ms.dashboard_link_url() is None            # nothing remembered yet
+    (tmp_path / "url.txt").write_text("https://z.trycloudflare.com\n")
+    assert ms.dashboard_link_url() == "https://z.trycloudflare.com/streamlit/?access_key=kk"
+
+
+def test_dashboard_link_lines_fail_open():
+    assert ms._dashboard_link_lines(url_fn=lambda: None)[0].startswith("No dashboard link")
+    lines = ms._dashboard_link_lines(url_fn=lambda: "https://z/streamlit/")
+    assert lines == ["Open: https://z/streamlit/", "Same access key as before."]
+    assert ms._dashboard_link_lines(url_fn=lambda: "https://z/streamlit/?access_key=k") \
+        == ["Open: https://z/streamlit/?access_key=k"]
+    assert "unavailable" in ms._dashboard_link_lines(url_fn=lambda: 1 / 0)[0]
+
+
+def test_link_card_is_sent_before_the_wait_for_the_open():
+    clock = FakeClock(MONDAY_PRE_OPEN)          # 09:00 — 15 min to the open
+    notes = []
+    stop = asyncio.Event()
+
+    async def scenario():
+        task = asyncio.create_task(ms.run_trading_session(
+            ("NIFTY BANK",), now_fn=clock, entry_loop=_idle_loop,
+            exit_loop=_idle_loop, notify_fn=notes.append,
+            playbook_fn=lambda u, **k: [], account_fn=lambda: [],
+            link_fn=lambda: ["Open: https://q/streamlit/"],
+            stop_event=stop, poll_seconds=0.02))
+        await asyncio.sleep(0.05)
+        assert notes and "Dashboard link" in notes[0]   # already out, pre-open
+        stop.set()
+        return await asyncio.wait_for(task, timeout=2)
+
+    assert run(scenario())["status"] == "stopped"
+    assert len(notes) == 1                        # no OPEN card: never opened
 
 
 # --- the bookend content builders -------------------------------------------

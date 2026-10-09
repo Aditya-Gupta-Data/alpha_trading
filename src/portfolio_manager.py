@@ -1191,9 +1191,10 @@ def size_for_account(conn, account: str, spread: dict, primary_lots: int = None,
     risk_pct = ACCOUNT_RISK_PER_TRADE_PCT if risk_pct is None else float(risk_pct)
     max_loss = float(spread.get("max_loss") or 0)
     per_lot = float((spread.get("margin") or {}).get("total_margin") or 0) * span_stress_factor(vix)
+    unlimited = account == ACCOUNT_PAPER_SHADOW_LEARNER    # #140 (owner): no margin wall on the learner's lots
     sized = fractional_lots(paper_equity(conn, account), max_loss, risk_pct,
-                            margin_per_lot=per_lot if per_lot > 0 else None,
-                            available_cash=paper_available_cash(conn, account))
+                            margin_per_lot=None if unlimited else (per_lot if per_lot > 0 else None),
+                            available_cash=None if unlimited else paper_available_cash(conn, account))
     sized["account"] = account
     return sized
 
@@ -1227,14 +1228,15 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
     if prior is not None and not _lock_expired_unapproved(conn, account, journal_ref):
         return {"approved": False,
                 "reason": "this entry's margin lock was already settled — never re-locked"}
-    halt = entry_halt(conn, account)
+    unlimited = account == ACCOUNT_PAPER_SHADOW_LEARNER    # #140 (owner): paper data bucket, no halt, no margin wall
+    halt = None if unlimited else entry_halt(conn, account)
     if halt:
         paper_log_event(conn, account, halt["event"], journal_ref,
                         f"entry {journal_ref} rejected ({halt['reason']})")
         return {"approved": False, "reason": halt["reason"]}
     cash = paper_available_cash(conn, account)
     margin = round(float(required_margin), 2)
-    if margin > cash:
+    if margin > cash and not unlimited:
         reason = (f"margin exhaustion: needs Rs.{margin:,.2f} but only "
                   f"Rs.{cash:,.2f} liquid (Rs.{paper_locked_margin(conn, account):,.2f} "
                   "already locked)")

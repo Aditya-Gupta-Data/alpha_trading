@@ -320,6 +320,8 @@ def renew_v2(env_text: str, creds: dict = None,
                 _write_new_token(env_text, new_token, body.get("expiryTime"))
                 return 0
             last_body = body
+        global _LAST_FAILURE
+        _LAST_FAILURE = "transport" if body is None else "rejected"
         if body is None or not _is_totp_rejection(body):
             break   # transport/HTTP failure (already printed) or a
                     # non-TOTP rejection — a retry cannot change either
@@ -406,8 +408,9 @@ def renew() -> int:
         for i in range(_RENEW_ATTEMPTS):              # Chunk 5 F2: a blip at 07:00 must not blind the day
             if renew_v2(env_text, creds) == 0:
                 return 0
-            if i < _RENEW_ATTEMPTS - 1:
-                time.sleep(_RENEW_RETRY_WAIT_SECONDS)
+            if _LAST_FAILURE != "transport" or i == _RENEW_ATTEMPTS - 1:
+                break                                 # a clean rejection is final; only transport retries
+            time.sleep(_RENEW_RETRY_WAIT_SECONDS)
         _page_renewal_failure()
         return 1
     rc = renew_legacy(env_text)
@@ -417,6 +420,7 @@ def renew() -> int:
 
 
 _RENEW_ATTEMPTS = 3
+_LAST_FAILURE = None
 _RENEW_RETRY_WAIT_SECONDS = 20
 
 

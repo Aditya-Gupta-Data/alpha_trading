@@ -1,3 +1,4 @@
+import pytest
 """
 Tests for src/dhan_guard.py — the response-shape hardening & audit
 wrapper. Entirely offline: the SDK client is a Mock, both the flat and
@@ -496,3 +497,10 @@ def test_auth_and_input_failures_are_separate_audit_views():
     safe.audit.append(DhanApiError("DH-905", "bad range", "historical").as_dict())
     assert [a["code"] for a in safe.auth_failures()] == ["DH-906"]
     assert [a["code"] for a in safe.input_failures()] == ["DH-905"]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_throttle(monkeypatch):
+    """Chunk 5 F1 put SafeDhanClient on the host-wide throttle; unit tests must not pace for real."""
+    from src import dhan_client as dc
+    monkeypatch.setattr(dc, "_throttle", lambda chain=False: None)

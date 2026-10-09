@@ -364,6 +364,12 @@ def _execute_equity_exit(entry: dict, exit_event: dict, conn=None, venue_mod=Non
             venue.sweep(conn, today=today, stamp=False)
             view = oms.ticket_view(conn, tid) or {}
             record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"))
+            if view.get("status") != oms.FILLED:
+                try:                           # E7: never leave a SELL working for shares the ledger settles
+                    oms.cancel_ticket(conn, tid, reason="desk exit not filled this sweep — modeled exit books")
+                    record["cancelled"] = True
+                except Exception as exc:
+                    record["cancel_error"] = str(exc)
             if view.get("status") == oms.FILLED and view.get("legs"):
                 fill = float(view["legs"][0]["avg_fill_price"])
                 record["fill_price"] = fill
@@ -683,6 +689,8 @@ def run_darling_live_cycle(tiers_path=None, levels_path=None, path=None,
             host = hosts.get(x.get("id"))
             if not host or not (host.get("funding") or {}).get("funded"):
                 continue
+            if str(host.get("ts") or "") < REVERSE_SWEEP_FROM:
+                continue                      # Mac-era funded row: no VM lock by design (E6)
             if not _ever_locked(conn, host.get("id")):
                 # logged as funded but no lock was ever taken (#123 panel):
                 # no OMS exit for shares the firm never bought — correct the

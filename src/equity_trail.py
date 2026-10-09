@@ -40,7 +40,8 @@ def compute_trail(entry_date: str, hard_stop: float, bars: list,
         if day < entry_date:
             continue
         since += 1
-        extreme = float(high) if extreme is None else max(extreme, float(high))
+        h = float(_close) if day == entry_date else float(high)     # E4: the entry-day high may predate the fill
+        extreme = h if extreme is None else max(extreme, h)
         a = atr_from_bars(bars[:i + 1], atr_n)
         if a is None:
             continue
@@ -85,7 +86,7 @@ def bars_for(security_id, entry_date: str, bars_fn=None, today: date = None) -> 
     return bars
 
 
-def trail_for_position(entry: dict, live_price: float = None, bars_fn=None,
+def _trail_for_position_raw(entry: dict, live_price: float = None, bars_fn=None,
                        id_fn=None, today: date = None,
                        atr_mult: float = None, atr_n: int = None) -> dict:
     """The desk's door: resolve the darling's scrip id, fetch its bars, run
@@ -121,4 +122,20 @@ def trail_for_position(entry: dict, live_price: float = None, bars_fn=None,
                       live_price=live_price)
     out.update(t)
     out["reason"] = "armed" if t["armed"] else f"atr_needs_{atr_n + 1}_bars"
+    return out
+
+
+_EXTREMES: dict = {}        # (entry id, entry date) -> the highest live print seen this process (E2)
+
+
+def trail_for_position(entry: dict, live_price: float = None, **kw) -> dict:
+    """The desk's door, with the intraday extreme remembered so a spike lifts the trail for the day (E2)."""
+    out = _trail_for_position_raw(entry, live_price, **kw)
+    key = (entry.get("id"), str(entry.get("as_of") or "")[:10])
+    prior = _EXTREMES.get(key)
+    if out.get("armed") and prior is not None and out.get("extreme") is not None and prior > out["extreme"]:
+        out["extreme"] = prior
+        out["trail"] = round(max(float(out["trail"]), prior - out["atr_mult"] * float(out["atr"])), 2)
+    if out.get("extreme") is not None:
+        _EXTREMES[key] = max(float(out["extreme"]), prior if prior is not None else float(out["extreme"]))
     return out

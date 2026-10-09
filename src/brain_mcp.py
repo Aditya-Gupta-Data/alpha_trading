@@ -127,13 +127,21 @@ def event_history(src: Sources, args: dict) -> dict:
     events = _rows(src.conn().execute(
         "SELECT id, date, event_type, tag, sentiment, source FROM events "
         "WHERE ticker = ? ORDER BY date DESC LIMIT ?", (ticker, limit)))
+    sim_n = 0
+    cols = {r[1] for r in src.conn().execute("PRAGMA table_info(outcomes)")}
+    sim_expr = "(o.journal_ref LIKE 'sim:%')" if "journal_ref" in cols else "0"
     for ev in events:
         ev["measured_outcomes"] = _rows(src.conn().execute(
-            "SELECT o.date, o.archetype, o.r_multiple, o.result "
+            "SELECT o.date, o.archetype, o.r_multiple, o.result, "
+            f"{sim_expr} AS simulated "
             "FROM outcomes o JOIN event_outcome_link l "
             "ON l.outcome_id = o.id WHERE l.event_id = ?", (ev["id"],)))
-    return {"available": True, "ticker": ticker, "events": events,
-            "note": "outcomes are the firm's own paper-trading measurements"}
+        sim_n += sum(1 for o in ev["measured_outcomes"] if o.get("simulated"))
+    as_of = src.conn().execute("SELECT MAX(date) FROM outcomes").fetchone()[0]
+    return {"available": True, "ticker": ticker, "events": events, "as_of": as_of,
+            "simulated_outcomes": sim_n,
+            "note": ("outcomes are the firm's own paper-trading measurements; rows with simulated=1 are "
+                     "synthetic-chain backtests (inflated ~10x) and must never be read as realised P&L")}
 
 
 def entity_affinity(src: Sources, args: dict) -> dict:

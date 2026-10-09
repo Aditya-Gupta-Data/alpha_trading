@@ -385,7 +385,8 @@ def test_renew_v2_fails_cleanly_without_touching_env():
     env_file.write_text(V2_ENV)
     with mock.patch.object(rt, "ENV_PATH", env_file), \
          mock.patch.object(rt, "BACKUP_PATH", bak_file), \
-         mock.patch.object(rt, "request_v2_token", return_value=None):
+         mock.patch.object(rt, "request_v2_token", return_value=None), \
+         mock.patch.object(rt, "_RENEW_RETRY_WAIT_SECONDS", 0):      # Chunk 5 F2 retries transport failures
         assert rt.renew() == 1
     assert env_file.read_text() == V2_ENV   # untouched on failure
     assert not bak_file.exists()

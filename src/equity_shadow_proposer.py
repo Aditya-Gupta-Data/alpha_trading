@@ -502,10 +502,11 @@ def propose_darling_entries(tiers_path=None, levels_path=None, path=None,
     as_of = as_of or _ist_today()
 
     events = kg.read_events(path)
-    open_now = kg.open_positions(events=events)
+    open_now = {t: e for t, e in kg.open_positions(events=events).items() if _is_darling(e)}
+    _hosts = {e.get("id"): e for e in events if e.get("event") == "entry"}
     exited_today = {e.get("ticker") for e in events
-                    if e.get("event") == "exit"
-                    and str(e.get("ts", "")).startswith(as_of)}
+                    if e.get("event") == "exit" and str(e.get("ts", "")).startswith(as_of)
+                    and _is_darling(_hosts.get(e.get("id")) or {})}     # E5: block telemetry never blocks a darling
     vix = nifty = None
     try:
         vix = vix_fn() if vix_fn else None   # Mac EOD: usually None (no token)
@@ -623,6 +624,10 @@ def force_exit_strong_sell(tiers_path=None, path=None, quote_fn=None,
             price = None
         if price is None:
             continue                 # stays open; graded again tomorrow
+        own_stop = (entry.get("kya_kara_action") or {}).get("stop")
+        if ("hard stop" in str(row.get("rule") or "") and not row.get("pinned")
+                and own_stop is not None and float(price) >= float(own_stop)):
+            continue                 # the pricer's stop moved overnight; the position's own stop holds (E1)
         if row.get("pinned"):
             reason = "fundamental_break"
             category = ("Fundamental break: weekly re-screen dropped the "

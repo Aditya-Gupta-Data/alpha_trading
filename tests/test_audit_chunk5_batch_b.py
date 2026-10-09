@@ -42,7 +42,9 @@ def test_f2_renewal_retries_then_pages(monkeypatch):
     calls, cards = [], []
     monkeypatch.setattr(rt, "ENV_PATH", type("P", (), {"exists": lambda s: True, "read_text": lambda s: "DHAN_CLIENT_ID=x\n"})())
     monkeypatch.setattr(rt, "v2_ready", lambda c: True)
-    monkeypatch.setattr(rt, "renew_v2", lambda env, creds: calls.append(1) or 1)
+    def _transport_fail(env, creds):
+        calls.append(1); rt._LAST_FAILURE = "transport"; return 1
+    monkeypatch.setattr(rt, "renew_v2", _transport_fail)
     monkeypatch.setattr(rt.time, "sleep", lambda s: None)
     monkeypatch.setattr("src.notifier.fire_broadcast", lambda p: cards.append(p))
     assert rt.renew() == 1 and len(calls) == 3 and cards[0]["event"] == "token_renewal_failed"

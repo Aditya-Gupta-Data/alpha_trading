@@ -42,6 +42,14 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 15:40 IST — DEPLOYED: #135 + audit Chunks 3–6 + rulings #139 (VM `66eb660` → `94b4c06`)
+
+**Live now.** Services `alpha-trading` + `alpha-discord-bot` restarted 15:39:22 on `94b4c06`; health 200; `deploy_log` shows both on the new sha. Crontab re-installed (`setup_cron.sh`): jobs #35 (log rotation 03:30) and #36 (weekly recalibration Fri 22:00) present. `DASHBOARD_KEY` added to the VM `.env` (the 09:10 link card carries the key from Monday). K2 repair applied: 44 `shadow_trades` rows re-aligned, `k2_shadow_repair` account event at 15:39:27. The Mac's Saturday `weekly_recalibration` crontab line removed (backup `~/mac_crontab.bak-*`).
+- **Pre-deploy dry-run (Issue 31 rule):** read-only snapshot 15:28 marks, 15 open primary trades, 4 pending; exit decisions IDENTICAL under `66eb660` and `origin/main` (15/15, all `hold`); no open darling graded strong_sell. Scoped tests on the VM: 161 passed.
+- **Note:** the VM had already been moved to `66eb660` earlier today by the parallel session (the desk graph + link card ran at 09:10).
+- **Watch Monday 10-12 (first session on the new code):** entries — W1 vetoes, stale-LTP refusals, sizing on real cash + VIX-stressed margin, `stale_proposal` refusals on the 4 old pendings (reject them to re-arm); exits — ratchet on crossed capture only, desk exits on the own stop; cards — 08:05 Morning Brief now arrives, the 09:10 link card with the key, routine text cards batched into the 15:45 EOD; the liquidity tiers (`rank_basis` fut_val) after the 19:xx bhavcopy run; the `vol_bridge` read without λ=0 edges. Off-ramps: `regime_advisory_enabled: false`, `stale_approval_max_days: null`.
+- Disk: 1.5 GB free (85%) — the disk RED fires under 1 GB; log rotation runs 03:30.
+
 ## 2026-10-09 ~10:30 IST — AUDIT PIPELINE COMPLETE: six chunks closed in code, Architect rulings locked (#139); ONE deploy bundle pending (Architect deploys post-15:30)
 
 **Rulings applied (`3a06ff5`, decision #139):** B1 stale approvals ON (`stale_approval_max_days: 1`); B3 the plain-text Discord door routes through the budget gate (failures page: ops RED, STOPPED session, approval needed, token renewal; routine text spools; the 09:10 link card scheduled); F2 renewal pages on the first failure and again on final; Q5 deferred; K1 λ=0 edges exempt from the `vol_bridge` vote (`decay_lambda > 0` only); E3 weekly recalibration = VM cron #36 Friday 22:00 (remove the Mac's Saturday line).

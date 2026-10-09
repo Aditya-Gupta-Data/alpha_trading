@@ -2354,3 +2354,10 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - **K1 (owner ruling, deploy-relevant):** 62 λ=0 loss edges vote in `vol_bridge` forever (−13.0). With Chunk 3's whole-token polarity the net is −1.86 → "Expansion" → risk ×0.70 for every account from the first deploy.
 
 - **2026-10-09 ~10:30 IST:** Architect rulings B1/B3/F2/K1/E3 locked (`3a06ff5`, #139); Q5 deferred. The six-chunk audit is complete in code. Dhan data plan renewed by hand. Deploy pending post-15:30 (checklist in HANDOVER).
+
+
+## Deploy 2026-10-09 15:39 IST — VM `66eb660` → `94b4c06` (#135, Chunks 3–6 #136–#138, rulings #139)
+
+- Open-book dry-run first (read-only, 15:28 marks): 15/15 exit decisions identical old vs new; 4 pending, 0 darlings graded strong_sell. VM scoped tests 161 passed.
+- Restarted `alpha-trading` + `alpha-discord-bot` 15:39:22; health 200; crontab re-installed (#35, #36); `DASHBOARD_KEY` in `.env`; `scripts/repair_k2_shadow_trades.py --apply` re-aligned 44 shadow rows (`k2_shadow_repair` event 15:39:27); Mac Saturday recalibration cron removed.
+- Unverified until Monday: every entry/exit/card change listed in the HANDOVER watch list.

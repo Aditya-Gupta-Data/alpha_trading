@@ -408,10 +408,12 @@ def renew() -> int:
         for i in range(_RENEW_ATTEMPTS):              # Chunk 5 F2: a blip at 07:00 must not blind the day
             if renew_v2(env_text, creds) == 0:
                 return 0
+            if i == 0:
+                _page_renewal_failure(final=False)      # Architect B3/F2: page at once, then keep trying
             if _LAST_FAILURE != "transport" or i == _RENEW_ATTEMPTS - 1:
                 break                                 # a clean rejection is final; only transport retries
             time.sleep(_RENEW_RETRY_WAIT_SECONDS)
-        _page_renewal_failure()
+        _page_renewal_failure(final=True)
         return 1
     rc = renew_legacy(env_text)
     if rc != 0:
@@ -424,15 +426,17 @@ _LAST_FAILURE = None
 _RENEW_RETRY_WAIT_SECONDS = 20
 
 
-def _page_renewal_failure() -> None:
-    """One real-time Discord card: the desk would otherwise run blind until the 16:30 brief."""
+def _page_renewal_failure(final: bool = True) -> None:
+    """Real-time Discord page (the desk would otherwise run blind until the 16:30 brief)."""
     try:
         from datetime import date as _date
         from src.notifier import fire_broadcast
+        text = ("🔑 DHAN TOKEN RENEWAL FAILED after retries — today's session will run blind unless the "
+                "token is renewed by hand (`python3 -m src.renew_token`). See logs/renew_token.log."
+                if final else
+                "🔑 Dhan token renewal FAILED on the first attempt — retrying now; a second card follows if it stays down.")
         fire_broadcast({"event": "token_renewal_failed", "ticker": "🔑 DHAN", "date": _date.today().isoformat(),
-                        "description": ("🔑 DHAN TOKEN RENEWAL FAILED after retries — today's session will run "
-                                        "blind unless the token is renewed by hand (`python3 -m src.renew_token`). "
-                                        "See logs/renew_token.log.")})
+                        "description": text})
     except Exception:
         pass
 

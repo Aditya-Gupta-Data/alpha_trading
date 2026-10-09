@@ -244,7 +244,7 @@ def _default_notify(text: str) -> None:
     try:
         import asyncio
         from src.notifier import send_discord_message
-        asyncio.run(send_discord_message(text))
+        asyncio.run(send_discord_message(text, event="discovery_note"))
     except Exception as exc:
         print(f"  (discovery nightly: notify failed [{exc}])")
 

@@ -107,13 +107,14 @@ def test_notifier_delegates_to_webhook_client():
     saved_override = notifier.WEBHOOK_MUZZLE_OVERRIDE
     notifier.WEBHOOK_MUZZLE_OVERRIDE = False
     try:
-        with mock.patch("src.discord_client.send_webhook_message",
-                        new_callable=mock.AsyncMock, return_value=True) as mock_send:
+        with mock.patch.object(notifier, "broadcast_alert",
+                               new_callable=mock.AsyncMock, return_value=True) as mock_send:
             ok = asyncio.run(notifier.send_discord_message("episode text", thread_id="42"))
     finally:
         notifier.WEBHOOK_MUZZLE_OVERRIDE = saved_override
     assert ok is True
-    mock_send.assert_awaited_once_with("episode text", thread_id="42")
+    # Architect ruling B3 (2026-10-09): the text door is an event card through the budget gate
+    mock_send.assert_awaited_once_with({"event": "text_note", "text": "episode text", "ticker": "desk"})
 
 
 RESOLVED_ENTRY = {

@@ -361,7 +361,7 @@ def _default_notify(text: str) -> None:
     try:
         import asyncio
         from src.notifier import send_discord_message
-        asyncio.run(send_discord_message(text))
+        asyncio.run(send_discord_message(text, event="news_note"))
     except Exception as exc:
         print(f"  (news processor: notify failed [{exc}])")
 

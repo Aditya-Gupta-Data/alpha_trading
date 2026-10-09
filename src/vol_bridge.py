@@ -121,6 +121,10 @@ def _load_active_edges(conn: sqlite3.Connection) -> list[dict]:
                      "OR (source IS NULL AND relation != 'concentrates_in'))")
         else:
             where = "invalid_at IS NULL AND relation != 'concentrates_in'"
+        if "decay_lambda" in cols:
+            # Architect ruling K1 (2026-10-09): permanent (λ=0) loss-lesson edges
+            # never fade, so they must not vote on the regime; only decaying edges do.
+            where += " AND (decay_lambda IS NULL OR decay_lambda > 0)"
         rows = conn.execute(
             "SELECT source_node, relation, target_node, confidence_score "
             f"FROM graph_edges WHERE {where}"

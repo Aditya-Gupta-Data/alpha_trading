@@ -707,3 +707,10 @@ def test_the_discord_bot_explains_a_margin_block_and_keeps_the_buttons():
     assert retire is False                      # still pending: Reject (or a later Approve) works
     assert "Can't approve `mrg00001`" in note and "margin exhaustion: free Rs.1,000" in note
     assert "journaled. " not in note and "Not journaled" in note
+
+
+@pytest.fixture(autouse=True)
+def _stale_rule_off(monkeypatch):
+    """Decision #139 (B1) refuses day-old approvals; these fixtures propose days before they approve
+    on purpose (they test the window / exposure rules), so the stale rule is parked here."""
+    monkeypatch.setattr("src.config.STALE_APPROVAL_MAX_DAYS", None)

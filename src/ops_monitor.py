@@ -672,11 +672,13 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
                       alarms=alarms)
     print(card, flush=True)
     if notify_fn is None:
+        red = any(a.get("red") for a in (alarms or []))
+
         def notify_fn(text):
             import asyncio
             from src.notifier import send_discord_message
-            try:
-                return asyncio.run(send_discord_message(text))
+            try:                                   # B3: a RED night pages, a clean night spools
+                return asyncio.run(send_discord_message(text, event="ops_alarm" if red else "ops_card", page=red))
             except Exception as e:
                 print(f"  (ops card notify failed: {e})")
                 return False

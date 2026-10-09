@@ -941,7 +941,9 @@ def _notify_discord(text: str) -> bool:
     import asyncio
     from src import notifier
     try:
-        return asyncio.run(notifier.send_discord_message(text))
+        needs_human = "pending" in text.lower() or "approve" in text.lower()
+        return asyncio.run(notifier.send_discord_message(
+            text, event="approval_needed" if needs_human else "proposal_note", page=needs_human))
     except Exception as e:
         print(f"  (discord notify failed: {e})")
         return False

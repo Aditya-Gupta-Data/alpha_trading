@@ -288,7 +288,8 @@ def _playbook_lines(underlyings, fetch_fn=None) -> list:
 
 
 async def _notify(notify_fn, title: str, lines: list) -> None:
-    """Session bookends to Discord — fail-safe and never blocking."""
+    """Session bookends to Discord — fail-safe and never blocking. B3: a STOPPED
+    session pages, the link card is scheduled, OPEN/CLOSED spool to the digest."""
     text = f"**{title}**\n" + "\n".join(lines)
     try:
         if notify_fn is not None:
@@ -297,7 +298,12 @@ async def _notify(notify_fn, title: str, lines: list) -> None:
                 await result
         else:
             from src.notifier import send_discord_message
-            await send_discord_message(text)
+            if "STOPPED" in title:
+                await send_discord_message(text, event="session_stopped", page=True)
+            elif "Dashboard link" in title:
+                await send_discord_message(text, event="dashboard_link")
+            else:
+                await send_discord_message(text, event="session_bookend")
     except Exception as e:
         print(f"[Scheduler] (bookend notify failed: {e})", flush=True)
 

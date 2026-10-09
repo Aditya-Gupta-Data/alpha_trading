@@ -965,7 +965,7 @@ def _notify_discord(text: str) -> bool:
     proposer's): Discord being down never touches the live loop."""
     from src import notifier
     try:
-        return asyncio.run(notifier.send_discord_message(text))
+        return asyncio.run(notifier.send_discord_message(text, event="live_exit_signal"))
     except Exception as e:
         print(f"  (live-bridge discord notify failed: {e})")
         return False

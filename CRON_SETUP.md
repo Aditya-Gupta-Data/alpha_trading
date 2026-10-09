@@ -208,3 +208,8 @@ systemd service (Streamlit on :8501) and a 03:05 `git pull` of code only.
 ## Job 35 — Log rotation (added 2026-10-09, audit Chunk 5 F6)
 
 `30 3 * * *` → `bash scripts/rotate_logs.sh`. Any `logs/*.log` over 20 MB keeps its last 5 MB; `*.drained` digest archives older than 90 days are removed. Nothing had ever bounded the logs on the e2-micro. Install by re-running `scripts/setup_cron.sh` on the VM (the owner pastes it).
+
+
+## Job 36 — Weekly recalibration on the VM (added 2026-10-09, Architect ruling E3)
+
+`0 22 * * 5` → `src.analysis.weekly_recalibration`. Moved from the Mac's Saturday 10:00 crontab: the No-Orphan pins are now built against the VM's live `logs/equity_shadow_journal.jsonl`. **On the Mac:** `( crontab -l | grep -v src.analysis.weekly_recalibration ) | crontab -`. Install on the VM by re-running `scripts/setup_cron.sh`.

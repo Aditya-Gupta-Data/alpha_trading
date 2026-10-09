@@ -457,3 +457,10 @@ def test_the_cli_names_the_refusal_and_counts_nothing_decided(monkeypatch, capsy
     assert op.review_pending() == 0
     assert "not decided: inside_exit_window (" in capsys.readouterr().out
     assert journal.get_entry("api00001")["decision"] == "pending_approval"
+
+
+@pytest.fixture(autouse=True)
+def _stale_rule_off(monkeypatch):
+    """Decision #139 (B1) refuses day-old approvals; these fixtures propose days before they approve
+    on purpose (they test the window / exposure rules), so the stale rule is parked here."""
+    monkeypatch.setattr("src.config.STALE_APPROVAL_MAX_DAYS", None)

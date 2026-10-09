@@ -478,6 +478,11 @@ CRON_TZ=Asia/Kolkata
 #     keep their last 5 MB; *.drained archives older than 90 days go. Nothing
 #     else had ever bounded the logs on the e2-micro.
 30 3 * * * cd "$REPO_ROOT" && bash scripts/rotate_logs.sh >> "$REPO_ROOT/logs/rotate_logs.log" 2>&1
+# 36. Weekly recalibration (Friday 22:00 IST, Architect ruling E3 2026-10-09):
+#     the weekly clock runs HERE, against the VM's live equity ledger, so the
+#     No-Orphan pins cover every position the VM actually holds (the Mac's
+#     ledger froze on 07-20). Remove the Mac's Saturday 10:00 crontab line.
+0 22 * * 5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.analysis.weekly_recalibration >> "$REPO_ROOT/logs/weekly_recalibration.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

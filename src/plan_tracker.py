@@ -2312,7 +2312,7 @@ def run_mock_trade(strategy_name: str = "IRON_BUTTERFLY") -> bool:
     message = ("🧪 **MOCK TRADE — connectivity test, nothing journaled**\n"
                + notifier.format_episode(episode))
     print(message)
-    ok = asyncio.run(notifier.send_discord_message(message))
+    ok = asyncio.run(notifier.send_discord_message(message, event="mock_trade"))
     print(f"\nDiscord delivery: {'OK' if ok else 'FAILED (webhook unconfigured or unreachable)'}")
     return ok
 

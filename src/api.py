@@ -219,7 +219,7 @@ async def _poll_watchlist_loop() -> None:
                 from src.notifier import send_digest
                 await asyncio.to_thread(send_digest, "ADiTrader Watchlist Alert", new_breaches)
                 await notifier.send_discord_message(
-                    "\n".join(["🔔 **ADiTrader Watchlist Alert**"] + new_breaches))
+                    "\n".join(["🔔 **ADiTrader Watchlist Alert**"] + new_breaches), event="watchlist_alert")
 
         except Exception as e:
             print(f"[Watchlist Poll] Error in background poll loop: {e}", flush=True)
@@ -242,7 +242,7 @@ async def _auto_sync_loop() -> None:
             # Episodic encoding: push each resolution's context snapshot to
             # Discord. Fail-safe — an unconfigured webhook returns False.
             for episode in episodes:
-                await notifier.send_discord_message(notifier.format_episode(episode))
+                await notifier.send_discord_message(notifier.format_episode(episode), event="trade_episode")
         except Exception as e:
             print(f"[Auto-Sync] refresh failed (will retry next cycle): {e}",
                   flush=True)

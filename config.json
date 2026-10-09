@@ -74,5 +74,6 @@
       70
     ]
   ],
-  "ratchet_effective_date": "2026-09-24"
+  "ratchet_effective_date": "2026-09-24",
+  "stale_approval_max_days": 1
 }

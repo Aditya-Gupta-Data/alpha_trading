@@ -104,19 +104,16 @@ def send_digest(subject: str, lines: list) -> None:
     _send_email(subject, "\n".join(lines))
 
 
-async def send_discord_message(message: str, thread_id: str = None) -> bool:
-    """Push one message to Discord via the webhook client. Async because
-    the network call is httpx-async (the API's event loop awaits it
-    directly). Returns False instead of raising when Discord is
-    unconfigured or unreachable."""
+async def send_discord_message(message: str, thread_id: str = None, *,
+                               event: str = "text_note", page: bool = False) -> bool:
+    """The one plain-text door. Architect ruling B3 (2026-10-09): every text
+    message is an event card through the budget gate — `page=True` (a
+    failure) sends at once, anything else spools to the digest."""
     if webhooks_muzzled():
         return _muzzle_log("discord message", repr(message[:120]))
-    try:
-        from src.discord_client import send_webhook_message
-    except Exception as e:
-        print(f"  (discord client unavailable: {e})")
-        return False
-    return await send_webhook_message(message, thread_id=thread_id)
+    if page:
+        TEXT_PAGE_EVENTS.add(event)
+    return await broadcast_alert({"event": event, "text": message, "ticker": "desk"})
 
 
 # ---- broadcast_alert: structured Discord embed notifications -------------
@@ -417,6 +414,7 @@ BUDGET_STATE_PATH = ROOT / "logs" / ".discord_budget.json"
 DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
 # decision #133 (Architect ruling 2026-10-09): a stuck or half-filled live exit
 # pages at once — it needs a human now, not in the evening digest
+TEXT_PAGE_EVENTS = {"ops_alarm", "session_stopped", "approval_needed", "token_renewal_failed"}
 BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review", "live_entry_needs_review", "token_renewal_failed"}
 BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest", "dashboard_link", "morning_brief",
                     "performance", "weekly_digest", "macro_heartbeat"}
@@ -469,8 +467,8 @@ def budget_gate(payload: dict, state_path=None, queue_path=None,
     if not enabled:
         return "send"
     event = str(payload.get("event") or "")
-    if event in BUDGET_ALWAYS:
-        return "send"                       # crash pages past any budget
+    if event in BUDGET_ALWAYS or event in TEXT_PAGE_EVENTS:
+        return "send"                       # crash / failure pages past any budget
     if event in BUDGET_DROP:
         return "drop"
     state = _budget_state(state_path)
@@ -625,7 +623,7 @@ async def broadcast_alert(payload: dict) -> bool:
             print(f"  (broadcast_alert: HTTP {resp.status_code})")
             return False
         try:
-            if str(payload.get("event") or "") not in BUDGET_ALWAYS:
+            if str(payload.get("event") or "") not in BUDGET_ALWAYS | TEXT_PAGE_EVENTS:
                 _budget_count_send()        # only a DELIVERED, budgeted card burns
         except Exception:
             pass

@@ -801,6 +801,8 @@ def to_journal_entry(proposal: dict, decision: str, why: str) -> dict:
     entry["spread"] = proposal["spread"]
     if proposal.get("sizing") is not None:
         entry["sizing"] = proposal["sizing"]
+    entry["portfolio_family"] = "IDX_SPREADS"                 # M1: every options row names its bucket family
+    entry["portfolio_id"] = "PAPER_10L/IDX_SPREADS"
     entry["regime"] = regime_for(proposal.get("view"), proposal.get("vix"))
     return entry
 

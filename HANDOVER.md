@@ -42,6 +42,25 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 ~10:30 IST — AUDIT PIPELINE COMPLETE: six chunks closed in code, Architect rulings locked (#139); ONE deploy bundle pending (Architect deploys post-15:30)
+
+**Rulings applied (`3a06ff5`, decision #139):** B1 stale approvals ON (`stale_approval_max_days: 1`); B3 the plain-text Discord door routes through the budget gate (failures page: ops RED, STOPPED session, approval needed, token renewal; routine text spools; the 09:10 link card scheduled); F2 renewal pages on the first failure and again on final; Q5 deferred; K1 λ=0 edges exempt from the `vol_bridge` vote (`decay_lambda > 0` only); E3 weekly recalibration = VM cron #36 Friday 22:00 (remove the Mac's Saturday line).
+**Audit status:** Chunks 1–6 all closed in code (#121–#123, #130–#132, #136–#139). Suite 3,004 passed, 42 s. Dhan data plan renewed by the Architect.
+**Still open, by design (recorded, not blocking):** Stage-B methodology S1/S2/S3/S9 (Dept 5), Q5 freshness (deferred), minor cosmetics (K5, R9/R10, T3/T6–T9).
+
+**VM deploy checklist (post-15:30, after the open-book dry-run):**
+```bash
+cd ~/alpha_trading && git fetch && git merge --ff-only origin/main
+python3 -m pytest tests/test_profit_ratchet.py tests/test_audit_chunk3_batch_a.py tests/test_audit_chunk3_batch_b.py tests/test_audit_chunk3_batch_c.py tests/test_audit_chunk4_batch_ab.py tests/test_audit_chunk4_batch_c.py tests/test_audit_chunk4_batch_d.py tests/test_audit_chunk5_batch_b.py tests/test_audit_chunk5_batch_c.py tests/test_audit_chunk5_f1.py tests/test_audit_chunk6.py tests/test_master_scheduler.py tests/test_discord_notifier.py -q
+grep -q DASHBOARD_KEY .env || echo "DASHBOARD_KEY=<the box's key>" >> .env
+bash scripts/setup_cron.sh
+sudo systemctl restart alpha-trading alpha-discord-bot
+python3 scripts/repair_k2_shadow_trades.py            # dry-run: read the 44 rows
+python3 scripts/repair_k2_shadow_trades.py --apply
+python3 -m src.deploy_log --show 2>/dev/null || tail -3 logs/deploy_log.jsonl
+```
+On the Mac: `( crontab -l | grep -v src.analysis.weekly_recalibration ) | crontab -`. Watch the first session: entries (W1 vetoes, stale-LTP refusals, sizing on real cash), desk exits (own stop), the digest at 15:45 (batched text cards). Off-ramps: `regime_advisory_enabled: false`, `stale_approval_max_days: null`.
+
 ## 2026-10-09 ~02:00 IST — the 09:10 dashboard-link card + the phantom-ratchet fix (#135) pushed, NOT deployed; Chunk 3 audit running
 
 **Done (owner directive 2026-10-09):**

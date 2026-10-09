@@ -782,6 +782,9 @@ def _settle(conn, row: dict, exit_mark_ps: float, resolution: str, basis: str, f
         except Exception as exc:    # the money is settled; a curve point is not
             print(f"  (live account: post-settle record skipped for {row['journal_ref']}: {exc})")
     _stamp_journal(row, payload)     # best-effort; eod_sweep repairs a missed stamp (F07)
+    if row["account_id"] == pm.ACCOUNT_PAPER_SHADOW_LEARNER:
+        from src import shadow_learner
+        shadow_learner.resolve_from_settle(conn, row, pnl, payload["closed_at"])   # the Court's real r
     return {"status": "settled", **payload}
 
 

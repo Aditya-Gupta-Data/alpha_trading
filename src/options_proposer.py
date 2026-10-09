@@ -500,6 +500,13 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
     # show institutional distribution or the sector trend is bearish. Task 2 (War
     # Playbook): in a crisis/VIX-spike regime, disable SHORT-premium (iron condor)
     # so only defined-risk long-premium debit spreads ride the fat tail. ---
+    advisory_block = None
+    if advisory and book is None and _learner_enabled():   # real run: the Shadow Learner records the veto and still builds
+        if view == "bullish" and advisory.get("block_bullish"):
+            advisory_block = advisory.get("bullish_reason", "smart-money/sector veto")
+        elif view == "neutral" and advisory.get("crisis"):
+            advisory_block = f"crisis regime ({advisory.get('crisis_reason', '')})"
+        advisory = None
     if advisory:
         if view == "bullish" and advisory.get("block_bullish"):
             return {"proposal": None, "view": view, "vix": vix,
@@ -719,7 +726,34 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         "vol_rank": vol_rank,
     }
     return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
-            "horizon": horizon}
+            "horizon": horizon, "advisory_block": advisory_block}
+
+
+def _learner_enabled() -> bool:
+    try:
+        from src import shadow_learner
+        return shadow_learner.enabled()
+    except Exception:
+        return False
+
+
+def _learner_path(underlying: str, result: dict, p: dict, reason: str) -> dict:
+    """A setup the primary's gates refused: journaled REJECTED (hypothetical for the
+    primary) and taken by the Shadow Learner on crossed quotes. Fail-open."""
+    from src import shadow_learner
+    entry = to_journal_entry(p, "rejected", f"learner-only: {reason}")
+    entry["learner_only"] = reason
+    verdict = {"status": "skipped", "reason": "learner not ready"}
+    try:
+        ok, why = shadow_learner.ready(underlying)
+        verdict = shadow_learner.take(entry, reason) if ok else {"status": "skipped", "reason": why}
+        entry.setdefault("accounts", {})[shadow_learner.ACCOUNT] = verdict
+        journal.log(entry)
+    except Exception as exc:
+        verdict = {"status": "error", "reason": str(exc)}
+    print(f"  [{shadow_learner.ACCOUNT}] {entry.get('short_id')}: {verdict.get('status')} — {verdict.get('reason')}")
+    return {"proposed": False, "reason": reason, "entry": None, "learner": verdict,
+            "rejected": _rejected_facts(underlying, result, p)}
 
 
 def _primary_available_cash(book: dict) -> float:
@@ -1044,9 +1078,11 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     "auto_approved": bool}."""
     state = dict(state or {})
     vol_overrides = state.pop("vol_overrides", {})
+    learner_only = bool(state.pop("learner_only", False))      # the market loop's cooled-down cycle
     bp_extras = {k: vol_overrides[k]
                  for k in ("risk_pct", "short_strike_otm_pct")
                  if k in vol_overrides}
+    learner_on = "book" not in state and _learner_enabled()
     result = build_proposal(underlying, **state, **bp_extras)
     if result["proposal"] is None:
         # `rejected` rides along for the proposal ledger / ghost tracker
@@ -1065,11 +1101,16 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     # only caller (market_loop reaches it through run_headless).
     # Sandbox books (simulator / tests / what-ifs) are their own worlds —
     # exempt, same rule as the margin gate below. Fail-OPEN by hard rule.
+    if learner_on and (learner_only or result.get("advisory_block")):
+        return _learner_path(underlying, result, p, "market-loop cooldown" if learner_only
+                             else f"advisory: {result['advisory_block']}")
     if "book" not in state:
         from src import exposure_gate
         allowed, exp_reason = exposure_gate.gate_entry(
             p, notify_fn=_notify_discord)
         if not allowed:
+            if learner_on:
+                return _learner_path(underlying, result, p, exp_reason)
             return {"proposed": False, "reason": exp_reason, "entry": None,
                     "rejected": _rejected_facts(underlying, result, p)}
     # Book context (annotate-only, #63 stage 1): what the real book already
@@ -2031,6 +2072,8 @@ def _switch_of(acct: str) -> str:
     from src import portfolio_manager as pm
     if not pm.shadow_accounts_enabled():
         return "paper_2l_account_enabled"
+    if acct == pm.ACCOUNT_PAPER_SHADOW_LEARNER:
+        return "shadow_learner_enabled"
     if acct in pm.LIVE_ACCOUNTS:
         return "paper_2l_live_account_enabled"
     if acct in pm.ROTATION_ACCOUNTS:

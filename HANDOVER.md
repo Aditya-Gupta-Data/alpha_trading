@@ -42,6 +42,18 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 ~17:30 IST — THE SHADOW LEARNER built (decision #140), switch OFF, NOT deployed; two pieces need the owner's hand
+
+**What is in the repo:** `src/shadow_learner.py` + the injections (`options_proposer.run_headless` → `_learner_path`; `build_proposal` records `advisory_block`; `market_loop` learner cycle on a cooled-down underlying; `exposure_gate._firm_holdings` ignores the learner; `live_pricer._settle` resolves its Court row; `portfolio_manager` constant `ACCOUNT_PAPER_SHADOW_LEARNER`, in `LIVE_ACCOUNTS`, `learner_enabled()`, `shadow_account_ids`). Config: `shadow_learner_enabled` (OFF), `shadow_learner_cooldown_seconds` 900, `shadow_learner_max_open` 6, `shadow_learner_capital_rs` 200000. Suite 3,004 green with the switch off.
+
+**Two edits the session's permission classifier refused ("Security Weaken") — apply by hand, then run the suite:**
+1. `src/portfolio_manager.py`, inside `PAPER_ACCOUNTS = {…}` after the `ACCOUNT_PAPER_2L_LIVE` line, add:
+   `    ACCOUNT_PAPER_SHADOW_LEARNER: float(SHADOW_LEARNER_CAPITAL_RS),`
+   Without it the learner has no starting capital: `size_for_account` / `paper_request_entry` refuse it (safe, inert).
+2. `tests/test_shadow_learner.py` — the test file was refused as a write; its intended cases: switch/account wiring, `ready()` cadence + cap, Court rows record/resolve with the real r, `_firm_holdings` never counts the learner, `build_proposal` returns `advisory_block` instead of refusing when the learner is on.
+
+**Then:** set `"shadow_learner_enabled": true` in `config.json` on the VM to arm it (deploy = the usual merge + restart; the 09:10 scheduler picks it up). First session after arming is a watch session: learner entries print `[PAPER_SHADOW_LEARNER] <ref>: approved …` in `master_scheduler.log`; its book is `paper_live_positions` rows for that account; Court rows: `SELECT * FROM shadow_trades WHERE mode='SHADOW_LEARNER'`.
+
 ## 2026-10-09 15:40 IST — DEPLOYED: #135 + audit Chunks 3–6 + rulings #139 (VM `66eb660` → `94b4c06`)
 
 **Live now.** Services `alpha-trading` + `alpha-discord-bot` restarted 15:39:22 on `94b4c06`; health 200; `deploy_log` shows both on the new sha. Crontab re-installed (`setup_cron.sh`): jobs #35 (log rotation 03:30) and #36 (weekly recalibration Fri 22:00) present. `DASHBOARD_KEY` added to the VM `.env` (the 09:10 link card carries the key from Monday). K2 repair applied: 44 `shadow_trades` rows re-aligned, `k2_shadow_repair` account event at 15:39:27. The Mac's Saturday `weekly_recalibration` crontab line removed (backup `~/mac_crontab.bak-*`).

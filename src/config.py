@@ -136,6 +136,11 @@ RATCHET_ENABLED = bool(_CONFIG.get("ratchet_enabled", True))
 # Chunk 3 W1: the regime_filters advisory (smart-money veto, war playbook) on the live fetch.
 REGIME_ADVISORY_ENABLED = bool(_CONFIG.get("regime_advisory_enabled", True))
 # Chunk 4 B1: a pending proposal older than this many days is refused at approval (fills at proposal-day prices).
+# The Shadow Learner (Architect 2026-10-09): raw setups on crossed quotes, no advisory/exposure/cooldown gates.
+SHADOW_LEARNER_ENABLED = bool(_CONFIG.get("shadow_learner_enabled", False))
+SHADOW_LEARNER_COOLDOWN_SECONDS = int(_CONFIG.get("shadow_learner_cooldown_seconds", 900))
+SHADOW_LEARNER_MAX_OPEN = int(_CONFIG.get("shadow_learner_max_open", 6))
+SHADOW_LEARNER_CAPITAL_RS = float(_CONFIG.get("shadow_learner_capital_rs", 200000.0))
 _sa = _CONFIG.get("stale_approval_max_days")
 STALE_APPROVAL_MAX_DAYS = None if _sa is None else int(_sa)      # None = off (owner ruling pending)
 RATCHET_LADDER = tuple(tuple(r) for r in _CONFIG.get(

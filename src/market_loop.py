@@ -270,6 +270,15 @@ async def run_market_loop(underlyings=UNDERLYINGS,
                       flush=True)
             for underlying in underlyings:
                 if not cooldown.ready(underlying, now):
+                    # the Shadow Learner is exempt from the cooldown: its own cadence applies
+                    try:
+                        from src import shadow_learner
+                        if shadow_learner.enabled() and shadow_learner.ready(underlying)[0]:
+                            state = await asyncio.to_thread(fetch_fn, underlying)
+                            if state is not None:
+                                await asyncio.to_thread(propose_fn, underlying, dict(state, learner_only=True))
+                    except Exception as e:
+                        print(f"[Market Loop] {underlying}: learner cycle failed ({e}).", flush=True)
                     continue  # still cooling down — stay quiet
                 try:
                     state = await asyncio.to_thread(fetch_fn, underlying)

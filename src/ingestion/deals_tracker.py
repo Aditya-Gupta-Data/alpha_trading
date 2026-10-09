@@ -621,8 +621,9 @@ def run(output_path=None, snapshot_path=None, watchlist_path=None,
     today = today or date.today()
     deals, wl, source, raw_rows, raw_payload = _collect_deals(
         snapshot_path, watchlist_path, use_live)
+    as_of = report_day(raw_rows) or today.isoformat()      # the deals' own date (Chunk 5 Q3)
     matrix = {
-        "as_of": today.isoformat(),
+        "as_of": as_of,
         "source": source,
         "entries": aggregate_deals(deals, wl["marquee"]),
     }
@@ -682,6 +683,18 @@ _BACKFILL_THROTTLE_SECONDS = 2.0
 # Per-row report-date spellings seen across NSE eras.
 _DATE_FIELDS = ("BD_DT_DATE", "date", "Date", "DATE", "mTIMESTAMP",
                 "TIMESTAMP", "dealDate")
+
+
+def report_day(rows) -> str | None:
+    """The report date most rows carry (ISO), or None when none parses."""
+    from collections import Counter
+    days = Counter()
+    for r in rows or []:
+        if isinstance(r, dict):
+            d = parse_report_date(_first_field(r, _DATE_FIELDS))
+            if d:
+                days[d] += 1
+    return days.most_common(1)[0][0] if days else None
 
 
 def parse_report_date(value) -> str | None:

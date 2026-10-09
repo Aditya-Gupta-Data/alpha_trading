@@ -499,6 +499,10 @@ def _quote_sec(ticker: str) -> dict | None:
         if attempt == 0:
             time.sleep(_RATE_PAUSE)  # transient rate limit — retry once
     if not isinstance(resp, dict) or resp.get("status") != "success":
+        if isinstance(resp, dict):              # Chunk 5 F5: the code reaches the log / ops sweep
+            rem = resp.get("remarks") or {}
+            code = rem.get("error_code") if isinstance(rem, dict) else rem
+            print(f"  Dhan quote refused for {ticker}: {code or resp.get('status')}", flush=True)
         return None
     d = unwrap_payload(resp, inner_marker=instr["seg"])
     try:

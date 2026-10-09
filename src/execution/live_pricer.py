@@ -368,10 +368,13 @@ def _sign(side: str) -> float:
     return 1.0 if str(side).upper() == "BUY" else -1.0
 
 
-def _node(chain: dict, strike: float, option_type: str) -> dict:
+def _node(chain: dict, strike: float, option_type: str):
+    """The leg's quote node, or None when the strike/type is ABSENT from the chain (Chunk 5 Q8)."""
     oc = (chain or {}).get("oc") or {}
-    node = oc.get(f"{float(strike):.6f}") or oc.get(str(strike)) or oc.get(str(float(strike))) or {}
-    return node.get(str(option_type).lower()) or {}
+    node = oc.get(f"{float(strike):.6f}") or oc.get(str(strike)) or oc.get(str(float(strike)))
+    if not node:
+        return None
+    return node.get(str(option_type).lower()) or None
 
 
 def _f(v):
@@ -385,6 +388,8 @@ def _f(v):
 def leg_quote(chain: dict, leg: dict) -> dict:
     """{bid, ask, ltp} for one leg (None where absent/non-positive)."""
     n = _node(chain, leg["strike"], leg["option_type"])
+    if n is None:
+        return {"bid": None, "ask": None, "ltp": None, "absent": True}
     return {"bid": _f(n.get("top_bid_price")), "ask": _f(n.get("top_ask_price")),
             "ltp": _f(n.get("last_price"))}
 
@@ -394,6 +399,8 @@ def crossed_close_price(leg: dict, q: dict) -> tuple:
     (no bid → 0.0, it cannot be sold — the structure still marks), a short
     is bought back at the ask (no ask → abstain). Abstains on a crossed
     book (bid > ask) or a quote > 50% off the last price."""
+    if q.get("absent"):
+        return None, "strike absent from the chain"
     bid, ask, ltp = q.get("bid"), q.get("ask"), q.get("ltp")
     if bid is not None and ask is not None and bid > ask:
         return None, "crossed book (bid > ask)"

@@ -208,7 +208,9 @@ def _clean_entry(raw: dict, now: str) -> dict:
     short-term from it; its long-term is None — unknown is not neutral,
     and None can never fire a reversal flag."""
     short = _coerce_score(raw.get("short_term_catalyst_score",
-                                  raw.get("sentiment_score", 0)))
+                                  raw.get("sentiment_score")), default=None)
+    unusable = short is None                     # Chunk 5 Q6: garbage is stale, never a fresh 0
+    short = 0 if unusable else short
     long_ = _coerce_score(raw.get("long_term_macro_score"), default=None)
     focus = str(raw.get("headline_focus", "")).strip() or "no clear driver"
     focus = " ".join(focus.split()[:3])
@@ -218,7 +220,7 @@ def _clean_entry(raw: dict, now: str) -> dict:
         "long_term_macro_score": long_,
         "headline_focus": focus,
         "last_updated": now,
-        "stale": False,
+        "stale": bool(unusable),
         "prev": None,
         "reversal": {"short_term": False, "long_term": False},
     }
@@ -400,7 +402,7 @@ def build_sentiment(tickers: list, previous_path: Path = None,
     api_key = os.environ.get("GEMINI_API_KEY")
 
     if not api_key:
-        print("  GEMINI_API_KEY not set — writing neutral sentiment (stale).")
+        print("  GEMINI_API_KEY not set — sentiment feed unavailable; writing neutral (stale).")
         return {
             "generated": now, "source": "fallback",
             "tickers": {t: _neutral_entry(now) for t in tickers},

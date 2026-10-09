@@ -427,10 +427,10 @@ def _leg_fill(chain: dict, strike: float, kind: str, side: str,
     """(fill_price, basis) for one leg (kind 'ce'/'pe') — the honest
     paper fill (decision #70): a BUY crosses to the ask, a SELL hits the
     bid, which is what a real fill pays on entry. Falls back to
-    last_price (basis "ltp") when the quoted side is missing/zero (thin
-    strike, closed market, simulator chains) or deviates >50% from a
-    live LTP (stale/crossed book — a data-quality refusal). (None, None)
-    means the leg is untradeable. Tries the exact key format Dhan uses
+    last_price (basis "ltp") only when the quoted side is missing/zero
+    (thin strike, closed market, simulator chains); a quote >50% off a
+    live LTP REFUSES the leg (stale/crossed book). (None, None) means
+    the leg is untradeable. Tries the exact key format Dhan uses
     (six decimals) then a plain match.
 
     P1 book-depth: `lots` > 1 walks the book — a synthetic +0.05%/10-lots
@@ -444,7 +444,7 @@ def _leg_fill(chain: dict, strike: float, kind: str, side: str,
     quote = leg.get("top_ask_price" if side == "BUY" else "top_bid_price")
     quote = float(quote) if quote else None
     if quote is not None and ltp is not None and abs(quote - ltp) > 0.5 * ltp:
-        quote = None
+        return None, None            # stale/crossed book: refuse (Chunk 5 Q4), never fill at LTP
     price, basis = (quote, "quoted") if quote is not None else \
         ((ltp, "ltp") if ltp is not None else (None, None))
     if price is not None and lots > 1:

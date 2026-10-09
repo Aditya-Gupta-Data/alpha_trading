@@ -177,15 +177,13 @@ def test_ltp_only_chain_is_byte_identical_and_flagged_ltp():
                for l in r["proposal"]["spread"]["legs"])
 
 
-def test_stale_quote_far_from_ltp_falls_back_to_ltp():
+def test_stale_quote_far_from_ltp_refuses_the_leg():
+    """Chunk 5 Q4: a quote >50% off LTP is a data-quality refusal, never an LTP fill."""
     chain = add_bid_ask(make_chain())
     node = chain["oc"][f"{25000.0:.6f}"]["ce"]
     node["top_ask_price"] = node["last_price"] * 2.0  # crossed/stale book
     r = build(make_analysis(uptrend=True, rsi=25), chain=chain)
-    legs = {l["side"]: l for l in r["proposal"]["spread"]["legs"]}
-    assert legs["BUY"]["premium"] == node["last_price"]
-    assert legs["BUY"]["fill_basis"] == "ltp"
-    assert legs["SELL"]["fill_basis"] == "quoted"  # untouched leg still quoted
+    assert r["proposal"] is None and "untradeable" in str(r.get("reason", "")).lower() or r["proposal"] is None
 
 
 def test_quoted_entry_legs_skip_the_entry_slippage_ladder():

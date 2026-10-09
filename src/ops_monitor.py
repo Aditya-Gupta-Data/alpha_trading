@@ -340,6 +340,7 @@ EXPECTED_JOBS = {
     "chain_archiver.log": True,      # Mon-Fri 15:40 IST (Phase-0 capture)
                                      # HEARTBEAT ONLY — see the note below on
                                      # why that was not enough on 2026-08-05.
+    "macro_nightly.log": False,      # daily 19:50 IST (Stage-B ledger; a lost night costs a session, #86)
     "deals_tracker.log": False,      # daily 19:30 IST (EOD bulk/block pull)
     "daily_archiver.log": False,     # daily 19:45 IST (perishable snapshots)
     "earnings_calendar.log": False,  # daily 19:20 IST (results dates)

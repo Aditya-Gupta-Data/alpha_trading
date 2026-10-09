@@ -403,8 +403,34 @@ def renew() -> int:
                   f"{', '.join(sorted(fetched))})")
             creds.update(fetched)
     if v2_ready(creds):
-        return renew_v2(env_text, creds)
-    return renew_legacy(env_text)
+        for i in range(_RENEW_ATTEMPTS):              # Chunk 5 F2: a blip at 07:00 must not blind the day
+            if renew_v2(env_text, creds) == 0:
+                return 0
+            if i < _RENEW_ATTEMPTS - 1:
+                time.sleep(_RENEW_RETRY_WAIT_SECONDS)
+        _page_renewal_failure()
+        return 1
+    rc = renew_legacy(env_text)
+    if rc != 0:
+        _page_renewal_failure()
+    return rc
+
+
+_RENEW_ATTEMPTS = 3
+_RENEW_RETRY_WAIT_SECONDS = 20
+
+
+def _page_renewal_failure() -> None:
+    """One real-time Discord card: the desk would otherwise run blind until the 16:30 brief."""
+    try:
+        from datetime import date as _date
+        from src.notifier import fire_broadcast
+        fire_broadcast({"event": "token_renewal_failed", "ticker": "🔑 DHAN", "date": _date.today().isoformat(),
+                        "description": ("🔑 DHAN TOKEN RENEWAL FAILED after retries — today's session will run "
+                                        "blind unless the token is renewed by hand (`python3 -m src.renew_token`). "
+                                        "See logs/renew_token.log.")})
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

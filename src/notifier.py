@@ -417,7 +417,7 @@ BUDGET_STATE_PATH = ROOT / "logs" / ".discord_budget.json"
 DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
 # decision #133 (Architect ruling 2026-10-09): a stuck or half-filled live exit
 # pages at once — it needs a human now, not in the evening digest
-BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review", "live_entry_needs_review"}
+BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review", "live_entry_needs_review", "token_renewal_failed"}
 BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest", "dashboard_link", "morning_brief",
                     "performance", "weekly_digest", "macro_heartbeat"}
 BUDGET_DROP = {"portfolio_report"}

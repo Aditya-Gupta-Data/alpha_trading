@@ -135,6 +135,7 @@ JOB_DUE_HOUR = {
     "deals_tracker.log": 19.5,
     "flows_tracker.log": 19.6,
     "daily_archiver.log": 19.75,
+    "macro_nightly.log": 19.85,     # 19:50 (Chunk 5 F7: a lost night costs a Stage-B session)
     "sleep_phase.log": 20.0,
     "discovery_nightly.log": 20.3,
     # proving_court.log (21:00, #97) runs AFTER the 20:30 sweep, so it is not
@@ -255,7 +256,7 @@ DHAN_ERROR_CODES = {
     "DH-903": "the account or segment is inactive at Dhan",
     "DH-904": "too many requests — rate limited",
     "DH-905": "the request itself was malformed (bad symbol or date range)",
-    "DH-906": "the data is not available for that instrument",
+    "DH-906": "invalid token (Dhan's DH-906 as observed here since 07-09) — renew the token",
 }
 
 

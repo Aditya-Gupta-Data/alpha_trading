@@ -235,8 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-09 · 38 commits · 103 files touched
+### 2026-10-09 · 42 commits · 106 files touched
 
+- `f626e4e` docs: Shadow Learner DEPLOYED + ARMED on the VM (0b1b2f2); config shadow_learner_enabled true in the repo; HANDOVER/MODULES/ledger
+- `0b1b2f2` feat(learner): grant infinite budget to PAPER_SHADOW_LEARNER and fix tests (#140)
+- `a4576ac` feat(learner): fund PAPER_SHADOW_LEARNER (Rs.2L, paper-only data bucket; #140, owner-authorised)
+- `8bb3289` feat(learner): the Shadow Learner — PAPER_SHADOW_LEARNER takes raw setups on crossed quotes, exempt from the advisory vetoes, the #68 slot and the loop cooldown; its own margin wall, cadence and Court rows (decision #140; switch off)
 - `256ad24` docs: DEPLOYED 94b4c06 to the VM (#135, Chunks 3-6, rulings #139) after a clean open-book dry-run; K2 repaired; HANDOVER + ledger
 - `970f127` docs: HANDOVER — audit pipeline complete, rulings #139 locked, VM deploy checklist
 - `3a06ff5` feat(rulings): Architect rulings closing the audit — stale approvals ON 1d (B1), text door through the budget gate (B3), renewal pages at once (F2), λ=0 edges exempt from vol_bridge (K1), weekly recalibration on the VM Fri 22:00 (E3); decision #139

@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-09 · 42 commits · 106 files touched
+### 2026-10-09 · 44 commits · 111 files touched
 
+- `7c2563c` feat(m1): additive multi-bucket ledger schema + views, migrate_m1_buckets.py (dry-run default, PARITY-gated apply), switch off; tests pin the learner/bucket switches (decision #141)
+- `8624c05` docs(m1): multi-bucket ledger blueprint — portfolios, capital_allocations, per-bucket locks/halts, additive migration, routing
 - `f626e4e` docs: Shadow Learner DEPLOYED + ARMED on the VM (0b1b2f2); config shadow_learner_enabled true in the repo; HANDOVER/MODULES/ledger
 - `0b1b2f2` feat(learner): grant infinite budget to PAPER_SHADOW_LEARNER and fix tests (#140)
 - `a4576ac` feat(learner): fund PAPER_SHADOW_LEARNER (Rs.2L, paper-only data bucket; #140, owner-authorised)

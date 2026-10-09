@@ -2361,3 +2361,9 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Open-book dry-run first (read-only, 15:28 marks): 15/15 exit decisions identical old vs new; 4 pending, 0 darlings graded strong_sell. VM scoped tests 161 passed.
 - Restarted `alpha-trading` + `alpha-discord-bot` 15:39:22; health 200; crontab re-installed (#35, #36); `DASHBOARD_KEY` in `.env`; `scripts/repair_k2_shadow_trades.py --apply` re-aligned 44 shadow rows (`k2_shadow_repair` event 15:39:27); Mac Saturday recalibration cron removed.
 - Unverified until Monday: every entry/exit/card change listed in the HANDOVER watch list.
+
+
+## Deploy 2026-10-09 20:38 IST — VM `94b4c06` → `0b1b2f2`: the Shadow Learner armed (#140)
+
+- `shadow_learner_enabled: true` on the VM and in the repo; services restarted 20:38:47; health 200; `shadow_account_ids()` includes PAPER_SHADOW_LEARNER. Mac suite 3,011; VM scoped 99.
+- Unverified until Monday 10-12: the learner's first entries, its negative-cash bookkeeping, Court rows resolving at settle, and the chain-call load of its re-quotes.

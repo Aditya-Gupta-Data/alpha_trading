@@ -931,6 +931,7 @@ PAPER_ACCOUNTS = {
     ACCOUNT_PAPER_2L: float(PAPER_2L_STARTING_CAPITAL_RS),
     ACCOUNT_PAPER_2L_ROT: float(PAPER_2L_STARTING_CAPITAL_RS),
     ACCOUNT_PAPER_2L_LIVE: float(PAPER_2L_STARTING_CAPITAL_RS),
+    ACCOUNT_PAPER_SHADOW_LEARNER: float(SHADOW_LEARNER_CAPITAL_RS),   # paper-only data bucket (#140, owner-authorised)
 }
 # The accounts that price and SETTLE THEMSELVES on live bid/ask quotes
 # (decision #120, execution/live_pricer). The primary's exit does not close

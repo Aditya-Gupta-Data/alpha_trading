@@ -42,6 +42,16 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-09 ~22:00 IST — M1 multi-bucket ledger: additive schema + migration tool shipped (decision #141), switch OFF, NOT deployed
+
+- `portfolio_manager.ensure_buckets_schema` (additive tables, views, nullable `portfolio_id`); `scripts/migrate_m1_buckets.py` (dry-run default, PARITY-gated `--apply`); `tests/test_m1_buckets.py`. Config `multi_bucket_ledger: false`. Suite 3,015.
+- **Suite hygiene fix in the same commit:** the repo `config.json` now carries `shadow_learner_enabled: true` (the VM's live switch), which had put 24 tests red since `f626e4e` — `tests/conftest.py` pins `SHADOW_LEARNER_ENABLED` and `MULTI_BUCKET_LEDGER` to False for every test (the learner tests set them explicitly).
+- **Next:** run the dry-run on the VM (read-only) and read the seeds + PARITY lines; then the seams batch behind the switch (request_entry / release / settle per bucket, journal `portfolio_id` stamping, routing in the proposers).
+  ```bash
+  cd ~/alpha_trading && git fetch && git merge --ff-only origin/main && venv/bin/python scripts/migrate_m1_buckets.py
+  ```
+  (Nothing is written without `--apply`; the deploy itself only adds empty tables/columns on the next `ensure_accounts_schema` call.)
+
 ## 2026-10-09 20:39 IST — THE SHADOW LEARNER DEPLOYED AND ARMED (decision #140; VM `94b4c06` → `0b1b2f2`)
 
 **Live now.** `alpha-trading` + `alpha-discord-bot` restarted 20:38:47 on `0b1b2f2`; health 200; `shadow_learner_enabled: true` (also committed in the repo's `config.json` so the VM and `origin/main` agree); `shadow_account_ids()` on the VM = PAPER_2L, PAPER_2L_ROT, PAPER_2L_LIVE, **PAPER_SHADOW_LEARNER**. VM scoped tests 99 passed; Mac suite 3,011.

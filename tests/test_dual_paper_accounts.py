@@ -295,7 +295,8 @@ def test_the_book_shows_both_accounts_side_by_side(tmp_path):
     pm.ensure_accounts_schema(c)
     c.execute("INSERT INTO account_state VALUES (1, 1000000, 95901.49, 1095901.49, '2026-07-21T09:00:00')")
     c.execute("INSERT INTO paper_accounts VALUES ('PAPER_2L', 200000, -3200.5, 200000, '2026-09-19T09:00:00')")
-    c.execute("INSERT INTO paper_margin_locks VALUES ('PAPER_2L', 'sp1', 40000, 2, 3, '2026-09-19T09:17:00', NULL, NULL)")
+    c.execute("INSERT INTO paper_margin_locks (account_id, journal_ref, margin_rs, lots, primary_lots, locked_at, "
+              "released_at, pnl_net) VALUES ('PAPER_2L', 'sp1', 40000, 2, 3, '2026-09-19T09:17:00', NULL, NULL)")
     c.execute("INSERT INTO paper_equity_curve VALUES ('PAPER_2L', '2026-09-19T15:30:00', 196799.5, 200000, 1.6)")
     c.execute("INSERT INTO paper_account_events VALUES ('PAPER_2L', '2026-09-19T10:00:00', 'margin_exhaustion', 'sp2', 'x')")
     c.commit(); c.close()

@@ -143,6 +143,13 @@ def _no_ambient_engine_switches(monkeypatch):
     """The suite must behave identically on the Mac and on the VM."""
     for key in _AMBIENT_ENGINE_SWITCHES:
         monkeypatch.delenv(key, raising=False)
+    # config.json carries the VM's live switches; the suite pins the experiment arms
+    # to their design defaults (a test that wants an arm ON sets it explicitly)
+    import src.config as _cfg
+    import src.portfolio_manager as _pm
+    for mod in (_cfg, _pm):
+        monkeypatch.setattr(mod, "SHADOW_LEARNER_ENABLED", False, raising=False)
+    monkeypatch.setattr(_cfg, "MULTI_BUCKET_LEDGER", False, raising=False)
 
 
 @pytest.fixture(autouse=True)

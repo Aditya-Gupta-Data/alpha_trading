@@ -141,6 +141,9 @@ SHADOW_LEARNER_ENABLED = bool(_CONFIG.get("shadow_learner_enabled", False))
 SHADOW_LEARNER_COOLDOWN_SECONDS = int(_CONFIG.get("shadow_learner_cooldown_seconds", 900))
 SHADOW_LEARNER_MAX_OPEN = int(_CONFIG.get("shadow_learner_max_open", 6))
 SHADOW_LEARNER_CAPITAL_RS = float(_CONFIG.get("shadow_learner_capital_rs", 200000.0))
+# M1 multi-bucket ledger (blueprint docs/m1_multi_bucket_ledger_blueprint.md): schema is additive and always
+# present; the switch moves the gate/settle seams onto the buckets. Off until the VM dry-run is verified.
+MULTI_BUCKET_LEDGER = bool(_CONFIG.get("multi_bucket_ledger", False))
 _sa = _CONFIG.get("stale_approval_max_days")
 STALE_APPROVAL_MAX_DAYS = None if _sa is None else int(_sa)      # None = off (owner ruling pending)
 RATCHET_LADDER = tuple(tuple(r) for r in _CONFIG.get(

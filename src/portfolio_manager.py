@@ -1027,6 +1027,93 @@ _ACCOUNTS_OBJECTS = ("paper_accounts", "paper_margin_locks", "paper_equity_curve
 def ensure_accounts_schema(conn) -> None:
     ensure_schema(conn)
     _apply_schema(conn, _ACCOUNTS_SCHEMA, _ACCOUNTS_OBJECTS)
+    ensure_buckets_schema(conn)
+
+
+# --- M1 multi-bucket ledger (docs/m1_multi_bucket_ledger_blueprint.md) ------
+# Additive: new tables + views, and a nullable portfolio_id on the existing
+# ledgers. Nothing reads them until config `multi_bucket_ledger` is true.
+_BUCKETS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS portfolios (
+    portfolio_id        TEXT PRIMARY KEY,
+    account_id          TEXT NOT NULL,
+    strategy_family     TEXT NOT NULL,
+    starting_capital    REAL NOT NULL,
+    realized_pnl        REAL NOT NULL DEFAULT 0,
+    peak_equity         REAL NOT NULL,
+    risk_per_trade_pct  REAL NOT NULL,
+    max_drawdown_pct    REAL,              -- NULL = no ruin latch (the Shadow Learner)
+    daily_loss_pct      REAL,
+    halted_at           TEXT,
+    halt_reason         TEXT,
+    created_at          TEXT NOT NULL,
+    retired_at          TEXT
+);
+CREATE TABLE IF NOT EXISTS capital_allocations (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts                  TEXT NOT NULL,
+    portfolio_id        TEXT NOT NULL REFERENCES portfolios (portfolio_id),
+    delta_rs            REAL NOT NULL,
+    from_portfolio_id   TEXT,
+    reason              TEXT NOT NULL,
+    actor               TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS portfolio_margin_locks (
+    portfolio_id  TEXT NOT NULL REFERENCES portfolios (portfolio_id),
+    journal_ref   TEXT NOT NULL,
+    margin_rs     REAL NOT NULL,
+    lots          INTEGER NOT NULL DEFAULT 1,
+    locked_at     TEXT NOT NULL,
+    released_at   TEXT,
+    pnl_net       REAL,
+    PRIMARY KEY (portfolio_id, journal_ref)
+);
+CREATE TABLE IF NOT EXISTS portfolio_equity_curve (
+    portfolio_id  TEXT NOT NULL,
+    ts            TEXT NOT NULL,
+    equity        REAL NOT NULL,
+    peak_equity   REAL NOT NULL,
+    drawdown_pct  REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS portfolio_events (
+    portfolio_id  TEXT NOT NULL,
+    ts            TEXT NOT NULL,
+    event_type    TEXT NOT NULL,
+    journal_ref   TEXT,
+    detail        TEXT
+);
+CREATE VIEW IF NOT EXISTS account_state_v AS
+    SELECT a.id, a.starting_capital, a.realized_pnl, a.peak_equity, a.created_at,
+           (SELECT COUNT(*) FROM portfolios p WHERE p.account_id = 'PAPER_10L') AS buckets,
+           (SELECT COALESCE(SUM(p.starting_capital + p.realized_pnl), 0) FROM portfolios p
+             WHERE p.account_id = 'PAPER_10L') AS bucket_equity
+    FROM account_state a;
+CREATE VIEW IF NOT EXISTS paper_accounts_v AS
+    SELECT a.account_id, a.starting_capital, a.realized_pnl, a.peak_equity, a.created_at,
+           (SELECT COUNT(*) FROM portfolios p WHERE p.account_id = a.account_id) AS buckets,
+           (SELECT COALESCE(SUM(p.starting_capital + p.realized_pnl), 0) FROM portfolios p
+             WHERE p.account_id = a.account_id) AS bucket_equity
+    FROM paper_accounts a;
+"""
+_BUCKETS_OBJECTS = ("portfolios", "capital_allocations", "portfolio_margin_locks",
+                    "portfolio_equity_curve", "portfolio_events")
+# existing ledgers that gain a nullable portfolio_id (only when the table exists)
+_BUCKET_COLUMN_TABLES = ("margin_locks", "paper_margin_locks", "paper_live_positions",
+                         "trade_tickets", "outcomes", "shadow_trades", "net_equity_history")
+
+
+def ensure_buckets_schema(conn) -> None:
+    """Additive M1 schema. Never executescript inside a caller's transaction (D4)."""
+    _apply_schema(conn, _BUCKETS_SCHEMA, _BUCKETS_OBJECTS)
+    present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    for table in _BUCKET_COLUMN_TABLES:
+        if table not in present:
+            continue
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if "portfolio_id" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN portfolio_id TEXT")
+    if not conn.in_transaction:
+        conn.commit()
 
 
 def _is_primary(account: str) -> bool:

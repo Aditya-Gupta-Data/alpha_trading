@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-09 · 37 commits · 103 files touched
+### 2026-10-09 · 38 commits · 103 files touched
 
+- `256ad24` docs: DEPLOYED 94b4c06 to the VM (#135, Chunks 3-6, rulings #139) after a clean open-book dry-run; K2 repaired; HANDOVER + ledger
 - `970f127` docs: HANDOVER — audit pipeline complete, rulings #139 locked, VM deploy checklist
 - `3a06ff5` feat(rulings): Architect rulings closing the audit — stale approvals ON 1d (B1), text door through the budget gate (B3), renewal pages at once (F2), λ=0 edges exempt from vol_bridge (K1), weekly recalibration on the VM Fri 22:00 (E3); decision #139
 - `710908a` docs: HANDOVER — Chunks 5 and 6 closed in code; deploy bundle, K1 ruling before deploy, K2 repair tool, Dhan plan 10-10

@@ -45,7 +45,7 @@ fi
 # one 🔗 card when it changed. Fail-open: no file / no ssh = nothing announced.
 URL_FILE="${DASHBOARD_URL_FILE:-/opt/alpha_trading/data/tunnel_url.txt}"
 PY="${PYTHON_BIN:-$HERE/venv/bin/python}"; [ -x "$PY" ] || PY=python3
-BOX_URL="$(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 "${TARGET%%:*}" "cat $URL_FILE" 2>/dev/null | head -1)"
+BOX_URL="$(timeout 30 ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "${TARGET%%:*}" "cat $URL_FILE" 2>/dev/null | head -1)"
 if [ -n "$BOX_URL" ]; then
   ( cd "$HERE" && "$PY" -m src.dashboard_link --url "$BOX_URL" ) 2>&1 | sed 's/^/[link] /'
 fi

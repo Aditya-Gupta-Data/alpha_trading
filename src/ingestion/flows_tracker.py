@@ -205,7 +205,13 @@ def run(output_path=None, snapshot_path=None, lake_root=None,
     normalized = normalize_flows(rows) or {"as_of": None, "fii": None,
                                            "dii": None}
     normalized["source"] = source
-    normalized["as_of"] = normalized["as_of"] or today.isoformat()
+    if not normalized["as_of"]:                      # Chunk 5 Q7: undated = never "today"
+        normalized["undated"] = True
+        if source != "none":
+            print("  (flows tracker: FL-UNDATED — the payload carries no parseable date; "
+                  "nothing written to the lake, flows for today are UNAVAILABLE.)")
+            source = "none"
+        normalized["as_of"] = today.isoformat()
 
     out = Path(output_path) if output_path is not None else OUTPUT_PATH
     try:

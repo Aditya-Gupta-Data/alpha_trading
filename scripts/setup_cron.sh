@@ -474,6 +474,10 @@ CRON_TZ=Asia/Kolkata
 #     the desk's Compliance tab is fresh every trading day (it had sat stale
 #     for five days as a manual-only tool).
 42 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.execution.recon_engine >> "$REPO_ROOT/logs/recon_engine.log" 2>&1
+# 35. Log rotation (Daily 03:30 IST, audit Chunk 5 F6): logs/*.log over 20 MB
+#     keep their last 5 MB; *.drained archives older than 90 days go. Nothing
+#     else had ever bounded the logs on the e2-micro.
+30 3 * * * cd "$REPO_ROOT" && bash scripts/rotate_logs.sh >> "$REPO_ROOT/logs/rotate_logs.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

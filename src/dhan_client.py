@@ -76,6 +76,9 @@ _CHAIN_THROTTLE_FILE = ROOT / "data" / ".dhan_chain_throttle"
 _last_chain_call = 0.0  # per-process fallback timestamp (chain lane)
 
 
+_SLOT_QUEUE_DEPTH = 10      # legitimately queued callers before a far-ahead slot reads as corrupt
+
+
 def _read_slot(f, now: float) -> float:
     """The last slot reserved in an open, locked gate file. Self-heals a
     corrupt file or a backwards clock: no real slot sits further ahead than
@@ -85,8 +88,8 @@ def _read_slot(f, now: float) -> float:
         last = float(f.read().strip() or 0.0)
     except (ValueError, OSError):
         last = 0.0
-    if not (0.0 <= last <= now + _RATE_PAUSE + _CHAIN_PAUSE):
-        last = now
+    if not (0.0 <= last <= now + _SLOT_QUEUE_DEPTH * (_RATE_PAUSE + _CHAIN_PAUSE)):
+        last = now                                   # corrupt file / clock jump only (Chunk 5 F3)
     return last
 
 

@@ -237,6 +237,18 @@ def memory_alarm(telemetry: dict) -> dict | None:
                      f"the VM hung at this level on 2026-09-09")}
 
 
+LOW_DISK_GB = 1.0
+
+
+def disk_alarm(telemetry: dict) -> dict | None:
+    """RED under LOW_DISK_GB free: every job fails open at once when the disk fills (Chunk 5 F6)."""
+    gb = (telemetry or {}).get("disk_free_gb")
+    if gb is None or gb >= LOW_DISK_GB:
+        return None
+    return {"kind": "low_disk", "disk_free_gb": gb, "red": True,
+            "text": f"🔴 LOW DISK: {gb} GB free (< {LOW_DISK_GB} GB) — sqlite and journal writes fail open when it fills"}
+
+
 def calendar_alarm(now: datetime = None) -> dict | None:
     """The NSE holiday list is missing or provisional for this year (or,
     from 15 December, the next): the engine trades exchange holidays it
@@ -256,6 +268,7 @@ def collect_alarms(problems: list, telemetry: dict, logs_dir: Path = LOGS_DIR,
     for fn in (lambda: auth_alarms(problems),
                lambda: [a for a in [capture_alarm(capture_blindness(logs_dir, now))] if a],
                lambda: [a for a in [memory_alarm(telemetry)] if a],
+               lambda: [a for a in [disk_alarm(telemetry)] if a],
                lambda: [a for a in [calendar_alarm(now)] if a]):
         try:
             alarms.extend(fn())

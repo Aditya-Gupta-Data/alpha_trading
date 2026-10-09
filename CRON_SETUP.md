@@ -203,3 +203,8 @@ Oracle free VM (`~/.dashboard_target`, key `~/.ssh/dashboard_push`). Read-only
 on the engine; a missing target is a named no-op; a failed push is one log
 line, never an alert. The dashboard box itself runs the `alpha-dashboard`
 systemd service (Streamlit on :8501) and a 03:05 `git pull` of code only.
+
+
+## Job 35 — Log rotation (added 2026-10-09, audit Chunk 5 F6)
+
+`30 3 * * *` → `bash scripts/rotate_logs.sh`. Any `logs/*.log` over 20 MB keeps its last 5 MB; `*.drained` digest archives older than 90 days are removed. Nothing had ever bounded the logs on the e2-micro. Install by re-running `scripts/setup_cron.sh` on the VM (the owner pastes it).

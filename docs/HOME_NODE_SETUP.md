@@ -333,3 +333,41 @@ truncate it whenever you like with `: > logs/mac_auto_sync.log`.
 To update the code on the node: `cd ~/alpha_trading && git pull` — the cron
 lines call the scripts by path, so a pull is all it takes. Re-run the
 installer only when `CRON_SETUP.md` says the block changed.
+
+---
+
+## 12. The replica trial — the VM's whole schedule, in parallel (decision #144)
+
+Everything above gets the box ready and runs the *home lane* (sync, miner, evolution) in
+shadow. The owner's real test is bigger: the node is to replace the VM from the week after,
+so for one week it runs **exactly what the VM runs**, the VM changes in no way, and each night
+the node reconciles itself against the VM and files a report. Its Discord posts carry the label
+`minipc1`.
+
+```bash
+cd ~/alpha_trading && git pull
+bash scripts/node_preflight.sh                       # READY first
+bash scripts/node_seed_from_vm.sh --yes              # weekend or evening; the node starts from the VM's live book
+bash scripts/setup_node_replica_cron.sh --dry-run    # read it
+bash scripts/setup_node_replica_cron.sh              # install
+```
+
+Then `tail -3 logs/node_heartbeat.log` after a minute (a line per minute) and check
+`bash scripts/node_preflight.sh` again; it now also checks the label, the nightly reconcile,
+the heartbeat and the seed. At 23:30 the first report lands in `logs/node_reconcile/` and one
+`[minipc1]` card appears in Discord.
+
+**The token is a separate decision.** `bash scripts/setup_node_replica_cron.sh --with-token`
+adds a 07:15 job that copies the token the VM already renewed. Dhan allows one active token,
+so this is not a second token, but it makes the node a second consumer of the same account's
+call budget, and the VM's quote throttle was built for one host. Switch it on when the VM's own
+session is not the thing being watched. Until then the node's market-hours jobs abstain with
+named reasons, and the report says so.
+
+**What to expect on day one:** `DIVERGED` is likely on the first nights and is information, not
+failure. The usual causes are named in the report: a job that ran on the VM and left no trace
+on the node, an artifact built from live fetches at a different moment, a decision that on the VM
+waited for your Approve button and on the node (which has no Discord bot) did not. The three
+honest limits are printed at the bottom of every report.
+
+To stop: `bash scripts/setup_node_replica_cron.sh --remove`. The VM never knew.

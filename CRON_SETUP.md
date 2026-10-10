@@ -155,6 +155,58 @@ launchctl unload ~/Library/LaunchAgents/com.aditrader.sync.plist ~/Library/Launc
 > **The Mac section below is HISTORY once the node is live** — kept for the
 > lessons in it (absolute interpreter paths, the gcloud python trap).
 
+## The node replica — the VM's whole schedule, run in parallel (decision #144, 2026-10-10)
+
+**What and why.** From the week after, the node is to REPLACE the VM. For the trial
+week it runs exactly what the VM runs, the VM changes in no way, and every night the
+node reconciles itself against the VM. This is the dress rehearsal; the home-lane
+block above (sync, miner, evolution, scrip master) keeps running beside it.
+
+**Order, once the node passes `scripts/node_preflight.sh` (weekend, market closed):**
+
+```bash
+cd ~/alpha_trading
+bash scripts/node_seed_from_vm.sh --yes          # start from the VM's live book (read-only on the VM)
+bash scripts/setup_node_replica_cron.sh          # the VM's schedule + heartbeat + nightly reconcile
+bash scripts/setup_node_replica_cron.sh --dry-run   # (optional first) print the block
+```
+
+`--with-token` is a separate, deliberate step: it adds a 07:15 job that READS the
+token the VM already renewed. The node never renews (decision #48: one active token).
+It also makes the node a second consumer of the Dhan account's call budget, so do not
+enable it on a day the VM's own session is the thing being watched. Without it the
+node's market-hours jobs abstain with named reasons and the reconcile says so.
+
+| IST | Job | Notes |
+|---|---|---|
+| the VM's 34 other lines | rendered from `scripts/setup_cron.sh` by `scripts/node_replica_block.py` | never retyped, cannot drift. Left off: `src.renew_token`, `publish_dashboard_mirror.sh` |
+| every minute | `scripts/node_heartbeat.sh` | `logs/node_heartbeat.log` — the outage record |
+| 23:30 | `python -m src.node_reconcile` | `logs/node_reconcile/<day>.md` + one `[minipc1]` Discord card |
+| 07:15 (only `--with-token`) | `scripts/node_token_mirror.sh` | read-only copy of the VM's current token |
+
+The block also sets `ALPHA_NODE_LABEL=minipc1` (every Discord card, plain message and
+email from the node carries it), `ALPHA_NODE_REPLICA=1`, and an `OPS_EXPECTED_JOBS`
+derived from the VM's heartbeat list minus `renew_token.log`. There are **no `@reboot`
+catch-up lines** in this block on purpose: a job the node missed is the measurement.
+
+**Reading the reports.** `logs/node_reconcile/<day>.md`: node uptime and dark windows,
+jobs (ran on both / missing on node / no evidence), differences (area, subject, VM, node,
+explained), then for-information items, then the limits. Verdicts: `MATCH`;
+`MATCH_WITH_OUTAGE_GAPS` (every difference overlaps a node outage); `DIVERGED` (something
+differs with no outage to blame — read it); `INCONCLUSIVE` (the VM could not be read).
+Saturday's report adds the week. `python3 -m src.node_reconcile --week` prints it any time;
+`--date YYYY-MM-DD --no-notify` re-files a day without posting.
+
+**What the VM sees.** Once a night, one `gcloud compute scp` of a single file to `/tmp`, one
+`gcloud compute ssh` that runs it read-only (sqlite `mode=ro`) and deletes it. No VM repo file,
+cron line, service or database is touched. With `--with-token`, one more read-only `grep` of
+one line, at 07:15. The seed script (once) takes a consistent snapshot into `/tmp/node_seed` and
+removes it.
+
+**Honest limits (printed in every report):** no human presses Approve on the node, so decisions
+that wait for a person differ by construction unless paper auto-approve is on; artifacts built
+from live fetches differ by fetch timing; a silent cron job leaves no log movement.
+
 ## The Mac (development + chat agent + opportunistic miner)
 
 **LaunchAgent** (`~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist`):

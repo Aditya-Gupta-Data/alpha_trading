@@ -244,7 +244,17 @@ if crontab -l 2>/dev/null | grep -q 'ALPHA TRADING HOME NODE BLOCK START'; then
         warn "home node block installed but predates the shadow switch — re-run: bash scripts/setup_mininode_cron.sh --shadow"
     fi
     crontab -l 2>/dev/null | grep -q '^@reboot' && ok "@reboot catch-up lines present" || warn "no @reboot catch-up lines — re-run the installer"
-    crontab -l 2>/dev/null | grep -q 'weekly_recalibration' && bad "weekly_recalibration is still in the node's crontab — it moved to the VM (cron #36); re-run the installer" || ok "no weekly_recalibration on the node (VM cron #36 owns it)"
+    if crontab -l 2>/dev/null | grep -q 'NODE REPLICA BLOCK START'; then
+        ok "replica block installed (the VM's schedule runs in parallel on this node, decision #144)"
+        crontab -l 2>/dev/null | grep -q '^ALPHA_NODE_LABEL=minipc1' && ok "Discord label minipc1 set" || bad "ALPHA_NODE_LABEL=minipc1 missing from the replica block — re-run scripts/setup_node_replica_cron.sh"
+        crontab -l 2>/dev/null | grep -q 'src.node_reconcile' && ok "nightly reconcile scheduled (23:30)" || bad "no nightly reconcile line — re-run scripts/setup_node_replica_cron.sh"
+        hb_last="$(tail -1 logs/node_heartbeat.log 2>/dev/null | cut -d'|' -f1)"
+        if [ -n "$hb_last" ] && [ $(( $(date +%s) - hb_last )) -le 180 ]; then ok "heartbeat is beating (last beat $(( $(date +%s) - hb_last ))s ago)"; else warn "no heartbeat in the last 3 minutes — cron or logs/node_heartbeat.log (give it a minute after install)"; fi
+        [ -f data/.node_seed.json ] && ok "node was seeded from the VM ($(grep -o '"vm_sha": "[^"]*"' data/.node_seed.json))" || bad "node not seeded from the VM — run scripts/node_seed_from_vm.sh --yes (remove the block first)"
+        crontab -l 2>/dev/null | grep -q 'node_token_mirror' && ok "token mirror scheduled — the node is a SECOND consumer of the Dhan call budget" || warn "no token mirror: the node has no live Dhan token, market-hours jobs will abstain (add --with-token when ready)"
+    else
+        crontab -l 2>/dev/null | grep -q 'weekly_recalibration' && bad "weekly_recalibration is still in the node's crontab — it moved to the VM (cron #36); re-run the installer" || ok "no weekly_recalibration on the node (VM cron #36 owns it)"
+    fi
 else
     warn "no home node block installed yet — when every FAIL above is gone: bash scripts/setup_mininode_cron.sh --shadow"
 fi

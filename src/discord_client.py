@@ -44,6 +44,17 @@ DISCORD_MESSAGE_LIMIT = 2000
 REQUEST_TIMEOUT_SECONDS = 10
 
 
+def node_label() -> str:
+    """Which machine is speaking. `ALPHA_NODE_LABEL` (crontab env or .env) is
+    set ONLY on the home node (`minipc1`, decision #144), so its Discord
+    posts are told apart from the VM's in the shared channel. Unset on the
+    VM = '' = every message exactly as before. Read at call time, never
+    import time; stripped to a short plain token so it cannot smuggle
+    markup or mentions into a card."""
+    raw = (os.environ.get("ALPHA_NODE_LABEL") or "").strip()
+    return "".join(c for c in raw if c.isalnum() or c in "-_.")[:32]
+
+
 def _webhook_url() -> str:
     """Read at call time (not import time) so tests can set/clear the env
     var freely. Strips optional surrounding quotes, matching how .env
@@ -66,6 +77,9 @@ async def send_webhook_message(content: str, thread_id: str = None) -> bool:
         return False
 
     params = {"thread_id": str(thread_id)} if thread_id else None
+    label = node_label()
+    if label:
+        content = f"[{label}] {content}"
     payload = {"content": content[:DISCORD_MESSAGE_LIMIT]}
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:

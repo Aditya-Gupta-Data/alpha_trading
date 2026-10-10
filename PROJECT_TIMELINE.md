@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-10 · 3 commits · 21 files touched
+### 2026-10-10 · 4 commits · 23 files touched
 
+- `f82bc12` docs: HOME_NODE_SETUP — the Mini PC as an always-on Ubuntu Server, blank install to shadow trial
 - `12b67f0` feat(ops): home node SHADOW TRIAL — parallel week beside the Mac, ships nothing (decision #143)
 - `731a85a` docs: HANDOVER — M1 seams deployed to the VM (78671dc), migration dry-run PARITY ok, learner seed gap noted
 - `78671dc` feat(ledger): implement M1 bucket routing seams (#141)

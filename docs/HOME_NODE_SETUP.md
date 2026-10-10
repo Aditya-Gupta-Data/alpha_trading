@@ -15,8 +15,20 @@ session cannot:
 
 ```bash
 cd /Users/adityagupta/Documents/Claude/alpha_trading
-bash scripts/bootstrap_node_from_mac.sh minipc1@100.72.160.38            # add --with-ollama for the LLM jobs
+ssh-copy-id mini_pc1@192.168.29.158                                      # once; after this no password prompts
+bash scripts/bootstrap_node_from_mac.sh mini_pc1@192.168.29.158          # add --with-ollama for the LLM jobs
 ```
+
+**As found on 2026-10-10:** the box is `minipc1`, user `mini_pc1`, Ubuntu
+Server **26.04.1** (fine — newer than the 24.04 below; the preflight checks
+the python it ships), LAN address `192.168.29.158`, Tailscale address
+`100.72.160.38`. The Tailscale address answers only from a machine on the
+same tailnet; the Mac was not (its `tailscale status` showed one node), so
+use the LAN address. The box was on **Wi-Fi** (`wlx00e9…`, a USB dongle) —
+move it to the cable before the trial week: Wi-Fi drops are exactly the
+failure the always-on box exists to end. After plugging in, `ip -4 addr`
+should show a second address on an `en…`/`eth…` interface; the DHCP
+reservation goes on that interface's MAC, and the LAN address may change.
 
 It copies this checkout, `data/` and `.env` to the node (nothing deleted
 there, never `logs/`), then runs `scripts/bootstrap_node.sh` on the node over

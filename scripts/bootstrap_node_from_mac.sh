@@ -5,9 +5,14 @@
 # PC over SSH (LAN or Tailscale); a cloud session cannot. So this is the one
 # command the owner runs, from the Mac's repo checkout:
 #
-#   bash scripts/bootstrap_node_from_mac.sh minipc1@100.72.160.38
-#   bash scripts/bootstrap_node_from_mac.sh minipc1@100.72.160.38 --with-ollama
-#   bash scripts/bootstrap_node_from_mac.sh minipc1@100.72.160.38 --no-install   # stop after the preflight
+#   ssh-copy-id mini_pc1@192.168.29.158                                    # once: no more password prompts
+#   bash scripts/bootstrap_node_from_mac.sh mini_pc1@192.168.29.158
+#   bash scripts/bootstrap_node_from_mac.sh mini_pc1@192.168.29.158 --with-ollama
+#   bash scripts/bootstrap_node_from_mac.sh mini_pc1@192.168.29.158 --no-install   # stop after the preflight
+#
+# Use the user@address that already works by hand. On 2026-10-10 that was the
+# LAN address with user `mini_pc1` (hostname minipc1); the node's Tailscale
+# address 100.72.160.38 only answers once the Mac is on the same tailnet.
 #
 # What it does:
 #   1. rsyncs THIS checkout (code + .git + config), data/ (the corpus) and
@@ -23,22 +28,24 @@ set -uo pipefail
 
 NODE="${1:-}"
 if [ -z "$NODE" ]; then
-    echo "usage: bash scripts/bootstrap_node_from_mac.sh user@node-ip [--with-ollama] [--no-install]" >&2
+    echo "usage: bash scripts/bootstrap_node_from_mac.sh user@node-ip [--with-ollama] [--no-install]   (e.g. mini_pc1@192.168.29.158)" >&2
     exit 2
 fi
 shift
 MAC_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$MAC_REPO" || exit 1
 
+# One ssh for both checks (every ssh is a password prompt unless the Mac's key
+# is on the node: `ssh-copy-id user@node-ip` once makes the whole run silent).
 echo "==> Reaching $NODE"
-if ! ssh -o ConnectTimeout=10 "$NODE" 'echo "    connected: $(hostname) ($(uname -s))"'; then
-    echo "bootstrap_node_from_mac: cannot ssh to $NODE — is the box on, on the LAN/Tailscale, and is the user right?" >&2
+probe="$(ssh -o ConnectTimeout=10 "$NODE" 'echo "$(hostname) $(uname -s)"' 2>&1)" || {
+    echo "bootstrap_node_from_mac: cannot ssh to $NODE — $probe" >&2
+    echo "    Use the address and user that already work by hand (the LAN one, e.g. mini_pc1@192.168.29.158)." >&2
+    echo "    A 100.x Tailscale address only answers if the Mac is logged into the same tailnet." >&2
     exit 1
-fi
-if ssh "$NODE" 'uname -s' 2>/dev/null | grep -q Darwin; then
-    echo "bootstrap_node_from_mac: $NODE is a Mac, not the Linux node." >&2
-    exit 1
-fi
+}
+echo "    connected: $probe"
+case "$probe" in *Darwin*) echo "bootstrap_node_from_mac: $NODE is a Mac, not the Linux node." >&2; exit 1 ;; esac
 
 echo "==> Sizing what travels (data/ can be a few GB)"
 du -sh data 2>/dev/null | sed 's/^/    data: /'

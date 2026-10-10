@@ -35,6 +35,8 @@ NEW until the next time this machine is awake.
 
 Run manually any time:      python3 -m src.edge_miner
 Force despite the 20h gate: python3 -m src.edge_miner --force
+Shadow trial (home node, 2026-10-10): python3 -m src.edge_miner --no-apply
+  — pulls, mines and refreshes the local copies but applies NOTHING on the VM.
 """
 
 import argparse
@@ -298,9 +300,15 @@ def run_resilient(runner, cmd: list, what: str,
 
 
 def run_miner(force: bool = False, runner=_run, extractor=None,
-              now: float = None) -> dict:
+              now: float = None, apply: bool = True) -> dict:
     """The full opportunistic cycle. Returns a summary dict; every skip
-    reason is explicit. Injectable runner/extractor for offline tests."""
+    reason is explicit. Injectable runner/extractor for offline tests.
+
+    `apply=False` is the home node's SHADOW TRIAL (2026-10-10): pull the
+    snapshot, mine with the local Ollama, refresh the local copies — but
+    never ship or apply a single edge on the VM. The Mac still owns that
+    write during the trial week; two machines must not apply to the same
+    graph. The summary then carries `new_edges_mined_not_applied`."""
     if not force and not due(now=now):
         return {"status": "skipped", "reason": "ran within the last "
                 f"{MIN_HOURS_BETWEEN_RUNS}h"}
@@ -356,7 +364,11 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
         # live in evolution.refresh_bars_cache, 2026-07-09; this path had
         # the same flaw but had never fired with >0 triples).
         applied = 0
-        if new_triples:
+        if new_triples and not apply:
+            print(f"  (edge_miner: SHADOW — {len(new_triples)} new triple(s) "
+                  "mined, NOT applied on the VM; the Mac's miner still owns "
+                  "that write)", flush=True)
+        if new_triples and apply:
             payload = tmp / "new_edges.json"
             payload.write_text(json.dumps(new_triples))
             applier = tmp / "apply_edges.py"
@@ -412,6 +424,9 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
                "triples_written_locally": stats.get("triples_written"),
                "new_edges_applied_to_vm": applied,
                "local_copies_refreshed": refreshed}
+    if not apply:
+        summary["shadow"] = True
+        summary["new_edges_mined_not_applied"] = len(new_triples)
     return summary
 
 
@@ -421,7 +436,10 @@ if __name__ == "__main__":
                     "knowledge graph")
     parser.add_argument("--force", action="store_true",
                         help="ignore the 20h since-last-success gate")
+    parser.add_argument("--no-apply", action="store_true",
+                        help="SHADOW TRIAL: pull + mine + refresh local "
+                             "copies, but apply nothing on the VM")
     args = parser.parse_args()
-    result = run_miner(force=args.force)
+    result = run_miner(force=args.force, apply=not args.no_apply)
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] edge_miner: "
           f"{json.dumps(result)}", flush=True)

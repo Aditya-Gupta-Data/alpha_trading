@@ -23,7 +23,12 @@ ollama_session_start || true   # miner fail-opens; it re-checks ollama_up() itse
 # silently neutered the miner's LLM calls on 2026-07-09 — the third
 # unpinned-interpreter incident this week (Mac cron: CommandLineTools
 # python; VM cron: bare python3; LaunchAgent: Homebrew python).
-"$PY" -m src.edge_miner >> logs/edge_miner.log 2>&1
+# SHADOW TRIAL (2026-10-10, decision #143): on the home node's parallel
+# week ALPHA_NODE_SHADOW=1 mines locally but applies nothing on the VM —
+# the Mac's miner still owns that write until the node is promoted.
+_MINER_ARGS=()
+[ "${ALPHA_NODE_SHADOW:-0}" = "1" ] && _MINER_ARGS+=(--no-apply)
+"$PY" -m src.edge_miner ${_MINER_ARGS[@]+"${_MINER_ARGS[@]}"} >> logs/edge_miner.log 2>&1
 _rc=$?
 ollama_session_stop
 exit $_rc

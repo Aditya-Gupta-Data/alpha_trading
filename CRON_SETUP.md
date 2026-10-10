@@ -74,20 +74,60 @@ the lid was shut (the sync shipped 2/7 on 09-15; the Saturday recalibration
 had not run since 08-01). The VM's schedule above is untouched. The node
 NEVER renews or pushes a Dhan token (#48) and never runs `setup_cron.sh`.
 
-Install / replace (clock must be IST — `sudo timedatectl set-timezone
+**2026-10-10 — the node goes live in two steps (decision #143): a SHADOW
+week beside the Mac first, promotion only on a clean report.** The box sits
+on a UPS and a LAN cable but will still lose power or the network now and
+then, so the schedule is built for a box that is *almost* always on.
+
+Step 1 — the shadow trial (clock must be IST — `sudo timedatectl set-timezone
 Asia/Kolkata` first; the installer refuses macOS, the VM and a non-IST clock):
 
 ```bash
-cd ~/alpha_trading && bash scripts/setup_mininode_cron.sh
+cd ~/alpha_trading && bash scripts/setup_mininode_cron.sh --shadow
 ```
+
+Same jobs, same times, full work — but `ALPHA_NODE_SHADOW=1` in the crontab
+makes the sync **ship nothing** (it logs `SHADOW: would have shipped k/7`),
+the miner **apply nothing** on the VM (`--no-apply`) and the scrip master
+post **no Discord card** (`--quiet`). The Mac keeps its LaunchAgents and owns
+the lane all week; the node only proves it can keep the clock. After seven
+full days, read the week from the node's own logs:
+
+```bash
+cd ~/alpha_trading && python3 scripts/node_trial_report.py
+```
+
+One row per day (which of the three slots fired, producer failures,
+would-have-shipped k/7, the read-only pull, the miner, reboots) and a verdict.
+`RELIABLE` means every slot fired, every producer succeeded and every ship
+would have been 7/7. Anything else lists exactly what went wrong.
+
+Step 2 — promotion, only on `RELIABLE`: re-run **without** `--shadow`
+(`bash scripts/setup_mininode_cron.sh`), hand-run `bash scripts/mac_auto_sync.sh
+--force` once and confirm `shipped 7/7`, then retire the Mac's copies with the
+command below so two machines never ship the same files.
 
 | IST | Job | Replaces | Log |
 |---|---|---|---|
 | 07:30, 12:30, 19:20 daily | `scripts/mac_auto_sync.sh` | the `com.aditrader.sync` LaunchAgent (sector bars, valuation, F&O bundle, darling ids, bars cache → the 7-file ship to the VM; keeps its own 180-min throttle) | `logs/mac_auto_sync.log` (+ `.cron.log`) |
+| `@reboot` + 90 s | `scripts/mac_auto_sync.sh` | **NEW 10-10:** catch-up after a power cut — plain cron never replays a slot it slept through; the 180-min throttle makes a boot-time run free | same |
 | 21:00 daily | `scripts/mine_edges.sh` | the edge-miner LaunchAgent (local Ollama, self-gates on > 20 h) | `logs/edge_miner.log` |
+| `@reboot` + 120 s | `scripts/mine_edges.sh` | **NEW 10-10:** same catch-up; the > 20 h self-gate makes it free | same |
 | 02:00 Saturday | `scripts/run_evolution.sh` | the evolution LaunchAgent (local Ollama, never auto-applies) | `logs/evolution.log` |
 | 09:30 Saturday | `src.ingestion.scrip_master` | Mac crontab | `logs/scrip_master.log` |
-| 10:00 Saturday | `src.analysis.weekly_recalibration` | Mac crontab | `logs/weekly_recalibration.log` |
+| ~~10:00 Saturday~~ | ~~`src.analysis.weekly_recalibration`~~ | **REMOVED 10-10** — Architect ruling E3 moved it to VM cron #36 (Friday 22:00) on 10-09; a node copy would recalibrate against a stale journal every week | — |
+
+**What a dark box costs, job by job.** One missed slot is harmless: three
+slots a day, the bhavcopy fetch walks back five weekdays, sector bars only
+extend forward. The VM protects itself when the ship stops: the sector veto
+abstains, darling entries stop after 3 stale days, the liquidity check fails
+closed after 7, and the ops card names the stale artifact (by design only
+after ~3 missed days — so a dead node is not noticed the same day). The
+Ollama jobs are safe to miss. Prerequisites for a box that comes back on its
+own: the router and fibre box on the **same UPS** (a box that is up with no
+internet fails every fetch and only logs it), BIOS "Restore on AC Power Loss
+= Power On" (the UPS only delays the outage; when its battery dies this is
+what brings the box back), and the suspend masking below.
 
 Every script resolves ONE explicit interpreter through `scripts/node_env.sh`
 (`$ALPHA_PY` → the repo `venv/bin/python` → the Mac framework python →

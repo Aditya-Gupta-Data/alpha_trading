@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 ACCOUNT = "PAPER_SHADOW_LEARNER"
 MODE = "SHADOW_LEARNER"
+PORTFOLIO_ID = f"{ACCOUNT}/IDX_SPREADS"     # M1 (#142): the learner's one bucket
 _LAST_TAKE: dict = {}          # underlying -> epoch of the learner's last entry (process memory)
 
 
@@ -64,11 +65,11 @@ def record_fire(conn, entry: dict, fire_date: str = None) -> dict:
     spread = entry.get("spread") or {}
     ref = learner_ref(entry.get("short_id"))
     cur = conn.execute(
-        "INSERT INTO shadow_trades (journal_ref, pattern_id, fire_date, ticker, direction, created_at, host_ref, mode) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (journal_ref) DO NOTHING",
+        "INSERT INTO shadow_trades (journal_ref, pattern_id, fire_date, ticker, direction, created_at, host_ref, mode, "
+        "portfolio_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (journal_ref) DO NOTHING",
         (ref, f"learner:{spread.get('strategy')}", fire_date or date.today().isoformat(), entry.get("ticker"),
          spread.get("direction") or entry.get("view"), datetime.utcnow().isoformat(timespec="seconds"),
-         entry.get("short_id"), MODE))
+         entry.get("short_id"), MODE, PORTFOLIO_ID))
     conn.commit()
     return {"ref": ref, "created": bool(cur.rowcount)}
 

@@ -46,7 +46,7 @@ Inspect the account from the project folder:
 
 from datetime import datetime, timedelta, timezone
 
-from src import brain_map
+from src import brain_map, buckets
 from src.config import (ACCOUNT_RISK_PER_TRADE_PCT,
                         CAPITAL_ROTATION_ENABLED, CAPITAL_ROTATION_RR_MULTIPLE,
                         PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_LIVE_ACCOUNT_ENABLED,
@@ -572,7 +572,7 @@ LIVE_ALREADY_OPEN = "already_open"
 
 
 def request_entry(conn, journal_ref: str, required_margin: float,
-                  dry_run: bool = False) -> dict:
+                  dry_run: bool = False, portfolio_id: str = None) -> dict:
     """The strict entry guard. Approve = the margin is locked under
     `journal_ref` (idempotent: re-requesting an active ref re-approves
     without double-locking). Reject = nothing is locked and the reason is
@@ -594,22 +594,32 @@ def request_entry(conn, journal_ref: str, required_margin: float,
     or a later approval passes once the halt clears); decide_pending
     answers MARGIN_BLOCKED. The re-request is otherwise idempotent. Every
     halt refusal (held lock or new) carries `halt` (entry_halt's dict) —
-    gate_headless_entry hands its event name on (L3 review)."""
-    ensure_schema(conn)
+    gate_headless_entry hands its event name on (L3 review).
+
+    M1 (decision #142): with `multi_bucket_ledger` on and a bucket row for this entry's portfolio
+    (`eqd:` → DARLINGS, else IDX_SPREADS, or `portfolio_id`), `buckets.gate` judges the halt and the
+    cash of THAT bucket alone and takes the bucket lock; the flat halt/cash checks are skipped and the
+    flat lock is still written as the audit trail. Returns `portfolio_id` on a routed verdict."""
+    ensure_accounts_schema(conn)
     get_account(conn)
+    routed = None
 
     active = conn.execute("SELECT 1 FROM margin_locks WHERE journal_ref = ? "
                           "AND released_at IS NULL", (journal_ref,)).fetchone()
     if active:
-        halt = entry_halt(conn)
+        routed = buckets.gate(conn, ACCOUNT_PAPER_10L, journal_ref, required_margin, dry_run=True,
+                              portfolio_id=portfolio_id)
+        stamp = {"portfolio_id": routed["portfolio_id"]} if routed is not None else {}
+        halt = (routed.get("halt") if routed is not None else entry_halt(conn))
         if halt:
             log_event(conn, halt["event"],
                       f"entry {journal_ref} refused at approval ({halt['reason']}) — "
                       f"{HELD_LOCK_HALTED}; the lock is left for the 15:30 sweep")
-            _primary_halt_cards(conn, halt)
+            if routed is None:
+                _primary_halt_cards(conn, halt)
             return {"approved": False, "reason": f"{halt['reason']} — {HELD_LOCK_HALTED}",
-                    "halt": halt}
-        return {"approved": True, "reason": HELD_LOCK_REASON}
+                    "halt": halt, **stamp}
+        return {"approved": True, "reason": HELD_LOCK_REASON, **stamp}
     # A released row for this ref: only a pending lock that EXPIRED unapproved
     # (D7) may be taken again — at approval, judged on today's cash below.
     # Anything else was settled, and a settled ref is never re-locked (it
@@ -620,38 +630,49 @@ def request_entry(conn, journal_ref: str, required_margin: float,
         return {"approved": False,
                 "reason": "this entry's margin lock was already settled — never re-locked"}
 
-    halt = entry_halt(conn)
-    if halt:
-        log_event(conn, halt["event"],
-                  f"entry {journal_ref} rejected ({halt['reason']})")
-        _primary_halt_cards(conn, halt)
-        return {"approved": False, "reason": halt["reason"], "halt": halt}
-
-    cash = available_cash(conn)
     margin = round(float(required_margin), 2)
-    if margin > cash:
-        reason = (f"margin exhaustion: needs Rs.{margin:,.2f} but only "
-                  f"Rs.{cash:,.2f} liquid (Rs.{locked_margin(conn):,.2f} "
-                  "already locked)")
-        log_event(conn, "margin_exhaustion",
-                  f"entry {journal_ref} rejected ({reason})")
-        return {"approved": False, "reason": reason}
+    routed = buckets.gate(conn, ACCOUNT_PAPER_10L, journal_ref, margin, dry_run=dry_run,
+                          portfolio_id=portfolio_id)
+    if routed is not None and not routed["approved"]:
+        halt = routed.get("halt")
+        log_event(conn, halt["event"] if halt else "margin_exhaustion",
+                  f"entry {journal_ref} rejected ({routed['reason']})")
+        return {"approved": False, "reason": routed["reason"], "portfolio_id": routed["portfolio_id"],
+                **({"halt": halt} if halt else {})}
+    if routed is None:
+        halt = entry_halt(conn)
+        if halt:
+            log_event(conn, halt["event"],
+                      f"entry {journal_ref} rejected ({halt['reason']})")
+            _primary_halt_cards(conn, halt)
+            return {"approved": False, "reason": halt["reason"], "halt": halt}
+
+        cash = available_cash(conn)
+        if margin > cash:
+            reason = (f"margin exhaustion: needs Rs.{margin:,.2f} but only "
+                      f"Rs.{cash:,.2f} liquid (Rs.{locked_margin(conn):,.2f} "
+                      "already locked)")
+            log_event(conn, "margin_exhaustion",
+                      f"entry {journal_ref} rejected ({reason})")
+            return {"approved": False, "reason": reason}
+    stamp = {"portfolio_id": routed["portfolio_id"]} if routed is not None else {}
 
     if dry_run:
-        return {"approved": True, "reason": "margin available (dry run — nothing locked)"}
+        return {"approved": True, "reason": "margin available (dry run — nothing locked)", **stamp}
     if prior is not None:
         conn.execute("UPDATE margin_locks SET margin_rs = ?, locked_at = ?, released_at = NULL, "
-                     "pnl_net = NULL WHERE journal_ref = ?", (margin, _now_iso(), journal_ref))
+                     "pnl_net = NULL, portfolio_id = COALESCE(?, portfolio_id) WHERE journal_ref = ?",
+                     (margin, _now_iso(), stamp.get("portfolio_id"), journal_ref))
         conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)",
                      (_now_iso(), PENDING_LOCK_REVIVED_EVENT,
                       f"{journal_ref}: expired pending lock taken again at approval "
                       f"(Rs.{margin:,.2f})"))
         conn.commit()
-        return {"approved": True, "reason": "margin locked (expired pending lock renewed at approval)"}
-    conn.execute("INSERT INTO margin_locks (journal_ref, margin_rs, locked_at) "
-                 "VALUES (?, ?, ?)", (journal_ref, margin, _now_iso()))
+        return {"approved": True, "reason": "margin locked (expired pending lock renewed at approval)", **stamp}
+    conn.execute("INSERT INTO margin_locks (journal_ref, margin_rs, locked_at, portfolio_id) "
+                 "VALUES (?, ?, ?, ?)", (journal_ref, margin, _now_iso(), stamp.get("portfolio_id")))
     conn.commit()
-    return {"approved": True, "reason": "margin locked"}
+    return {"approved": True, "reason": "margin locked", **stamp}
 
 
 # --- pending-lock expiry (audit Chunk 1 D7, decision #122) ----------------
@@ -709,6 +730,7 @@ def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
         if row is not None:
             conn.execute("UPDATE margin_locks SET released_at = ?, pnl_net = 0 WHERE journal_ref = ? "
                          "AND released_at IS NULL", (now, journal_ref))
+            buckets.release(conn, ACCOUNT_PAPER_10L, journal_ref, 0.0)        # M1: the bucket lock expires too
             conn.execute("INSERT INTO account_events (ts, event_type, detail) VALUES (?, ?, ?)",
                          (now, PENDING_LOCK_EXPIRED_EVENT,
                           f"{journal_ref}: pending lock Rs.{float(row[0]):,.2f} expired unapproved "
@@ -741,6 +763,7 @@ def expire_pending_lock(conn, journal_ref: str, why: str = "") -> dict:
             conn.execute("UPDATE paper_margin_locks SET released_at = ?, pnl_net = 0 WHERE "
                          "account_id = ? AND journal_ref = ? AND released_at IS NULL",
                          (now, account, journal_ref))
+            buckets.release(conn, account, journal_ref, 0.0)
             conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, journal_ref, "
                          "detail) VALUES (?, ?, ?, ?, ?)",
                          (account, now, PENDING_LOCK_EXPIRED_EVENT, journal_ref,
@@ -758,8 +781,9 @@ def release_margin(conn, journal_ref: str, pnl_net: float = 0.0) -> dict:
     """Close out one lock: mark it released, settle its realized P&L into
     the account, ratchet the peak, and append an equity-curve point.
     Unknown/already-released refs are a safe no-op (the tracker may sweep
-    entries that never passed through the gate)."""
-    ensure_schema(conn)
+    entries that never passed through the gate). M1 (#142): the bucket lock
+    on the same ref settles in the same transaction (`buckets.release`)."""
+    ensure_accounts_schema(conn)
     active = conn.execute("SELECT margin_rs FROM margin_locks WHERE "
                           "journal_ref = ? AND released_at IS NULL",
                           (journal_ref,)).fetchone()
@@ -773,8 +797,11 @@ def release_margin(conn, journal_ref: str, pnl_net: float = 0.0) -> dict:
     conn.execute("UPDATE account_state SET realized_pnl = round(realized_pnl + ?, 2), "
                  "peak_equity = max(peak_equity, starting_capital + realized_pnl + ?) "
                  "WHERE id = 1", (float(pnl_net), float(pnl_net)))
+    bucket = buckets.release(conn, ACCOUNT_PAPER_10L, journal_ref, pnl_net)
     conn.commit()
     snap = _snapshot_equity(conn)
+    if bucket is not None:
+        snap["bucket"] = bucket
     if not was_halted and trading_halted(conn):
         log_event(conn, "risk_of_ruin_halt",
                   f"drawdown hit {snap['drawdown_pct']:.2f}% after settling "
@@ -1287,7 +1314,7 @@ def size_for_account(conn, account: str, spread: dict, primary_lots: int = None,
 
 
 def paper_request_entry(conn, account: str, journal_ref: str, required_margin: float,
-                        lots: int = 1, primary_lots: int = 1) -> dict:
+                        lots: int = 1, primary_lots: int = 1, portfolio_id: str = None) -> dict:
     """The shadow account's strict entry guard: same order as request_entry
     (re-request of a held lock -> its halts, then approve; halt list;
     margin exhaustion), its own tables. The primary delegates to
@@ -1298,55 +1325,70 @@ def paper_request_entry(conn, account: str, journal_ref: str, required_margin: f
     lock itself — entry_halt, then release_unopened_lock — and never
     reaches this branch)."""
     if _is_primary(account):
-        return request_entry(conn, journal_ref, required_margin)
+        return request_entry(conn, journal_ref, required_margin, portfolio_id=portfolio_id)
     get_paper_account(conn, account)
     active = conn.execute("SELECT 1 FROM paper_margin_locks WHERE account_id = ? AND "
                           "journal_ref = ? AND released_at IS NULL",
                           (account, journal_ref)).fetchone()
     if active:
-        halt = entry_halt(conn, account)
+        routed = buckets.gate(conn, account, journal_ref, required_margin, lots=lots, dry_run=True,
+                              portfolio_id=portfolio_id)
+        stamp = {"portfolio_id": routed["portfolio_id"]} if routed is not None else {}
+        halt = (routed.get("halt") if routed is not None else entry_halt(conn, account))
         if halt:
+            conn.commit()
             return {"approved": False, "reason": f"{halt['reason']} — {HELD_LOCK_HALTED}",
-                    "halt": halt}
-        return {"approved": True, "reason": HELD_LOCK_REASON}
+                    "halt": halt, **stamp}
+        return {"approved": True, "reason": HELD_LOCK_REASON, **stamp}
     # same rule as request_entry: only a D7-expired pending lock is renewed
     prior = conn.execute("SELECT 1 FROM paper_margin_locks WHERE account_id = ? AND "
                          "journal_ref = ?", (account, journal_ref)).fetchone()
     if prior is not None and not _lock_expired_unapproved(conn, account, journal_ref):
         return {"approved": False,
                 "reason": "this entry's margin lock was already settled — never re-locked"}
-    unlimited = account == ACCOUNT_PAPER_SHADOW_LEARNER    # #140 (owner): paper data bucket, no halt, no margin wall
-    halt = None if unlimited else entry_halt(conn, account)
-    if halt:
-        paper_log_event(conn, account, halt["event"], journal_ref,
-                        f"entry {journal_ref} rejected ({halt['reason']})")
-        return {"approved": False, "reason": halt["reason"]}
-    cash = paper_available_cash(conn, account)
     margin = round(float(required_margin), 2)
-    if margin > cash and not unlimited:
-        reason = (f"margin exhaustion: needs Rs.{margin:,.2f} but only "
-                  f"Rs.{cash:,.2f} liquid (Rs.{paper_locked_margin(conn, account):,.2f} "
-                  "already locked)")
-        paper_log_event(conn, account, "margin_exhaustion", journal_ref,
-                        f"entry {journal_ref} rejected ({reason})")
-        return {"approved": False, "reason": reason}
+    # M1 (#142): the account's bucket judges its own halt and cash; the flat checks below are skipped
+    routed = buckets.gate(conn, account, journal_ref, margin, lots=lots, portfolio_id=portfolio_id)
+    if routed is not None and not routed["approved"]:
+        halt = routed.get("halt")
+        paper_log_event(conn, account, halt["event"] if halt else "margin_exhaustion", journal_ref,
+                        f"entry {journal_ref} rejected ({routed['reason']})")
+        return {"approved": False, "reason": routed["reason"], "portfolio_id": routed["portfolio_id"]}
+    stamp = {"portfolio_id": routed["portfolio_id"]} if routed is not None else {}
+    if routed is None:
+        unlimited = account == ACCOUNT_PAPER_SHADOW_LEARNER    # #140 (owner): paper data bucket, no halt, no margin wall
+        halt = None if unlimited else entry_halt(conn, account)
+        if halt:
+            paper_log_event(conn, account, halt["event"], journal_ref,
+                            f"entry {journal_ref} rejected ({halt['reason']})")
+            return {"approved": False, "reason": halt["reason"]}
+        cash = paper_available_cash(conn, account)
+        if margin > cash and not unlimited:
+            reason = (f"margin exhaustion: needs Rs.{margin:,.2f} but only "
+                      f"Rs.{cash:,.2f} liquid (Rs.{paper_locked_margin(conn, account):,.2f} "
+                      "already locked)")
+            paper_log_event(conn, account, "margin_exhaustion", journal_ref,
+                            f"entry {journal_ref} rejected ({reason})")
+            return {"approved": False, "reason": reason}
     if prior is not None:
         conn.execute("UPDATE paper_margin_locks SET margin_rs = ?, lots = ?, primary_lots = ?, "
-                     "locked_at = ?, released_at = NULL, pnl_net = NULL WHERE account_id = ? "
-                     "AND journal_ref = ?",
-                     (margin, int(lots), int(primary_lots), _now_iso(), account, journal_ref))
+                     "locked_at = ?, released_at = NULL, pnl_net = NULL, "
+                     "portfolio_id = COALESCE(?, portfolio_id) WHERE account_id = ? AND journal_ref = ?",
+                     (margin, int(lots), int(primary_lots), _now_iso(), stamp.get("portfolio_id"),
+                      account, journal_ref))
         conn.execute("INSERT INTO paper_account_events (account_id, ts, event_type, journal_ref, "
                      "detail) VALUES (?, ?, ?, ?, ?)",
                      (account, _now_iso(), PENDING_LOCK_REVIVED_EVENT, journal_ref,
                       f"expired pending lock taken again at approval (Rs.{margin:,.2f}, "
                       f"{int(lots)} lot(s))"))
         conn.commit()
-        return {"approved": True, "reason": "margin locked (expired pending lock renewed at approval)"}
+        return {"approved": True, "reason": "margin locked (expired pending lock renewed at approval)", **stamp}
     conn.execute("INSERT INTO paper_margin_locks (account_id, journal_ref, margin_rs, "
-                 "lots, primary_lots, locked_at) VALUES (?, ?, ?, ?, ?, ?)",
-                 (account, journal_ref, margin, int(lots), int(primary_lots), _now_iso()))
+                 "lots, primary_lots, locked_at, portfolio_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (account, journal_ref, margin, int(lots), int(primary_lots), _now_iso(),
+                  stamp.get("portfolio_id")))
     conn.commit()
-    return {"approved": True, "reason": "margin locked"}
+    return {"approved": True, "reason": "margin locked", **stamp}
 
 
 def _paper_snapshot(conn, account: str) -> dict:
@@ -1386,6 +1428,7 @@ def paper_release_rows(conn, account: str, journal_ref: str, pnl: float) -> bool
     conn.execute("UPDATE paper_accounts SET realized_pnl = round(realized_pnl + ?, 2), "
                  "peak_equity = max(peak_equity, starting_capital + realized_pnl + ?) "
                  "WHERE account_id = ?", (float(pnl), float(pnl), account))
+    buckets.release(conn, account, journal_ref, pnl)          # M1 (#142): same transaction, no commit
     return True
 
 
@@ -1647,6 +1690,8 @@ def paper_resize_lock(conn, account: str, journal_ref: str, lots: int, margin_rs
     cur = conn.execute("UPDATE paper_margin_locks SET lots = ?, margin_rs = ? WHERE account_id = ? "
                        "AND journal_ref = ? AND released_at IS NULL AND lots > ?",
                        (int(lots), round(float(margin_rs), 2), account, journal_ref, int(lots)))
+    if cur.rowcount == 1:
+        buckets.resize_lock(conn, account, journal_ref, lots, margin_rs)
     conn.commit()
     return cur.rowcount == 1
 

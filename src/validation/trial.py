@@ -76,6 +76,8 @@ def ensure_schema(conn) -> None:
     # exclude the latter explicitly — see shadow_evidence.
     if "mode" not in cols:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN mode TEXT")
+    if "portfolio_id" not in cols:                 # M1 (#142): the bucket the Court row's evidence belongs to
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN portfolio_id TEXT")
     conn.commit()
 
 
@@ -113,7 +115,7 @@ def in_validation(day: str, windows: dict) -> bool:
 # ------------------------------------------------------- shadow tracking
 
 def record_shadow_fire(conn, pattern_id: str, fire_date: str, ticker: str,
-                       direction: str = None) -> dict:
+                       direction: str = None, portfolio_id: str = None) -> dict:
     """A discovered pattern's matcher fired live -> a shadow: row (NOT a
     journal entry). Idempotent per (pattern, day, ticker). Returns
     {ref, created}."""
@@ -121,10 +123,10 @@ def record_shadow_fire(conn, pattern_id: str, fire_date: str, ticker: str,
     ref = shadow_ref(pattern_id, fire_date, ticker)
     cur = conn.execute(
         "INSERT INTO shadow_trades (journal_ref, pattern_id, fire_date, "
-        "ticker, direction, created_at) VALUES (?, ?, ?, ?, ?, ?) "
+        "ticker, direction, created_at, portfolio_id) VALUES (?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (journal_ref) DO NOTHING",
         (ref, pattern_id, fire_date, ticker, direction,
-         datetime.now(timezone.utc).isoformat(timespec="seconds")))
+         datetime.now(timezone.utc).isoformat(timespec="seconds"), portfolio_id))
     conn.commit()
     return {"ref": ref, "created": bool(cur.rowcount)}
 
@@ -170,7 +172,7 @@ def signal_ref(signal: str, host_ref: str, fire_date: str) -> str:
 
 
 def record_signal_fire(conn, signal: str, fire_date: str, ticker: str,
-                       direction: str = None, host_ref: str = None) -> dict:
+                       direction: str = None, host_ref: str = None, portfolio_id: str = None) -> dict:
     """A shadow SIGNAL fired against a live host position -> one row,
     resolved by the existing Sleep-Phase host-linked sweep exactly like a
     blocked trade. host_ref is required in spirit: a row with no host can
@@ -180,18 +182,18 @@ def record_signal_fire(conn, signal: str, fire_date: str, ticker: str,
     ref = signal_ref(signal, host_ref or "", fire_date)
     cur = conn.execute(
         "INSERT INTO shadow_trades (journal_ref, pattern_id, fire_date, "
-        "ticker, direction, created_at, host_ref, mode) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ticker, direction, created_at, host_ref, mode, portfolio_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (journal_ref) DO NOTHING",
         (ref, f"signal:{signal}", fire_date, ticker, direction,
          datetime.now(timezone.utc).isoformat(timespec="seconds"),
-         host_ref, SIGNAL_MODE))
+         host_ref, SIGNAL_MODE, portfolio_id))
     conn.commit()
     return {"ref": ref, "created": bool(cur.rowcount)}
 
 
 def record_block(conn, gate: str, fire_date: str, ticker: str,
-                 direction: str = None, host_ref: str = None) -> dict:
+                 direction: str = None, host_ref: str = None, portfolio_id: str = None) -> dict:
     """A GATE refused a proposal -> one opportunity-cost row. `host_ref`
     is the real open trade whose outcome answers the counterfactual (for
     the exposure gate: the conflicting position that caused the block);
@@ -204,12 +206,12 @@ def record_block(conn, gate: str, fire_date: str, ticker: str,
     ref = block_ref(gate, fire_date, ticker, direction)
     cur = conn.execute(
         "INSERT INTO shadow_trades (journal_ref, pattern_id, fire_date, "
-        "ticker, direction, created_at, host_ref, mode) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ticker, direction, created_at, host_ref, mode, portfolio_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (journal_ref) DO NOTHING",
         (ref, f"blocked:{gate}", fire_date, ticker, direction,
          datetime.now(timezone.utc).isoformat(timespec="seconds"),
-         host_ref, BLOCKED_MODE))
+         host_ref, BLOCKED_MODE, portfolio_id))
     conn.commit()
     return {"ref": ref, "created": bool(cur.rowcount)}
 

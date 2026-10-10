@@ -355,6 +355,12 @@ def ensure_schema(conn) -> None:
     an open transaction → the CREATE joins it."""
     from src import portfolio_manager as pm
     pm._apply_schema(conn, _SCHEMA, _SCHEMA_OBJECTS)
+    # M1 (#142): nullable portfolio_id, additive; a PRAGMA read, and ONE ALTER the first time only
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(paper_live_positions)")}
+    if "portfolio_id" not in cols:
+        conn.execute("ALTER TABLE paper_live_positions ADD COLUMN portfolio_id TEXT")
+        if not conn.in_transaction:
+            conn.commit()
 
 
 def _accounts():
@@ -590,13 +596,15 @@ def open_position(conn, account: str, entry: dict, ticket_view: dict, quote_ts: 
     if inverted:
         raise LiveEntryRefused(f"the entry fills invert the structure: {inverted}")
     b = structure_bounds(spread, d)
+    portfolio_id = f"{account}/{entry.get('portfolio_family') or 'IDX_SPREADS'}"   # M1 (#142)
     conn.execute("INSERT INTO paper_live_positions (account_id, journal_ref, ticker, strategy, "
                  "direction, expiry, lots, lot_size, legs_json, entry_mark_ps, width_ps, max_profit_ps, "
-                 "max_loss_ps, opened_at, entry_quote_ts, state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 "max_loss_ps, opened_at, entry_quote_ts, state, portfolio_id) "
+                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (account, entry.get("short_id"), entry["ticker"], spread.get("strategy"),
                   spread.get("direction"), spread["expiry"], int(ticket_view.get("lots") or spread.get("lots") or 1),
                   int(spread["lot_size"]), json.dumps(legs), d, b["width_ps"], b["max_profit_ps"],
-                  b["max_loss_ps"], _iso(now), quote_ts, STATE_OPEN))
+                  b["max_loss_ps"], _iso(now), quote_ts, STATE_OPEN, portfolio_id))
     conn.commit()
     return {"journal_ref": entry.get("short_id"), "entry_mark_ps": d, **b, "legs": legs}
 

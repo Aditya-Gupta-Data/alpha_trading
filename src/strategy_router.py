@@ -121,6 +121,11 @@ def leg_working_order(legs: list) -> list:
     return buys + sells
 
 
+def portfolio_id_for(account_id: str = None, family: str = "IDX_SPREADS") -> str:
+    """M1 (#142): `<account>/<family>` — the bucket a ticket or row trades for."""
+    return f"{account_id or oms.PRIMARY_ACCOUNT}/{family}"
+
+
 def build_ticket(proposal: dict, source: str = "options_proposer",
                  issued_at: str = None, journal_ref: str = None,
                  account_id: str = None, lots: int = None) -> dict:
@@ -159,6 +164,7 @@ def build_ticket(proposal: dict, source: str = "options_proposer",
             "lots": lots, "lot_size": lot_size,
             "reward_risk": spread.get("reward_risk"),
             "account_id": account_id,
+            "portfolio_id": portfolio_id_for(account_id, proposal.get("portfolio_family") or "IDX_SPREADS"),
             "source": source, "issued_at": issued_at,
             "note": (proposal.get("signal") or "")[:200],
             "legs": legs}
@@ -206,6 +212,7 @@ def build_exit_ticket(entry: dict, leg_limits: dict, resolution: str,
             "direction": spread.get("direction") or direction_of(strategy),
             "lots": lots, "lot_size": lot_size, "reward_risk": spread.get("reward_risk"),
             "account_id": account_id, "kind": oms.EXIT,
+            "portfolio_id": portfolio_id_for(account_id, entry.get("portfolio_family") or "IDX_SPREADS"),
             "source": source, "issued_at": issued_at,
             "note": f"EXIT {resolution}"[:200], "legs": legs}
 
@@ -231,6 +238,7 @@ def build_equity_exit_ticket(entry: dict, qty: int, limit_price: float,
             "strategy": "equity_long", "direction": "bullish",
             "lots": 1, "lot_size": qty, "reward_risk": None,
             "account_id": account_id, "kind": oms.EXIT,
+            "portfolio_id": (entry.get("funding") or {}).get("portfolio_id") or portfolio_id_for(account_id, "DARLINGS"),
             "source": source, "issued_at": issued_at,
             "note": f"EXIT {resolution}"[:200], "legs": [leg]}
 

@@ -84,6 +84,7 @@ DP_CHARGE_SELL = 16.0              # flat depository debit per sell
 
 LOCK_PREFIX = "eqd:"
 DESK_RUIN_PCT = 10.0               # mirrors pm.MAX_DRAWDOWN_PCT, per desk
+PORTFOLIO_ID = "PAPER_10L/DARLINGS"   # M1 (#142): every funded darling trades for this bucket
 DESK_HALT_LATCH_EVENT = "equity_desk_ruin_halt_latched"   # the state of the brake
 DESK_HALT_CLEAR_EVENT = "equity_desk_ruin_halt_cleared"   # (admin-only: clear_desk_halt)
 TIERS_MAX_AGE_DAYS = 3             # stale analysis = no NEW entries
@@ -298,11 +299,13 @@ def fund_entry(entry: dict, conn=None, commit: bool = True) -> dict:
                              f"{entry.get('ticker')}: {reason}")
                 return {"funded": False, "reason": reason}
             ref = LOCK_PREFIX + str(entry.get("id"))
-            gate = pm.request_entry(conn, ref, sized["notional"], dry_run=not commit)
+            gate = pm.request_entry(conn, ref, sized["notional"], dry_run=not commit,
+                                    portfolio_id=PORTFOLIO_ID)
             if not gate["approved"]:
                 return {"funded": False, "reason": gate["reason"]}
             out = {"funded": True, "qty": sized["qty"],
                    "notional": sized["notional"], "lock_ref": ref,
+                   "portfolio_id": PORTFOLIO_ID,                       # M1 (#142): the DARLINGS bucket
                    "reason": ("funded" if mult == 1.0
                               else f"funded (sizing x{mult})")}
             if not commit:
@@ -327,7 +330,7 @@ def commit_funding(entry: dict, conn=None) -> dict:
     try:
         conn, owns = _connect(conn)
         try:
-            gate = pm.request_entry(conn, ref, float(notional))
+            gate = pm.request_entry(conn, ref, float(notional), portfolio_id=PORTFOLIO_ID)
             return {"funded": bool(gate["approved"]), "reason": gate["reason"]}
         finally:
             if owns:

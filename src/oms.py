@@ -150,6 +150,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     # rows that predate the column are entries.
     if "kind" not in cols:
         conn.execute(f"ALTER TABLE trade_tickets ADD COLUMN kind TEXT NOT NULL DEFAULT '{ENTRY}'")
+    if "portfolio_id" not in cols:                 # M1 (#142): the bucket the ticket trades for, nullable
+        conn.execute("ALTER TABLE trade_tickets ADD COLUMN portfolio_id TEXT")
     conn.commit()
 
 
@@ -191,12 +193,13 @@ def issue_ticket(conn, ticket: dict) -> dict:
     conn.execute(
         "INSERT INTO trade_tickets (ticket_id, journal_ref, underlying, strategy, direction, "
         "lots, lot_size, reward_risk, source, status, issued_at, updated_at, note, "
-        "account_id, kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "account_id, kind, portfolio_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (tid, ticket.get("journal_ref"), ticket["underlying"], ticket["strategy"],
          ticket.get("direction"), int(ticket["lots"]), int(ticket["lot_size"]),
          ticket.get("reward_risk"), ticket.get("source", "unknown"), PENDING,
          ticket.get("issued_at") or now, now, ticket.get("note"),
-         ticket.get("account_id") or PRIMARY_ACCOUNT, ticket.get("kind") or ENTRY))
+         ticket.get("account_id") or PRIMARY_ACCOUNT, ticket.get("kind") or ENTRY,
+         ticket.get("portfolio_id")))
     for leg in ticket["legs"]:
         conn.execute(
             "INSERT INTO trade_legs (leg_id, ticket_id, leg_index, side, option_type, strike, "

@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-10 · 2 commits · 13 files touched
+
+- `731a85a` docs: HANDOVER — M1 seams deployed to the VM (78671dc), migration dry-run PARITY ok, learner seed gap noted
+- `78671dc` feat(ledger): implement M1 bucket routing seams (#141)
+
+
 ### 2026-10-09 · 44 commits · 111 files touched
 
 - `7c2563c` feat(m1): additive multi-bucket ledger schema + views, migrate_m1_buckets.py (dry-run default, PARITY-gated apply), switch off; tests pin the learner/bucket switches (decision #141)

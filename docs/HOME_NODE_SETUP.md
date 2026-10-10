@@ -7,6 +7,26 @@ be installed.*
 
 ---
 
+## The one-command way (added 2026-10-10, late)
+
+Once Ubuntu Server is installed with SSH on (§1–§2), everything from §3 to
+§10 is one command **on the Mac**, which can reach the box where a cloud
+session cannot:
+
+```bash
+cd /Users/adityagupta/Documents/Claude/alpha_trading
+bash scripts/bootstrap_node_from_mac.sh minipc1@100.72.160.38            # add --with-ollama for the LLM jobs
+```
+
+It copies this checkout, `data/` and `.env` to the node (nothing deleted
+there, never `logs/`), then runs `scripts/bootstrap_node.sh` on the node over
+`ssh -t`. You will be asked for two things on the way: the node's sudo
+password, and the gcloud login (it prints a command to run in a second Mac
+terminal; paste the result back). It ends with the read-only preflight and,
+on READY, installs the SHADOW schedule and does one forced sync. Re-running
+it after a fix is safe. The manual sections below are the same steps, for
+when you want to see what it did.
+
 ## 0. What this box is, and what it is not
 
 **It is the home lane.** It does exactly the jobs the Mac used to do from its

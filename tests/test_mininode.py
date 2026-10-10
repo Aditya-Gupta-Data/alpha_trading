@@ -28,7 +28,7 @@ def _sh(*args, env=None):
 def test_every_home_node_script_parses():
     for name in ("node_env.sh", "setup_mininode_cron.sh", "mac_auto_sync.sh",
                  "mine_edges.sh", "run_evolution.sh", "ollama_session.sh",
-                 "node_preflight.sh"):
+                 "node_preflight.sh", "bootstrap_node.sh", "bootstrap_node_from_mac.sh"):
         r = _sh("-n", str(SCRIPTS / name))
         assert r.returncode == 0, f"{name}: {r.stderr}"
 
@@ -281,3 +281,29 @@ def test_preflight_is_read_only_and_names_every_fix(tmp_path):
     else:
         assert r.returncode == 0 and "READY." in r.stdout
     assert "VM round-trip skipped" in r.stdout            # --no-vm honoured: no ssh attempted
+
+
+def test_bootstrap_scripts_never_touch_the_token_the_vm_schedule_or_delete_on_the_node():
+    """scripts/bootstrap_node_from_mac.sh (Mac side) + scripts/bootstrap_node.sh
+    (node side), 10-10: one command builds the home node. Guards: no token
+    job, no setup_cron.sh, rsync never deletes on the node and never carries
+    the Mac's logs/ (the trial report must read the node's OWN logs) or its
+    throttle stamp; the node side strips the four Dhan account-control keys
+    and ends in the read-only preflight before any cron install."""
+    mac = (SCRIPTS / "bootstrap_node_from_mac.sh").read_text()
+    node = (SCRIPTS / "bootstrap_node.sh").read_text()
+    for src in (mac, node):
+        for forbidden in ("src.renew_token", "push_token_to_vm.sh", "bash scripts/setup_cron.sh",
+                          "systemctl restart alpha-trading"):
+            assert forbidden not in src, forbidden
+    assert "--delete" not in mac
+    assert "--exclude 'logs/'" in mac and "data/.mac_auto_sync_state" in mac and "--exclude 'venv/'" in mac
+    assert "ssh -t" in mac and "bootstrap_node.sh" in mac
+    assert "/^DHAN_PIN=/d;/^DHAN_TOTP_SECRET=/d;/^DHAN_API_KEY=/d;/^DHAN_API_SECRET=/d" in node
+    assert node.index("node_preflight.sh") < node.index("setup_mininode_cron.sh --shadow")
+    assert 'uname -s)" = "Darwin"' in node and "alpha-trading-vm*" in node
+    # the usage error paths work without a node
+    r = _sh(str(SCRIPTS / "bootstrap_node_from_mac.sh"))
+    assert r.returncode == 2 and "usage" in r.stderr
+    r = _sh(str(SCRIPTS / "bootstrap_node.sh"), "--bogus")
+    assert r.returncode in (1, 2)

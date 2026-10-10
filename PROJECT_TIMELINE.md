@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-10 · 7 commits · 26 files touched
+### 2026-10-10 · 8 commits · 38 files touched
 
+- `cf9beea` feat(ops): node REPLICA trial — the VM's whole schedule in parallel on the Mini PC, nightly reconcile against the VM, Discord label minipc1 (decision #144)
 - `d174347` fix(ops): bootstrap_node_from_mac — one ssh probe, LAN address + mini_pc1 user as found on the box; HOME_NODE_SETUP records the real box
 - `887dd2e` feat(ops): one-command home-node build from the Mac — bootstrap_node_from_mac.sh + bootstrap_node.sh
 - `08c1e73` feat(ops): node_preflight.sh — read-only readiness gate for the Mini PC before the shadow install

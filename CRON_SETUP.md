@@ -79,7 +79,7 @@ week beside the Mac first, promotion only on a clean report.** The box sits
 on a UPS and a LAN cable but will still lose power or the network now and
 then, so the schedule is built for a box that is *almost* always on.
 
-**Building the box from a blank Ubuntu Server install: `docs/HOME_NODE_SETUP.md`** (BIOS, OS, no-sleep, packages, repo, venv, the corpus and `.env` copy from the Mac, gcloud, optional Ollama, verification). Then:
+**Building the box from a blank Ubuntu Server install: `docs/HOME_NODE_SETUP.md`** (BIOS, OS, no-sleep, packages, repo, venv, the corpus and `.env` copy from the Mac, gcloud, optional Ollama, verification). `bash scripts/node_preflight.sh` checks all of it read-only and names each fix. Then:
 
 Step 1 — the shadow trial (clock must be IST — `sudo timedatectl set-timezone
 Asia/Kolkata` first; the installer refuses macOS, the VM and a non-IST clock):

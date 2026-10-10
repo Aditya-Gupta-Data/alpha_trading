@@ -112,9 +112,17 @@ The repo is private, so the node needs its own GitHub key:
 ```bash
 ssh-keygen -t ed25519 -C "alpha-node" -N "" -f ~/.ssh/id_ed25519
 cat ~/.ssh/id_ed25519.pub     # paste this at github.com → Settings → SSH and GPG keys → New SSH key
-git clone git@github.com:aditya-gupta-data/alpha_trading.git ~/alpha_trading
+git clone git@github.com:Aditya-Gupta-Data/alpha_trading.git ~/alpha_trading
 cd ~/alpha_trading
 ```
+
+**Until the shadow-trial branch is merged to `main`**, check it out on the node, otherwise the installer has no `--shadow` and the preflight will say so:
+
+```bash
+git fetch origin claude/adoring-rubin-do2j66 && git checkout claude/adoring-rubin-do2j66
+```
+
+(After the merge: `git checkout main && git pull`.)
 
 The cron block records the absolute path at install time, so keep the repo at
 `~/alpha_trading` and do not move it afterwards.
@@ -230,6 +238,14 @@ If you see swapping during a 21:00 run (`free -h` shows swap in use), put
 ---
 
 ## 9. Verify before scheduling anything
+
+One command checks every step above and names the fix for anything missing:
+
+```bash
+cd ~/alpha_trading && bash scripts/node_preflight.sh
+```
+
+It is read-only. `READY` means every FAIL is gone (WARNs are advisory — Ollama, the bars cache, the F&O lake fill themselves on the first run). Then the longer checks:
 
 ```bash
 cd ~/alpha_trading

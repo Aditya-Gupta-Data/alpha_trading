@@ -27,7 +27,8 @@ def _sh(*args, env=None):
 
 def test_every_home_node_script_parses():
     for name in ("node_env.sh", "setup_mininode_cron.sh", "mac_auto_sync.sh",
-                 "mine_edges.sh", "run_evolution.sh", "ollama_session.sh"):
+                 "mine_edges.sh", "run_evolution.sh", "ollama_session.sh",
+                 "node_preflight.sh"):
         r = _sh("-n", str(SCRIPTS / name))
         assert r.returncode == 0, f"{name}: {r.stderr}"
 
@@ -256,3 +257,27 @@ def test_trial_report_calls_a_clean_week_reliable_and_a_missing_log_not_installe
     assert m.main(["--logs", str(logs), "--days", "2", "--through", "2026-10-14", "--no-boots"]) == 0
     out = capsys.readouterr().out
     assert "2026-10-13 Tue" in out and "✓ ✓ ✓" in out and "FAIL:sector" in out
+
+
+def test_preflight_is_read_only_and_names_every_fix(tmp_path):
+    """scripts/node_preflight.sh (10-10): PASS/WARN/FAIL per prerequisite,
+    exit 1 on any FAIL, writes nothing, never touches a token."""
+    src = (SCRIPTS / "node_preflight.sh").read_text()
+    # it may GREP for the token jobs (to flag them) but never invokes them,
+    # never writes a file and never replaces the crontab
+    for forbidden in ("src.renew_token", "push_token_to_vm.sh", "| crontab -", "> .env", ">> "):
+        assert forbidden not in src, forbidden
+    for check in ("+0530", "sleep.target", "is-active cron", "repo venv", "financial_results",
+                  "DHAN_PIN|DHAN_TOTP_SECRET|DHAN_API_KEY|DHAN_API_SECRET", "auth list",
+                  "project-37632031-10d0-47dd-b6f", "weekly_recalibration", "--no-vm"):
+        assert check in src, check
+    env = dict(os.environ, TZ="Asia/Kolkata", HOME=str(tmp_path))
+    r = subprocess.run(["bash", str(SCRIPTS / "node_preflight.sh"), "--no-vm"],
+                       capture_output=True, text=True, cwd=ROOT, env=env, timeout=120)
+    assert "HOME NODE PREFLIGHT" in r.stdout and "SUMMARY:" in r.stdout
+    assert r.returncode in (0, 1)
+    if "NOT READY" in r.stdout:
+        assert r.returncode == 1 and "  FAIL  " in r.stdout
+    else:
+        assert r.returncode == 0 and "READY." in r.stdout
+    assert "VM round-trip skipped" in r.stdout            # --no-vm honoured: no ssh attempted

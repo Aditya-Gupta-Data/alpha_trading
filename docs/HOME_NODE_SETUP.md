@@ -7,6 +7,43 @@ be installed.*
 
 ---
 
+## Reaching the node (facts as of 2026-10-10)
+
+| What | Value |
+|---|---|
+| Hostname | `minipc1` |
+| Login user | **`mini_pc1`** (underscore). `minipc1` is not a user. |
+| Home LAN address | `192.168.29.158` (Wi-Fi dongle as of 10-10; may change when the cable goes in) |
+| Tailscale address | `100.72.160.38`, account `adigupta1998@gmail.com`, Tailscale SSH on |
+| Reachable from | the owner's Mac only. A cloud AI session cannot (no ssh, no tailnet, policy blocks `*.tailscale.com`). |
+
+One-time setup on the Mac (the Mac must be signed in to the same Tailscale account):
+
+```bash
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+cat >> ~/.ssh/config <<'EOF'
+
+Host minipc1
+    HostName 100.72.160.38
+    User mini_pc1
+    ServerAliveInterval 30
+    ServerAliveCountMax 4
+EOF
+chmod 600 ~/.ssh/config
+echo "alias minipc1='ssh minipc1'" >> ~/.zshrc && source ~/.zshrc
+ssh minipc1 hostname        # prints: minipc1
+```
+
+At home, swap `HostName` to `192.168.29.158` for the steadier path. After that
+`ssh minipc1`, `rsync … minipc1:…` and `bash scripts/bootstrap_node_from_mac.sh minipc1`
+all work, because the entry lives in SSH's own config, not in a shell alias.
+
+If it answers "tailnet policy does not permit you to SSH as user …": first check the user is
+`mini_pc1`. If it still refuses, either run `sudo tailscale set --ssh=false` on the node (over
+the LAN) so plain SSH takes over, or allow Tailscale SSH in the admin access controls:
+`"ssh": [{"action": "accept", "src": ["autogroup:member"], "dst": ["autogroup:self"], "users": ["autogroup:nonroot", "root"]}]`.
+A link printed instead of a prompt is Tailscale asking for a browser approval; open it and approve.
+
 ## The one-command way (added 2026-10-10, late)
 
 Once Ubuntu Server is installed with SSH on (§1–§2), everything from §3 to

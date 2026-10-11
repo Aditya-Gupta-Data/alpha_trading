@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-11 · 1 commits · 5 files touched
+
+- `609ff2c` feat(ops): node_health_check.sh — read-only 'is the Mini PC working' check, run from the Mac over ssh
+
+
 ### 2026-10-10 · 9 commits · 38 files touched
 
 - `27f0c63` docs: how to reach the Mini PC — user mini_pc1, LAN + Tailscale addresses, Mac ssh alias, why a cloud session cannot

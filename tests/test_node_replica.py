@@ -613,3 +613,16 @@ def test_new_scripts_parse():
     for name in ("setup_node_replica_cron.sh", "node_seed_from_vm.sh", "node_token_mirror.sh", "node_heartbeat.sh"):
         r = subprocess.run(["bash", "-n", str(SCRIPTS / name)], capture_output=True, text=True)
         assert r.returncode == 0, f"{name}: {r.stderr}"
+
+
+def test_the_health_check_is_read_only_and_never_prints_a_secret():
+    src = (SCRIPTS / "node_health_check.sh").read_text()
+    r = subprocess.run(["bash", "-n", str(SCRIPTS / "node_health_check.sh")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    import re
+    for pat in (r"\brm\b", r"\bmv\b", r"\bcp\b", r"tee\b", r"sed -i", r">>", r"systemctl (start|stop|restart|enable|disable|mask)",
+                r"crontab -[^l]", r"git (pull|fetch|checkout|reset|clean)", r"apt(-get)? (install|upgrade|remove)", r"sudo (?!-n ufw)"):
+        assert not re.search(pat, src), pat
+    assert "sed -E 's/=.*/=<hidden>/' .env" in src                   # .env values are masked, names only
+    assert "cat .env" not in src and "grep -i token" not in src
+    assert "ssh minipc1 'bash -s' < scripts/node_health_check.sh" in src

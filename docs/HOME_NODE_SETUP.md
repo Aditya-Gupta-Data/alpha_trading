@@ -34,6 +34,15 @@ echo "alias minipc1='ssh minipc1'" >> ~/.zshrc && source ~/.zshrc
 ssh minipc1 hostname        # prints: minipc1
 ```
 
+**Is it working?** One read-only command from the Mac's repo folder (nothing to copy to the node):
+
+```bash
+ssh minipc1 'bash -s' < scripts/node_health_check.sh
+```
+
+The first time `ssh minipc1` asks "Are you sure you want to continue connecting", the fingerprint to expect is
+`SHA256:wNmYHo+CwW1Rlcmx2a83jmiQ3+RoPXEO5mRiglN1vxE` (the box's ED25519 host key as of 2026-10-10); answer `yes` only if it matches.
+
 At home, swap `HostName` to `192.168.29.158` for the steadier path. After that
 `ssh minipc1`, `rsync … minipc1:…` and `bash scripts/bootstrap_node_from_mac.sh minipc1`
 all work, because the entry lives in SSH's own config, not in a shell alias.

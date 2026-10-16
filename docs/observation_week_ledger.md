@@ -2394,3 +2394,11 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 ## Issue 48 — three date-dependent tests began failing (2026-10-12 / 10-15; test-only)
 
 - `test_equity_shadow` ×2: the fixture's July deals aged out of the 90-day accumulation window. `test_equity_trail_and_macro_expiry`: a 45-day time stop from 08-31 expired on 10-15. Verified failing on unmodified code in both checkouts; fixed with dates relative to today and a 3,650-day stop.
+
+
+## Deploy 2026-10-16 16:18–16:20 IST — VM `78671dc` → `b7f923b` (#145), desk halt cleared
+
+- `main` fast-forwarded to `b7f923b`. VM: clean tree, no job running, 300 scoped tests passed, `alpha-trading` + `alpha-discord-bot` restarted, health 200.
+- `python -m src.equity_desk --reset-halt` at 16:19:34: `cleared`, `halted: false`; ruin count restarts at ₹0 (lifetime desk realized −₹31,239.74).
+- Dashboard box at `b7f923b`, bridge + Streamlit restarted, desk bundle shipped 16:20:25; bridge reads the learner 9/9 priced.
+- No exit rule changed. Unverified until Mon 10-19: real-quote marks on condor chains, the chain-call load, the first hard-cap refusals, the desk's first entries after the reset.

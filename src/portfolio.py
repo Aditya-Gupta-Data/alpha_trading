@@ -228,6 +228,13 @@ def flat_order_cost_rs(orders: int) -> float:
     return round(max(0, int(orders)) * BROKERAGE_FLAT * (1 + GST_RATE), 2)
 
 
+def _covers(long_leg: dict, short_leg: dict) -> bool:
+    """True when the long leg alone pays at least what the short owes at any expiry."""
+    if str(short_leg["option_type"]).upper() == "PE":
+        return float(long_leg["strike"]) >= float(short_leg["strike"])
+    return float(long_leg["strike"]) <= float(short_leg["strike"])
+
+
 def calculate_span_margin(legs: list, lot_size: int) -> dict:
     """Simulate NSE SPAN margin for a basket of option legs, WITH the
     hedge offsets a real clearing house grants — so a defined-risk spread
@@ -239,9 +246,11 @@ def calculate_span_margin(legs: list, lot_size: int) -> dict:
     Model (paper-trading approximation, not the real SPAN engine):
       * long legs block no margin — their premium is paid as cost;
       * each SHORT leg is paired with the nearest same-type LONG leg
-        (a vertical hedge). The pair blocks its worst-case loss:
-        (strike width - net credit) x lot, floored at 0 for debit pairs
-        (max loss there is the debit already paid);
+        (a vertical hedge). A credit pair (long further OTM) blocks its
+        worst-case loss, (strike width - net credit) x lot. A debit pair
+        (long at or beyond the short's strike: put long >= short, call
+        long <= short) blocks exactly the net debit paid x lot — its max
+        loss — and no additional margin (architect ruling 2026-10-16);
       * an UNPAIRED short is naked: premium x lot plus
         NAKED_SHORT_MARGIN_PCT of strike notional. Strategy code must
         never produce one (decision #27) but the math stays honest.
@@ -268,7 +277,10 @@ def calculate_span_margin(legs: list, lot_size: int) -> dict:
             available_longs.remove(hedge)
             width = abs(hedge["strike"] - s["strike"])
             net_credit = s["premium"] - hedge["premium"]
-            total += max(0.0, (width - net_credit) * lot)
+            if _covers(hedge, s):
+                total += max(0.0, -net_credit * lot)
+            else:
+                total += max(0.0, (width - net_credit) * lot)
         else:
             total += s["premium"] * lot + NAKED_SHORT_MARGIN_PCT * s["strike"] * lot
 

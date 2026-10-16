@@ -23,11 +23,40 @@ def test_the_two_accounts_size_the_same_structure_independently():
 
 
 def test_min_one_lot_but_margin_is_the_hard_wall():
-    r = ps.fractional_lots(200_000.0, 9000.0, 2.0, margin_per_lot=250_000.0, available_cash=200_000.0)
+    r = ps.fractional_lots(200_000.0, 9000.0, 2.0, margin_per_lot=250_000.0, available_cash=200_000.0,
+                           hard_cap_pct=None)
     assert r["lots"] == 0 and r["by_margin"] == 0 and "exceeds liquid cash" in r["reason"]
-    r = ps.fractional_lots(200_000.0, 9000.0, 2.0, margin_per_lot=100_000.0, available_cash=200_000.0)
+    r = ps.fractional_lots(200_000.0, 9000.0, 2.0, margin_per_lot=100_000.0, available_cash=200_000.0,
+                           hard_cap_pct=None)
     assert r["lots"] == 1 and r["floor_applied"]
     assert ps.fractional_lots(200_000.0, 0.0, 2.0)["lots"] == 0     # unmeasurable loss
+
+
+def test_one_lot_past_the_hard_cap_is_refused_not_floored():
+    import src.config as cfg
+    assert cfg.ACCOUNT_MAX_LOT_RISK_PCT == 2.5
+    # 4e40647d on 10-12: Rs.30,833/lot on Rs.11,56,505 = 2.67% -> refused
+    r = ps.fractional_lots(1_156_504.65, 30_832.75, 2.0, margin_per_lot=30_832.75, available_cash=500_000.0)
+    assert r["lots"] == 0 and r["hard_capped"] and not r["floor_applied"]
+    assert r["by_margin"] is None                    # refused before the margin wall: no rotation answers it
+    assert "2.5% hard cap Rs.28,913" in r["reason"]
+    # between 2% and 2.5% the floor still carries one lot (8be5df84: Rs.24,245 on Rs.12,03,252 = 2.01%)
+    r = ps.fractional_lots(1_203_252.0, 24_245.0, 2.0, margin_per_lot=24_245.0, available_cash=500_000.0)
+    assert r["lots"] == 1 and r["floor_applied"] and not r["hard_capped"]
+    # a Rs.2L book: Rs.5,000 is the most one lot may lose
+    assert ps.fractional_lots(200_000.0, 5_000.0, 2.0)["lots"] == 1
+    assert ps.fractional_lots(200_000.0, 5_456.25, 2.0)["lots"] == 0
+    assert ps.fractional_lots(200_000.0, 5_456.25, 2.0, hard_cap_pct=None)["lots"] == 1
+
+
+def test_the_learner_is_exempt_from_the_hard_cap(tmp_path, monkeypatch):
+    from src import portfolio_manager as pm
+    monkeypatch.setattr(pm, "paper_equity", lambda conn, account: 200_000.0)
+    monkeypatch.setattr(pm, "paper_available_cash", lambda conn, account: 200_000.0)
+    spread = {"max_loss": 8_000.0, "margin": {"total_margin": 8_000.0}}
+    assert pm.size_for_account(None, pm.ACCOUNT_PAPER_SHADOW_LEARNER, spread)["lots"] == 1
+    capped = pm.size_for_account(None, "PAPER_2L", spread)
+    assert capped["lots"] == 0 and capped["hard_capped"]
 
 
 def test_risk_pct_is_config_driven_and_the_rupee_cap_is_gone():

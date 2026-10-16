@@ -264,7 +264,10 @@ def evaluate_position(entry: dict, spot: float, today: date = None,
     pre-expiry rule) evaluated NOW instead of at the daily close.
 
     Returns {"short_id", "ticker", "strategy", "signal", "live_pnl_rs",
-    "capture_pct", "days_left"} where signal is "profit_take" /
+    "model_pnl_rs", "real_pnl_rs", "pnl_basis", "capture_pct", "days_left"}.
+    `live_pnl_rs` is the CROSSED bid/ask P&L when a real quote priced every
+    leg (architect ruling 2026-10-16), else the model mark; `pnl_basis` says
+    which ("crossed" / "modeled"). Signal is "profit_take" /
     "pre_expiry_exit" / "hold". Purely advisory — nothing is mutated. There
     is no mid-trade stop signal (decision #105): a defined-risk spread is
     held to target or expiry.
@@ -339,9 +342,14 @@ def evaluate_position(entry: dict, spot: float, today: date = None,
         signal = "pre_expiry_exit"
     else:
         signal = "hold"
+    model_pnl = round(profit_ps * qty, 2)
+    real_pnl = (round(float(real_capture_pct) / 100 * max_profit_ps * qty, 2)
+                if real_capture_pct is not None else None)
     return {"short_id": entry.get("short_id"), "ticker": entry["ticker"],
             "strategy": spread.get("strategy"), "signal": signal,
-            "live_pnl_rs": round(profit_ps * qty, 2),
+            "live_pnl_rs": real_pnl if real_pnl is not None else model_pnl,
+            "model_pnl_rs": model_pnl, "real_pnl_rs": real_pnl,
+            "pnl_basis": "crossed" if real_pnl is not None else "modeled",
             "capture_pct": round(capture, 2), "days_left": days_left,
             "real_capture_pct": (round(float(real_capture_pct), 2)
                                  if real_capture_pct is not None else None),
@@ -400,17 +408,17 @@ def _real_capture_for(entry: dict, chains: dict = None) -> float | None:
         try:
             chains[key] = dhan_client.get_option_chain(key[0], key[1]) or None
         except Exception as exc:
-            print(f"  (ratchet real capture for {ref}: chain fetch failed: {exc})", flush=True)
+            print(f"  (real capture for {ref}: chain fetch failed: {exc})", flush=True)
             chains[key] = None
     chain = chains[key]
     if not chain:
-        print(f"  (ratchet real capture for {ref}: option chain unavailable)", flush=True)
+        print(f"  (real capture for {ref}: option chain unavailable)", flush=True)
         return None
     quotes = {}
     for leg in spread.get("legs") or []:
         price, why = _crossed_exit_price(leg, leg_quote(chain, leg))
         if price is None:
-            print(f"  (ratchet real capture for {ref}: refused on "
+            print(f"  (real capture for {ref}: refused on "
                   f"{float(leg['strike']):g}{str(leg['option_type']).upper()}: {why})", flush=True)
             return None
         quotes[(float(leg["strike"]), str(leg["option_type"]).upper())] = price
@@ -423,20 +431,23 @@ def evaluate_open_positions(spot_by_ticker: dict, entries=None,
     in real time. Positions with no quote this cycle are skipped (never
     guessed). Read-only by hard rule — see the module docstring.
     `real_capture_fn(entry) -> float | None` (the daemon passes
-    `_real_capture_for`) supplies the CROSSED capture the ratchet moves on;
-    it is asked only for spreads the ratchet applies to. None (offline
-    callers, the dashboard) = the ratchet neither rises nor fires here."""
+    `_real_capture_for`) supplies the CROSSED capture the ratchet moves on
+    and the real-quote P&L every mark reports — asked for every spread
+    (REAL_QUOTE_MARKS_ALL, ruling 2026-10-16; off = the ratchet's spreads
+    only). None (offline callers, the dashboard) = the ratchet neither
+    rises nor fires here and the marks stay modeled."""
+    from src import config as _config
     results = []
     for entry in _open_spreads(entries):
         spot = spot_by_ticker.get(entry["ticker"])
         if spot is None:
             continue
         real = None
-        if real_capture_fn is not None and _ratchet_applies(entry):
+        if real_capture_fn is not None and (_config.REAL_QUOTE_MARKS_ALL or _ratchet_applies(entry)):
             try:
                 real = real_capture_fn(entry)
             except Exception as exc:          # abstain, never a modeled stand-in
-                print(f"  (ratchet real capture for {entry.get('short_id')} skipped: {exc})", flush=True)
+                print(f"  (real capture for {entry.get('short_id')} skipped: {exc})", flush=True)
                 real = None
         results.append(evaluate_position(entry, float(spot), today, real_capture_pct=real))
     return results
@@ -887,7 +898,7 @@ def live_cycle(underlyings=UNDERLYINGS, *, quote_fn=None, entries=None,
                 f"(`{sig['short_id']}`)\n"
                 f"{sig['signal'].replace('_', ' ')} at "
                 f"{sig['capture_pct']:.0f}% of max profit "
-                f"(modeled P&L Rs.{sig['live_pnl_rs']:,.2f}, "
+                f"(modeled P&L Rs.{sig.get('model_pnl_rs', sig['live_pnl_rs']):,.2f}, "
                 f"{sig['days_left']}d to expiry). Advisory only — the "
                 f"tracker settles at the daily close.{fallback}")
 

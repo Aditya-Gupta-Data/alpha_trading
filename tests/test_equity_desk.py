@@ -439,24 +439,33 @@ def test_a_treasury_raise_never_releases_a_latched_desk_halt():
     conn.close()
 
 
-def test_only_a_stated_human_clear_releases_it_and_a_live_breach_relatches():
+def test_only_a_stated_human_clear_releases_it_and_the_count_restarts(monkeypatch):
+    """Architect ruling 2026-10-16: a clear RESETS the ruin count — the desk
+    trades again at the same budget and re-latches only on a fresh 10% loss."""
+    clock = iter(f"2026-10-16T16:{m:02d}:00" for m in range(60))
+    monkeypatch.setattr(pm, "_now_iso", lambda: next(clock))
     conn = _breached_desk()
     desk.desk_state(conn)
     assert desk.clear_desk_halt(conn, why="  ")["cleared"] is False               # no reason, no clear
     assert desk.desk_halt_latched(conn)
-    # still past the limit (Rs.-31,239.74 vs -10% of Rs.2L): the clear is recorded, the latch re-arms
-    out = desk.clear_desk_halt(conn, why="reviewed", who="owner (test)")
-    assert out["cleared"] and out["halted"] and "re-armed" in out["reason"]
-    assert desk.desk_halt_latched(conn) and len(_events(conn, desk.DESK_HALT_LATCH_EVENT)) == 2
-    # the budget is raised AND a human clears: only now do entries resume
-    ft.set_budget(conn, 900000.0, "raise")
-    assert desk.desk_state(conn)["ruin_halted"]
-    out = desk.clear_desk_halt(conn, why="strategy reviewed; resume", who="owner (test)")
-    assert out["cleared"] and not out["halted"] and out["reason"] == "cleared; desk entries are live again"
-    assert not desk.desk_state(conn)["ruin_halted"] and not desk.desk_halt_latched(conn)
+    out = desk.clear_desk_halt(conn, why="architect: let the learning continue", who="owner (test)")
+    assert out["cleared"] and not out["halted"] and "restarts at zero" in out["reason"]
+    s = desk.desk_state(conn)
+    assert not s["ruin_halted"] and not desk.desk_halt_latched(conn)
+    assert s["realized"] == -31239.74 and s["realized_since_reset"] == 0.0 and s["ruin_count_since"]
     cleared = _events(conn, desk.DESK_HALT_CLEAR_EVENT)
-    assert len(cleared) == 2 and "owner (test)" in cleared[-1] and "strategy reviewed; resume" in cleared[-1]
+    assert len(cleared) == 1 and "owner (test)" in cleared[0] and "restarts here" in cleared[0]
     assert desk.clear_desk_halt(conn, why="again")["reason"] == "no latched desk halt to clear"
+    # a fresh loss under 10% of the Rs.2L budget trades on; past it the latch re-arms
+    def settled(ref, pnl, day):
+        conn.execute("INSERT INTO margin_locks (journal_ref, margin_rs, locked_at, released_at, pnl_net) "
+                     "VALUES (?, 1000, ?, ?, ?)", (ref, f"{day}T09:30:00", f"{day}T14:00:00", pnl))
+        conn.commit()
+    settled("eqd:new1", -15000.0, "2026-10-19")
+    assert not desk.desk_state(conn)["ruin_halted"]
+    settled("eqd:new2", -6000.0, "2026-10-20")
+    assert desk.desk_state(conn)["ruin_halted"] and desk.desk_halt_latched(conn)
+    assert "Rs.-21,000.00 since the 2026-10-16T16:" in _events(conn, desk.DESK_HALT_LATCH_EVENT)[-1]
     conn.close()
 
 

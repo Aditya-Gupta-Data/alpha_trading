@@ -216,24 +216,32 @@ def test_sizing_uses_options_risk_budget():
     # any spread; the 10% options budget makes a sub-Rs.10k-max-loss
     # condor affordable at exactly 1 lot. (Richer premiums than the
     # default fixture so the condor credit is realistic for 2% OTM.)
-    small_book = {"cash": 100_000.0, "holdings": {}}
+    small_book = {"cash": 350_000.0, "holdings": {}}
     r = build(make_analysis(uptrend=True, rsi=55), vix=13.0, book=small_book,
               chain=make_chain(base_premium=200.0))
     p = r["proposal"]
     assert p is not None
     assert p["lots"] == 1 and p["spread"]["lots"] == 1
-    # decision #106: 2% of a Rs.1L book = Rs.2,000 capacity; one lot of this
-    # condor risks more, so the 1-lot floor applied — and the row SAYS so.
+    # decision #106: 2% of Rs.3.5L = Rs.7,000; one lot risks Rs.8,320, inside
+    # the 2.5% hard cap (Rs.8,750), so the 1-lot floor applied and SAYS so.
     assert p["sizing"]["risk_pct"] == op.ACCOUNT_RISK_PER_TRADE_PCT
-    assert p["sizing"]["equity"] == 100_000.0 and p["sizing"]["account"] == "PAPER_10L"
-    assert p["sizing"]["floor_applied"] is (p["spread"]["max_loss"] > 100_000 * op.ACCOUNT_RISK_PER_TRADE_PCT / 100)
+    assert p["sizing"]["equity"] == 350_000.0 and p["sizing"]["account"] == "PAPER_10L"
+    assert p["sizing"]["floor_applied"] is True
+    # on a Rs.1L book the same lot is 8.3% of equity: refused by the hard cap (2026-10-16)
+    r = build(make_analysis(uptrend=True, rsi=55), vix=13.0, book={"cash": 100_000.0, "holdings": {}},
+              chain=make_chain(base_premium=200.0))
+    assert r["proposal"] is None and "2.5% hard cap" in r["reason"]
 
 
 def test_unaffordable_spread_returns_reason_not_crash():
     tiny_book = {"cash": 5_000.0, "holdings": {}}
     r = build(make_analysis(uptrend=True, rsi=55), vix=13.0, book=tiny_book)
     assert r["proposal"] is None and r["reason"].startswith("sizing refused")
-    assert "exceeds liquid cash" in r["reason"]
+    assert "hard cap" in r["reason"]
+    r = op.build_proposal("NIFTY 50", analysis=make_analysis(uptrend=True, rsi=55), vix=13.0,
+                          expiry=FUTURE_EXPIRY, chain=make_chain(), book=dict(BIG_BOOK), prices={},
+                          account_equity=1_000_000.0, account_cash=5_000.0)
+    assert r["proposal"] is None and "exceeds liquid cash" in r["reason"]
 
 
 # ----------------------------------------------------- journal contract

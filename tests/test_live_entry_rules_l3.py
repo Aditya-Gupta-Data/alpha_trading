@@ -92,8 +92,8 @@ def _bull_call(buy=100.0, sell=30.0, expiry=EXPIRY):
     return s
 
 
-def _condor(short=60.0, wing=10.0, expiry=EXPIRY):
-    s = StrategyConstructor(vix=13.0, lot_size=65).construct_iron_condor(23500, 24500, 200, short, wing, short, wing)
+def _condor(short=60.0, wing=10.0, expiry=EXPIRY, lot_size=65):
+    s = StrategyConstructor(vix=13.0, lot_size=lot_size).construct_iron_condor(23500, 24500, 200, short, wing, short, wing)
     for leg in s["legs"]:
         leg["fill_basis"] = "quoted"
     s.update(lots=1, expiry=expiry, entry_spot=24000.0)
@@ -416,7 +416,7 @@ def test_a_condor_requote_is_judged_on_the_neutral_floor(desk, short_bid, opens)
     """The proposer's own gate, so its own floors: 0.35 for range-bound —
     credit 60 on 200 wings (R:R 0.43) opens; credit 50 (0.33) is refused."""
     c, ref = desk["c"], f"f12n{int(short_bid)}"
-    _propose(ref, _condor(60.0, 10.0))
+    _propose(ref, _condor(60.0, 10.0, lot_size=30))     # a 30-lot keeps one lot inside the 2.5% hard cap
     desk["book"]["chain"] = _condor_book(short_bid, 10.0)
     v = op.decide_pending(ref, approve=True, why="tap", human=True)["entry"]["accounts"][LIVE]
     assert (lp.position_state(c, LIVE, ref) == "open") is opens
@@ -781,7 +781,7 @@ def test_a_re_approval_never_issues_a_second_live_ticket_over_a_recorded_positio
     assert v["status"] == op.LIVE_ALREADY_OPEN                            # its position stands: not 'rejected'
     assert v["reason"] == (f"no second live entry: a live position for this entry is already recorded ({state}) — "
                            "a ref is opened once; no second entry ticket")
-    assert (v["lots"], v["margin_rs"]) == (1, 17550.0)                    # the lock that backs it, as held
+    assert (v["lots"], v["margin_rs"]) == (1, 4550.0)                     # the lock that backs it (the debit), as held
     assert _tickets(c, ref, LIVE) == 1                                        # the original fill only
     assert dict(lp.positions(c)[0]) == before and pm._active_shadow_lock(c, LIVE, ref) is not None
     (ev,) = _events(c, LIVE, "live_entry_refused", ref)
@@ -800,7 +800,7 @@ def test_a_re_approval_never_issues_a_second_ticket_over_a_filled_entry_awaiting
     assert v["status"] == op.LIVE_ALREADY_OPEN and v["reason"] == (
         f"no second live entry: entry ticket {tid} for this entry already FILLED (its position row is repaired "
         "from that ticket by the next live tick) — a ref is opened once; no second entry ticket")
-    assert (v["lots"], v["margin_rs"]) == (1, 17550.0)
+    assert (v["lots"], v["margin_rs"]) == (1, 4550.0)
     assert _tickets(c, ref, LIVE) == 1 and pm._active_shadow_lock(c, LIVE, ref) is not None
     (ev,) = _events(c, LIVE, "live_entry_refused", ref)
     assert f"lock kept (entry ticket {tid} FILLED but no live position row was recorded" in ev

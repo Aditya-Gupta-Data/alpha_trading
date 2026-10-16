@@ -10,11 +10,18 @@ default.
 """
 import asyncio
 import json
+from datetime import date, timedelta
 
 import pytest
 
 from src import equity_shadow_proposer as shadow
 from src import knowledge_graph_logger as kg
+
+
+def _days_ago(n: int) -> str:
+    """Deal dates relative to the run's IST today: the 90-day accumulation window
+    moves with the clock (fixed July dates aged out on 2026-10-12)."""
+    return (date.fromisoformat(shadow._ist_today()) - timedelta(days=n)).isoformat()
 
 
 def _deals():
@@ -23,10 +30,10 @@ def _deals():
     return [
         {"ticker": "TCS.NS", "client": "BIG FUND A", "side": "buy",
          "qty": 1000, "price": 99.0, "value_rs": 99000.0,
-         "deal_type": "block", "as_of": "2026-07-10"},
+         "deal_type": "block", "as_of": _days_ago(6)},
         {"ticker": "TCS.NS", "client": "BIG FUND B", "side": "buy",
          "qty": 1000, "price": 101.0, "value_rs": 101000.0,
-         "deal_type": "block", "as_of": "2026-07-14"},
+         "deal_type": "block", "as_of": _days_ago(2)},
     ]
 
 
@@ -99,7 +106,7 @@ def test_distribution_context_is_recorded_not_gating(tmp_path):
     deals = _deals() + [{
         "ticker": "TCS.NS", "client": "BIG FUND C", "side": "sell",
         "qty": 5000, "price": 100.0, "value_rs": 500000.0,
-        "deal_type": "block", "as_of": "2026-07-15"}]
+        "deal_type": "block", "as_of": _days_ago(1)}]
     res, _ = _cycle(tmp_path, price=102.0, deals=deals)
     assert len(res["entries"]) == 1
     assert res["entries"][0]["kyu_trigger"]["accumulation"] is False

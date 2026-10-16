@@ -2367,3 +2367,30 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 
 - `shadow_learner_enabled: true` on the VM and in the repo; services restarted 20:38:47; health 200; `shadow_account_ids()` includes PAPER_SHADOW_LEARNER. Mac suite 3,011; VM scoped 99.
 - Unverified until Monday 10-12: the learner's first entries, its negative-cash bookkeeping, Court rows resolving at settle, and the chain-call load of its re-quotes.
+
+
+## Diagnostic 2026-10-16 — the 12–16 Oct drawdown (read-only snapshot of the VM, 16 Oct 13:23 IST, VM at `78671dc`)
+
+- No trade closed at a loss 12–16 Oct. Closes: three ratchet exits on 10-12 (`fed6ad2e` +₹6,424, `99baa7d2` +₹3,810, `62d04919` +₹4,059 on PAPER_10L) and the TCS condor `f8356c9c` profit-take on 10-15 (+₹42,689).
+- The drop was open marks: PAPER_10L net equity ₹11,39,767 (9 Oct) → ₹11,34,222; 2L −₹13,599; ROT −₹27,406; LIVE −₹12,129; learner −₹47,606 (see Issue 47). All 16 open PAPER_10L positions were bear puts (8), condors (6) or butterflies (2) while TCS rose 15.3%, INFY 13.4%, RELIANCE 4.8%, ICICI 4.1%, HDFC 3.6% (12 Oct close → 16 Oct 13:15).
+- Regime stamps: trend "bearish" on every 10-12 entry, "neutral" on 10-15; `vol_bridge` "Contraction" on all five approved entries (risk 2.0%, no scaling); macro layer abstained on every entry.
+- The darling desk made no trade: its ruin halt has been latched since 10-04 (desk realized −₹31,239.74 vs −10% of ₹3L).
+
+
+## Issue 46 — debit verticals blocked width + debit as margin since July (found 2026-10-16; FIXED in code, NOT deployed)
+
+- Verified on the 16 Oct snapshot: `4e40647d` (NIFTY 22500/16500 PE, Mar-2027) locked ₹4,20,832.75 on PAPER_10L and on the learner for a max loss of ₹30,832.75; `7da29e4f` ₹65,325 for ₹13,325; `932d4e2e` ₹16,296 for ₹4,296. Cause: `calculate_span_margin` applied the credit formula `(width − net_credit) × lot` to debit pairs, where `net_credit` is negative.
+- Observed effects: PAPER_2L, ROT and LIVE refused `4e40647d` and `7da29e4f` ("SPAN margin exceeds liquid cash"); the treasury log read `options_util` 1.2279 from 10-12.
+- Fix: decision #145 M (`claude/diag-fixes-1016`). Locks already open keep the amount they were taken at until they settle — not repaired.
+
+
+## Issue 47 — the learner's unrealized P&L priced its mirrored trades twice (found 2026-10-16; FIXED in code, NOT deployed)
+
+- Verified: on the 16 Oct snapshot `dashboard.data.unrealized_by_account` gave the learner −₹48,093.16 on 14 marks of "18 open" (it holds 9). After the fix: −₹36,296.95 on 9 of 9. The −₹11,796.21 difference is its five desk-mirrored trades priced a second time from PAPER_10L's model marks scaled to one lot.
+- Cause: the dashboard's `LIVE_ACCOUNTS` named only PAPER_2L_LIVE; the learner also marks itself in `paper_live_positions` (`pm.LIVE_ACCOUNTS` has both).
+- The learner's `net_equity_history` rows from 10-12 until the deploy carry the double count. They are left as recorded.
+
+
+## Issue 48 — three date-dependent tests began failing (2026-10-12 / 10-15; test-only)
+
+- `test_equity_shadow` ×2: the fixture's July deals aged out of the 90-day accumulation window. `test_equity_trail_and_macro_expiry`: a 45-day time stop from 08-31 expired on 10-15. Verified failing on unmodified code in both checkouts; fixed with dates relative to today and a 3,650-day stop.

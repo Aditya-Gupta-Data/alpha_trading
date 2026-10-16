@@ -23,10 +23,14 @@ ROT, TWO_L = pm.ACCOUNT_PAPER_2L_ROT, pm.ACCOUNT_PAPER_2L
 
 def _spread():
     # bull call 24000/24200 @ 100/30: debit 70, max loss 4,550, max profit
-    # 8,450 per 65-lot, reward:risk 1.857, SPAN Rs.17,550 per lot
+    # 8,450 per 65-lot, reward:risk 1.857. The per-lot margin is PINNED at
+    # Rs.17,550 so the rotation arithmetic below keeps its numbers — the
+    # margin model itself (a debit spread now blocks its Rs.4,550 debit,
+    # 2026-10-16) is tested in test_options_spreads.
     s = StrategyConstructor(vix=13.0, lot_size=65).construct_bull_call_spread(
         24000, 24200, 100.0, 30.0)
-    s.update(lots=1, expiry="2026-10-28", entry_spot=24000.0)
+    s.update(lots=1, expiry="2026-10-28", entry_spot=24000.0,
+             margin=dict(s["margin"], total_margin=17550.0))
     return s
 
 

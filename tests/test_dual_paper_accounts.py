@@ -127,10 +127,13 @@ def test_sizing_is_independent_of_the_primary_and_names_each_refusal(conn):
     # 4000 // 500 = 8 lots whatever the primary chose
     assert pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, s, primary_lots=1)["lots"] == 8
     assert pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, s, primary_lots=3)["lots"] == 8
-    big = _spread(lots=1, max_loss=12000.0, margin=1000.0)
+    big = _spread(lots=1, max_loss=4800.0, margin=1000.0)        # 2.4% of 2L: floored
     r = pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, big, primary_lots=1)
     assert r["lots"] == 1 and r["floor_applied"] and "1-lot floor" in r["reason"]
-    thin = _spread(lots=1, max_loss=9000.0, margin=250000.0)
+    huge = _spread(lots=1, max_loss=12000.0, margin=1000.0)      # 6% of 2L: past the 2.5% hard cap
+    r = pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, huge, primary_lots=1)
+    assert r["lots"] == 0 and r["hard_capped"] and "2.5% hard cap" in r["reason"]
+    thin = _spread(lots=1, max_loss=4800.0, margin=250000.0)
     r = pm.size_for_account(conn, pm.ACCOUNT_PAPER_2L, thin, primary_lots=1)
     assert r["lots"] == 0 and "exceeds liquid cash" in r["reason"]
     out = pm.evaluate_shadow_accounts("sp0009", {"spread": thin, "lots": 1}, conn=conn)

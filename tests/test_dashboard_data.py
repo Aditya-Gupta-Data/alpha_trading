@@ -215,3 +215,12 @@ def test_brain_map_renders_live_read_only_and_falls_back_to_the_file(tmp_path, m
     (tmp_path / "graph_viz.html").write_text("<html>saved</html>")
     B = d.brain_map_html(tmp_path / "absent.db")
     assert B["html"].endswith("<html>saved</html>") and B["source"].startswith("graph_viz.html written ")
+
+
+def test_the_portfolio_graph_axis_ticks_on_calendar_units():
+    from src.dashboard import data as d
+    assert d.time_axis(4.25 * 3600) == {"format": "%H:%M", "interval": "hour", "step": 1}
+    assert d.time_axis(7 * 86400) == {"format": "%d %b", "interval": "day", "step": 1}
+    assert d.time_axis(10 * 86400) == {"format": "%d %b", "interval": "day", "step": 2}
+    assert d.time_axis(30 * 86400) == {"format": "%d %b", "interval": "day", "step": 7}
+    assert d.time_axis(290 * 86400) == {"format": "%b '%y", "interval": "month", "step": 2}

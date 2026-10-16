@@ -1305,10 +1305,12 @@ def size_for_account(conn, account: str, spread: dict, primary_lots: int = None,
     risk_pct = ACCOUNT_RISK_PER_TRADE_PCT if risk_pct is None else float(risk_pct)
     max_loss = float(spread.get("max_loss") or 0)
     per_lot = float((spread.get("margin") or {}).get("total_margin") or 0) * span_stress_factor(vix)
-    unlimited = account == ACCOUNT_PAPER_SHADOW_LEARNER    # #140 (owner): no margin wall on the learner's lots
+    unlimited = account == ACCOUNT_PAPER_SHADOW_LEARNER    # #140 (owner): no margin wall or hard cap on the learner's lots
+    extra = {"hard_cap_pct": None} if unlimited else {}
     sized = fractional_lots(paper_equity(conn, account), max_loss, risk_pct,
                             margin_per_lot=None if unlimited else (per_lot if per_lot > 0 else None),
-                            available_cash=None if unlimited else paper_available_cash(conn, account))
+                            available_cash=None if unlimited else paper_available_cash(conn, account),
+                            **extra)
     sized["account"] = account
     return sized
 

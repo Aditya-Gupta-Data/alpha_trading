@@ -225,7 +225,7 @@ def test_real_capture_from_quotes_matches_the_settlement_gate():
     assert lb.real_capture_from_quotes(s, {(100.0, "PE"): 90.0, (90.0, "PE"): 1.0}) == 100.0  # clamped
 
 
-def test_evaluate_open_positions_asks_real_capture_only_for_ratchet_spreads():
+def test_evaluate_open_positions_asks_real_capture_for_every_spread_the_ratchet_only_moves_on_its_own(monkeypatch):
     asked = []
 
     def fn(entry):
@@ -234,9 +234,20 @@ def test_evaluate_open_positions_asks_real_capture_only_for_ratchet_spreads():
     bp, cd = _bear_put(entry_date="2026-09-24", expiry="2026-10-29"), _condor(entry_date="2026-09-24", expiry="2026-10-29")
     bp["short_id"], cd["short_id"] = "bp000001", "cd000001"
     out = lb.evaluate_open_positions({"NIFTY 50": 85.0}, [bp, cd], today=date(2026, 9, 25), real_capture_fn=fn)
-    assert asked == ["bp000001"]                   # the condor never costs a chain fetch
+    assert asked == ["bp000001", "cd000001"]       # 2026-10-16: every mark is a real-quote mark
     by = {o["short_id"]: o for o in out}
     assert by["bp000001"]["ratchet"]["locked_pct"] == 0.0 and by["cd000001"]["ratchet"] is None
+    modeled = lb.evaluate_open_positions({"NIFTY 50": 85.0}, [cd], today=date(2026, 9, 25))[0]
+    assert by["cd000001"]["signal"] == modeled["signal"]          # the condor's exit rule never reads it
+    for o in out:
+        spread = (bp if o["short_id"] == "bp000001" else cd)["spread"]
+        assert o["pnl_basis"] == "crossed" and o["live_pnl_rs"] == o["real_pnl_rs"]
+        assert o["real_pnl_rs"] == round(0.45 * float(spread["max_profit"]) * int(spread.get("lots", 1)), 2)
+    assert modeled["pnl_basis"] == "modeled" and modeled["live_pnl_rs"] == modeled["model_pnl_rs"]
+    monkeypatch.setattr("src.config.REAL_QUOTE_MARKS_ALL", False)
+    asked.clear()
+    lb.evaluate_open_positions({"NIFTY 50": 85.0}, [bp, cd], today=date(2026, 9, 25), real_capture_fn=fn)
+    assert asked == ["bp000001"]                   # the kill switch: the condor costs no chain fetch
     # a raising door is an abstention, never a modeled stand-in
     out = lb.evaluate_open_positions({"NIFTY 50": 85.0}, [bp], today=date(2026, 9, 25),
                                      real_capture_fn=lambda e: 1 / 0)

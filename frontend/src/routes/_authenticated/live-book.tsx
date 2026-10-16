@@ -98,7 +98,7 @@ function LiveBookPage() {
     <>
       <PageHeader
         title="Live Book"
-        description="Open paper positions"
+        description="Open paper positions · MTM on real bid/ask quotes (a row tagged model had no real quote)"
         sources={["market_snapshot", "brain_map.db"]}
       />
 
@@ -175,6 +175,14 @@ function LiveBookPage() {
                       </td>
                       <td className={`num px-2 py-2 text-right text-xs ${pnlClass(trade.mtm_rs)}`}>
                         {trade.mtm_rs === null ? EM_DASH : formatRupeesSigned(trade.mtm_rs)}
+                        {trade.mtm_basis === "modeled" ? (
+                          <span
+                            className="ml-1 text-[9px] text-muted-foreground uppercase"
+                            title="No real bid/ask quote on this snapshot — model mark"
+                          >
+                            model
+                          </span>
+                        ) : null}
                       </td>
                       <td
                         className={`num px-2 py-2 text-right text-xs ${pnlClass(trade.capture_pct)}`}
@@ -213,7 +221,12 @@ function LiveBookPage() {
                     {[
                       ["Accounts", trade.accounts],
                       ["Lots", formatNumber(trade.lots)],
-                      ["MTM", trade.mtm_rs === null ? EM_DASH : formatRupeesSigned(trade.mtm_rs)],
+                      [
+                        "MTM",
+                        trade.mtm_rs === null
+                          ? EM_DASH
+                          : `${formatRupeesSigned(trade.mtm_rs)}${trade.mtm_basis === "modeled" ? " (model)" : ""}`,
+                      ],
                       ["Capture", formatPct(trade.capture_pct, 1)],
                       ["Max loss", formatRupees(trade.max_loss_rs)],
                       ["Expiry", trade.expiry === "—" ? EM_DASH : formatIstDate(trade.expiry)],

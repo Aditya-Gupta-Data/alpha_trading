@@ -42,6 +42,31 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-16 (Fri, after close) — loss diagnostic done; Architect rulings #145 built on `claude/diag-fixes-1016`. NOT deployed: the VM still runs `78671dc`
+
+- **Diagnostic (ledger "Diagnostic 2026-10-16"):** no trade closed at a loss 12–16 Oct. The drop was open marks on an all-bearish/short-vol book during a results rally. Three defects were found (Issues 46, 47) and fixed here.
+- **Built (code + tests, suite green):**
+  - **#145 M — margin:** a debit spread now blocks its net debit (= max loss) instead of width + debit. Locks already open keep their old, inflated amounts until they settle. `4e40647d` still holds ₹4,20,833 on PAPER_10L and the learner; no repair was run.
+  - **#145 R — 2.5% hard cap:** a trade whose one lot risks more than 2.5% of the account's equity is refused, never floored. The shadow learner is exempt (#140's unlimited budget) — flip by passing the cap in `pm.size_for_account` if the Architect wants it capped too.
+  - **#145 Q — real-quote P&L:** the live loop marks every open spread on crossed bid/ask (one chain per ticker+expiry per minute, shared with the ratchet; kill switch `real_quote_marks_all: false`). Discord cards, firm MTM and the dashboard now all read the real-quote number; rows with no quote are tagged "model". Exit signals are unchanged (tested).
+  - **Graph:** the four-portfolio graph's date axis ticks on IST hours, days or months (React desk + Streamlit).
+  - **Learner ₹11.8k gap (Issue 47):** the dashboard priced the learner's desk-mirrored trades twice. Fixed. Its `net_equity_history` rows from 10-12 to the deploy keep the double count.
+  - **#145 D — desk reset:** a desk-halt clear now restarts the ruin count from zero. The clear itself is a human command, to run AFTER the deploy (below).
+  - **#145 E — earnings:** spec only, `docs/earnings_awareness_spec.md`. No blackout, no block. Four Architect choices listed in its §4.
+  - Three tests that had begun failing on dates alone were defused (Issue 48).
+- **Deploy — the Architect, after market hours:**
+  1. Mac: merge the branch into `main` and push.
+  2. VM: `git pull --ff-only`, scoped tests, `sudo systemctl restart alpha-trading alpha-discord-bot`, health 200.
+  3. VM, after step 2: `venv/bin/python -m src.equity_desk --reset-halt --why "…" --yes` → expect `"halted": false`.
+  4. Dashboard box: `git pull` + restart `alpha-api-bridge alpha-dashboard`; Mac: `bash scripts/dashboard_box/ship_ui.sh`.
+  Exact commands are in the 10-16 session's DEVELOPER_HANDOFF.
+- **Watch Monday 10-19:**
+  - the live-bridge log for "real capture … refused/unavailable" lines on condor chains (MID SELECT, TCS);
+  - the chain-call load (two extra chains per minute on today's book);
+  - "hard cap" refusals in `paper_account_events` on the ₹2L accounts (expected on any entry whose one lot risks more than ~₹5,000);
+  - the desk's first entries after the reset.
+- **Merge note:** `claude/adoring-rubin-do2j66` (node replica, #143/#144) is not on `main`. Merging it after this branch will conflict in `DECISIONS.md` and `HANDOVER.md` — keep both sides, decisions in number order.
+
 ## 2026-10-10 ~16:10 IST — M1 seams DEPLOYED (VM `f626e4e` → `78671dc`), migration DRY-RUN read: PARITY ok on all 8 checks, switch still OFF, nothing written
 
 - **Live now (Saturday, no session):** `alpha-trading` + `alpha-discord-bot` restarted on `78671dc`; all three services active; health 200; VM scoped tests 72 passed. Behaviour unchanged — `multi_bucket_ledger` is absent from the VM `config.json` (default false), so `buckets.gate` returns None everywhere; the first touch of `request_entry` on Monday adds the M1 tables/columns (additive).

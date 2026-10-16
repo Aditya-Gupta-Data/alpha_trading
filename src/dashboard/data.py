@@ -38,7 +38,10 @@ RECON_PATH = _LOGS / "recon.jsonl"
 # those moves drawn as labelled markers (`capital_events`).
 CURVE_EPOCH = "2026-08-07"
 CAPITAL_EVENT_TYPES = ("clean_sheet", "capital_injection")
-LIVE_ACCOUNTS = ("PAPER_2L_LIVE",)     # the live-quote arm (#120): marks itself
+# accounts that mark themselves on crossed quotes in paper_live_positions —
+# must equal portfolio_manager.LIVE_ACCOUNTS (the learner was missing until
+# 2026-10-16, so its mirrored trades were priced twice)
+LIVE_ACCOUNTS = ("PAPER_2L_LIVE", "PAPER_SHADOW_LEARNER")
 STRATEGY_LABELS = {"bear_put_spread": "Bear Put", "bull_call_spread": "Bull Call",
                    "iron_condor": "Iron Condor", "iron_butterfly": "Iron Butterfly",
                    "equity_long": "Equity Long"}
@@ -688,6 +691,29 @@ def _read_live(db_path=None) -> tuple:
         conn.close()
 
 
+def time_axis(span_seconds: float, max_ticks: int = 7) -> dict:
+    """Date-axis spec for a time span (2026-10-16: the portfolio graph's
+    default ticks repeated one day's label): hours under two days, days up to
+    ~4 months, months beyond. {format, interval, step} for a Vega-Lite axis."""
+    span = max(float(span_seconds or 0), 1.0)
+    if span <= 2 * 86400:
+        step = next((h for h in (1, 2, 3, 4, 6, 12) if span / (h * 3600) <= max_ticks), 12)
+        return {"format": "%H:%M", "interval": "hour", "step": step}
+    if span <= 120 * 86400:
+        step = next((d for d in (1, 2, 3, 7, 14, 21, 28) if span / (d * 86400) <= max_ticks), 28)
+        return {"format": "%d %b", "interval": "day", "step": step}
+    months = span / (30 * 86400)
+    step = next((m for m in (1, 2, 3, 6, 12) if months / m <= max_ticks), 12)
+    return {"format": "%b '%y", "interval": "month", "step": step}
+
+
+def _mtm_basis(mark: dict) -> str | None:
+    """'crossed' when the engine priced every leg on real bid/ask, else 'modeled'; None = no mark."""
+    if mark.get("live_pnl_rs") is None:
+        return None
+    return mark.get("pnl_basis") or ("crossed" if mark.get("real_pnl_rs") is not None else "modeled")
+
+
 def _live_row(r: dict, settled: dict, max_age_s, ref) -> dict:
     """Audit F10: one PAPER_2L_LIVE position on its OWN figures (#120) —
     its last crossed mark, capture, ratchet peak/lock, the time of the
@@ -714,6 +740,7 @@ def _live_row(r: dict, settled: dict, max_age_s, ref) -> dict:
             "expiry": r["expiry"],
             "max_loss_rs": round(float(r["max_loss_ps"] or 0) * qty, 2),
             "mtm_rs": round(float(r["last_profit_ps"]) * qty, 2) if r["last_profit_ps"] is not None else None,
+            "mtm_basis": "crossed" if r["last_profit_ps"] is not None else None,
             "capture_pct": r["last_capture_pct"],
             "ratchet_peak_pct": r["ratchet_peak_pct"], "ratchet_lock_pct": lock,
             "ratchet": _exit_rule(r["strategy"], lock is not None, lock),
@@ -774,7 +801,8 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                      "direction": s.get("direction"), "accounts": ", ".join(accounts),
                      "lots": s.get("lots"), "entered": e.get("date"), "expiry": s.get("expiry"),
                      "max_loss_rs": round(float(s.get("max_loss") or 0) * int(s.get("lots") or 1), 2),
-                     "mtm_rs": m.get("live_pnl_rs"), "capture_pct": m.get("capture_pct"),
+                     "mtm_rs": m.get("live_pnl_rs"), "mtm_basis": _mtm_basis(m),
+                     "capture_pct": m.get("capture_pct"),
                      "real_capture_pct": m.get("real_capture_pct"),
                      "capture_basis": "crossed" if m.get("real_capture_pct") is not None else "modeled",
                      "ratchet_peak_pct": r.get("peak_capture_pct"),
@@ -800,7 +828,8 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                      "entered": x.get("as_of"), "expiry": None,
                      "max_loss_rs": (round((float(a["entry_price"]) - float(a["stop"])) * int((x.get("funding") or {}).get("qty") or 0), 2)
                                      if a.get("entry_price") is not None and a.get("stop") is not None else None),
-                     "mtm_rs": None, "capture_pct": None, "ratchet_peak_pct": None, "ratchet_lock_pct": None,
+                     "mtm_rs": None, "mtm_basis": None, "capture_pct": None,
+                     "ratchet_peak_pct": None, "ratchet_lock_pct": None,
                      "ratchet": "ATR trail (3×ATR14)", "sizing": None})
     return rows
 

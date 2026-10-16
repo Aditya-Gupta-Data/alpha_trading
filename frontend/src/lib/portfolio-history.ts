@@ -68,3 +68,75 @@ export function hasLine(points: PortfolioPoint[]): boolean {
   for (const p of points) n.set(p.account, (n.get(p.account) ?? 0) + 1);
   return [...n.values()].some((v) => v >= 2);
 }
+
+const HOUR_MS = 3600_000;
+const DAY_MS = 86_400_000;
+const DAY_STEPS = [1, 2, 3, 7, 14, 21, 28];
+const MONTH_STEPS = [1, 2, 3, 6, 12];
+
+/** IST midnight on or before `t` (epoch ms). */
+function istMidnight(t: number): number {
+  return Math.floor((t + IST_MS) / DAY_MS) * DAY_MS - IST_MS;
+}
+
+/**
+ * Time-axis ticks on IST calendar boundaries (2026-10-16: recharts' numeric
+ * ticks landed at arbitrary instants, so neighbouring ticks repeated the same
+ * "13 Oct" label). Under two days: whole hours; up to ~4 months: IST midnights
+ * every k days; beyond: the 1st of every k months. At most `maxTicks`.
+ */
+export function timeTicks(min: number, max: number, maxTicks = 7): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return [min];
+  const span = max - min;
+  const out: number[] = [];
+  if (span <= 2 * DAY_MS) {
+    const stepH = [1, 2, 3, 4, 6, 12].find((h) => span / (h * HOUR_MS) <= maxTicks) ?? 12;
+    const step = stepH * HOUR_MS;
+    for (let t = Math.ceil((min + IST_MS) / step) * step - IST_MS; t <= max; t += step) out.push(t);
+    return out;
+  }
+  if (span <= 120 * DAY_MS) {
+    const k = DAY_STEPS.find((d) => span / (d * DAY_MS) <= maxTicks) ?? 28;
+    let t = istMidnight(min);
+    if (t < min) t += DAY_MS;
+    for (; t <= max; t += k * DAY_MS) out.push(t);
+    return out;
+  }
+  const months = span / (30 * DAY_MS);
+  const k = MONTH_STEPS.find((m) => months / m <= maxTicks) ?? 12;
+  const start = new Date(min + IST_MS);
+  for (let idx = start.getUTCFullYear() * 12 + start.getUTCMonth() + 1; ; idx += 1) {
+    const t = Date.UTC(Math.floor(idx / 12), idx % 12, 1) - IST_MS;
+    if (t > max) break;
+    if (idx % k === 0) out.push(t);
+  }
+  return out;
+}
+
+/** The tick label for a span: "10:00" under two days, "13 Oct" up to ~4 months, "Oct '26" beyond. */
+export function formatTimeTick(value: number, span: number): string {
+  const d = new Date(value);
+  if (span <= 2 * DAY_MS) {
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(d);
+  }
+  if (span <= 120 * DAY_MS) {
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "numeric",
+      month: "short",
+    }).format(d);
+  }
+  const parts = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    month: "short",
+    year: "2-digit",
+  }).formatToParts(d);
+  const month = parts.find((p) => p.type === "month")?.value ?? "";
+  const year = parts.find((p) => p.type === "year")?.value ?? "";
+  return `${month} '${year}`;
+}

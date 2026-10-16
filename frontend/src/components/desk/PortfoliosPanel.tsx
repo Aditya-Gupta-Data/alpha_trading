@@ -15,14 +15,16 @@ import {
 import { EmptyState, Panel } from "@/components/desk/Panel";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { equityHistoryQuery } from "@/lib/desk-queries";
-import { formatIstDate, formatIstDateTime, formatIstDayMonth, formatPct } from "@/lib/desk-format";
+import { formatIstDate, formatIstDateTime, formatPct } from "@/lib/desk-format";
 import {
   PORTFOLIOS,
   PORTFOLIO_NAMES,
   PORTFOLIO_STROKES,
   WINDOWS,
+  formatTimeTick,
   hasLine,
   inWindow,
+  timeTicks,
   toChartRows,
   windowStart,
   type WindowChoice,
@@ -50,6 +52,9 @@ export function PortfoliosPanel() {
     [basis, netPts, data, start],
   );
   const rows = useMemo(() => toChartRows(pts), [pts]);
+  const first = rows[0]?.["t"] ?? 0;
+  const last = rows[rows.length - 1]?.["t"] ?? 0;
+  const ticks = useMemo(() => timeTicks(first, last), [first, last]);
   const accounts = PORTFOLIOS.filter((a) => pts.some((p) => p.account === a));
   const events =
     basis === "realized"
@@ -119,10 +124,12 @@ export function PortfoliosPanel() {
                 type="number"
                 scale="time"
                 domain={["dataMin", "dataMax"]}
-                tickFormatter={(value: number) => formatIstDayMonth(new Date(value).toISOString())}
+                ticks={ticks}
+                interval={0}
+                tickFormatter={(value: number) => formatTimeTick(value, last - first)}
                 tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
                 stroke="var(--color-border)"
-                minTickGap={64}
+                minTickGap={8}
               />
               <YAxis
                 domain={["auto", "auto"]}

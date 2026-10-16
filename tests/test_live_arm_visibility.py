@@ -535,3 +535,29 @@ def test_run_tracker_names_every_failed_settlement_and_every_row_waiting_for_bar
     _run_tracker_with(monkeypatch, lambda: r)
     assert ("Plan tracker: live account lvW is waiting for bars — NIFTY 50 expired 2026-10-28 and no daily close "
             "on or before expiry has arrived yet (day 1 of the 3-day grace window") in capsys.readouterr().out
+
+
+def test_the_learner_is_priced_once_from_its_own_marks_never_again_from_the_primary(tmp_path):
+    """2026-10-16 diagnostic: a learner trade mirrored from the desk was priced
+    twice — its lock scaled from the primary's model mark AND its own crossed
+    row — an Rs.11.8k overstatement of its loss on the VM's 16 Oct book."""
+    assert set(dash.LIVE_ACCOUNTS) == set(pm.LIVE_ACCOUNTS)
+    learner = pm.ACCOUNT_PAPER_SHADOW_LEARNER
+    p = tmp_path / "bm.db"
+    c = brain_map.connect(str(p))
+    pm.get_account(c)
+    lp.ensure_schema(c)
+    pm.paper_request_entry(c, learner, "mir00001", 16_296.0, lots=1, primary_lots=5)
+    c.execute("INSERT INTO paper_live_positions (account_id, journal_ref, ticker, expiry, lots, lot_size, "
+              "legs_json, entry_mark_ps, width_ps, max_profit_ps, max_loss_ps, opened_at, last_mark_ts, "
+              "quote_ts, last_profit_ps, state) VALUES (?, 'mir00001', 'NIFTY BANK', '2026-10-27', 1, 30, "
+              "'[]', 142.42, 400, 257.58, 142.42, '2026-10-12T09:19:00', '2026-10-16T13:21:00', "
+              "'2026-10-16T13:21:00', -62.52, 'open')", (learner,))
+    c.commit()
+    c.close()
+    conn = dash.connect_ro(p)
+    u = dash.unrealized_by_account(conn, snapshot={"marks": [{"short_id": "mir00001", "live_pnl_rs": -5_770.0}]},
+                                   rows=[], now=datetime(2026, 10, 16, 13, 30))
+    conn.close()
+    assert u[learner]["unrealized_pnl"] == round(-62.52 * 30, 2)
+    assert (u[learner]["marked_positions"], u[learner]["open_positions"]) == (1, 1)

@@ -123,9 +123,12 @@ def _all_portfolios_chart():
                        "portfolio": [PORTFOLIO_NAMES.get(p["account"], p["account"]) for p in pts],
                        "account": [p["account"] for p in pts]})
     accounts = [a for a in d.EQUITY_ACCOUNTS if a in set(df["account"])]
+    ax = d.time_axis((df["time"].max() - df["time"].min()).total_seconds())
     chart = alt.Chart(df).mark_line(interpolate="step-after" if basis == bases[1] else "linear",
                                     point=len(df) < 60).encode(
-        x=alt.X("time:T", title=None),
+        x=alt.X("time:T", title=None,
+                axis=alt.Axis(format=ax["format"], labelAngle=0, labelOverlap=True,
+                              tickCount={"interval": ax["interval"], "step": ax["step"]})),
         y=alt.Y("return_pct:Q", title="% return", scale=alt.Scale(zero=False)),
         color=alt.Color("portfolio:N", scale=alt.Scale(domain=[PORTFOLIO_NAMES.get(a, a) for a in accounts],
                                                        range=[PORTFOLIO_COLOURS[a] for a in accounts]),
@@ -313,7 +316,9 @@ def _body():
           st.dataframe([{"Symbol": r["symbol"], "Strategy": r["strategy"], "Dir": r["direction"],
                          "Accounts": r["accounts"], "Lots/Qty": r["lots"], "Entered": r["entered"],
                          "Expiry": r["expiry"] or "—", "Max loss ₹": r["max_loss_rs"],
-                         "MTM ₹": r["mtm_rs"], "Capture %": r["capture_pct"],
+                         "MTM ₹": r["mtm_rs"],
+                         "MTM basis": {"crossed": "real quote", "modeled": "MODEL"}.get(r.get("mtm_basis"), "—"),
+                         "Capture %": r["capture_pct"],
                          "Ratchet peak %": r["ratchet_peak_pct"], "Ratchet lock %": r["ratchet_lock_pct"],
                          "Exit rule": r["ratchet"],
                          "Mark as of": r.get("last_mark_ts") or "—",
@@ -327,7 +332,9 @@ def _body():
       st.caption("Directional spreads ride the asymmetric profit ratchet (decision #110): armed at 40% of max "
                  "profit → breakeven lock; 60→30, 80→50, 90→70; exit when capture falls below the lock. "
                  "Condors keep a static 65% take. Equity darlings trail 3×ATR(14) (decision #107). "
-                 "MTM is the engine's own last snapshot — this page never quotes the broker.")
+                 "MTM is the engine's own last snapshot — this page never quotes the broker. It is the "
+                 "real-quote P&L (every leg crossed at bid/ask, ruling 2026-10-16); a row marked MODEL had no "
+                 "real quote on that snapshot and shows the model mark instead.")
       outs = d.recent_outcomes()
       if outs:
           st.subheader("Recent settlements")

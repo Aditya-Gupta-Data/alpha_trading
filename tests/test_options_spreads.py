@@ -141,6 +141,24 @@ def test_span_margin_offsets_hedged_spreads():
     assert naked["total_margin"] == naked["naked_margin"]
 
 
+def test_debit_spreads_block_only_the_net_debit():
+    # 2026-10-16 ruling: the 4e40647d bear put (22500/16500 PE) had blocked width + debit, Rs.4.2L
+    bear_put = calculate_span_margin(
+        [{"side": "BUY", "option_type": "PE", "strike": 22500.0, "premium": 497.9},
+         {"side": "SELL", "option_type": "PE", "strike": 16500.0, "premium": 23.55}], 65)
+    assert bear_put["total_margin"] == round((497.9 - 23.55) * 65, 2)       # 30,832.75 = the max loss
+    assert bear_put["offset_savings"] > 0
+    bull_call = calculate_span_margin(
+        [{"side": "BUY", "option_type": "CE", "strike": 25000.0, "premium": 180.0},
+         {"side": "SELL", "option_type": "CE", "strike": 25200.0, "premium": 95.0}], 75)
+    assert bull_call["total_margin"] == (180.0 - 95.0) * 75
+    # a credit vertical (long further OTM) keeps width - credit
+    bull_put = calculate_span_margin(
+        [{"side": "SELL", "option_type": "PE", "strike": 25000.0, "premium": 120.0},
+         {"side": "BUY", "option_type": "PE", "strike": 24800.0, "premium": 60.0}], 75)
+    assert bull_put["total_margin"] == (200 - 60) * 75
+
+
 def test_size_lots_uses_absolute_max_loss_not_stop_distance():
     ic = make_condor()   # max_loss 6225/lot, margin 21225/lot
     sc = StrategyConstructor(vix=13.0, lot_size=75)

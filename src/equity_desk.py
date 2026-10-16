@@ -32,7 +32,10 @@ sat on different machines):
     the LATCH — not the live percentage — keeps the desk frozen. A treasury
     budget raise dilutes the percentage; it no longer lifts the brake. The
     only door out is `clear_desk_halt` (CLI `--reset-halt --why "…" --yes`),
-    a named, timestamped `equity_desk_ruin_halt_cleared` row.
+    a named, timestamped `equity_desk_ruin_halt_cleared` row. A clear RESETS
+    the count (architect ruling 2026-10-16): the breach test then measures
+    desk realized P&L booked AFTER the latest clear, so the desk trades
+    again and re-latches only on a fresh 10% loss.
 
 LIVE TRADING (`run_darling_live_cycle`, wired into the VM market loop at
 master_scheduler's composition root): exits first — open shadows marked
@@ -142,17 +145,27 @@ def _desk_ruin_halted(conn, realized: float, budget: float) -> bool:
     if desk_halt_latched(conn):
         return True
     if realized <= -(DESK_RUIN_PCT / 100.0) * budget:
-        latch_desk_halt(conn, f"desk realized Rs.{realized:,.2f} is at or below "
-                              f"-{DESK_RUIN_PCT:g}% of the Rs.{budget:,.0f} budget")
+        since = last_desk_reset(conn)
+        latch_desk_halt(conn, f"desk realized Rs.{realized:,.2f}"
+                              + (f" since the {since} reset" if since else "")
+                              + f" is at or below -{DESK_RUIN_PCT:g}% of the Rs.{budget:,.0f} budget")
         return True
     return False
 
 
+def last_desk_reset(conn) -> str | None:
+    """The latest `equity_desk_ruin_halt_cleared` timestamp — the start of the ruin count — or None."""
+    pm.ensure_schema(conn)
+    row = conn.execute("SELECT ts FROM account_events WHERE event_type = ? "
+                       "ORDER BY ts DESC, rowid DESC LIMIT 1", (DESK_HALT_CLEAR_EVENT,)).fetchone()
+    return str(row[0]) if row else None
+
+
 def clear_desk_halt(conn, why: str = "", who: str = "owner") -> dict:
     """THE ONLY DOOR OUT of a latched desk halt — a deliberate, recorded
-    human act (the pm.clear_halt contract). Refuses an empty `why`. If the
-    desk is still past its threshold the latch re-arms on the spot: clearing
-    is a decision that the desk may trade again, not a way around the limit."""
+    human act (the pm.clear_halt contract). Refuses an empty `why`. The clear
+    resets the ruin count to the desk realized P&L booked after it (architect
+    ruling 2026-10-16), so the latch re-arms only on a fresh breach."""
     pm.ensure_schema(conn)
     if not why or not str(why).strip():
         return {"cleared": False,
@@ -165,20 +178,20 @@ def clear_desk_halt(conn, why: str = "", who: str = "owner") -> dict:
     pm.log_event(conn, DESK_HALT_CLEAR_EVENT,
                  f"latched desk ruin halt cleared by {who} at desk realized "
                  f"Rs.{before['realized']:,.2f} (limit Rs.{limit:,.2f} on a "
-                 f"Rs.{before['budget']:,.0f} budget) — {why}")
-    still = desk_state(conn)["ruin_halted"]      # re-latches instantly if still breached
+                 f"Rs.{before['budget']:,.0f} budget); the ruin count restarts here — {why}")
+    still = desk_state(conn)["ruin_halted"]
     return {"cleared": True, "why": why, "who": who, "realized": before["realized"],
             "budget": before["budget"], "limit": round(limit, 2), "halted": still,
-            "reason": ("cleared, but desk realized is still past the limit — the latch "
-                       "re-armed immediately" if still
-                       else "cleared; desk entries are live again")}
+            "reason": ("cleared, but the latch re-armed" if still
+                       else "cleared; the ruin count restarts at zero and desk entries are live again")}
 
 
 # ------------------------------------------------------------ desk views
 
 def desk_state(conn=None) -> dict:
     """The desk's books as a VIEW over the firm account's tagged locks.
-    `ruin_halted` is the LATCHED brake (see _desk_ruin_halted)."""
+    `ruin_halted` is the LATCHED brake (see _desk_ruin_halted), judged on
+    `realized_since_reset` (desk realized after the latest clear)."""
     conn, owns = _connect(conn)
     try:
         pm.ensure_schema(conn)
@@ -192,6 +205,11 @@ def desk_state(conn=None) -> dict:
             "SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks WHERE "
             "released_at IS NOT NULL AND journal_ref LIKE ?",
             (LOCK_PREFIX + "%",)).fetchone()[0])
+        reset = last_desk_reset(conn)
+        since_reset = realized if reset is None else float(conn.execute(
+            "SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks WHERE "
+            "released_at > ? AND journal_ref LIKE ?",
+            (reset, LOCK_PREFIX + "%")).fetchone()[0])
         open_locks = conn.execute(
             "SELECT COUNT(*) FROM margin_locks WHERE released_at IS NULL "
             "AND journal_ref LIKE ?", (LOCK_PREFIX + "%",)).fetchone()[0]
@@ -200,7 +218,8 @@ def desk_state(conn=None) -> dict:
                 "realized": round(realized, 2), "capital": capital,
                 "available": round(capital - deployed, 2),
                 "open_locks": open_locks,
-                "ruin_halted": _desk_ruin_halted(conn, realized, budget),
+                "realized_since_reset": round(since_reset, 2), "ruin_count_since": reset,
+                "ruin_halted": _desk_ruin_halted(conn, since_reset, budget),
                 "firm_halted": pm.trading_halted(conn)}
     finally:
         if owns:

@@ -85,7 +85,7 @@ def _funded_entry(path, ticker="DABUR.NS", stop=95.0, target=140.0, entry_price=
                          "mode": sp.CAPITAL_MODE, "setup": sp.DARLING_SETUP,
                          "funding": {"funded": True, "qty": 10, "lock_ref": "eqd:e1"},
                          "kya_kara_action": {"entry_price": entry_price, "stop": stop,
-                                             "target": target, "time_stop_days": 45}},
+                                             "target": target, "time_stop_days": 3650}},   # 45 expired 2026-10-15
                         path=path)
 
 

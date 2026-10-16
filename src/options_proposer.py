@@ -1899,8 +1899,9 @@ def _live_entry_rules(conn, acct: str, entry: dict, rq: dict, lots: int) -> int 
           accounts' one sizing door (pm.size_for_account, the account's own
           equity, risk only — its held lock is already out of its liquid
           cash, and fewer lots need less margin): lots re-sized DOWN, never
-          above the lots it was approved for; #106's 1-lot floor is kept
-          and recorded on the verdict (`requote_sizing`); the lock shrinks
+          above the lots it was approved for; #106's 1-lot floor is kept up
+          to the 2.5% hard cap, past it the arm refuses, and the verdict is
+          recorded (`requote_sizing`); the lock shrinks
           with the lots (a `live_entry_resized` event). The budget is the
           one the proposal was sized on (`_proposal_risk_pct`: vol_bridge's
           Expansion override, else the default — L3 review).
@@ -1931,7 +1932,7 @@ def _live_entry_rules_body(conn, acct: str, entry: dict, rq: dict, lots: int) ->
     sized = pm.size_for_account(conn, acct, dict(crossed, margin={"total_margin": 0}),
                                 risk_pct=_proposal_risk_pct(entry))
     new = min(int(lots), int(sized["lots"]))
-    if new <= 0:                 # unreachable past the gate (a measurable loss sizes >= 1)
+    if new <= 0:                 # a crossed 1-lot loss past the 2.5% hard cap (2026-10-16 ruling)
         _live_refuse(conn, acct, entry, f"re-sizing on the crossed max loss refused: {sized['reason']}")
         return None
     record = {"lots_approved": int(lots), "lots": new, "crossed_max_loss_rs": crossed["max_loss"],

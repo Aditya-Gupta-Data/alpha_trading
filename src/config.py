@@ -228,6 +228,9 @@ ADAPTIVE_SIZING_ENABLED = bool(_CONFIG.get("adaptive_sizing_enabled", False))
 # keeps its own `equity_desk_risk_per_trade_pct` of DESK capital (no rupee
 # cap any more either).
 ACCOUNT_RISK_PER_TRADE_PCT = float(_CONFIG.get("risk_per_trade_pct", 2.0))
+# Architect ruling 2026-10-16: the 1-lot floor may not carry a trade whose
+# one-lot max loss exceeds this % of the account's equity — refused instead.
+ACCOUNT_MAX_LOT_RISK_PCT = float(_CONFIG.get("max_lot_risk_pct", 2.5))
 # Treasury rupee-granularity (pool-scale aware since the 2L clean sheet).
 TREASURY_ROUND_RS = float(_CONFIG.get("treasury_round_rs", 5000.0))
 # Directive 4 (#84): the daily Discord message budget. Code default OFF
@@ -278,3 +281,7 @@ CAPITAL_ROTATION_RR_MULTIPLE = float(_CONFIG.get("capital_rotation_rr_multiple",
 # LIVE_QUOTE_INTERVAL_SECONDS during market hours for its open positions.
 PAPER_2L_LIVE_ACCOUNT_ENABLED = bool(_CONFIG.get("paper_2l_live_account_enabled", True))
 LIVE_QUOTE_INTERVAL_SECONDS = int(_CONFIG.get("live_quote_interval_seconds", 300))
+# Architect ruling 2026-10-16: every open spread is marked on crossed bid/ask
+# (one chain per ticker+expiry per live cycle, shared with the ratchet);
+# false = only the ratchet's directional spreads get a real quote.
+REAL_QUOTE_MARKS_ALL = bool(_CONFIG.get("real_quote_marks_all", True))

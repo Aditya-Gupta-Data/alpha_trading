@@ -42,6 +42,17 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-17 ~13:35 IST — LLM endpoint = FreeLLMAPI (#148); edge miner + weekly evolution moved to the Mini PC only (#149). Mini PC at `f74a5a4`; FreeLLMAPI NOT installed yet; Mac agents NOT retired yet
+
+- **#148 (`5b17753`):** `LocalExtractor` defaults to the local FreeLLMAPI router `http://localhost:3001/v1`, model `auto:fast`, Bearer `ALPHA_LLM_API_KEY`. `OLLAMA_BASE_URL` keeps a host on Ollama. Ollama is NOT installed on the node. The Architect accepted that prompts go to free-tier providers.
+- **#149 (`f74a5a4`):** the replica block now also runs `mine_edges.sh` 21:00 daily (apply mode: the node is the VM graph's ONE miner) and `run_evolution.sh` Sat 02:00. The home-lane block no longer carries them. Both CLIs refuse (exit 3) off the analytics node. On the node the miner's VM copy goes to `data/vm_snapshot/`, never over `data/brain_map.db`, and evolution reads that copy.
+- **Installed on the node (13:32):** `git pull` to `f74a5a4`, replica block reinstalled: 23 lines (19 VM + heartbeat + reconcile + miner + evolution), 0 live-lane or book lines. `edge_miner --force` → `skipped: LLM endpoint not reachable` (expected: no FreeLLMAPI yet).
+- **⚠️ ORDER MATTERS — owner, in this order:**
+  1. **On the Mac, retire the two LLM agents BEFORE FreeLLMAPI works on the node.** Both were still loaded at 13:35 (`launchctl list`). The Mac's checkout is still on `claude/adoring-rubin-do2j66`, so the new code guard does NOT protect it yet. `add_edge` reinforces repeated triples, so two miners would double-weight every mined edge. Command in CRON_SETUP.md, "LLM jobs on the Mini PC".
+  2. On the node: Docker (`sudo apt install -y docker.io docker-compose-v2`, docker group, re-login) → download, read and run the FreeLLMAPI installer → dashboard through `ssh -N -L 3001:127.0.0.1:3001 mini_pc1@100.72.160.38` → add provider keys → `ALPHA_LLM_API_KEY=` in `.env` → test line. All in `docs/HOME_NODE_SETUP.md` §13.
+- **Then expect:** the first 21:00 miner run pulls a VM snapshot, mines, applies new edges on the VM and writes `data/vm_snapshot/`. Saturday 02:00 evolution reads it (it refuses until that copy exists) and refreshes a bars cache older than 7 days through the VM. The 20:00 sleep phase's LLM tasks also start doing real work on the node's own DB.
+- **Not done:** `node_preflight.sh` still has the Ollama section. The auto-mode safety classifier blocked the edit that would replace it with a FreeLLMAPI check. It warns "ollama not installed"; ignore it.
+
 ## 2026-10-17 ~12:05 IST — the Mini PC is LIVE as the analytics hub (#146 + #147): on `main` `bd53bf3`, seeded from the VM, analytics schedule installed, trading loop refuses there
 
 - **Reaching it:** from the Mac, `ssh mini_pc1@100.72.160.38` (Tailscale SSH) works. The first attempt timed out because the Mac's Tailscale app had lost its relay connection; switching it off and on fixed that.

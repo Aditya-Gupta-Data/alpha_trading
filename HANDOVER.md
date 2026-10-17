@@ -42,6 +42,22 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-17 ~12:05 IST — the Mini PC is LIVE as the analytics hub (#146 + #147): on `main` `bd53bf3`, seeded from the VM, analytics schedule installed, trading loop refuses there
+
+- **Reaching it:** from the Mac, `ssh mini_pc1@100.72.160.38` (Tailscale SSH) works. The first attempt timed out because the Mac's Tailscale app had lost its relay connection; switching it off and on fixed that.
+- **Found on the node (before any change):** `~/alpha_trading` on the old branch at `0d1c414`, no local changes, **no crontab at all** (nothing had ever run), venv Python 3.14.4, `.env` + 4.9 GB `data/` from the Mac bootstrap, gcloud signed in to the right project, suspend masked, IST.
+- **Done on the node, in order:**
+  1. Checkout moved to `main` (fast-forward; now `bd53bf3`).
+  2. `ALPHA_NODE_ROLE=analytics` appended to `.env` (backup `.env.bak-20261017-115717`). Both `.env` backups set to 600; the July one had been 644.
+  3. Guard proved: `master_scheduler` and `live_bridge` print REFUSED and exit 3.
+  4. Seeded from the VM at 12:01 (`node_seed_from_vm.sh --yes`). VM at `b7f923b`; `brain_map.db` integrity ok, 37 tables; 68 state files. The node's old copies are in `data/seed_backup_20261017-120150/`. The VM's `/tmp/node_seed` was removed (checked); VM `/tmp` 460 MB free, root disk 998 MB free (90%).
+  5. Replica block installed **without** the token mirror: 19 VM lines + heartbeat (beating every minute since 12:03) + 23:30 reconcile. Crontab check: 0 live-lane lines, 0 book-job lines. Preflight: 30 pass, 2 warn, 0 fail.
+- **Code (#147, `bd53bf3`):** the node block also leaves out the book jobs (`main`, `suggest`, `morning_brief`, `eod_summary`, `ceo_brief`, `portfolio_report`, `portfolio_greeks`, `performance`, `firm_treasury --rotate`, `markdown_ledger`), because the node's book never moves and those would post a second `[minipc1]` set of cards about a frozen book. Suite 3,092 passed.
+- **Dhan:** the node's `.env` token (copied from the Mac) **expired 2026-07-31**, so the node cannot call Dhan at all. It is not a second consumer of the call budget. The `.env` also carries `DISCORD_BOT_TOKEN`; nothing on the node runs the bot.
+- **What happens next on its own:** tonight from 19:10 the analytics jobs run on the node's own database (bhavcopy backfill, ingestion clerks, news, pricer + tiers, cross-asset, macro nightly 19:50, sleep phase 20:00, discovery 20:20, ops sweep 20:30, Proving Court 21:00). At 23:30 the first `logs/node_reconcile/2026-10-17.md` and one `[minipc1]` Discord card. The analytics jobs' own cards (macro nightly, discovery, ops sweep) also arrive labelled `[minipc1]`, as a second copy beside the VM's.
+- **Check first next session:** `ssh mini_pc1@100.72.160.38 'cd ~/alpha_trading && tail -40 logs/node_reconcile/2026-10-17.md; ls -lt logs | head -20'`. Read the reconcile verdict and look for any job that failed.
+- **Not done (deliberate / open):** the home-lane block (#143, `setup_mininode_cron.sh --shadow`) is not installed, which is why the preflight warns about it. Ollama is not installed (edge miner and evolution would skip). Preflight's replica checks only run when the home-lane block exists (nested `if`); cosmetic. VM not redeployed; nothing it runs changed.
+
 ## 2026-10-17 (Sat) — node branch MERGED to `main`; ROLE SEPARATION (#146): the GCP VM is the only execution node, the Mini PC the analytics hub. VM untouched; nothing installed on the node
 
 - **Merged:** `claude/adoring-rubin-do2j66` (#143 shadow trial, #144 replica) into `main`. The `HANDOVER.md` and `PROJECT_TIMELINE.md` conflicts were resolved by keeping both sides (newer first). `DECISIONS.md` merged without conflict; rows reordered 146, 145, 144, 143, 142.

@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-17 · 1 commits · 19 files touched
+### 2026-10-17 · 3 commits · 20 files touched
 
+- `2d4f674` docs: HANDOVER — Mini PC live as the analytics hub (#146/#147): main bd53bf3, seeded from the VM, 19-line schedule, guard proved
+- `bd53bf3` feat(ops): the Mini PC leaves out the book jobs too (decision #147)
 - `eb82ad2` feat(ops): role separation — the VM is the only execution node, the Mini PC the analytics hub (decision #146)
 
 

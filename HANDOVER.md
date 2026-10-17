@@ -42,6 +42,14 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-17 ~14:30 IST — LLM path LIVE end to end on the Mini PC: FreeLLMAPI → Gemini, miner probe passes
+
+- **Key saved:** `ALPHA_LLM_API_KEY` in the node's `~/alpha_trading/.env` (one line, `freellmapi-` key, owner `mini_pc1`, 600). The owner's first attempt ran in a root shell (`~` = `/root`) and saved nothing; `su - mini_pc1` fixed it.
+- **First provider key unusable:** with one provider key the router answered 503 "No candidate model has a configured, usable provider key" for `auto:fast`, `auto` and `auto:smart`. After the owner added more keys, the router health-checks 2 keys.
+- **End-to-end test (from the Mac over ssh):** `/v1/models` 200 (259 models); a raw call → HTTP 200 in 2.6 s, `X-Routed-Via: google/gemini-3.8-flash`; `extract_event_json` → `{"event_type": "earnings", "tag": "earnings_beat", "sentiment": 1, "entities": ["NIFTY 50"]}` in 6.7 s; `edge_miner.extractor_ready` → `True ok`; `llm_up()` → True.
+- **What runs for real from tonight:** 20:00 sleep phase LLM tasks on the node's own DB; **21:00 the edge miner's first real cycle** (VM snapshot → mine → apply new edges on the VM → copy to `data/vm_snapshot/`); next Saturday 10-24 02:00 evolution (reads `data/vm_snapshot/`). The Mac's agents are retired, so the node is the only miner.
+- **Check next session:** `ssh mini_pc1@100.72.160.38 'cd ~/alpha_trading && tail -3 logs/edge_miner.log; ls -la data/vm_snapshot/; tail -20 logs/sleep_phase.log'`. Also read the 23:30 reconcile report.
+
 ## 2026-10-17 ~13:48 IST — Mac LLM agents RETIRED; Docker + FreeLLMAPI RUNNING on the Mini PC; only the provider keys + unified key remain
 
 - **Mac (13:38):** `com.adityagupta.alpha-edge-miner` + `com.alphatrading.evolution` unloaded and moved to `~/Library/LaunchAgents/retired-alphatrading/`; `launchctl list` shows neither. `com.aditrader.sync` still runs.

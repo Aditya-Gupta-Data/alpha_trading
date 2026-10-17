@@ -1,9 +1,10 @@
 """
 src/node_reconcile.py — the home node checks itself against the VM, every night.
 
-WHY (2026-10-10, decision #144). For the trial week the node (`minipc1`)
-runs the VM's whole cron schedule in parallel while the VM changes in no
-way. At 23:30 IST, on the NODE, this module:
+WHY (2026-10-10, decision #144; narrowed by #146 on 2026-10-17). The node
+(`minipc1`) runs the VM's cron schedule minus the live session lane — the VM
+is the only execution node — while the VM changes in no way. At 23:30 IST,
+on the NODE, this module:
 
   1. fingerprints the node (`src.node_fingerprint`, local),
   2. fingerprints the VM — the same file copied to /tmp, run read-only
@@ -43,10 +44,10 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 try:
-    from src import node_fingerprint as nf
+    from src import node_fingerprint as nf, node_role
 except ImportError:                                  # run as a plain script from src/
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from src import node_fingerprint as nf
+    from src import node_fingerprint as nf, node_role
 
 ROOT = Path(__file__).resolve().parent.parent
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -57,7 +58,13 @@ MAX_GAP_S = 150                       # a beat is due every 60 s; > 150 s apart 
 MARKET_OPEN_MIN, MARKET_CLOSE_MIN = 9 * 60 + 10, 15 * 60 + 30
 
 # Jobs that exist on the VM and are deliberately NOT replicated on the node.
-NOT_ON_NODE_BY_DESIGN = ("src.renew_token", "scripts/publish_dashboard_mirror.sh")
+NOT_ON_NODE_BY_DESIGN = node_role.NEVER_ON_NODE
+# The node does not trade (#146): its book differs from the VM's by construction, so these are info.
+TRADING_TABLES = set(nf.TABLES + nf.SMALL_TABLES) - {"events", "graph_edges", "semantic_nodes",
+                                                    "daily_context", "simulated_trades"}
+TRADING_ARTIFACTS = {"data/journal.jsonl", "logs/equity_shadow_journal.jsonl", "data/portfolio.json",
+                     "data/human_pulse.json"}
+BY_DESIGN = "by design: the VM is the only execution node, the node does not trade (#146)"
 # Content differs by nature (LLM output, a snapshot of a moving market): freshness only.
 NONDETERMINISTIC = {"data/news_sentiment.json", "data/market_snapshot.json"}
 # Built from home-lane fetches (Yahoo / NSE / the corpus) on each machine at its own
@@ -70,6 +77,7 @@ LIMITS = (
     "construction unless the paper auto-approve path is on.",
     "Artifacts built from live fetches differ by fetch timing; those are listed as info, not divergence.",
     "A silent cron job leaves no log movement: no evidence on BOTH hosts is a note, not a failure.",
+    "The node does not run the live session (#146): book, ticket, outcome and journal differences are info.",
 )
 
 
@@ -170,7 +178,7 @@ def compare_jobs(vm: dict, node: dict, hb: dict, day: date, now: datetime) -> tu
     for key in sorted(set(vmj) | set(ndj)):
         v, n = vmj.get(key), ndj.get(key)
         ref = v or n
-        if v and not n and key in NOT_ON_NODE_BY_DESIGN:
+        if v and not n and node_role.never_on_node(key):
             counts["by_design"] += 1
             continue
         if not ref.get("due", True):
@@ -322,7 +330,16 @@ def compare_meta(vm: dict, node: dict) -> list:
     return issues
 
 
-def reconcile(vm: dict, node: dict, hb: dict, day: date, now: datetime | None = None) -> dict:
+def _trading_derived(i: dict) -> bool:
+    if i["section"] in ("accounts", "decisions"):
+        return True
+    if i["section"] == "ledgers":
+        return i["subject"].split(" ")[0] in TRADING_TABLES
+    return i["section"] == "artifacts" and i["subject"] in TRADING_ARTIFACTS
+
+
+def reconcile(vm: dict, node: dict, hb: dict, day: date, now: datetime | None = None,
+              node_trades: bool = False) -> dict:
     now = now or datetime.now(IST)
     if not vm or vm.get("error"):
         return {"day": day.isoformat(), "verdict": "INCONCLUSIVE",
@@ -332,6 +349,10 @@ def reconcile(vm: dict, node: dict, hb: dict, day: date, now: datetime | None = 
     outage_day = bool(hb.get("outages") or hb.get("net_down"))
     issues = (job_issues + compare_artifacts(vm, node, outage_day) + compare_db(vm, node, hb)
               + compare_lists(vm, node, hb) + compare_meta(vm, node))
+    if not node_trades:
+        for i in issues:
+            if i["severity"] == "warn" and _trading_derived(i):
+                i.update(severity="info", cause=BY_DESIGN)
     warn = [i for i in issues if i["severity"] == "warn"]
     unexplained = [i for i in warn if not i["explained"]]
     verdict = "MATCH" if not warn else ("MATCH_WITH_OUTAGE_GAPS" if not unexplained else "DIVERGED")

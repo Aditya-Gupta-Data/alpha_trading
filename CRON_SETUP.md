@@ -155,12 +155,17 @@ launchctl unload ~/Library/LaunchAgents/com.aditrader.sync.plist ~/Library/Launc
 > **The Mac section below is HISTORY once the node is live** — kept for the
 > lessons in it (absolute interpreter paths, the gcloud python trap).
 
-## The node replica — the VM's whole schedule, run in parallel (decision #144, 2026-10-10)
+## The node replica — the VM's analytics schedule, run in parallel (decision #144, narrowed by #146)
 
-**What and why.** From the week after, the node is to REPLACE the VM. For the trial
-week it runs exactly what the VM runs, the VM changes in no way, and every night the
-node reconciles itself against the VM. This is the dress rehearsal; the home-lane
-block above (sync, miner, evolution, scrip master) keeps running beside it.
+**What and why.** Role separation (#146, 2026-10-17): the GCP VM is the ONLY execution
+node, the Mini PC is the analytics hub. The block runs the VM's schedule MINUS the live
+session lane (`master_scheduler`, `recon_engine`, `intraday_tracker` ×2, `chain_archiver`),
+so the two hosts never run the session for one Dhan account at once; the heavy nightly
+work (Proving Court, macro nightly, discovery, backfills) runs on the node's own database.
+`master_scheduler` and `live_bridge` also refuse to start on the node by themselves
+(`src/node_role.py`), and `setup_cron.sh` refuses to install there. The VM changes in no
+way, and every night the node reconciles itself against the VM. The home-lane block
+above (sync, miner, evolution, scrip master) keeps running beside it.
 
 **Order, once the node passes `scripts/node_preflight.sh` (weekend, market closed):**
 
@@ -179,14 +184,14 @@ node's market-hours jobs abstain with named reasons and the reconcile says so.
 
 | IST | Job | Notes |
 |---|---|---|
-| the VM's 34 other lines | rendered from `scripts/setup_cron.sh` by `scripts/node_replica_block.py` | never retyped, cannot drift. Left off: `src.renew_token`, `publish_dashboard_mirror.sh` |
+| the VM's other lines | rendered from `scripts/setup_cron.sh` by `scripts/node_replica_block.py` | never retyped, cannot drift. Left off (`node_role.NEVER_ON_NODE`): `src.renew_token`, `publish_dashboard_mirror.sh` ×2, and the live lane — `src.master_scheduler`, `src.execution.recon_engine`, `src.ingestion.intraday_tracker` ×2, `src.ingestion.chain_archiver` |
 | every minute | `scripts/node_heartbeat.sh` | `logs/node_heartbeat.log` — the outage record |
 | 23:30 | `python -m src.node_reconcile` | `logs/node_reconcile/<day>.md` + one `[minipc1]` Discord card |
 | 07:15 (only `--with-token`) | `scripts/node_token_mirror.sh` | read-only copy of the VM's current token |
 
 The block also sets `ALPHA_NODE_LABEL=minipc1` (every Discord card, plain message and
-email from the node carries it), `ALPHA_NODE_REPLICA=1`, and an `OPS_EXPECTED_JOBS`
-derived from the VM's heartbeat list minus `renew_token.log`. There are **no `@reboot`
+email from the node carries it), `ALPHA_NODE_ROLE=analytics`, `ALPHA_NODE_REPLICA=1`, and an
+`OPS_EXPECTED_JOBS` derived from the VM's heartbeat list minus the logs of the jobs left off. There are **no `@reboot`
 catch-up lines** in this block on purpose: a job the node missed is the measurement.
 
 **Reading the reports.** `logs/node_reconcile/<day>.md`: node uptime and dark windows,

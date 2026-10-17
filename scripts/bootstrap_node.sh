@@ -86,6 +86,7 @@ echo "    $(node_env_describe)"
 step ".env — private, and free of the Dhan account-control keys (decision #46)"
 if [ -f .env ]; then
     sed -i '/^DHAN_PIN=/d;/^DHAN_TOTP_SECRET=/d;/^DHAN_API_KEY=/d;/^DHAN_API_SECRET=/d' .env
+    grep -q '^ALPHA_NODE_ROLE=' .env || printf '\nALPHA_NODE_ROLE=analytics\n' >> .env   # decision #146
     chmod 600 .env
     echo "    stripped; $(grep -c . .env) lines remain"
 else

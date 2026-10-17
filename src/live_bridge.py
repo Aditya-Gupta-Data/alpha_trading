@@ -1125,6 +1125,11 @@ async def run_live_loop(underlyings=UNDERLYINGS,
 
 
 if __name__ == "__main__":
+    from src import node_role
+    _refusal = node_role.execution_refusal()
+    if _refusal:
+        print(f"[Live Bridge] REFUSED to start: {_refusal}", flush=True)
+        raise SystemExit(3)
     try:
         asyncio.run(run_live_loop())
     except KeyboardInterrupt:

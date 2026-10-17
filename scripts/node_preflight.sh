@@ -259,6 +259,8 @@ else
     warn "no home node block installed yet — when every FAIL above is gone: bash scripts/setup_mininode_cron.sh --shadow"
 fi
 crontab -l 2>/dev/null | grep -qE 'renew_token|push_token_to_vm|setup_cron.sh' && bad "the crontab carries a token or VM job — remove it; the node never renews or pushes a token (decision #48)"
+crontab -l 2>/dev/null | grep -qE 'src\.master_scheduler|src\.live_bridge|src\.execution\.recon_engine' && bad "the crontab carries the live execution loop — the VM is the only execution node (decision #146); re-run scripts/setup_node_replica_cron.sh"
+grep -qs '^ALPHA_NODE_ROLE=analytics' .env && ok ".env declares ALPHA_NODE_ROLE=analytics (the live loop refuses to start here)" || bad ".env lacks ALPHA_NODE_ROLE=analytics — re-run scripts/setup_node_replica_cron.sh (it adds the line)"
 
 # ------------------------------------------------------------------ summary
 section "SUMMARY: $PASS pass, $WARN warn, $FAIL fail"

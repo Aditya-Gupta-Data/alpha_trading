@@ -426,7 +426,11 @@ async def _main() -> dict:
 
 
 if __name__ == "__main__":
-    from src import deploy_log
+    from src import deploy_log, node_role
+    _refusal = node_role.execution_refusal()
+    if _refusal:
+        print(f"[Scheduler] REFUSED to start: {_refusal}", flush=True)
+        raise SystemExit(3)
     # kind="job": this process self-terminates at 15:30, so its sha is a
     # record of what THIS morning's session ran — not what is live tonight.
     deploy_log.record_startup("master_scheduler", kind="job")

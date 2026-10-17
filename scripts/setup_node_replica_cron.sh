@@ -1,17 +1,20 @@
 #!/bin/bash
-# scripts/setup_node_replica_cron.sh — run the VM's WHOLE schedule on the home node, in parallel
+# scripts/setup_node_replica_cron.sh — the VM's analytics schedule on the home node, in parallel
 # ==============================================================================
-# Decision #144 (2026-10-10). Owner directive: for the trial week the Mini PC runs
-# EXACTLY what the VM runs, the VM changes in no way, and every night the node
-# reconciles itself against the VM and files a report (src/node_reconcile.py).
-# From the week after, the node is to replace the VM, so this is the dress rehearsal.
+# Decision #144 (2026-10-10), narrowed by #146 (2026-10-17, role separation): the
+# GCP VM is the ONLY execution node; the Mini PC is the analytics hub. This block
+# runs the VM's cron lines MINUS the live session lane (master_scheduler,
+# recon_engine, intraday_tracker, chain_archiver — src/node_role.py), so the two
+# hosts never trade or poll Dhan for the same account at once. Every night the
+# node reconciles itself against the VM and files a report (src/node_reconcile.py).
 #
 # What it installs (a second, separate crontab block — the home-lane block from
 # setup_mininode_cron.sh is untouched):
 #   * the VM's cron lines, rendered from scripts/setup_cron.sh by
-#     scripts/node_replica_block.py so the two can never drift, minus the two
-#     jobs a replica must not run (token renewal; the dashboard-mirror push)
+#     scripts/node_replica_block.py so the two can never drift, minus every job
+#     the node must not run (token renewal, the dashboard-mirror push, the live lane)
 #   * ALPHA_NODE_LABEL=minipc1 — every Discord card / email the node sends carries it
+#   * ALPHA_NODE_ROLE=analytics — master_scheduler / live_bridge refuse to start here
 #   * scripts/node_heartbeat.sh every minute — the outage record
 #   * src.node_reconcile at 23:30 — the nightly report + one Discord card
 #   * with --with-token only: scripts/node_token_mirror.sh at 07:15 (see below)
@@ -70,8 +73,9 @@ fi
 
 CRON_BLOCK="$BLOCK_START
 SHELL=/bin/bash
-# MODE: REPLICA TRIAL — the VM's schedule, run in parallel; the VM is not touched.
+# MODE: ANALYTICS HUB — the VM's schedule minus the live session lane (#146); the VM is not touched.
 ALPHA_NODE_LABEL=minipc1
+ALPHA_NODE_ROLE=analytics
 ALPHA_NODE_REPLICA=1${OPS_LINE:+
 $OPS_LINE}
 $VM_LINES
@@ -96,6 +100,9 @@ case "$MODE" in
         # hand-run commands on the node carry the label too (discord_client loads .env)
         if [ -f "$REPO_ROOT/.env" ] && ! grep -q '^ALPHA_NODE_LABEL=' "$REPO_ROOT/.env"; then
             printf '\nALPHA_NODE_LABEL=minipc1\n' >> "$REPO_ROOT/.env"; chmod 600 "$REPO_ROOT/.env"
+        fi
+        if [ -f "$REPO_ROOT/.env" ] && ! grep -q '^ALPHA_NODE_ROLE=' "$REPO_ROOT/.env"; then
+            printf 'ALPHA_NODE_ROLE=analytics\n' >> "$REPO_ROOT/.env"; chmod 600 "$REPO_ROOT/.env"
         fi
         echo "setup_node_replica_cron: installed $(echo "$VM_LINES" | wc -l | tr -d ' ') VM job lines + heartbeat + nightly reconcile$([ "$WITH_TOKEN" -eq 1 ] && echo ' + token mirror')."
         [ -f "$REPO_ROOT/data/.node_seed.json" ] || echo "  !! the node has not been seeded from the VM — run: bash scripts/node_seed_from_vm.sh --yes   (remove the block first if jobs are already running)"

@@ -86,7 +86,7 @@ The live execution path is: the 35 VM cron jobs in `scripts/setup_cron.sh`, the
 server in `.mcp.json`. **If a module is not reachable from one of those, it is
 not running** — whatever its docstring claims.
 
-- The home node's two crontab blocks (`scripts/setup_mininode_cron.sh`, and from 2026-10-10 `scripts/setup_node_replica_cron.sh`) are also live execution paths for the jobs they name. The replica block runs the VM's schedule in parallel with `ALPHA_NODE_LABEL=minipc1`, on its OWN database; it has no authority over the VM's book (decisions #143, #144).
+- The home node's two crontab blocks (`scripts/setup_mininode_cron.sh`, and from 2026-10-10 `scripts/setup_node_replica_cron.sh`) are also live execution paths for the jobs they name. The replica block runs the VM's schedule MINUS the live session lane, with `ALPHA_NODE_LABEL=minipc1` and `ALPHA_NODE_ROLE=analytics`, on its OWN database; it has no authority over the VM's book (decisions #143, #144). **The GCP VM is the only execution node (#146):** `master_scheduler` and `live_bridge` refuse to start on the Mini PC, and `setup_cron.sh` refuses to install there. Never add a live-loop line to a node block.
 - `research_archive/` is on NO execution path. Never import it from `src/`.
 - Files starting with `# MANUAL OFFLINE TOOL` or `# TEST INFRA` are
   intentionally off-cron. Do not "clean them up" as dead code.

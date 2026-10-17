@@ -71,8 +71,9 @@ def test_exposure_gate_never_counts_the_learners_holdings():
     assert err is None and {h["account_id"] for h in held} == {pm.ACCOUNT_PAPER_2L_LIVE}
 
 
-def test_build_proposal_records_the_veto_for_the_learner_instead_of_refusing(monkeypatch):
-    from src import options_proposer as op
+def test_build_proposal_records_the_veto_for_the_learner_instead_of_refusing(monkeypatch, tmp_path):
+    from src import options_proposer as op, portfolio
+    monkeypatch.setattr(portfolio, "PORTFOLIO_PATH", tmp_path / "portfolio.json")   # never the real book or its lock
     from tests.test_options_proposer import make_analysis, make_chain, add_bid_ask
     adv = {"block_bullish": True, "bullish_reason": "distribution"}
     kw = dict(analysis=make_analysis(uptrend=True, rsi=25), vix=15.0, expiry="2099-12-31",

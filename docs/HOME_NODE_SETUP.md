@@ -382,13 +382,17 @@ installer only when `CRON_SETUP.md` says the block changed.
 
 ---
 
-## 12. The replica trial — the VM's whole schedule, in parallel (decision #144)
+## 12. The replica — the VM's analytics schedule, in parallel (decision #144, narrowed by #146)
 
 Everything above gets the box ready and runs the *home lane* (sync, miner, evolution) in
-shadow. The owner's real test is bigger: the node is to replace the VM from the week after,
-so for one week it runs **exactly what the VM runs**, the VM changes in no way, and each night
-the node reconciles itself against the VM and files a report. Its Discord posts carry the label
-`minipc1`.
+shadow. **Role separation (#146, 2026-10-17): the GCP VM is the only execution node; this box
+is the analytics hub.** The replica block runs the VM's schedule **minus the live session lane**
+(`master_scheduler`, `recon_engine`, `intraday_tracker`, `chain_archiver`), the VM changes in no
+way, and each night the node reconciles itself against the VM and files a report. Its Discord
+posts carry the label `minipc1`. The live loop also refuses to start here on its own: the
+installer writes `ALPHA_NODE_ROLE=analytics` into `.env`, and `master_scheduler` / `live_bridge`
+exit with `REFUSED` on such a host (or any host named `minipc1`). Never run `setup_cron.sh` here —
+it refuses too.
 
 ```bash
 cd ~/alpha_trading && git pull
@@ -412,8 +416,8 @@ named reasons, and the report says so.
 
 **What to expect on day one:** `DIVERGED` is likely on the first nights and is information, not
 failure. The usual causes are named in the report: a job that ran on the VM and left no trace
-on the node, an artifact built from live fetches at a different moment, a decision that on the VM
-waited for your Approve button and on the node (which has no Discord bot) did not. The three
+on the node, an artifact built from live fetches at a different moment. Book, ticket and journal
+differences are listed as information, never divergence: the node does not trade (#146). The three
 honest limits are printed at the bottom of every report.
 
 To stop: `bash scripts/setup_node_replica_cron.sh --remove`. The VM never knew.

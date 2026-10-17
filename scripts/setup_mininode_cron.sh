@@ -94,6 +94,7 @@ fi
 read -r -d '' CRON_BLOCK <<EOF2 || true
 $BLOCK_START
 SHELL=/bin/bash
+ALPHA_NODE_ROLE=analytics
 $MODE_LINES
 # 1. Home-node producers + the 7-file ship to the VM (sector bars, valuation,
 #    F&O bundle, darling ids, bars cache). 3 slots/day; the script throttles itself.

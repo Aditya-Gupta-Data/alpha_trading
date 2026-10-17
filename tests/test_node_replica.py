@@ -351,15 +351,32 @@ def test_ledger_and_decision_differences_and_the_outage_overlap_rule():
         "paper_accounts": [{"account_id": "A", "equity": 100.0}]}, "tickets_today": ["NIFTY|bull|up|approved"], "outcomes_today": []}
     nd_db = {"present": True, "tables": {"trade_tickets": {"rows": 9, "today": 1}}, "accounts": {
         "paper_accounts": [{"account_id": "A", "equity": 100.004}]}, "tickets_today": [], "outcomes_today": []}
-    during = nr.reconcile(_fp(db=vm_db, journal=["NIFTY|bull|approved"]), _fp(db=nd_db), _hb(outages=[(10 * 60, 10 * 60 + 30)]), DAY, NOW)
+    during = nr.reconcile(_fp(db=vm_db, journal=["NIFTY|bull|approved"]), _fp(db=nd_db), _hb(outages=[(10 * 60, 10 * 60 + 30)]), DAY, NOW,
+                          node_trades=True)
     warn = [i for i in during["issues"] if i["severity"] == "warn"]
     assert warn and all(i["explained"] for i in warn)                   # node behind + outage in the session
     assert not [i for i in warn if i["section"] == "accounts"]          # 0.004 rupee drift is within tolerance
     assert during["verdict"] == "MATCH_WITH_OUTAGE_GAPS"
-    quiet = nr.reconcile(_fp(db=vm_db, journal=["NIFTY|bull|approved"]), _fp(db=nd_db), _hb(), DAY, NOW)
+    quiet = nr.reconcile(_fp(db=vm_db, journal=["NIFTY|bull|approved"]), _fp(db=nd_db), _hb(), DAY, NOW, node_trades=True)
     assert quiet["verdict"] == "DIVERGED"
-    node_only = nr.reconcile(_fp(), _fp(journal=["TCS|iron|approved"]), _hb(outages=[(600, 630)]), DAY, NOW)
+    node_only = nr.reconcile(_fp(), _fp(journal=["TCS|iron|approved"]), _hb(outages=[(600, 630)]), DAY, NOW, node_trades=True)
     assert node_only["verdict"] == "DIVERGED"                           # node-ahead is never an outage effect
+
+
+def test_a_node_that_does_not_trade_reports_book_differences_as_info():
+    vm_db = {"present": True, "tables": {"trade_tickets": {"rows": 10, "today": 2}, "graph_edges": {"rows": 50}},
+             "accounts": {"paper_accounts": [{"account_id": "A", "equity": 100.0}]},
+             "tickets_today": ["NIFTY|bull|up|approved"], "outcomes_today": []}
+    nd_db = {"present": True, "tables": {"trade_tickets": {"rows": 0, "today": 0}, "graph_edges": {"rows": 40}},
+             "accounts": {"paper_accounts": [{"account_id": "A", "equity": 90.0}]},
+             "tickets_today": [], "outcomes_today": []}
+    r = nr.reconcile(_fp(db=vm_db, journal=["NIFTY|bull|approved"],
+                         jobs=[_job("src.master_scheduler", True, "10 9 * * 1-5")]), _fp(db=nd_db), _hb(), DAY, NOW)
+    warn = [i for i in r["issues"] if i["severity"] == "warn"]
+    assert [i["subject"] for i in warn] == ["graph_edges rows"]          # analytics tables still count
+    by_design = [i for i in r["issues"] if i["cause"] == nr.BY_DESIGN]
+    assert {i["section"] for i in by_design} == {"ledgers", "accounts", "decisions"}
+    assert r["job_counts"]["by_design"] == 1 and r["verdict"] == "DIVERGED"
 
 
 def test_config_drift_unseeded_baseline_and_git_difference():
@@ -468,16 +485,19 @@ def test_the_vm_fingerprint_failures_are_named_not_raised():
 
 
 # ============================================================ the VM's schedule, rendered for the node
-def test_the_replica_block_is_the_vm_schedule_minus_exactly_two_jobs():
+def test_the_replica_block_is_the_vm_schedule_minus_the_token_the_mirror_and_the_live_lane():
+    from src import node_role
     mod = _load(SCRIPTS / "node_replica_block.py")
     kept, dropped = mod.render((SCRIPTS / "setup_cron.sh").read_text(), "/home/n/alpha_trading", "/home/n/alpha_trading/venv/bin/python")
-    assert len(kept) >= 30 and len(dropped) == 3
-    assert all("src.renew_token" in d or "publish_dashboard_mirror.sh" in d for d in dropped)
+    assert len(kept) >= 25 and len(dropped) == 8
+    assert all(node_role.never_on_node(d) for d in dropped)
     joined = "\n".join(kept)
-    for needed in ("src.master_scheduler", "src.ops_monitor", "src.sleep_phase", "src.analysis.macro_nightly",
+    for needed in ("src.ops_monitor", "src.sleep_phase", "src.analysis.macro_nightly", "src.discovery.nightly",
                    "src.analysis.weekly_recalibration", "src.firm_treasury --rotate", "src.validation.run_proving_court"):
         assert needed in joined, needed
-    assert "renew_token" not in joined and "publish_dashboard_mirror" not in joined
+    for absent in ("renew_token", "publish_dashboard_mirror", "src.master_scheduler", "src.execution.recon_engine",
+                   "src.ingestion.intraday_tracker", "src.ingestion.chain_archiver"):
+        assert absent not in joined, absent
     assert "$" not in joined and "/home/n/alpha_trading/logs/" in joined   # every variable substituted
     # nothing in the real VM installer is lost: kept + dropped == every active schedule line in the heredoc
     active = [ln for ln in mod.heredoc((SCRIPTS / "setup_cron.sh").read_text()).splitlines()
@@ -485,18 +505,19 @@ def test_the_replica_block_is_the_vm_schedule_minus_exactly_two_jobs():
     assert len(active) == len(kept) + len(dropped)
 
 
-def test_the_nodes_heartbeat_list_is_the_vms_minus_the_renewal_log():
+def test_the_nodes_heartbeat_list_is_the_vms_minus_the_jobs_it_does_not_run():
     from src import ops_monitor
     mod = _load(SCRIPTS / "node_replica_block.py")
     val = mod.ops_expected_jobs()
-    assert "renew_token.log" not in val
+    gone = mod.dropped_logs((SCRIPTS / "setup_cron.sh").read_text())
+    assert {"renew_token.log", "master_scheduler.log", "chain_archiver.log", "recon_engine.log"} <= gone
     os.environ["OPS_EXPECTED_JOBS"] = val
     try:
         parsed = ops_monitor._expected_jobs_from_env()
     finally:
         del os.environ["OPS_EXPECTED_JOBS"]
-    assert parsed == {k: v for k, v in ops_monitor.EXPECTED_JOBS.items() if k != "renew_token.log"}
-    assert "master_scheduler.log:1" in val and "macro_nightly.log:0" in val
+    assert parsed == {k: v for k, v in ops_monitor.EXPECTED_JOBS.items() if k not in gone}
+    assert "master_scheduler.log" not in val and "macro_nightly.log:0" in val
 
 
 def _installer_copy(tmp_path):
@@ -516,7 +537,8 @@ def test_the_replica_installer_block(tmp_path):
     assert plain.returncode == 0, plain.stderr
     out = plain.stdout
     assert out.startswith("# === ALPHA TRADING NODE REPLICA BLOCK START") and out.rstrip().endswith("BLOCK END ===")
-    assert "ALPHA_NODE_LABEL=minipc1" in out and "ALPHA_NODE_REPLICA=1" in out
+    assert "ALPHA_NODE_LABEL=minipc1" in out and "ALPHA_NODE_REPLICA=1" in out and "\nALPHA_NODE_ROLE=analytics\n" in out
+    assert "src.master_scheduler" not in out and "src.execution.recon_engine" not in out
     assert "scripts/node_heartbeat.sh" in out and "-m src.node_reconcile" in out and out.count("\n* * * * * ") == 1
     assert "node_token_mirror" not in out                                   # off unless asked for
     assert "\nOPS_EXPECTED_JOBS=" in out and "renew_token.log" not in out

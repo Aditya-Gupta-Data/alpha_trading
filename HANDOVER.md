@@ -42,6 +42,28 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-17 (Sat) — node branch MERGED to `main`; ROLE SEPARATION (#146): the GCP VM is the only execution node, the Mini PC the analytics hub. VM untouched; nothing installed on the node
+
+- **Merged:** `claude/adoring-rubin-do2j66` (#143 shadow trial, #144 replica) into `main`. The `HANDOVER.md` and `PROJECT_TIMELINE.md` conflicts were resolved by keeping both sides (newer first). `DECISIONS.md` merged without conflict; rows reordered 146, 145, 144, 143, 142.
+- **Built (#146, Architect directive):** the live session lane never runs on the node.
+  - `src/node_role.py`: `master_scheduler` and `live_bridge` print `REFUSED` and exit 3 on any host that declares `ALPHA_NODE_ROLE=analytics` (env or `.env`), carries `ALPHA_NODE_REPLICA` / `ALPHA_NODE_SHADOW=1`, or is named `minipc1`. Only `ALPHA_ALLOW_EXECUTION=1` typed in the shell lifts it (a manual failover with the VM's session stopped); a `.env` line never does.
+  - The replica block now leaves out `master_scheduler`, `recon_engine`, `intraday_tracker` (both lines) and `chain_archiver`, plus the #144 pair, and its `OPS_EXPECTED_JOBS` leaves out their logs. Proving Court, macro nightly, discovery, bhavcopy backfill, darling tiers, sleep phase and weekly recalibration still run on the node's own database.
+  - `setup_cron.sh` (the VM installer) refuses to run on the analytics node. Both node installers and `bootstrap_node.sh` write `ALPHA_NODE_ROLE=analytics`. `node_preflight.sh` FAILs on a live-loop crontab line or a missing role line.
+  - `node_reconcile` lists book, ticket, outcome and journal differences as info ("by design"), so a non-trading node does not read DIVERGED every night.
+  - Suite fix: `test_shadow_learner.py::test_build_proposal_records_the_veto…` now uses a tmp portfolio (it failed on every fresh checkout, as the 10-10 note said).
+- **Verified:** on the merged tree `ALPHA_NODE_ROLE=analytics python3 -m src.master_scheduler` and `… -m src.live_bridge` both print REFUSED and exit 3, with nothing written. The VM (read-only, 10-17) has hostname `alpha-trading-vm`, sits at `b7f923b` and has zero `ALPHA_NODE_*` / `ALPHA_ALLOW_EXECUTION` lines in `.env`, so the guard cannot block the VM's session once deployed.
+- **Live effect today: NONE.** The VM is not redeployed (nothing it runs changes behaviour, except that `setup_cron.sh` gains a check that passes there). The node was **not reachable** from the Mac on 10-17 (Tailscale `100.72.160.38` and LAN `192.168.29.158` both timed out), so whether a replica block is already installed there is UNKNOWN.
+- **Next, owner, on the Mini PC** (the node should now follow `main`, not the old branch):
+  ```bash
+  cd ~/alpha_trading && git fetch origin && git checkout main && git pull --ff-only origin main
+  bash scripts/setup_node_replica_cron.sh          # replaces any old replica block; writes ALPHA_NODE_ROLE=analytics to .env
+  crontab -l | grep -cE 'src\.master_scheduler|src\.live_bridge|src\.execution\.recon_engine'   # must print 0
+  venv/bin/python -c "from src import node_role; print(node_role.execution_refusal())"           # must print the #146 refusal, not None
+  bash scripts/node_preflight.sh
+  ```
+  If the node was never bootstrapped, run `bash scripts/bootstrap_node_from_mac.sh mini_pc1@192.168.29.158` from the Mac first (it now writes the role line).
+- **Open:** `--with-token` on the node still makes it a second consumer of the Dhan call budget for whatever analytics jobs fetch; the live lane is gone either way. No automatic failover exists (#146: manual by design). The 10-16 watch list for Monday 10-19 below still stands.
+
 ## 2026-10-16 (Fri, after close) — loss diagnostic done; Architect rulings #145 DEPLOYED 16:18–16:20 IST (VM `78671dc` → `b7f923b`, dashboard box `b7f923b` + new desk bundle); darling desk UN-HALTED
 
 - **Diagnostic (ledger "Diagnostic 2026-10-16"):** no trade closed at a loss 12–16 Oct. The drop was open marks on an all-bearish/short-vol book during a results rally. Three defects were found (Issues 46, 47) and fixed here.

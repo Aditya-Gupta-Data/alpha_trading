@@ -42,6 +42,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-17 ~13:48 IST — Mac LLM agents RETIRED; Docker + FreeLLMAPI RUNNING on the Mini PC; only the provider keys + unified key remain
+
+- **Mac (13:38):** `com.adityagupta.alpha-edge-miner` + `com.alphatrading.evolution` unloaded and moved to `~/Library/LaunchAgents/retired-alphatrading/`; `launchctl list` shows neither. `com.aditrader.sync` still runs.
+- **Mini PC:** Docker 29.1.3 + Compose 2.40.3 (installed by the owner 13:40); `mini_pc1` added to the `docker` group by the owner (first attempt added only `root`). FreeLLMAPI installed 13:47 from `freellmapi.co/install.sh` only after its sha256 matched the copy reviewed earlier (`7b0ab2fb…`, 149 lines). Container `freellmapi-freellmapi-1` healthy, `restart: unless-stopped`, bound to **127.0.0.1:3001 only**, ~35 MB RAM; `~/freellmapi/.env` (its encryption key) is 600. `/api/ping` → 200 `{"status":"ok"}`.
+- **Not done (owner):** provider keys on the dashboard's Keys page, then `ALPHA_LLM_API_KEY=` in `~/alpha_trading/.env`. Until then `LocalExtractor` reads NOT reachable and the miner, evolution and sleep-phase LLM tasks skip cleanly. Dashboard from the Mac: `ssh -N -L 3001:127.0.0.1:3001 mini_pc1@100.72.160.38`, then `http://localhost:3001`. Back up `~/freellmapi/.env`.
+
 ## 2026-10-17 ~13:35 IST — LLM endpoint = FreeLLMAPI (#148); edge miner + weekly evolution moved to the Mini PC only (#149). Mini PC at `f74a5a4`; FreeLLMAPI NOT installed yet; Mac agents NOT retired yet
 
 - **#148 (`5b17753`):** `LocalExtractor` defaults to the local FreeLLMAPI router `http://localhost:3001/v1`, model `auto:fast`, Bearer `ALPHA_LLM_API_KEY`. `OLLAMA_BASE_URL` keeps a host on Ollama. Ollama is NOT installed on the node. The Architect accepted that prompts go to free-tier providers.

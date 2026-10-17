@@ -235,8 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-17 · 3 commits · 20 files touched
+### 2026-10-17 · 6 commits · 30 files touched
 
+- `2d34dd9` docs: HANDOVER — #148 FreeLLMAPI + #149 LLM jobs on the Mini PC; node at f74a5a4, Mac agents and FreeLLMAPI install pending (order matters)
+- `f74a5a4` feat(ops): edge miner + weekly evolution move to the Mini PC only (decision #149)
+- `5b17753` feat(llm): FreeLLMAPI router replaces Ollama as the LLM endpoint (decision #148)
 - `2d4f674` docs: HANDOVER — Mini PC live as the analytics hub (#146/#147): main bd53bf3, seeded from the VM, 19-line schedule, guard proved
 - `bd53bf3` feat(ops): the Mini PC leaves out the book jobs too (decision #147)
 - `eb82ad2` feat(ops): role separation — the VM is the only execution node, the Mini PC the analytics hub (decision #146)

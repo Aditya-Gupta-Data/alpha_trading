@@ -71,7 +71,7 @@ the agent's job under the Session Wrap rule above.
   Plus two new ones: confirm the "not announced" rule above, and decide whether the outcome should also record whether results *actually* fell inside the hold (today it carries the entry-time label only).
 - **Not built:** S4 (morning watch + Discord review card) and S5 (shadow square-off).
 
-## 2026-10-16 (Fri, after close) — loss diagnostic done; Architect rulings #145 built on `claude/diag-fixes-1016`. NOT deployed: the VM still runs `78671dc`
+## 2026-10-16 (Fri, after close) — loss diagnostic done; Architect rulings #145 DEPLOYED 16:18–16:20 IST (VM `78671dc` → `b7f923b`, dashboard box `b7f923b` + new desk bundle); darling desk UN-HALTED
 
 - **Diagnostic (ledger "Diagnostic 2026-10-16"):** no trade closed at a loss 12–16 Oct. The drop was open marks on an all-bearish/short-vol book during a results rally. Three defects were found (Issues 46, 47) and fixed here.
 - **Built (code + tests, suite green):**
@@ -83,12 +83,12 @@ the agent's job under the Session Wrap rule above.
   - **#145 D — desk reset:** a desk-halt clear now restarts the ruin count from zero. The clear itself is a human command, to run AFTER the deploy (below).
   - **#145 E — earnings:** spec only, `docs/earnings_awareness_spec.md`. No blackout, no block. Four Architect choices listed in its §4.
   - Three tests that had begun failing on dates alone were defused (Issue 48).
-- **Deploy — the Architect, after market hours:**
-  1. Mac: merge the branch into `main` and push.
-  2. VM: `git pull --ff-only`, scoped tests, `sudo systemctl restart alpha-trading alpha-discord-bot`, health 200.
-  3. VM, after step 2: `venv/bin/python -m src.equity_desk --reset-halt --why "…" --yes` → expect `"halted": false`.
-  4. Dashboard box: `git pull` + restart `alpha-api-bridge alpha-dashboard`; Mac: `bash scripts/dashboard_box/ship_ui.sh`.
-  Exact commands are in the 10-16 session's DEVELOPER_HANDOFF.
+- **Deployed (Architect-approved, done by the agent):**
+  1. `main` fast-forwarded `1fb0ade` → `b7f923b`.
+  2. VM: tree clean, no job running; `git pull`; 300 scoped tests passed on the VM; `alpha-trading` + `alpha-discord-bot` restarted; health 200; `max_lot_risk_pct` 2.5 and `real_quote_marks_all` True read from config.
+  3. VM: `src.equity_desk --reset-halt` at 16:19:34 → `cleared`, `halted: false`, ruin count since 16:19:34 = ₹0. Lifetime desk realized stays −₹31,239.74; budget ₹3L; one open darling (SUPREMEIND).
+  4. Dashboard box: `git pull` to `b7f923b`, bridge + Streamlit restarted, desk bundle shipped from the Mac (16:20:25). Bridge check: the learner is 9/9 priced (−₹35,325 on the mirror), rows carry `mtm_basis`. The 16 PAPER_10L rows read "model" until the new live loop publishes marks (Mon 09:15).
+- **Disk on the VM: 951 MB free (90%)** — under the 1 GB RED line. Log rotation runs 03:30; check Monday's ops card.
 - **Watch Monday 10-19:**
   - the live-bridge log for "real capture … refused/unavailable" lines on condor chains (MID SELECT, TCS);
   - the chain-call load (two extra chains per minute on today's book);

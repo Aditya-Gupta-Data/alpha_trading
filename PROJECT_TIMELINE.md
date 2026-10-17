@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-16 · 2 commits · 30 files touched
+
+- `5c628a1` docs: HANDOVER + ledger — #145 deployed to the VM (b7f923b), desk halt cleared 16:19:34, dashboard box shipped
+- `b7f923b` fix(risk): Architect rulings #145 — debit-spread margin, 2.5% one-lot hard cap, real-quote P&L, learner double count, desk reset count, graph date axis
+
+
 ### 2026-10-10 · 2 commits · 13 files touched
 
 - `731a85a` docs: HANDOVER — M1 seams deployed to the VM (78671dc), migration dry-run PARITY ok, learner seed gap noted

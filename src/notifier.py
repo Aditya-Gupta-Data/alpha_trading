@@ -82,9 +82,21 @@ def _muzzle_log(kind: str, detail: str) -> bool:
     return False
 
 
+def node_label() -> str:
+    """The home node's label ('minipc1') or '' on the VM — see
+    discord_client.node_label. Lazy import: discord_client loads .env."""
+    try:
+        from src.discord_client import node_label as _nl
+        return _nl()
+    except Exception:
+        return ""
+
+
 def _send_email(subject: str, body: str) -> None:
     if not EMAIL_FROM or not EMAIL_APP_PASSWORD:
         return
+    if node_label():
+        subject = f"[{node_label()}] {subject}"
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -308,6 +320,7 @@ def _build_embed(payload: dict) -> dict:
         "ceo_brief":        f"🧭 Daily CEO Brief — {today}",
         "macro_heartbeat":  f"🫀 Macro Nightly Heartbeat — {today}",
         "dashboard_link":   f"🔗 Dashboard Link Changed — {today}",
+        "node_reconcile":   f"🖥️ Node vs VM — {today}",
     }
     title = titles.get(event, f"📌 {event.replace('_', ' ').title()} — {ticker}")
 
@@ -375,6 +388,10 @@ def _build_embed(payload: dict) -> dict:
     footer_parts = ["Alpha Trading Paper", today]
     if payload.get("strategy") and event != "eod":
         footer_parts.append(payload["strategy"].replace("_", " "))
+    label = node_label()
+    if label:                                   # home node only (#144)
+        title = f"[{label}] {title}"
+        footer_parts.insert(0, label)
     embed: dict = {
         "title":  title,
         "color":  _embed_colour(payload),
@@ -415,7 +432,8 @@ DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
 # decision #133 (Architect ruling 2026-10-09): a stuck or half-filled live exit
 # pages at once — it needs a human now, not in the evening digest
 TEXT_PAGE_EVENTS = {"ops_alarm", "session_stopped", "approval_needed", "token_renewal_failed"}
-BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review", "live_entry_needs_review", "token_renewal_failed"}
+BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review", "live_entry_needs_review", "token_renewal_failed",
+                 "node_reconcile"}   # #144: the home node's one daily report card, never spooled
 BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest", "dashboard_link", "morning_brief",
                     "performance", "weekly_digest", "macro_heartbeat"}
 BUDGET_DROP = {"portfolio_report"}
@@ -616,6 +634,8 @@ async def broadcast_alert(payload: dict) -> bool:
         return False
 
     body = {"embeds": [_build_embed(payload)]}
+    if node_label():                            # the sender name shows the machine
+        body["username"] = f"Alpha Trading · {node_label()}"
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             resp = await client.post(url, json=body)

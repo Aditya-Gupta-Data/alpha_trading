@@ -379,3 +379,44 @@ def test_gcloud_runs_with_a_pinned_interpreter():
         em._run(["gcloud", "version"])
     assert seen["env"]["CLOUDSDK_PYTHON"] == sys.executable
     assert seen["timeout"] == em.TRANSPORT_TIMEOUT
+
+
+def test_shadow_cycle_pulls_mines_refreshes_but_never_writes_to_the_vm():
+    """Home node SHADOW TRIAL (2026-10-10, decision #143): apply=False must
+    leave the VM untouched — no edges shipped, no remote apply — while the
+    local copies still refresh and the 20h gate still records a success."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        data_dir, state = tmp / "data", tmp / "data" / ".state.json"
+        data_dir.mkdir()
+        calls = []
+
+        def fake_task_d(conn, extractor=None, window_days=None, today=None):
+            add_edge(conn, "vix_spike", "PRECEDES", "condor_loss",
+                     confidence_score=1.0)
+            return {"outcomes_considered": 5, "triples_written": 1,
+                    "triples_skipped": 0}
+
+        with mock.patch.object(em, "due", return_value=True), \
+             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
+             mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
+             mock.patch.object(em, "DATA_DIR", data_dir), \
+             mock.patch.object(em, "STATE_PATH", state), \
+             mock.patch.object(em, "ARCHIVE_DIR", data_dir / "archive"), \
+             mock.patch("src.sleep_phase.write_causal_links", fake_task_d):
+            result = em.run_miner(
+                runner=_fake_runner_factory([("seed", "RESULTS_IN", "x")], calls),
+                apply=False)
+
+        assert result["status"] == "ok"
+        assert result["shadow"] is True
+        assert result["new_edges_applied_to_vm"] == 0
+        assert result["new_edges_mined_not_applied"] == 1
+        assert result["local_copies_refreshed"] is True
+        assert state.exists()
+        # snapshot + pull, then snapshot + refresh — and NOTHING in between:
+        # no ship of new_edges.json, no remote apply
+        kinds = ["ssh" if "ssh" in c else "scp" for c in calls]
+        assert kinds == ["ssh", "scp", "ssh", "scp"]
+        assert not any("new_edges.json" in " ".join(c) or "apply_edges.py" in " ".join(c) for c in calls)

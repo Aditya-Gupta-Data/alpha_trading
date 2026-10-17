@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-17 · 1 commits · 19 files touched
+
+- `eb82ad2` feat(ops): role separation — the VM is the only execution node, the Mini PC the analytics hub (decision #146)
+
+
 ### 2026-10-16 · 2 commits · 30 files touched
 
 - `5c628a1` docs: HANDOVER + ledger — #145 deployed to the VM (b7f923b), desk halt cleared 16:19:34, dashboard box shipped

@@ -42,6 +42,35 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-16 (Fri, evening) — Earnings Awareness S1–S3 built (decision #146) on `claude/earnings-s1-s3`. NOT merged, NOT deployed
+
+- **What it does, in plain English:** every new spread entry now carries a label saying where it sits against its results date — `pre` (results within 7 days and before expiry), `through` (results before expiry, further out), `post` (results in the last 3 days), `clear`, or blank with a reason. When the trade settles, the label is copied onto its outcome row and its Court/shadow rows, and the `strategy_stats` MCP tool shows win rates per label. **It blocks nothing and resizes nothing** (tested: a pre-results calendar and no calendar produce the same proposal).
+- **Built:**
+  - **S1:** the results calendar now remembers the last results date per stock (rebuilt from the lake's daily copies), not just the next one. A postponed date never counts as "held". A calendar older than 3 days, empty, or missing reads blank with a reason. There is also an index → heavyweights map at `config/index_heavyweights.json`.
+  - **S2:** the `earnings` block is stamped in `options_proposer.to_journal_entry`, so headless, learner-only and manual entries all get it. An index reads its heavyweights' dates.
+  - **S3:** two new nullable columns, `earnings_window` and `results_before_expiry`, on `outcomes` and `shadow_trades`. They are added automatically on the first connect after deploy. Older rows stay blank; nothing is rewritten.
+  - Tests: `tests/test_earnings_awareness.py` (21 tests).
+- **Suite:** 3,052 passed (base 3,031 + 21). The 1 failure + 1 error, `test_shadow_learner::test_build_proposal_records_the_veto…`, is PRE-EXISTING and happens only in a fresh checkout. The base commit `b7f923b` fails the same way in a clean worktree: the test calls `build_proposal` on the real book, and with no `data/portfolio.json` the load tries to create it, which the write guard refuses. It passes where `data/portfolio.json` exists. Not fixed here.
+- **One rule added beyond the spec (in #146, for the Architect to confirm):** if a stock's next results date is not announced yet, the label is `clear` only when it *cannot* report before expiry (last quarter already reported, expiry before the next quarter end). Otherwise it is blank with "not announced". The reason: NSE dates can be announced as little as two working days ahead.
+- **Expect after deploy:** until the first 19:20 calendar run on the new code, every block reads blank with "no past-results memory yet". That run fills `last` from the lake. To fill it at once, run the same job by hand:
+  ```bash
+  cd ~/alpha_trading && venv/bin/python -m src.ingestion.earnings_calendar
+  ```
+- **Deploy (the Architect, after market hours; no exit rule changes, so no open-book dry-run needed):**
+  1. Mac: merge `claude/earnings-s1-s3` into `main` and push.
+  2. On the VM:
+     ```bash
+     cd ~/alpha_trading && git pull --ff-only && venv/bin/python -m pytest -q tests/test_earnings_awareness.py tests/test_earnings_calendar.py tests/test_evidence_wiring.py tests/test_brain_mcp.py tests/test_shadow_learner.py tests/test_brain_map.py && sudo systemctl restart alpha-trading alpha-discord-bot
+     ```
+- **Read the dataset later:** `sqlite3 data/brain_map.db "SELECT earnings_window, archetype, COUNT(*), SUM(result='win') FROM outcomes GROUP BY 1, 2"` (or the MCP `strategy_stats` → `by_earnings_window`). Nothing is decided on a cell below n = 20.
+- **Architect choices still open (spec §4):**
+  1. The pre/post days (built at 7 / 3; `earnings_pre_days` / `earnings_post_days` in `config.json`).
+  2. The heavyweight names. The shipped map is an unverified proposal from about 2025 weights. NIFTY MID SELECT is deliberately empty, so it reads blank.
+  3. Which structures count as short-volatility (S4/S5).
+  4. The S5 thresholds.
+  Plus two new ones: confirm the "not announced" rule above, and decide whether the outcome should also record whether results *actually* fell inside the hold (today it carries the entry-time label only).
+- **Not built:** S4 (morning watch + Discord review card) and S5 (shadow square-off).
+
 ## 2026-10-16 (Fri, after close) — loss diagnostic done; Architect rulings #145 built on `claude/diag-fixes-1016`. NOT deployed: the VM still runs `78671dc`
 
 - **Diagnostic (ledger "Diagnostic 2026-10-16"):** no trade closed at a loss 12–16 Oct. The drop was open marks on an all-bearish/short-vol book during a results rally. Three defects were found (Issues 46, 47) and fixed here.

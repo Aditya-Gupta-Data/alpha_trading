@@ -202,6 +202,29 @@ def firm_equity_curve(src: Sources, args: dict) -> dict:
             "basis": "paper trading — no real money, not a performance claim"}
 
 
+EARNINGS_CELL_FLOOR_N = 20     # spec §2 S3: nothing is read from a cell below this n
+
+
+def _earnings_split(src: Sources) -> list:
+    """Resolved outcomes by (entry-time results window, strategy); placebo/sim refs excluded."""
+    from src.validation.stat_gates import EXCLUDED_REF_PREFIXES
+    where = " AND ".join("journal_ref NOT LIKE ?" for _ in EXCLUDED_REF_PREFIXES)
+    try:
+        rows = _rows(src.conn().execute(
+            "SELECT COALESCE(earnings_window, 'unlabelled') AS window, "
+            "archetype AS strategy, COUNT(*) AS n, "
+            "SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins, "
+            "ROUND(AVG(r_multiple), 2) AS avg_r, "
+            "SUM(CASE WHEN results_before_expiry = 1 THEN 1 ELSE 0 END) AS results_before_expiry "
+            f"FROM outcomes WHERE {where} GROUP BY 1, 2 ORDER BY 1, n DESC",
+            [prefix + "%" for prefix in EXCLUDED_REF_PREFIXES]))
+    except sqlite3.Error:
+        return []
+    for row in rows:
+        row["readable"] = row["n"] >= EARNINGS_CELL_FLOOR_N
+    return rows
+
+
 def strategy_stats(src: Sources, args: dict) -> dict:
     try:
         rows = _rows(src.conn().execute(
@@ -215,7 +238,11 @@ def strategy_stats(src: Sources, args: dict) -> dict:
         rows = []
     return {"available": bool(rows), "by_strategy": rows,
             "basis": "simulated/paper fills — mechanics evidence, "
-                     "never expected return"}
+                     "never expected return",
+            "by_earnings_window": _earnings_split(src),
+            "earnings_basis": "resolved paper outcomes (incl. hypothetical) labelled by the "
+                              f"entry-time results window; a cell is read only at n >= "
+                              f"{EARNINGS_CELL_FLOOR_N}"}
 
 
 TOOLS = {
@@ -268,7 +295,8 @@ TOOLS = {
         firm_equity_curve),
     "strategy_stats": (
         "Aggregate paper-trade counts, win counts and average P&L by "
-        "strategy from the simulation ledger.",
+        "strategy from the simulation ledger, plus resolved outcomes split "
+        "by results window (pre / through / post / clear).",
         {"type": "object", "properties": {}},
         strategy_stats),
 }

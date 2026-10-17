@@ -78,7 +78,25 @@ def ensure_schema(conn) -> None:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN mode TEXT")
     if "portfolio_id" not in cols:                 # M1 (#142): the bucket the Court row's evidence belongs to
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN portfolio_id TEXT")
+    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER")):   # #146 S3
+        if col not in cols:
+            conn.execute(f"ALTER TABLE shadow_trades ADD COLUMN {col} {kind}")
     conn.commit()
+
+
+def label_earnings(conn, host_ref: str, window, results_before_expiry) -> int:
+    """Copy a trade's entry-time results window onto every shadow_trades row of that ref
+    (host-linked or its own); a row already labelled keeps its label. Returns rows labelled."""
+    if not host_ref or (window is None and results_before_expiry is None):
+        return 0
+    ensure_schema(conn)
+    rbe = None if results_before_expiry is None else int(bool(results_before_expiry))
+    cur = conn.execute(
+        "UPDATE shadow_trades SET earnings_window = ?, results_before_expiry = ? "
+        "WHERE (host_ref = ? OR journal_ref = ?) AND earnings_window IS NULL "
+        "AND results_before_expiry IS NULL", (window, rbe, host_ref, host_ref))
+    conn.commit()
+    return cur.rowcount
 
 
 def shadow_ref(pattern_id: str, fire_date: str, ticker: str) -> str:

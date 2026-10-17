@@ -1568,6 +1568,13 @@ def record_post_mortem(entry: dict, brain) -> None:
     initial_plan, actual_execution = _post_mortem_payloads(entry)
     post_mortem = analyst.generate_post_mortem(initial_plan, actual_execution)
     brain_map.record_resolved_entry(brain, entry, post_mortem=post_mortem)
+    try:                                                       # #146 S3: the window rides onto Court/shadow rows
+        from src.validation import trial
+        earn = entry.get("earnings") if isinstance(entry.get("earnings"), dict) else {}
+        trial.label_earnings(brain, brain_map.journal_ref_for(entry), earn.get("window"),
+                             earn.get("results_before_expiry"))
+    except Exception:
+        pass
     # Phase 2 (holy-grail plan §5.1): the entry's proposal-time evidence
     # snapshot joins its outcome in brain_map — the labeled row per-layer
     # reliability learns from. Pre-substrate entries (no stamp) skip

@@ -804,6 +804,8 @@ def to_journal_entry(proposal: dict, decision: str, why: str) -> dict:
     entry["portfolio_family"] = "IDX_SPREADS"                 # M1: every options row names its bucket family
     entry["portfolio_id"] = "PAPER_10L/IDX_SPREADS"
     entry["regime"] = regime_for(proposal.get("view"), proposal.get("vix"))
+    from src.confluence.evidence import stamp_earnings
+    stamp_earnings(entry)                                      # #146: results-window annotation, gates nothing
     return entry
 
 

@@ -124,6 +124,10 @@ def connect(db_path=None) -> sqlite3.Connection:
     for col in ("regime_trend", "regime_vix", "portfolio_id"):    # portfolio_id: M1 (#142), nullable
         if col not in outcome_cols:
             conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} TEXT")
+    # Earnings Awareness S3 (#146): the entry-time results window, NULL on older rows.
+    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER")):
+        if col not in outcome_cols:
+            conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} {kind}")
     # DUAL-HORIZON SENTIMENT (Level 1, 2026-08-05). `news_processor` has
     # emitted two scores since its v3 (2026-07-20) — short_term_catalyst
     # (days/weeks: what a swing trade rides) and long_term_macro
@@ -161,7 +165,8 @@ def record_event(conn, date, ticker, event_type, tag,
 
 def record_outcome(conn, journal_ref, date, ticker, archetype=None,
                    r_multiple=None, result=None, post_mortem=None,
-                   regime_trend=None, regime_vix=None, portfolio_id=None) -> int:
+                   regime_trend=None, regime_vix=None, portfolio_id=None,
+                   earnings_window=None, results_before_expiry=None) -> int:
     """Insert one resolved trade and return its outcome id. `journal_ref`
     is the stable key back to the journal entry; re-recording the same ref
     is a no-op that returns the existing row's id, so future backfills can
@@ -178,10 +183,11 @@ def record_outcome(conn, journal_ref, date, ticker, archetype=None,
         post_mortem = json.dumps(post_mortem)
     cur = conn.execute(
         "INSERT INTO outcomes (journal_ref, date, ticker, archetype, r_multiple, result, post_mortem, "
-        "regime_trend, regime_vix, portfolio_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT (journal_ref) DO NOTHING",
+        "regime_trend, regime_vix, portfolio_id, earnings_window, results_before_expiry) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (journal_ref) DO NOTHING",
         (journal_ref, date, ticker, archetype, r_multiple, result,
-         post_mortem, regime_trend, regime_vix, portfolio_id),
+         post_mortem, regime_trend, regime_vix, portfolio_id, earnings_window,
+         None if results_before_expiry is None else int(bool(results_before_expiry))),
     )
     conn.commit()
     if cur.lastrowid and cur.rowcount:
@@ -365,6 +371,7 @@ def record_resolved_entry(conn, entry, post_mortem=None):
     archetype = ((entry.get("spread") or {}).get("strategy")
                  or _archetype_for(signal))
     regime = entry.get("regime") or {}
+    earnings = entry.get("earnings") if isinstance(entry.get("earnings"), dict) else {}
     outcome_id = record_outcome(
         conn,
         journal_ref=journal_ref_for(entry),
@@ -376,6 +383,8 @@ def record_resolved_entry(conn, entry, post_mortem=None):
         regime_trend=regime.get("trend"),
         regime_vix=regime.get("vix_band"),
         portfolio_id=entry.get("portfolio_id"),
+        earnings_window=earnings.get("window"),
+        results_before_expiry=earnings.get("results_before_expiry"),
     )
     # One event for the strategy signal (tagged by archetype when it's a
     # known one, else by the normalized signal text) + one per user-chosen

@@ -285,3 +285,10 @@ LIVE_QUOTE_INTERVAL_SECONDS = int(_CONFIG.get("live_quote_interval_seconds", 300
 # (one chain per ticker+expiry per live cycle, shared with the ratchet);
 # false = only the ratchet's directional spreads get a real quote.
 REAL_QUOTE_MARKS_ALL = bool(_CONFIG.get("real_quote_marks_all", True))
+# Earnings Awareness S2 (#145 E, docs/earnings_awareness_spec.md): the entry's
+# results window — "pre" = results within this many days and before expiry,
+# "post" = results within the last EARNINGS_POST_DAYS. Annotation only, gates nothing.
+EARNINGS_PRE_DAYS = int(_CONFIG.get("earnings_pre_days", 7))
+EARNINGS_POST_DAYS = int(_CONFIG.get("earnings_post_days", 3))
+# A results calendar older than this many days abstains (window null + reason).
+EARNINGS_CALENDAR_MAX_AGE_DAYS = int(_CONFIG.get("earnings_calendar_max_age_days", 3))

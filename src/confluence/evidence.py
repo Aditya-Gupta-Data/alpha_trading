@@ -275,6 +275,93 @@ def build_evidence_snapshot(ticker: str, today: date = None,
     }
 
 
+# ------------------------------------------------------------- earnings window
+
+def _iso_day(value):
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def earnings_block(ticker, expiry, today: date = None, doc: dict = None,
+                   heavyweights: dict = None) -> dict:
+    """The entry's one `earnings` annotation (spec §2 S2): window pre / through / post / clear,
+    or None with a reason. A stock reads its own dates; an index reads its heavyweights'."""
+    from src.config import EARNINGS_POST_DAYS, EARNINGS_PRE_DAYS
+    from src.ingestion import earnings_calendar as ec
+    today = today or date.today()
+    doc = ec.load_doc() if doc is None else doc
+    block = {"next_results": None, "days_to_results": None,
+             "last_results": None, "days_since_results": None,
+             "results_before_expiry": None, "window": None,
+             "index_constituents_reporting": [],
+             "source_as_of": (doc or {}).get("as_of"), "basis": None,
+             "pre_days": EARNINGS_PRE_DAYS, "post_days": EARNINGS_POST_DAYS,
+             "reason": ec.stale_reason(doc, today)}
+    if block["reason"]:
+        return block
+    exp = _iso_day(expiry)
+    if exp is None:
+        block["reason"] = "entry has no expiry"
+        return block
+    t = str(ticker or "").strip().upper()
+    if t.endswith(".NS"):
+        names, block["basis"] = [t], "own"
+    else:
+        heavy = ec.load_heavyweights() if heavyweights is None else heavyweights
+        names, block["basis"] = list(heavy.get(t) or []), "index_heavyweights"
+        if not names:
+            block["reason"] = f"no heavyweight map for index {t or '?'}"
+            return block
+        block["index_constituents_reporting"] = ec.index_constituent_results(
+            t, today, exp, doc, heavyweights={t: names}) or []
+    ctx = {n: ec.results_context(n, today, doc) for n in names}
+    nexts = [c["next_results"] for c in ctx.values() if c["next_results"]]
+    lasts = [c["last_results"] for c in ctx.values() if c["last_results"]]
+    if nexts:
+        block["next_results"] = min(nexts)
+        block["days_to_results"] = (date.fromisoformat(min(nexts)) - today).days
+    if lasts:
+        block["last_results"] = max(lasts)
+        block["days_since_results"] = (today - date.fromisoformat(max(lasts))).days
+    exp_iso = exp.isoformat()
+    unknown = [n for n, c in ctx.items() if not c["next_results"]
+               and (ec.earliest_unannounced_results(n, today, doc) or "0000") <= exp_iso]
+    if any(d <= exp_iso for d in nexts):
+        block["results_before_expiry"] = True
+        block["window"] = ("pre" if block["days_to_results"] <= EARNINGS_PRE_DAYS
+                           else "through")
+    elif unknown:
+        block["reason"] = (f"results date not announced for {', '.join(unknown)}"
+                           f" — may fall before expiry {exp_iso}")
+    else:
+        block["results_before_expiry"] = False
+        ds = block["days_since_results"]
+        block["window"] = ("post" if ds is not None and ds <= EARNINGS_POST_DAYS
+                           else "clear")
+    return block
+
+
+def stamp_earnings(entry: dict, today: date = None, doc: dict = None,
+                   heavyweights: dict = None) -> dict | None:
+    """Attach the `earnings` block to a spread journal entry. Annotation only: it never
+    refuses or resizes anything, and a failure stamps window None with the reason."""
+    try:
+        today = today or _iso_day(entry.get("date")) or date.today()
+        block = earnings_block(entry.get("ticker"),
+                               (entry.get("spread") or {}).get("expiry"),
+                               today, doc, heavyweights)
+    except Exception as exc:
+        block = {"window": None, "results_before_expiry": None,
+                 "reason": f"earnings stamp failed ({type(exc).__name__}: {exc})"}
+    try:
+        entry["earnings"] = block
+    except Exception:
+        return None
+    return block
+
+
 def summarize(snapshot: dict) -> str:
     """One human line per non-abstaining layer — the proposal-card /
     /analyze rendering. Abstentions collapse to a count (card-bloat rule)."""

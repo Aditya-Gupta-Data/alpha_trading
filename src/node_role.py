@@ -9,6 +9,7 @@ ALPHA_ALLOW_EXECUTION=1 is in the process env (a hand-run failover, only with th
 from __future__ import annotations
 
 import os
+import re
 import socket
 from pathlib import Path
 
@@ -20,12 +21,17 @@ NOT_ON_NODE = ("src.renew_token", "scripts/publish_dashboard_mirror.sh")
 # ... and the live session lane: the loop itself and every 09:10–15:50 Dhan consumer (#146).
 EXECUTION_JOBS = ("src.master_scheduler", "src.live_bridge", "src.execution.recon_engine",
                   "src.ingestion.intraday_tracker", "src.ingestion.chain_archiver")
-NEVER_ON_NODE = NOT_ON_NODE + EXECUTION_JOBS
+# ... and the jobs that report on or move the VM's book, or repeat its watchlist cards (#147).
+BOOK_JOBS = ("src.main", "src.suggest", "src.morning_brief", "src.eod_summary", "src.ceo_brief",
+             "src.portfolio_report", "src.portfolio_greeks", "src.performance", "src.firm_treasury --rotate",
+             "src.reporting.markdown_ledger")
+NEVER_ON_NODE = NOT_ON_NODE + EXECUTION_JOBS + BOOK_JOBS
+_NEVER = re.compile("|".join(rf"(?<![\w./]){re.escape(x)}(?![\w.])" for x in NEVER_ON_NODE))
 
 
 def never_on_node(job: str) -> bool:
     """True for a cron line or job key the node must not run."""
-    return any(x in job for x in NEVER_ON_NODE)
+    return bool(_NEVER.search(job))
 
 
 def _dotenv(key: str, env_path: Path) -> str:

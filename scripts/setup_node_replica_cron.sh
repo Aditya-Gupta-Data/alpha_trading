@@ -5,7 +5,8 @@
 # GCP VM is the ONLY execution node; the Mini PC is the analytics hub. This block
 # runs the VM's cron lines MINUS the live session lane (master_scheduler,
 # recon_engine, intraday_tracker, chain_archiver — src/node_role.py), so the two
-# hosts never trade or poll Dhan for the same account at once. Every night the
+# hosts never trade or poll Dhan for the same account at once, and minus the book
+# jobs (#147: briefs, EOD/CEO cards, portfolio reports, treasury rotation). Every night the
 # node reconciles itself against the VM and files a report (src/node_reconcile.py).
 #
 # What it installs (a second, separate crontab block — the home-lane block from

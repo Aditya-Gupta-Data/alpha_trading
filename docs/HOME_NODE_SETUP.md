@@ -387,7 +387,8 @@ installer only when `CRON_SETUP.md` says the block changed.
 Everything above gets the box ready and runs the *home lane* (sync, miner, evolution) in
 shadow. **Role separation (#146, 2026-10-17): the GCP VM is the only execution node; this box
 is the analytics hub.** The replica block runs the VM's schedule **minus the live session lane**
-(`master_scheduler`, `recon_engine`, `intraday_tracker`, `chain_archiver`), the VM changes in no
+(`master_scheduler`, `recon_engine`, `intraday_tracker`, `chain_archiver`) and the jobs that
+report on the paper book (#147 — briefs, EOD/CEO cards, portfolio reports), the VM changes in no
 way, and each night the node reconciles itself against the VM and files a report. Its Discord
 posts carry the label `minipc1`. The live loop also refuses to start here on its own: the
 installer writes `ALPHA_NODE_ROLE=analytics` into `.env`, and `master_scheduler` / `live_bridge`

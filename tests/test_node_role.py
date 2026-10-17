@@ -48,10 +48,14 @@ def test_the_failover_override_is_process_env_only(tmp_path):
 
 def test_the_job_lists():
     for job in ("src.master_scheduler", "src.execution.recon_engine", "src.ingestion.intraday_tracker --darlings",
-                "src.ingestion.chain_archiver", "src.renew_token", "scripts/publish_dashboard_mirror.sh"):
+                "src.ingestion.chain_archiver", "src.renew_token", "scripts/publish_dashboard_mirror.sh",
+                "src.main", "src.suggest", "src.morning_brief", "src.eod_summary", "src.ceo_brief",
+                "src.portfolio_report", "src.portfolio_greeks", "src.performance", "src.firm_treasury --rotate",
+                "src.reporting.markdown_ledger", 'cd "/r" && "/r/py" -m src.main >> "/r/logs/main.log" 2>&1'):
         assert node_role.never_on_node(job), job
     for job in ("src.validation.run_proving_court", "src.analysis.macro_nightly", "src.discovery.nightly",
-                "src.ingestion.bhavcopy_clerk --backfill 5", "src.main", "src.firm_treasury --rotate"):
+                "src.ingestion.bhavcopy_clerk --backfill 5", "src.ops_monitor", "src.sleep_phase",
+                "src.validation.digest", "src.firm_treasury", "src.maintenance", "src.main_x"):
         assert not node_role.never_on_node(job), job
 
 

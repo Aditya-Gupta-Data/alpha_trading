@@ -159,7 +159,8 @@ launchctl unload ~/Library/LaunchAgents/com.aditrader.sync.plist ~/Library/Launc
 
 **What and why.** Role separation (#146, 2026-10-17): the GCP VM is the ONLY execution
 node, the Mini PC is the analytics hub. The block runs the VM's schedule MINUS the live
-session lane (`master_scheduler`, `recon_engine`, `intraday_tracker` ×2, `chain_archiver`),
+session lane (`master_scheduler`, `recon_engine`, `intraday_tracker` ×2, `chain_archiver`)
+and the book jobs (#147: briefs, EOD/CEO cards, portfolio reports, treasury rotation),
 so the two hosts never run the session for one Dhan account at once; the heavy nightly
 work (Proving Court, macro nightly, discovery, backfills) runs on the node's own database.
 `master_scheduler` and `live_bridge` also refuse to start on the node by themselves
@@ -184,7 +185,7 @@ node's market-hours jobs abstain with named reasons and the reconcile says so.
 
 | IST | Job | Notes |
 |---|---|---|
-| the VM's other lines | rendered from `scripts/setup_cron.sh` by `scripts/node_replica_block.py` | never retyped, cannot drift. Left off (`node_role.NEVER_ON_NODE`): `src.renew_token`, `publish_dashboard_mirror.sh` ×2, and the live lane — `src.master_scheduler`, `src.execution.recon_engine`, `src.ingestion.intraday_tracker` ×2, `src.ingestion.chain_archiver` |
+| the VM's other lines | rendered from `scripts/setup_cron.sh` by `scripts/node_replica_block.py` | never retyped, cannot drift. Left off (`node_role.NEVER_ON_NODE`, 18 lines): `src.renew_token`, `publish_dashboard_mirror.sh` ×2; the live lane — `src.master_scheduler`, `src.execution.recon_engine`, `src.ingestion.intraday_tracker` ×2, `src.ingestion.chain_archiver` (#146); the book jobs — `src.main`, `src.suggest`, `src.morning_brief`, `src.eod_summary`, `src.ceo_brief`, `src.portfolio_report`, `src.portfolio_greeks`, `src.performance`, `src.firm_treasury --rotate`, `src.reporting.markdown_ledger` (#147). 19 lines remain |
 | every minute | `scripts/node_heartbeat.sh` | `logs/node_heartbeat.log` — the outage record |
 | 23:30 | `python -m src.node_reconcile` | `logs/node_reconcile/<day>.md` + one `[minipc1]` Discord card |
 | 07:15 (only `--with-token`) | `scripts/node_token_mirror.sh` | read-only copy of the VM's current token |

@@ -12,6 +12,8 @@ path and interpreter, and drops every job the node must not run
   scripts/publish_dashboard_mirror.sh   would overwrite the VM's mirror on the dashboard box
   the live session lane (#146)          master_scheduler, recon_engine, intraday_tracker,
                                         chain_archiver — the VM is the only execution node
+  the book jobs (#147)                  briefs, EOD/CEO cards, portfolio reports, treasury
+                                        rotation — the node's book never moves
 
 Everything else is the VM's schedule verbatim, so it can never drift from it.
 

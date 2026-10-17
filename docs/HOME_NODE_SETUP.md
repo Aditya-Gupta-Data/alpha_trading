@@ -422,3 +422,66 @@ differences are listed as information, never divergence: the node does not trade
 honest limits are printed at the bottom of every report.
 
 To stop: `bash scripts/setup_node_replica_cron.sh --remove`. The VM never knew.
+
+
+## 13. The LLM endpoint — FreeLLMAPI, not Ollama (decision #148)
+
+Ollama is **not** installed on this box (it costs too much RAM). The edge miner, evolution
+and the sleep phase's LLM tasks talk to **FreeLLMAPI** instead: one small Docker container
+that listens only on `127.0.0.1:3001` and forwards each request to a free-tier provider
+(Groq, Cerebras, Google AI Studio, Mistral, OpenRouter …), failing over when one is
+rate-limited. The code's default endpoint is `http://localhost:3001/v1`, model `auto:fast`.
+
+**Know before you switch it on:** the text these jobs send (reviewed trade outcomes and
+post-mortems, journal and news text, evolution's reasoning about parameters) leaves this
+box for those providers. Free tiers can log or train on what they receive. The project
+itself says "personal experimentation only".
+
+**1. Docker, from Ubuntu's own packages (once):**
+
+```bash
+sudo apt update && sudo apt install -y docker.io docker-compose-v2
+sudo usermod -aG docker "$USER"
+exit
+```
+
+Log back in (`ssh mini_pc1@100.72.160.38`) so the `docker` group applies, then check
+`docker ps` answers without sudo.
+
+**2. FreeLLMAPI — download the installer, read it, run it.** It never uses sudo, writes
+`~/freellmapi/.env` (its own encryption key) and `docker-compose.yml`, pulls
+`ghcr.io/tashfeenahmed/freellmapi:latest`, and binds `127.0.0.1:3001` only:
+
+```bash
+curl -fsSL https://freellmapi.co/install.sh -o ~/freellmapi-install.sh
+less ~/freellmapi-install.sh
+bash ~/freellmapi-install.sh
+curl -s http://127.0.0.1:3001/api/ping
+```
+
+Back up `~/freellmapi/.env`: losing its key means re-entering every provider key.
+
+**3. Open the dashboard from the Mac** through an SSH tunnel (the port is never exposed
+to the network). On the Mac, leave this running in its own terminal tab:
+
+```bash
+ssh -N -L 3001:127.0.0.1:3001 mini_pc1@100.72.160.38
+```
+
+then open `http://localhost:3001` in the Mac's browser. On the **Keys** page add the
+free-tier keys you have (each provider's console issues them). Copy the **unified key**
+(`freellmapi-…`) from the page header.
+
+**4. Give the project the unified key** (on the node; replace the placeholder):
+
+```bash
+cd ~/alpha_trading && printf 'ALPHA_LLM_API_KEY=%s\n' 'freellmapi-PASTE-HERE' >> .env && chmod 600 .env
+venv/bin/python -c "from src.local_parser import LocalExtractor as L; e=L(); print(e.base_url, e.model, 'reachable' if e.is_reachable() else 'NOT reachable'); print(e.extract_event_json('NIFTY 50 closed 1.2 percent higher after strong bank earnings'))"
+```
+
+The second line must print `reachable` and a small JSON event frame. From then on the
+20:00 sleep phase's LLM tasks run for real on the node's own database.
+
+Update later: `cd ~/freellmapi && docker compose pull && docker compose up -d`.
+Logs: `cd ~/freellmapi && docker compose logs -f`. Off: `cd ~/freellmapi && docker compose down`
+(the jobs then skip again, nothing breaks).

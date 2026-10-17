@@ -430,7 +430,7 @@ def test_run_from_sleep_phase_skips_gracefully():
             return False
 
     out = ev.run_from_sleep_phase(conn, DeadLLM())
-    assert out == {"skipped": "Ollama not reachable"}
+    assert out == {"skipped": "LLM endpoint not reachable"}
 
 
 if __name__ == "__main__":

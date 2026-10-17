@@ -43,9 +43,9 @@ def test_run_skips_without_ollama_or_when_not_due():
     with mock.patch.object(em, "due", return_value=False):
         assert em.run_miner()["status"] == "skipped"
     with mock.patch.object(em, "due", return_value=True), \
-         mock.patch.object(em, "ollama_up", return_value=False):
+         mock.patch.object(em, "llm_up", return_value=False):
         result = em.run_miner()
-    assert result["status"] == "skipped" and "Ollama" in result["reason"]
+    assert result["status"] == "skipped" and "LLM endpoint" in result["reason"]
 
 
 def _seed_db(path: Path, existing_triples=()):
@@ -104,7 +104,7 @@ def test_full_cycle_pull_mine_apply_refresh():
                     "triples_skipped": 0}
 
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
              mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
              mock.patch.object(em, "DATA_DIR", data_dir), \
@@ -151,7 +151,7 @@ def test_no_new_edges_means_no_apply_call():
                     "triples_skipped": 0}
 
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
              mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
              mock.patch.object(em, "DATA_DIR", data_dir), \
@@ -174,7 +174,7 @@ def test_failed_pull_reports_and_writes_no_state():
             return mock.Mock(returncode=1, stdout="", stderr="scp: boom")
 
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
              mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
              mock.patch.object(em, "STATE_PATH", state):
@@ -216,7 +216,7 @@ def test_run_miner_skips_honestly_when_the_extractor_is_dead():
     with tempfile.TemporaryDirectory() as tmp:
         state = Path(tmp) / ".state.json"
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready",
                                return_value=(False, "dummy extraction "
                                              "returned no valid event frame")), \
@@ -231,7 +231,7 @@ def test_injected_extractors_are_not_probed():
     """Tests/callers that inject their own extractor own its readiness —
     the probe only guards the scheduled build-your-own path."""
     with mock.patch.object(em, "due", return_value=True), \
-         mock.patch.object(em, "ollama_up", return_value=True), \
+         mock.patch.object(em, "llm_up", return_value=True), \
          mock.patch.object(em, "extractor_ready") as probe, \
          mock.patch.object(em, "_gcloud", return_value=None):
         result = em.run_miner(extractor=mock.Mock())
@@ -398,7 +398,7 @@ def test_shadow_cycle_pulls_mines_refreshes_but_never_writes_to_the_vm():
                     "triples_skipped": 0}
 
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
              mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
              mock.patch.object(em, "DATA_DIR", data_dir), \

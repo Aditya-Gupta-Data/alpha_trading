@@ -60,6 +60,15 @@ def is_analytics_node(env=None, hostname: str | None = None, env_path: Path = EN
     return host in ANALYTICS_HOSTS or label in ANALYTICS_HOSTS
 
 
+def llm_jobs_refusal(env=None, hostname: str | None = None, env_path: Path = ENV_PATH) -> str | None:
+    """None where the edge miner and the weekly evolution may run: the analytics node only (#149)."""
+    env = os.environ if env is None else env
+    if is_analytics_node(env, hostname, env_path) or (env.get("ALPHA_ALLOW_LLM_JOBS") or "").strip() == "1":
+        return None
+    return ("the edge miner and the weekly evolution run only on the analytics node (decision #149), so the "
+            "VM's graph has one miner. Set ALPHA_ALLOW_LLM_JOBS=1 for a deliberate hand-run here.")
+
+
 def execution_refusal(env=None, hostname: str | None = None, env_path: Path = ENV_PATH) -> str | None:
     """None where the live loop may run; otherwise the reason it must not."""
     env = os.environ if env is None else env

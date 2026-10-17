@@ -56,6 +56,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 STATE_PATH = DATA_DIR / ".edge_miner_state.json"
 ARCHIVE_DIR = DATA_DIR / "mac-archive-pre-vm"
+VM_COPY_DIR = DATA_DIR / "vm_snapshot"   # the analytics node's copy of the VM; its own data/ belongs to its jobs (#149)
 
 MIN_HOURS_BETWEEN_RUNS = 20
 MINE_WINDOW_DAYS = 30            # how far back Task D looks for outcomes
@@ -299,7 +300,7 @@ def run_resilient(runner, cmd: list, what: str,
 
 
 def run_miner(force: bool = False, runner=_run, extractor=None,
-              now: float = None, apply: bool = True) -> dict:
+              now: float = None, apply: bool = True, local_dir=None) -> dict:
     """The full opportunistic cycle. Returns a summary dict; every skip
     reason is explicit. Injectable runner/extractor for offline tests.
 
@@ -393,8 +394,15 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
                         "detail": (res.stderr or res.stdout or "")[-300:]}
             applied = len(new_triples)
 
-        # 5. REFRESH the Mac's read-only copies (archive originals once)
-        if not ARCHIVE_DIR.exists():
+        # 5. REFRESH the local read-only copies (archive originals once). On the
+        # analytics node they go to VM_COPY_DIR: its data/brain_map.db is live
+        # under its own nightly jobs and must never be overwritten (#149).
+        if local_dir is None:
+            from src import node_role
+            local_dir = DATA_DIR / VM_COPY_DIR.name if node_role.is_analytics_node() else DATA_DIR
+        local_dir = Path(local_dir)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        if local_dir == DATA_DIR and not ARCHIVE_DIR.exists():
             ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
             for name in ("brain_map.db", "journal.jsonl", "portfolio.json"):
                 src = DATA_DIR / name
@@ -409,7 +417,7 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
         refresh = (run_resilient(
             runner, scp_base + [f"{VM}:{SNAPSHOT_DIR}/brain_map.db",
                                 f"{VM}:{SNAPSHOT_DIR}/journal.jsonl",
-                                str(DATA_DIR) + "/"],
+                                str(local_dir) + "/"],
             "refresh Mac copies") if getattr(snap, "returncode", 1) == 0 else snap)
         refreshed = getattr(refresh, "returncode", 1) == 0
         if not refreshed:
@@ -439,6 +447,11 @@ if __name__ == "__main__":
                         help="SHADOW TRIAL: pull + mine + refresh local "
                              "copies, but apply nothing on the VM")
     args = parser.parse_args()
+    from src import node_role
+    refusal = node_role.llm_jobs_refusal()
+    if refusal:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] edge_miner: REFUSED — {refusal}", flush=True)
+        raise SystemExit(3)
     result = run_miner(force=args.force, apply=not args.no_apply)
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] edge_miner: "
           f"{json.dumps(result)}", flush=True)

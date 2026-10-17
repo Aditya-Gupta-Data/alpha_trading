@@ -16,10 +16,11 @@
 #   12:30     scripts/mac_auto_sync.sh                   (login + hourly, 180-min throttle)
 #   19:20     scripts/mac_auto_sync.sh                   — after NSE's ~19:00 F&O bundle
 #   @reboot   scripts/mac_auto_sync.sh (+90 s)         catch-up after a power cut (10-10)
-#   21:00     scripts/mine_edges.sh                    Mac LaunchAgent alpha-edge-miner
-#   @reboot   scripts/mine_edges.sh (+120 s)           catch-up; the miner self-gates >20 h
-#   Sat 02:00 scripts/run_evolution.sh                 Mac LaunchAgent com.alphatrading.evolution
 #   Sat 09:30 src.ingestion.scrip_master               Mac crontab
+#
+# The edge miner and the weekly evolution are NOT here: they moved to the
+# replica block (scripts/setup_node_replica_cron.sh, decision #149), so the
+# two node blocks can never run them twice.
 #
 # NOT here any more: src.analysis.weekly_recalibration. Architect ruling E3
 # (2026-10-09, decision #139) moved it to the VM, cron #36 Friday 22:00,
@@ -103,12 +104,7 @@ $MODE_LINES
 20 19 * * * cd "$REPO_ROOT" && bash scripts/mac_auto_sync.sh >> "$REPO_ROOT/logs/mac_auto_sync.cron.log" 2>&1
 #    Catch-up after a power cut / reboot (cron never replays a missed slot; the 180-min throttle makes this free).
 @reboot sleep 90 && cd "$REPO_ROOT" && bash scripts/mac_auto_sync.sh >> "$REPO_ROOT/logs/mac_auto_sync.cron.log" 2>&1
-# 2. Edge miner (local Ollama; self-gates on >20h since last success). Same catch-up at boot.
-0 21 * * * cd "$REPO_ROOT" && bash scripts/mine_edges.sh >> "$REPO_ROOT/logs/edge_miner.cron.log" 2>&1
-@reboot sleep 120 && cd "$REPO_ROOT" && bash scripts/mine_edges.sh >> "$REPO_ROOT/logs/edge_miner.cron.log" 2>&1
-# 3. Procedural evolution (local Ollama; never auto-applies anything).
-0 2 * * 6 cd "$REPO_ROOT" && bash scripts/run_evolution.sh >> "$REPO_ROOT/logs/evolution.cron.log" 2>&1
-# 4. Saturday scrip reconciliation. (Weekly recalibration is VM cron #36 since 2026-10-09 — NOT here.)
+# 2. Saturday scrip reconciliation. (Weekly recalibration is VM cron #36 since 2026-10-09 — NOT here.)
 30 9 * * 6 cd "$REPO_ROOT" && . scripts/node_env.sh && "\$PY" -m src.ingestion.scrip_master$SCRIP_QUIET >> "$REPO_ROOT/logs/scrip_master.log" 2>&1
 $BLOCK_END
 EOF2

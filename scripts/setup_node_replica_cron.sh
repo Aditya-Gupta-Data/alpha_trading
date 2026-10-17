@@ -17,6 +17,9 @@
 #   * ALPHA_NODE_LABEL=minipc1 — every Discord card / email the node sends carries it
 #   * ALPHA_NODE_ROLE=analytics — master_scheduler / live_bridge refuse to start here
 #   * scripts/node_heartbeat.sh every minute — the outage record
+#   * the LLM jobs, node-only (#149): scripts/mine_edges.sh 21:00 daily (the VM
+#     graph's ONE miner) and scripts/run_evolution.sh Saturday 02:00, both through
+#     the local FreeLLMAPI router (#148); the Mac's agents for them are retired
 #   * src.node_reconcile at 23:30 — the nightly report + one Discord card
 #   * with --with-token only: scripts/node_token_mirror.sh at 07:15 (see below)
 #
@@ -82,6 +85,9 @@ $OPS_LINE}
 $VM_LINES
 # node-only: the outage record, and the nightly report against the VM
 * * * * * cd \"$REPO_ROOT\" && bash scripts/node_heartbeat.sh
+# node-only LLM jobs (#149): the VM graph's one edge miner, and the weekly evolution
+0 21 * * * cd \"$REPO_ROOT\" && bash scripts/mine_edges.sh >> \"$REPO_ROOT/logs/edge_miner.cron.log\" 2>&1
+0 2 * * 6 cd \"$REPO_ROOT\" && bash scripts/run_evolution.sh >> \"$REPO_ROOT/logs/evolution.cron.log\" 2>&1
 30 23 * * * cd \"$REPO_ROOT\" && \"$PY\" -m src.node_reconcile >> \"$REPO_ROOT/logs/node_reconcile.log\" 2>&1${TOKEN_LINE:+
 $TOKEN_LINE}
 $BLOCK_END"
@@ -105,7 +111,8 @@ case "$MODE" in
         if [ -f "$REPO_ROOT/.env" ] && ! grep -q '^ALPHA_NODE_ROLE=' "$REPO_ROOT/.env"; then
             printf 'ALPHA_NODE_ROLE=analytics\n' >> "$REPO_ROOT/.env"; chmod 600 "$REPO_ROOT/.env"
         fi
-        echo "setup_node_replica_cron: installed $(echo "$VM_LINES" | wc -l | tr -d ' ') VM job lines + heartbeat + nightly reconcile$([ "$WITH_TOKEN" -eq 1 ] && echo ' + token mirror')."
+        echo "setup_node_replica_cron: installed $(echo "$VM_LINES" | wc -l | tr -d ' ') VM job lines + heartbeat + nightly reconcile + edge miner + weekly evolution$([ "$WITH_TOKEN" -eq 1 ] && echo ' + token mirror')."
+        echo "  the Mac must not mine too (#149): retire its two agents — CRON_SETUP.md, 'LLM jobs on the Mini PC'"
         [ -f "$REPO_ROOT/data/.node_seed.json" ] || echo "  !! the node has not been seeded from the VM — run: bash scripts/node_seed_from_vm.sh --yes   (remove the block first if jobs are already running)"
         [ "$WITH_TOKEN" -eq 1 ] || echo "  note: no live token on the node — market-hours jobs will abstain. Add --with-token when you are ready (it is a second consumer of the Dhan account's call budget)."
         echo "  tomorrow 23:30: logs/node_reconcile/$(date +%F).md and one [minipc1] Discord card"

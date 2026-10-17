@@ -110,6 +110,7 @@ def test_full_cycle_pull_mine_apply_refresh():
              mock.patch.object(em, "DATA_DIR", data_dir), \
              mock.patch.object(em, "STATE_PATH", state), \
              mock.patch.object(em, "ARCHIVE_DIR", data_dir / "archive"), \
+             mock.patch("src.node_role.is_analytics_node", return_value=False), \
              mock.patch("src.sleep_phase.write_causal_links", fake_task_d):
             result = em.run_miner(
                 runner=_fake_runner_factory([("seed", "RESULTS_IN", "x")],
@@ -420,3 +421,29 @@ def test_shadow_cycle_pulls_mines_refreshes_but_never_writes_to_the_vm():
         kinds = ["ssh" if "ssh" in c else "scp" for c in calls]
         assert kinds == ["ssh", "scp", "ssh", "scp"]
         assert not any("new_edges.json" in " ".join(c) or "apply_edges.py" in " ".join(c) for c in calls)
+
+
+def test_on_the_analytics_node_the_vm_copy_never_lands_on_its_live_db():
+    """#149: the node's data/brain_map.db is written by its own nightly jobs; the
+    miner's read-only copy of the VM goes to data/vm_snapshot/, and nothing is archived."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        data_dir = tmp / "data"
+        data_dir.mkdir()
+        (data_dir / "brain_map.db").write_text("the node's own live db")
+        calls = []
+        with mock.patch.object(em, "due", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
+             mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
+             mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
+             mock.patch.object(em, "DATA_DIR", data_dir), \
+             mock.patch.object(em, "STATE_PATH", data_dir / ".state.json"), \
+             mock.patch.object(em, "ARCHIVE_DIR", data_dir / "archive"), \
+             mock.patch("src.node_role.is_analytics_node", return_value=True), \
+             mock.patch("src.sleep_phase.write_causal_links",
+                        lambda *a, **k: {"outcomes_considered": 0, "triples_written": 0, "triples_skipped": 0}):
+            result = em.run_miner(runner=_fake_runner_factory([("seed", "RESULTS_IN", "x")], calls))
+        assert result["status"] == "ok" and result["local_copies_refreshed"]
+        assert calls[-1][-1] == str(data_dir / "vm_snapshot") + "/"
+        assert (data_dir / "brain_map.db").read_text() == "the node's own live db"
+        assert not (data_dir / "archive").exists()

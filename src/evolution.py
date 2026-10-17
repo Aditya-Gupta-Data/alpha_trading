@@ -62,6 +62,7 @@ import json
 import statistics
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -766,13 +767,29 @@ if __name__ == "__main__":
                         help="bars-cache start date (YYYY-MM-DD)")
     parser.add_argument("--max-candidates", type=int,
                         default=MAX_CANDIDATES_PER_RUN)
+    parser.add_argument("--db", default=None,
+                        help="brain_map.db to read (default: the VM copy on the analytics node, else data/)")
     args = parser.parse_args()
 
     if args.refresh_bars_cache:
         raise SystemExit(0 if refresh_bars_cache(start=args.start) else 1)
 
-    from src import brain_map
+    from src import brain_map, node_role
     from src.local_parser import LocalExtractor
+    refusal = node_role.llm_jobs_refusal()
+    if refusal:
+        print(f"evolution: REFUSED — {refusal}", flush=True)
+        raise SystemExit(3)
+    db = args.db
+    if db is None and node_role.is_analytics_node():
+        # the node's own data/brain_map.db never sees a new outcome (#146); read the miner's VM copy (#149)
+        from src.edge_miner import VM_COPY_DIR
+        db = VM_COPY_DIR / "brain_map.db"
+        if not db.exists():
+            raise SystemExit(f"No VM copy at {db} yet — the edge miner writes it after its first successful run.")
+        if not BARS_CACHE_PATH.exists() or time.time() - BARS_CACHE_PATH.stat().st_mtime > 7 * 86400:
+            print("evolution: bars cache older than 7 days — refreshing through the VM", flush=True)
+            refresh_bars_cache()
     extractor = LocalExtractor()
     if not extractor.is_reachable():
         raise SystemExit(f"LLM endpoint not reachable at {extractor.base_url} — start FreeLLMAPI "
@@ -781,7 +798,7 @@ if __name__ == "__main__":
     if cache is None:
         raise SystemExit("No bars cache — run: python3 -m src.evolution "
                          "--refresh-bars-cache")
-    connection = brain_map.connect()
+    connection = brain_map.connect(db)
     summary = run_evolution(connection, extractor, cache,
                             max_candidates=args.max_candidates)
     connection.close()

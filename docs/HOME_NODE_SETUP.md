@@ -485,3 +485,10 @@ The second line must print `reachable` and a small JSON event frame. From then o
 Update later: `cd ~/freellmapi && docker compose pull && docker compose up -d`.
 Logs: `cd ~/freellmapi && docker compose logs -f`. Off: `cd ~/freellmapi && docker compose down`
 (the jobs then skip again, nothing breaks).
+
+**The edge miner and the weekly evolution live here (#149).** The replica block runs
+`scripts/mine_edges.sh` at 21:00 every day and `scripts/run_evolution.sh` at 02:00 every
+Saturday. The miner keeps its copy of the VM in `data/vm_snapshot/` (this box's own
+`data/brain_map.db` belongs to its nightly jobs), and evolution reads that copy. Retire the
+Mac's two agents first (CRON_SETUP.md, "LLM jobs on the Mini PC"): two miners would apply
+the same edges twice.

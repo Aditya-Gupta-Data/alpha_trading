@@ -77,13 +77,13 @@ def test_the_node_installer_refuses_macos_the_vm_and_a_non_ist_clock():
 
 def test_the_node_schedule_is_the_mac_lane_and_nothing_of_the_vm_or_the_token():
     src = (SCRIPTS / "setup_mininode_cron.sh").read_text()
-    for job in ("mac_auto_sync.sh", "mine_edges.sh", "run_evolution.sh",
-                "src.ingestion.scrip_master"):
+    for job in ("mac_auto_sync.sh", "src.ingestion.scrip_master"):
         assert job in src, job
-    # three scheduled sync slots + ONE @reboot catch-up (10-10); the miner
-    # gets the same catch-up because it self-gates
+    # the LLM jobs live in the replica block only (#149): one miner on the node
+    assert "bash scripts/mine_edges.sh" not in src and "bash scripts/run_evolution.sh" not in src
+    # three scheduled sync slots + ONE @reboot catch-up (10-10)
     assert src.count("mac_auto_sync.sh >>") == 4
-    assert src.count("@reboot sleep") == 2                  # the two cron lines (comments aside)
+    assert src.count("@reboot sleep") == 1
     # Architect ruling E3 (10-09): recalibration is VM cron #36 — a node
     # copy would recalibrate on stale data every Saturday
     assert 'src.analysis.weekly_recalibration >>' not in src

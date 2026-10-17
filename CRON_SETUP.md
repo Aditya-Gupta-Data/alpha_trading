@@ -213,10 +213,25 @@ removes it.
 that wait for a person differ by construction unless paper auto-approve is on; artifacts built
 from live fetches differ by fetch timing; a silent cron job leaves no log movement.
 
-## The Mac (development + chat agent + opportunistic miner)
+## LLM jobs on the Mini PC (decision #149, 2026-10-17)
 
-**LaunchAgent** (`~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist`):
-runs `scripts/mine_edges.sh` at every login and daily at 21:00. The miner itself
+The edge miner and the weekly evolution run **only on the Mini PC**, from the replica
+block: `scripts/mine_edges.sh` daily 21:00 (the VM graph's one miner) and
+`scripts/run_evolution.sh` Saturday 02:00, through the local FreeLLMAPI router (#148,
+`docs/HOME_NODE_SETUP.md` §13). Both refuse to start on any other host. The Mac's two
+LaunchAgents for them are retired with one command, run on the Mac (the plists are kept
+in the existing `retired-alphatrading` folder, so this is reversible):
+
+```bash
+cd ~/Library/LaunchAgents && launchctl unload com.adityagupta.alpha-edge-miner.plist com.alphatrading.evolution.plist; mkdir -p retired-alphatrading && mv com.adityagupta.alpha-edge-miner.plist com.alphatrading.evolution.plist retired-alphatrading/ && launchctl list | grep -E 'alpha-edge-miner|alphatrading.evolution' || echo "both retired"
+```
+
+The Mac keeps `com.aditrader.sync` (the artifact ship) and its crontab.
+
+## The Mac (development + chat agent; the miner moved to the Mini PC, #149)
+
+**RETIRED by #149 — LaunchAgent** (`~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist`):
+ran `scripts/mine_edges.sh` at every login and daily at 21:00. The miner itself
 decides whether it's due (>20h since last success, Ollama up) and skips silently
 otherwise — so the Mac being open more often costs nothing. Reinstall if needed:
 

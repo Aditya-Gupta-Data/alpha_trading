@@ -86,3 +86,28 @@ def test_the_vm_installer_refuses_on_the_node_before_it_touches_cron():
 def test_every_node_installer_declares_the_role():
     for name in ("setup_node_replica_cron.sh", "setup_mininode_cron.sh", "bootstrap_node.sh", "node_preflight.sh"):
         assert "ALPHA_NODE_ROLE=analytics" in (ROOT / "scripts" / name).read_text(), name
+
+
+def test_the_llm_jobs_run_only_on_the_analytics_node(tmp_path):
+    none = tmp_path / "none"
+    assert node_role.llm_jobs_refusal({}, "minipc1", none) is None
+    assert node_role.llm_jobs_refusal({"ALPHA_NODE_ROLE": "analytics"}, VM, none) is None
+    for host in (VM, "Adityas-MacBook-Pro"):
+        assert "decision #149" in node_role.llm_jobs_refusal({}, host, none)
+    assert node_role.llm_jobs_refusal({"ALPHA_ALLOW_LLM_JOBS": "1"}, "Adityas-MacBook-Pro", none) is None
+
+
+@pytest.mark.parametrize("module", ["src.edge_miner", "src.evolution"])
+def test_the_llm_entry_points_refuse_off_the_node_before_anything_runs(monkeypatch, module):
+    from src import edge_miner, local_parser
+    def boom(*a, **k):
+        raise AssertionError("the LLM job started off the analytics node")
+    monkeypatch.setattr(edge_miner, "run_miner", boom)
+    monkeypatch.setattr(local_parser, "LocalExtractor", boom)
+    monkeypatch.setattr(node_role, "is_analytics_node", lambda *a, **k: False)
+    monkeypatch.delenv("ALPHA_ALLOW_LLM_JOBS", raising=False)
+    monkeypatch.setattr(sys, "argv", [module])
+    monkeypatch.delitem(sys.modules, module, raising=False)
+    with pytest.raises(SystemExit) as e:
+        runpy.run_module(module, run_name="__main__")
+    assert e.value.code == 3

@@ -542,6 +542,8 @@ def test_the_replica_installer_block(tmp_path):
     assert "ALPHA_NODE_LABEL=minipc1" in out and "ALPHA_NODE_REPLICA=1" in out and "\nALPHA_NODE_ROLE=analytics\n" in out
     assert "src.master_scheduler" not in out and "src.execution.recon_engine" not in out
     assert "scripts/node_heartbeat.sh" in out and "-m src.node_reconcile" in out and out.count("\n* * * * * ") == 1
+    assert "\n0 21 * * * " in out and "bash scripts/mine_edges.sh >>" in out           # the VM graph's one miner (#149)
+    assert "\n0 2 * * 6 " in out and "bash scripts/run_evolution.sh >>" in out
     assert "node_token_mirror" not in out                                   # off unless asked for
     assert "\nOPS_EXPECTED_JOBS=" in out and "renew_token.log" not in out
     # the preflight greps the crontab for these: a replica block must never trip it

@@ -42,7 +42,7 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-10-20 ~13:00 IST — Earnings S1–S3 (#150) + the Architect's §4 rulings and a HARD earnings proximity gate (#151): DEPLOYED to the VM 12:5x IST (`b7f923b` → `112f2c7`, which also brings #143–#149's code to the VM). Mini PC NOT pulled (unreachable)
+## 2026-10-20 ~13:00 IST — Earnings S1–S3 (#150) + the Architect's §4 rulings and a HARD earnings proximity gate (#151): DEPLOYED to the VM 12:5x IST (`b7f923b` → `112f2c7`, which also brings #143–#149's code to the VM); Mini PC pulled 12:57 IST (`fc9cd30`)
 
 - **Deploy record (Architect-approved, done by the agent):**
   1. VM: tree clean, no job running (NSE holiday); `git pull` → `112f2c7`.
@@ -51,7 +51,7 @@ the agent's job under the Session Wrap rule above.
   4. Settings read live: pre/post 5/3, `glassbreaking_require_volume` True.
   5. Gate on the live calendar: INFY.NS results in 3 days (gated from the 10-21 session); TCS, HDFCBANK and RELIANCE have no announced date; NIFTY BANK is an index, so not gated.
 - **Also live on the VM with this pull (#149):** the edge miner and the weekly evolution now REFUSE on the VM (Mini-PC only), and the VM's LLM default endpoint is FreeLLMAPI (#148), which the VM does not run.
-- **Mini PC NOT pulled.** Neither the Tailscale address nor the LAN address answered from the Mac at 12:51. The Mac's Tailscale said the relay was unreachable and MagicSock was not running; the owner toggles the app off/on. The node has no self-pull, so it stays on its old commit (analytics copy only). To finish: `ssh mini_pc1@100.72.160.38 'cd ~/alpha_trading && git pull --ff-only && git log -1 --oneline'`.
+- **Mini PC pulled 12:57 IST** (after the owner toggled Tailscale on the Mac; it then connected directly): `55ffb9f` → `fc9cd30`. Guard on the node: `is_analytics_node()` True, the live loop refused (#146), LLM jobs allowed (#149). 50 tests passed there (event gates, earnings, node role); 23 crontab lines unchanged.
 - **VM disk:** 1.4 GB free (86%). The 10-17 ops-agent log flood is unresolved unless the owner ran the cleanup.
 - **What changes now that it is deployed:**
   - **Gate:** a STOCK with results 5 or fewer days away gets no condor, butterfly, credit vertical or bear put. The refusal reads "earnings proximity gate: results in N day(s)…". Bull call spreads pass. Indices are not gated.

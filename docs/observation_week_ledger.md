@@ -2408,4 +2408,4 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 
 - VM clean, no job running; `git pull`; `node_role.execution_refusal()` None on the VM (hostname `alpha-trading-vm`, no `ALPHA_NODE_*`); 281 scoped tests passed; `alpha-trading` + `alpha-discord-bot` restarted; health 200.
 - Live gate read: INFY.NS results in 3 days → gated from the 10-21 session; TCS/HDFCBANK/RELIANCE no announced date; indices not gated.
-- Mini PC NOT updated: unreachable from the Mac (Tailscale relay down on the Mac, LAN timed out). Unverified until 10-21: the first gated refusals, learner-only entries carrying the gate reason, `event_gates` on proposals, the 19:20 calendar run writing `last`.
+- Mini PC: unreachable at 12:51 (the Mac's Tailscale relay was down; LAN timed out). After the owner toggled Tailscale it was pulled at 12:57, `55ffb9f` → `fc9cd30`; guard = analytics node, live loop refused; 50 tests passed there. Unverified until 10-21: the first gated refusals, learner-only entries carrying the gate reason, `event_gates` on proposals, the 19:20 calendar run writing `last`.

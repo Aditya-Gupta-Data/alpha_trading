@@ -1,4 +1,4 @@
-"""Earnings Awareness S1-S3 (decision #146, docs/earnings_awareness_spec.md). Fully offline."""
+"""Earnings Awareness S1-S3 (decision #150, docs/earnings_awareness_spec.md). Fully offline."""
 import json
 from datetime import date, timedelta
 

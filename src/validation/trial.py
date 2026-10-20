@@ -78,7 +78,7 @@ def ensure_schema(conn) -> None:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN mode TEXT")
     if "portfolio_id" not in cols:                 # M1 (#142): the bucket the Court row's evidence belongs to
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN portfolio_id TEXT")
-    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER")):   # #146 S3
+    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER")):   # #150 S3
         if col not in cols:
             conn.execute(f"ALTER TABLE shadow_trades ADD COLUMN {col} {kind}")
     conn.commit()

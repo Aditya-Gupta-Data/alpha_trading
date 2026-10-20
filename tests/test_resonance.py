@@ -279,8 +279,8 @@ def test_parse_headline_returns_strict_five_key_frame():
                      "directional_bias": -0.8,
                      "horizon_impact": "SHORT",
                      "confidence_score": 0.9}
-    # Local endpoint only, strict schema in the system prompt:
-    assert "11434" in post.call_args.args[0]
+    # The configured local endpoint only (FreeLLMAPI by default, #148), strict schema in the system prompt:
+    assert post.call_args.args[0].startswith("http://localhost:3001/v1/")
     prompt = post.call_args.kwargs["json"]["messages"][0]["content"]
     for key in ("target_entity", "event_classification", "directional_bias",
                 "horizon_impact", "confidence_score"):

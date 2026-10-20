@@ -124,7 +124,7 @@ def connect(db_path=None) -> sqlite3.Connection:
     for col in ("regime_trend", "regime_vix", "portfolio_id"):    # portfolio_id: M1 (#142), nullable
         if col not in outcome_cols:
             conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} TEXT")
-    # Earnings Awareness S3 (#146): the entry-time results window, NULL on older rows.
+    # Earnings Awareness S3 (#150): the entry-time results window, NULL on older rows.
     for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER")):
         if col not in outcome_cols:
             conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} {kind}")

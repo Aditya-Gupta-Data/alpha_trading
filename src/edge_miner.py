@@ -8,15 +8,18 @@ knowledge graph's causal mining. So the mining runs HERE, on the Mac,
 opportunistically: whenever this machine happens to be awake (login
 LaunchAgent + a daily timer), it
 
-  1. GUARDS   — silently skips unless local Ollama answers, gcloud is
+  0. LLM      — from 2026-10-17 (#148) the local FreeLLMAPI router
+                (http://localhost:3001/v1, free-tier providers behind it)
+                replaces Ollama; `src.local_parser` reads the endpoint.
+  1. GUARDS   — silently skips unless the LLM endpoint answers, gcloud is
                 available, and >20h have passed since the last success
                 (opportunistic, but roughly daily at most);
   2. PULLS    — the VM's live brain_map.db to a temp copy
                 (gcloud compute scp; the VM stays authoritative);
   3. MINES    — runs the Sleep Phase's own Task D
                 (sleep_phase.write_causal_links, decision #34: reviewed
-                outcomes only) against the temp copy with the local
-                Ollama extractor, then diffs graph_edges to collect the
+                outcomes only) against the temp copy with the
+                LLM extractor, then diffs graph_edges to collect the
                 NEWLY-minted triples;
   4. APPLIES  — ships just those triples (a small JSON) to the VM and
                 replays them there through the idempotent
@@ -35,6 +38,8 @@ NEW until the next time this machine is awake.
 
 Run manually any time:      python3 -m src.edge_miner
 Force despite the 20h gate: python3 -m src.edge_miner --force
+Shadow trial (home node, 2026-10-10): python3 -m src.edge_miner --no-apply
+  — pulls, mines and refreshes the local copies but applies NOTHING on the VM.
 """
 
 import argparse
@@ -51,9 +56,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 STATE_PATH = DATA_DIR / ".edge_miner_state.json"
 ARCHIVE_DIR = DATA_DIR / "mac-archive-pre-vm"
+VM_COPY_DIR = DATA_DIR / "vm_snapshot"   # the analytics node's copy of the VM; its own data/ belongs to its jobs (#149)
 
 MIN_HOURS_BETWEEN_RUNS = 20
-OLLAMA_URL = "http://localhost:11434/api/version"
 MINE_WINDOW_DAYS = 30            # how far back Task D looks for outcomes
 
 GCLOUD_CANDIDATES = ("/opt/homebrew/share/google-cloud-sdk/bin/gcloud",
@@ -95,18 +100,15 @@ def _gcloud() -> str | None:
     return None
 
 
-def ollama_up(url: str = OLLAMA_URL) -> bool:
-    try:
-        import urllib.request
-        with urllib.request.urlopen(url, timeout=3) as resp:
-            return resp.status < 500
-    except Exception:
-        return False
+def llm_up() -> bool:
+    """True when the configured LLM endpoint answers and accepts the key (#148)."""
+    from src.local_parser import LocalExtractor
+    return LocalExtractor().is_reachable()
 
 
 # The honesty probe's input: small, unambiguous, and shaped like the real
 # journal text the extractor mines — a valid answer proves the WHOLE chain
-# (httpx installed -> Ollama chat endpoint -> model -> JSON coercion), not
+# (httpx installed -> LLM chat endpoint -> model -> JSON coercion), not
 # just that a server socket answered.
 PROBE_TEXT = ("Health probe: NIFTY 50 closed 1.2 percent higher after "
               "strong bank earnings; volatility eased.")
@@ -298,14 +300,20 @@ def run_resilient(runner, cmd: list, what: str,
 
 
 def run_miner(force: bool = False, runner=_run, extractor=None,
-              now: float = None) -> dict:
+              now: float = None, apply: bool = True, local_dir=None) -> dict:
     """The full opportunistic cycle. Returns a summary dict; every skip
-    reason is explicit. Injectable runner/extractor for offline tests."""
+    reason is explicit. Injectable runner/extractor for offline tests.
+
+    `apply=False` is the home node's SHADOW TRIAL (2026-10-10): pull the
+    snapshot, mine with the LLM endpoint, refresh the local copies — but
+    never ship or apply a single edge on the VM. The Mac still owns that
+    write during the trial week; two machines must not apply to the same
+    graph. The summary then carries `new_edges_mined_not_applied`."""
     if not force and not due(now=now):
         return {"status": "skipped", "reason": "ran within the last "
                 f"{MIN_HOURS_BETWEEN_RUNS}h"}
-    if not ollama_up():
-        return {"status": "skipped", "reason": "Ollama not running"}
+    if not llm_up():
+        return {"status": "skipped", "reason": "LLM endpoint not reachable (FreeLLMAPI, #148)"}
     if extractor is None:
         # The scheduled path (launchd) builds its own extractor — probe it
         # end-to-end BEFORE claiming anything (Issue 9's honesty gap: a
@@ -347,7 +355,7 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
             return {"status": "failed", "reason": "could not pull VM DB",
                     "detail": (res.stderr or "")[-300:]}
 
-        # 3. MINE locally with Ollama
+        # 3. MINE through the LLM endpoint
         stats, new_triples = mine_new_triples(pulled, extractor=extractor)
 
         # 4. APPLY the new triples on the VM (idempotent add_edge). The
@@ -356,7 +364,11 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
         # live in evolution.refresh_bars_cache, 2026-07-09; this path had
         # the same flaw but had never fired with >0 triples).
         applied = 0
-        if new_triples:
+        if new_triples and not apply:
+            print(f"  (edge_miner: SHADOW — {len(new_triples)} new triple(s) "
+                  "mined, NOT applied on the VM; the Mac's miner still owns "
+                  "that write)", flush=True)
+        if new_triples and apply:
             payload = tmp / "new_edges.json"
             payload.write_text(json.dumps(new_triples))
             applier = tmp / "apply_edges.py"
@@ -382,8 +394,15 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
                         "detail": (res.stderr or res.stdout or "")[-300:]}
             applied = len(new_triples)
 
-        # 5. REFRESH the Mac's read-only copies (archive originals once)
-        if not ARCHIVE_DIR.exists():
+        # 5. REFRESH the local read-only copies (archive originals once). On the
+        # analytics node they go to VM_COPY_DIR: its data/brain_map.db is live
+        # under its own nightly jobs and must never be overwritten (#149).
+        if local_dir is None:
+            from src import node_role
+            local_dir = DATA_DIR / VM_COPY_DIR.name if node_role.is_analytics_node() else DATA_DIR
+        local_dir = Path(local_dir)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        if local_dir == DATA_DIR and not ARCHIVE_DIR.exists():
             ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
             for name in ("brain_map.db", "journal.jsonl", "portfolio.json"):
                 src = DATA_DIR / name
@@ -398,7 +417,7 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
         refresh = (run_resilient(
             runner, scp_base + [f"{VM}:{SNAPSHOT_DIR}/brain_map.db",
                                 f"{VM}:{SNAPSHOT_DIR}/journal.jsonl",
-                                str(DATA_DIR) + "/"],
+                                str(local_dir) + "/"],
             "refresh Mac copies") if getattr(snap, "returncode", 1) == 0 else snap)
         refreshed = getattr(refresh, "returncode", 1) == 0
         if not refreshed:
@@ -412,16 +431,27 @@ def run_miner(force: bool = False, runner=_run, extractor=None,
                "triples_written_locally": stats.get("triples_written"),
                "new_edges_applied_to_vm": applied,
                "local_copies_refreshed": refreshed}
+    if not apply:
+        summary["shadow"] = True
+        summary["new_edges_mined_not_applied"] = len(new_triples)
     return summary
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Opportunistic Ollama edge mining against the VM's "
+        description="Opportunistic LLM edge mining against the VM's "
                     "knowledge graph")
     parser.add_argument("--force", action="store_true",
                         help="ignore the 20h since-last-success gate")
+    parser.add_argument("--no-apply", action="store_true",
+                        help="SHADOW TRIAL: pull + mine + refresh local "
+                             "copies, but apply nothing on the VM")
     args = parser.parse_args()
-    result = run_miner(force=args.force)
+    from src import node_role
+    refusal = node_role.llm_jobs_refusal()
+    if refusal:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] edge_miner: REFUSED — {refusal}", flush=True)
+        raise SystemExit(3)
+    result = run_miner(force=args.force, apply=not args.no_apply)
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] edge_miner: "
           f"{json.dumps(result)}", flush=True)

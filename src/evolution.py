@@ -20,7 +20,7 @@ The pipeline, per cluster (all local, zero API spend):
   3. COUNTER-   the same setup's WINS are pulled and contrasted (VIX,
      FACTUAL    hold time, capture) so the model must reason about the
                 pivot that separated them, not free-associate.
-  4. ANALYST    local Ollama proposes ONE mutation from the whitelisted
+  4. ANALYST    the LLM endpoint (FreeLLMAPI from #148) proposes ONE mutation from the whitelisted
                 EVOLVABLE_PARAMETERS registry — strict JSON, schema-gated,
                 bounds-checked. A 3B model never writes code here: it
                 picks a parameter and a value and argues why; the code
@@ -40,9 +40,10 @@ The pipeline, per cluster (all local, zero API spend):
                 parameter, with the reasoning that drove each step).
 
 Where it runs (decision #47/#48 realities the spec couldn't know):
-  * The LLM work needs Ollama → the MAC. The VM's sleep phase calls Task
-    E too, but it degrades to a silent skip there (no Ollama) — same
-    pattern as ingestion/consolidation.
+  * The LLM work needs an LLM endpoint → the analytics node's FreeLLMAPI
+    (#148; Ollama on the Mac before). The VM's sleep phase calls Task E too,
+    but it degrades to a silent skip there (no endpoint) — same pattern as
+    ingestion/consolidation.
   * The Mac holds no live Dhan token (single-token rule, decision #48),
     so backtests run on a CACHED bars file (data/bars_cache.json),
     refreshed from the VM (which owns the token):
@@ -61,6 +62,7 @@ import json
 import statistics
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -682,10 +684,10 @@ def run_evolution(conn, extractor, bars_cache: dict,
 
 def run_from_sleep_phase(conn, extractor, today: date = None) -> dict:
     """Task E seam for sleep_phase: silently skips wherever the pieces
-    are missing (the VM has no Ollama; a machine without a bars cache
+    are missing (the VM has no LLM endpoint; a machine without a bars cache
     can't backtest) — same graceful-degradation contract as Tasks A-D."""
     if not extractor.is_reachable():
-        return {"skipped": "Ollama not reachable"}
+        return {"skipped": "LLM endpoint not reachable"}
     cache = load_bars_cache()
     if cache is None:
         return {"skipped": "no bars cache (python3 -m src.evolution "
@@ -765,21 +767,38 @@ if __name__ == "__main__":
                         help="bars-cache start date (YYYY-MM-DD)")
     parser.add_argument("--max-candidates", type=int,
                         default=MAX_CANDIDATES_PER_RUN)
+    parser.add_argument("--db", default=None,
+                        help="brain_map.db to read (default: the VM copy on the analytics node, else data/)")
     args = parser.parse_args()
 
     if args.refresh_bars_cache:
         raise SystemExit(0 if refresh_bars_cache(start=args.start) else 1)
 
-    from src import brain_map
+    from src import brain_map, node_role
     from src.local_parser import LocalExtractor
+    refusal = node_role.llm_jobs_refusal()
+    if refusal:
+        print(f"evolution: REFUSED — {refusal}", flush=True)
+        raise SystemExit(3)
+    db = args.db
+    if db is None and node_role.is_analytics_node():
+        # the node's own data/brain_map.db never sees a new outcome (#146); read the miner's VM copy (#149)
+        from src.edge_miner import VM_COPY_DIR
+        db = VM_COPY_DIR / "brain_map.db"
+        if not db.exists():
+            raise SystemExit(f"No VM copy at {db} yet — the edge miner writes it after its first successful run.")
+        if not BARS_CACHE_PATH.exists() or time.time() - BARS_CACHE_PATH.stat().st_mtime > 7 * 86400:
+            print("evolution: bars cache older than 7 days — refreshing through the VM", flush=True)
+            refresh_bars_cache()
     extractor = LocalExtractor()
     if not extractor.is_reachable():
-        raise SystemExit("Ollama is not running — start it and retry.")
+        raise SystemExit(f"LLM endpoint not reachable at {extractor.base_url} — start FreeLLMAPI "
+                         "and set ALPHA_LLM_API_KEY (docs/HOME_NODE_SETUP.md §13).")
     cache = load_bars_cache()
     if cache is None:
         raise SystemExit("No bars cache — run: python3 -m src.evolution "
                          "--refresh-bars-cache")
-    connection = brain_map.connect()
+    connection = brain_map.connect(db)
     summary = run_evolution(connection, extractor, cache,
                             max_candidates=args.max_candidates)
     connection.close()

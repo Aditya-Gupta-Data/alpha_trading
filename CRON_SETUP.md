@@ -74,20 +74,62 @@ the lid was shut (the sync shipped 2/7 on 09-15; the Saturday recalibration
 had not run since 08-01). The VM's schedule above is untouched. The node
 NEVER renews or pushes a Dhan token (#48) and never runs `setup_cron.sh`.
 
-Install / replace (clock must be IST — `sudo timedatectl set-timezone
+**2026-10-10 — the node goes live in two steps (decision #143): a SHADOW
+week beside the Mac first, promotion only on a clean report.** The box sits
+on a UPS and a LAN cable but will still lose power or the network now and
+then, so the schedule is built for a box that is *almost* always on.
+
+**Building the box from a blank Ubuntu Server install: `docs/HOME_NODE_SETUP.md`** (BIOS, OS, no-sleep, packages, repo, venv, the corpus and `.env` copy from the Mac, gcloud, optional Ollama, verification). `bash scripts/node_preflight.sh` checks all of it read-only and names each fix. Then:
+
+Step 1 — the shadow trial (clock must be IST — `sudo timedatectl set-timezone
 Asia/Kolkata` first; the installer refuses macOS, the VM and a non-IST clock):
 
 ```bash
-cd ~/alpha_trading && bash scripts/setup_mininode_cron.sh
+cd ~/alpha_trading && bash scripts/setup_mininode_cron.sh --shadow
 ```
+
+Same jobs, same times, full work — but `ALPHA_NODE_SHADOW=1` in the crontab
+makes the sync **ship nothing** (it logs `SHADOW: would have shipped k/7`),
+the miner **apply nothing** on the VM (`--no-apply`) and the scrip master
+post **no Discord card** (`--quiet`). The Mac keeps its LaunchAgents and owns
+the lane all week; the node only proves it can keep the clock. After seven
+full days, read the week from the node's own logs:
+
+```bash
+cd ~/alpha_trading && python3 scripts/node_trial_report.py
+```
+
+One row per day (which of the three slots fired, producer failures,
+would-have-shipped k/7, the read-only pull, the miner, reboots) and a verdict.
+`RELIABLE` means every slot fired, every producer succeeded and every ship
+would have been 7/7. Anything else lists exactly what went wrong.
+
+Step 2 — promotion, only on `RELIABLE`: re-run **without** `--shadow`
+(`bash scripts/setup_mininode_cron.sh`), hand-run `bash scripts/mac_auto_sync.sh
+--force` once and confirm `shipped 7/7`, then retire the Mac's copies with the
+command below so two machines never ship the same files.
 
 | IST | Job | Replaces | Log |
 |---|---|---|---|
 | 07:30, 12:30, 19:20 daily | `scripts/mac_auto_sync.sh` | the `com.aditrader.sync` LaunchAgent (sector bars, valuation, F&O bundle, darling ids, bars cache → the 7-file ship to the VM; keeps its own 180-min throttle) | `logs/mac_auto_sync.log` (+ `.cron.log`) |
+| `@reboot` + 90 s | `scripts/mac_auto_sync.sh` | **NEW 10-10:** catch-up after a power cut — plain cron never replays a slot it slept through; the 180-min throttle makes a boot-time run free | same |
 | 21:00 daily | `scripts/mine_edges.sh` | the edge-miner LaunchAgent (local Ollama, self-gates on > 20 h) | `logs/edge_miner.log` |
+| `@reboot` + 120 s | `scripts/mine_edges.sh` | **NEW 10-10:** same catch-up; the > 20 h self-gate makes it free | same |
 | 02:00 Saturday | `scripts/run_evolution.sh` | the evolution LaunchAgent (local Ollama, never auto-applies) | `logs/evolution.log` |
 | 09:30 Saturday | `src.ingestion.scrip_master` | Mac crontab | `logs/scrip_master.log` |
-| 10:00 Saturday | `src.analysis.weekly_recalibration` | Mac crontab | `logs/weekly_recalibration.log` |
+| ~~10:00 Saturday~~ | ~~`src.analysis.weekly_recalibration`~~ | **REMOVED 10-10** — Architect ruling E3 moved it to VM cron #36 (Friday 22:00) on 10-09; a node copy would recalibrate against a stale journal every week | — |
+
+**What a dark box costs, job by job.** One missed slot is harmless: three
+slots a day, the bhavcopy fetch walks back five weekdays, sector bars only
+extend forward. The VM protects itself when the ship stops: the sector veto
+abstains, darling entries stop after 3 stale days, the liquidity check fails
+closed after 7, and the ops card names the stale artifact (by design only
+after ~3 missed days — so a dead node is not noticed the same day). The
+Ollama jobs are safe to miss. Prerequisites for a box that comes back on its
+own: the router and fibre box on the **same UPS** (a box that is up with no
+internet fails every fetch and only logs it), BIOS "Restore on AC Power Loss
+= Power On" (the UPS only delays the outage; when its battery dies this is
+what brings the box back), and the suspend masking below.
 
 Every script resolves ONE explicit interpreter through `scripts/node_env.sh`
 (`$ALPHA_PY` → the repo `venv/bin/python` → the Mac framework python →
@@ -113,10 +155,83 @@ launchctl unload ~/Library/LaunchAgents/com.aditrader.sync.plist ~/Library/Launc
 > **The Mac section below is HISTORY once the node is live** — kept for the
 > lessons in it (absolute interpreter paths, the gcloud python trap).
 
-## The Mac (development + chat agent + opportunistic miner)
+## The node replica — the VM's analytics schedule, run in parallel (decision #144, narrowed by #146)
 
-**LaunchAgent** (`~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist`):
-runs `scripts/mine_edges.sh` at every login and daily at 21:00. The miner itself
+**What and why.** Role separation (#146, 2026-10-17): the GCP VM is the ONLY execution
+node, the Mini PC is the analytics hub. The block runs the VM's schedule MINUS the live
+session lane (`master_scheduler`, `recon_engine`, `intraday_tracker` ×2, `chain_archiver`)
+and the book jobs (#147: briefs, EOD/CEO cards, portfolio reports, treasury rotation),
+so the two hosts never run the session for one Dhan account at once; the heavy nightly
+work (Proving Court, macro nightly, discovery, backfills) runs on the node's own database.
+`master_scheduler` and `live_bridge` also refuse to start on the node by themselves
+(`src/node_role.py`), and `setup_cron.sh` refuses to install there. The VM changes in no
+way, and every night the node reconciles itself against the VM. The home-lane block
+above (sync, miner, evolution, scrip master) keeps running beside it.
+
+**Order, once the node passes `scripts/node_preflight.sh` (weekend, market closed):**
+
+```bash
+cd ~/alpha_trading
+bash scripts/node_seed_from_vm.sh --yes          # start from the VM's live book (read-only on the VM)
+bash scripts/setup_node_replica_cron.sh          # the VM's schedule + heartbeat + nightly reconcile
+bash scripts/setup_node_replica_cron.sh --dry-run   # (optional first) print the block
+```
+
+`--with-token` is a separate, deliberate step: it adds a 07:15 job that READS the
+token the VM already renewed. The node never renews (decision #48: one active token).
+It also makes the node a second consumer of the Dhan account's call budget, so do not
+enable it on a day the VM's own session is the thing being watched. Without it the
+node's market-hours jobs abstain with named reasons and the reconcile says so.
+
+| IST | Job | Notes |
+|---|---|---|
+| the VM's other lines | rendered from `scripts/setup_cron.sh` by `scripts/node_replica_block.py` | never retyped, cannot drift. Left off (`node_role.NEVER_ON_NODE`, 18 lines): `src.renew_token`, `publish_dashboard_mirror.sh` ×2; the live lane — `src.master_scheduler`, `src.execution.recon_engine`, `src.ingestion.intraday_tracker` ×2, `src.ingestion.chain_archiver` (#146); the book jobs — `src.main`, `src.suggest`, `src.morning_brief`, `src.eod_summary`, `src.ceo_brief`, `src.portfolio_report`, `src.portfolio_greeks`, `src.performance`, `src.firm_treasury --rotate`, `src.reporting.markdown_ledger` (#147). 19 lines remain |
+| every minute | `scripts/node_heartbeat.sh` | `logs/node_heartbeat.log` — the outage record |
+| 23:30 | `python -m src.node_reconcile` | `logs/node_reconcile/<day>.md` + one `[minipc1]` Discord card |
+| 07:15 (only `--with-token`) | `scripts/node_token_mirror.sh` | read-only copy of the VM's current token |
+
+The block also sets `ALPHA_NODE_LABEL=minipc1` (every Discord card, plain message and
+email from the node carries it), `ALPHA_NODE_ROLE=analytics`, `ALPHA_NODE_REPLICA=1`, and an
+`OPS_EXPECTED_JOBS` derived from the VM's heartbeat list minus the logs of the jobs left off. There are **no `@reboot`
+catch-up lines** in this block on purpose: a job the node missed is the measurement.
+
+**Reading the reports.** `logs/node_reconcile/<day>.md`: node uptime and dark windows,
+jobs (ran on both / missing on node / no evidence), differences (area, subject, VM, node,
+explained), then for-information items, then the limits. Verdicts: `MATCH`;
+`MATCH_WITH_OUTAGE_GAPS` (every difference overlaps a node outage); `DIVERGED` (something
+differs with no outage to blame — read it); `INCONCLUSIVE` (the VM could not be read).
+Saturday's report adds the week. `python3 -m src.node_reconcile --week` prints it any time;
+`--date YYYY-MM-DD --no-notify` re-files a day without posting.
+
+**What the VM sees.** Once a night, one `gcloud compute scp` of a single file to `/tmp`, one
+`gcloud compute ssh` that runs it read-only (sqlite `mode=ro`) and deletes it. No VM repo file,
+cron line, service or database is touched. With `--with-token`, one more read-only `grep` of
+one line, at 07:15. The seed script (once) takes a consistent snapshot into `/tmp/node_seed` and
+removes it.
+
+**Honest limits (printed in every report):** no human presses Approve on the node, so decisions
+that wait for a person differ by construction unless paper auto-approve is on; artifacts built
+from live fetches differ by fetch timing; a silent cron job leaves no log movement.
+
+## LLM jobs on the Mini PC (decision #149, 2026-10-17)
+
+The edge miner and the weekly evolution run **only on the Mini PC**, from the replica
+block: `scripts/mine_edges.sh` daily 21:00 (the VM graph's one miner) and
+`scripts/run_evolution.sh` Saturday 02:00, through the local FreeLLMAPI router (#148,
+`docs/HOME_NODE_SETUP.md` §13). Both refuse to start on any other host. The Mac's two
+LaunchAgents for them are retired with one command, run on the Mac (the plists are kept
+in the existing `retired-alphatrading` folder, so this is reversible):
+
+```bash
+cd ~/Library/LaunchAgents && launchctl unload com.adityagupta.alpha-edge-miner.plist com.alphatrading.evolution.plist; mkdir -p retired-alphatrading && mv com.adityagupta.alpha-edge-miner.plist com.alphatrading.evolution.plist retired-alphatrading/ && launchctl list | grep -E 'alpha-edge-miner|alphatrading.evolution' || echo "both retired"
+```
+
+The Mac keeps `com.aditrader.sync` (the artifact ship) and its crontab.
+
+## The Mac (development + chat agent; the miner moved to the Mini PC, #149)
+
+**RETIRED by #149 — LaunchAgent** (`~/Library/LaunchAgents/com.adityagupta.alpha-edge-miner.plist`):
+ran `scripts/mine_edges.sh` at every login and daily at 21:00. The miner itself
 decides whether it's due (>20h since last success, Ollama up) and skips silently
 otherwise — so the Mac being open more often costs nothing. Reinstall if needed:
 

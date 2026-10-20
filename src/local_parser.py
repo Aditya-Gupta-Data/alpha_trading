@@ -4,32 +4,34 @@ Alpha Trading — Phase 10B: the local LLM Episodic Event Frame extractor
 
 Turns unstructured text (a news headline, a Discord message, a journal
 snippet) into ONE strict JSON event frame and records it in the Brain Map
-(data/brain_map.db `events` table) — using a LOCAL Ollama model so this
-"light work" burns zero Gemini tokens and works fully offline.
+(data/brain_map.db `events` table). The model sits behind an OpenAI-compatible
+endpoint: from 2026-10-17 (decision #148) the local FreeLLMAPI router on the
+analytics node (free-tier Groq / Cerebras / Gemini …), Ollama only where
+OLLAMA_BASE_URL still points at one.
 
 STRICT GUARDRAILS (DECISIONS.md #30):
   * This module is a pure text-to-JSON transformer. It has ZERO
     dependencies on market data: no dhan_client, no price polling, no
     rules evaluation. An LLM is never used for market monitoring — that
     stays pure Python in src/rules.py.
-  * The ONLY network I/O allowed is to the local Ollama endpoint
-    (OLLAMA_BASE_URL, default http://localhost:11434/v1).
+  * The ONLY network I/O is to the configured OpenAI-compatible endpoint
+    (ALPHA_LLM_BASE_URL, else OLLAMA_BASE_URL, else http://localhost:3001/v1).
+    Behind FreeLLMAPI the text leaves the host for free-tier providers (#148).
   * Brain Map writes go through src/brain_map.py's existing idempotent
     helpers — brain_map itself stays standalone and network-free (the
     integration lives HERE, same pattern as the episode snapshot call).
 
-Fail-safe like every other optional dependency in this project: Ollama
-not installed / not running / returning garbage means extract() returns
-None with a printed note — nothing raises, nothing blocks.
+Fail-safe like every other optional dependency in this project: no endpoint /
+no key / garbage output means extract() returns None with a printed note —
+nothing raises, nothing blocks.
 
-Setup (one-time, on the Mac):
-  1. Install Ollama: https://ollama.com/download  (or `brew install ollama`)
-  2. Pull a small model:  ollama pull llama3
-  3. Optional .env overrides:
-       OLLAMA_BASE_URL="http://localhost:11434/v1"   (this is the default)
-       OLLAMA_MODEL="llama3"                          (this is the default)
+.env (docs/HOME_NODE_SETUP.md §13):
+  ALPHA_LLM_BASE_URL="http://localhost:3001/v1"   FreeLLMAPI (this is the default)
+  ALPHA_LLM_API_KEY="freellmapi-…"                 the router's unified key (Bearer)
+  ALPHA_LLM_MODEL="auto:fast"                      router alias (this is the default)
+  OLLAMA_BASE_URL / OLLAMA_MODEL                   legacy: a host that still runs Ollama
 
-Try it from the project folder (needs Ollama running):
+Try it from the project folder (needs the endpoint running):
 
     python3 -m src.local_parser "Reliance wins arbitration case over gas dues"
 """
@@ -39,6 +41,7 @@ import os
 import re
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 from src import brain_map
 
@@ -58,9 +61,11 @@ def _load_env() -> None:
 
 _load_env()
 
-DEFAULT_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_MODEL = "llama3"
-REQUEST_TIMEOUT_SECONDS = 60  # local models on a laptop can be slow
+DEFAULT_BASE_URL = "http://localhost:3001/v1"   # FreeLLMAPI (#148)
+DEFAULT_MODEL = "auto:fast"                      # the router picks a fast free-tier model and fails over
+OLLAMA_PORT = 11434
+OLLAMA_DEFAULT_MODEL = "llama3"
+REQUEST_TIMEOUT_SECONDS = 60
 
 # Event types the extractor is allowed to emit; anything else coerces to
 # "news". Keeps the events table's vocabulary small and clusterable.
@@ -117,7 +122,7 @@ _OLLAMA_OFFLINE_REPORTED = False
 
 
 def _is_offline_error(exc: Exception) -> bool:
-    """True when the failure means 'no Ollama server here' (connection
+    """True when the failure means 'no LLM server here' (connection
     refused / Errno 111 and httpx's connect-level wrappers) rather than a
     real protocol/parsing problem worth a full log line."""
     text = repr(exc).lower()
@@ -127,22 +132,30 @@ def _is_offline_error(exc: Exception) -> bool:
 
 
 class LocalExtractor:
-    """OpenAI-compatible client for a local Ollama server. Pure
-    text-to-JSON — carries no market-data capability whatsoever."""
+    """OpenAI-compatible client (FreeLLMAPI by default, Ollama on port 11434).
+    Pure text-to-JSON — carries no market-data capability whatsoever."""
 
     def __init__(self, base_url: str = None, model: str = None,
                  timeout: float = REQUEST_TIMEOUT_SECONDS):
-        self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL")
-                         or DEFAULT_BASE_URL).rstrip("/")
-        self.model = model or os.environ.get("OLLAMA_MODEL") or DEFAULT_MODEL
+        chosen = base_url or os.environ.get("ALPHA_LLM_BASE_URL")
+        legacy = os.environ.get("OLLAMA_BASE_URL")
+        self.base_url = (chosen or legacy or DEFAULT_BASE_URL).rstrip("/")
+        self.is_ollama = bool(not chosen and legacy) or urlparse(self.base_url).port == OLLAMA_PORT
+        self.model = model or (
+            (os.environ.get("OLLAMA_MODEL") or OLLAMA_DEFAULT_MODEL) if self.is_ollama
+            else (os.environ.get("ALPHA_LLM_MODEL") or DEFAULT_MODEL))
+        self.api_key = (os.environ.get("ALPHA_LLM_API_KEY") or "").strip().strip('"').strip("'")
         self.timeout = timeout
 
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
     def is_reachable(self) -> bool:
-        """True if the local Ollama server answers at all. Never raises."""
+        """True if the endpoint answers and accepts our key. Never raises."""
         try:
             import httpx
-            resp = httpx.get(f"{self.base_url}/models", timeout=3)
-            return resp.status_code < 500
+            resp = httpx.get(f"{self.base_url}/models", headers=self._headers(), timeout=3)
+            return resp.status_code < 400
         except Exception:
             return False
 
@@ -151,7 +164,9 @@ class LocalExtractor:
         the native endpoint — the documented unload mechanism). Batch
         jobs (annual_report_analyzer) call this after each document so
         the 8GB Mac never holds model weights between reports. Never
-        raises; False on any failure."""
+        raises; False on any failure. A router holds no weights: True."""
+        if not self.is_ollama:
+            return True
         try:
             import httpx
             native = self.base_url[:-3] if self.base_url.endswith("/v1") \
@@ -183,6 +198,8 @@ class LocalExtractor:
             # endpoint; older ones ignore it (the fence-stripping below
             # covers those).
             "response_format": {"type": "json_object"},
+        }
+        if self.is_ollama:
             # Unload the weights the instant this call returns, instead of
             # the server's default 5-minute keep-alive. Sent PER REQUEST
             # on purpose: the same policy was set once as a server env var
@@ -193,13 +210,13 @@ class LocalExtractor:
             # cannot drift out of sync with the process that honors it.
             # Costs a reload per call; on batch jobs that is the trade we
             # want, and `unload()` above remains the explicit escape hatch.
-            "keep_alive": 0,
-        }
+            # Ollama only: an OpenAI-style router may reject unknown fields.
+            payload["keep_alive"] = 0
         try:
-            resp = httpx.post(f"{self.base_url}/chat/completions",
-                              json=payload, timeout=self.timeout)
+            resp = httpx.post(f"{self.base_url}/chat/completions", json=payload,
+                              headers=self._headers(), timeout=self.timeout)
             if resp.status_code >= 300:
-                print(f"  (local parser: Ollama HTTP {resp.status_code})")
+                print(f"  (local parser: LLM HTTP {resp.status_code} at {self.base_url})")
                 return None
             return resp.json()["choices"][0]["message"]["content"]
         except Exception as e:
@@ -212,11 +229,11 @@ class LocalExtractor:
             if _is_offline_error(e):
                 if not _OLLAMA_OFFLINE_REPORTED:
                     _OLLAMA_OFFLINE_REPORTED = True
-                    print(f"  (local parser: Ollama offline at "
+                    print(f"  (local parser: LLM endpoint offline at "
                           f"{self.base_url} — LLM extraction skipped; "
-                          "expected on the VM, which runs no Ollama)")
+                          "expected on the VM, which runs no LLM endpoint)")
                 return None
-            print(f"  (local parser: Ollama call failed: {e})")
+            print(f"  (local parser: LLM call failed: {e})")
             return None
 
     def extract_event_json(self, text_payload: str) -> dict:

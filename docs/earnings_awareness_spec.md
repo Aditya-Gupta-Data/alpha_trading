@@ -1,7 +1,7 @@
 # Earnings Awareness — architectural requirement (draft, 2026-10-16)
 
-**Status:** S1–S3 **BUILT** 2026-10-16 (decision #146, branch `claude/earnings-s1-s3`, not deployed); S4–S6 spec only. Elsewhere, nothing below is built except where marked **EXISTS**.
-**One rule added in the build (see #146):** a stock whose next results date is not yet announced is `clear` only when it cannot report before expiry (last quarter already reported, expiry before the next quarter end); otherwise `window` is null with the reason "not announced".
+**Status:** S1–S3 **BUILT** 2026-10-16 (decision #150, branch `claude/earnings-s1-s3`, not deployed); S4–S6 spec only. Elsewhere, nothing below is built except where marked **EXISTS**.
+**One rule added in the build (see #150):** a stock whose next results date is not yet announced is `clear` only when it cannot report before expiry (last quarter already reported, expiry before the next quarter end); otherwise `window` is null with the reason "not announced".
 **Ruling it serves (Architect, 2026-10-16, decision #145 E):** no blind blackout
 window. The system must know about results in advance, square off an open trade
 when holding it through results is not justified, and eventually learn to trade
@@ -39,7 +39,7 @@ date is `None` with a reason, never "no results".
 
 ## 2. The seams
 
-### S1 — Calendar memory (extend `earnings_calendar.py`) — **BUILT (#146)**
+### S1 — Calendar memory (extend `earnings_calendar.py`) — **BUILT (#150)**
 - Keep `last` beside `next` per ticker, rebuilt from the lake's daily copies
   (the most recent date that has passed).
 - `days_since_results(ticker, today)` beside the existing `days_to_results`.
@@ -48,7 +48,7 @@ date is `None` with a reason, never "no results".
   weight per index; the map is data, not code).
 - Postponements stay "latest fetch wins". A date that moves is visible in the lake.
 
-### S2 — Entry stamp (extend `confluence/evidence.py` → journal) — **BUILT (#146)**
+### S2 — Entry stamp (extend `confluence/evidence.py` → journal) — **BUILT (#150)**
 Every spread entry carries one `earnings` block. It is an annotation and gates nothing:
 
 ```json
@@ -66,7 +66,7 @@ Every spread entry carries one `earnings` block. It is an annotation and gates n
   `"through"` (results before expiry but outside the pre window), `"clear"`, or
   `null` with a reason when the calendar is stale or missing.
 
-### S3 — Outcome label (extend `plan_tracker` settlement + `shadow_learner` Court rows) — **BUILT (#146)**
+### S3 — Outcome label (extend `plan_tracker` settlement + `shadow_learner` Court rows) — **BUILT (#150)**
 - Settlement copies the entry's `earnings.window` and `results_before_expiry`
   onto the outcome, the Court row and every `shadow_trades` row of that ref.
 - `mcp strategy_stats` gains a `by_earnings_window` split. This is the dataset

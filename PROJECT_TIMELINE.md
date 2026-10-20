@@ -235,14 +235,36 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-17 · 6 commits · 30 files touched
+
+- `2d34dd9` docs: HANDOVER — #148 FreeLLMAPI + #149 LLM jobs on the Mini PC; node at f74a5a4, Mac agents and FreeLLMAPI install pending (order matters)
+- `f74a5a4` feat(ops): edge miner + weekly evolution move to the Mini PC only (decision #149)
+- `5b17753` feat(llm): FreeLLMAPI router replaces Ollama as the LLM endpoint (decision #148)
+- `2d4f674` docs: HANDOVER — Mini PC live as the analytics hub (#146/#147): main bd53bf3, seeded from the VM, 19-line schedule, guard proved
+- `bd53bf3` feat(ops): the Mini PC leaves out the book jobs too (decision #147)
+- `eb82ad2` feat(ops): role separation — the VM is the only execution node, the Mini PC the analytics hub (decision #146)
+
+
 ### 2026-10-16 · 2 commits · 30 files touched
 
 - `5c628a1` docs: HANDOVER + ledger — #145 deployed to the VM (b7f923b), desk halt cleared 16:19:34, dashboard box shipped
 - `b7f923b` fix(risk): Architect rulings #145 — debit-spread margin, 2.5% one-lot hard cap, real-quote P&L, learner double count, desk reset count, graph date axis
 
 
-### 2026-10-10 · 2 commits · 13 files touched
+### 2026-10-11 · 1 commits · 5 files touched
 
+- `609ff2c` feat(ops): node_health_check.sh — read-only 'is the Mini PC working' check, run from the Mac over ssh
+
+
+### 2026-10-10 · 9 commits · 38 files touched
+
+- `27f0c63` docs: how to reach the Mini PC — user mini_pc1, LAN + Tailscale addresses, Mac ssh alias, why a cloud session cannot
+- `cf9beea` feat(ops): node REPLICA trial — the VM's whole schedule in parallel on the Mini PC, nightly reconcile against the VM, Discord label minipc1 (decision #144)
+- `d174347` fix(ops): bootstrap_node_from_mac — one ssh probe, LAN address + mini_pc1 user as found on the box; HOME_NODE_SETUP records the real box
+- `887dd2e` feat(ops): one-command home-node build from the Mac — bootstrap_node_from_mac.sh + bootstrap_node.sh
+- `08c1e73` feat(ops): node_preflight.sh — read-only readiness gate for the Mini PC before the shadow install
+- `f82bc12` docs: HOME_NODE_SETUP — the Mini PC as an always-on Ubuntu Server, blank install to shadow trial
+- `12b67f0` feat(ops): home node SHADOW TRIAL — parallel week beside the Mac, ships nothing (decision #143)
 - `731a85a` docs: HANDOVER — M1 seams deployed to the VM (78671dc), migration dry-run PARITY ok, learner seed gap noted
 - `78671dc` feat(ledger): implement M1 bucket routing seams (#141)
 

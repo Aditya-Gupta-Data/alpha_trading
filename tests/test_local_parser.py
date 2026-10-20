@@ -117,7 +117,7 @@ def test_connection_refused_logs_one_quiet_line_then_stays_silent(capsys=None):
             assert ex.extract_event_json("text") is None
     printed = out.getvalue().strip().splitlines()
     assert len(printed) == 1                       # ONE line for 5 failures
-    assert "Ollama offline" in printed[0]
+    assert "LLM endpoint offline" in printed[0]
     assert "expected on the VM" in printed[0]
     lp._OLLAMA_OFFLINE_REPORTED = False            # leave global state clean
 
@@ -254,3 +254,41 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}  {e}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+# --- the FreeLLMAPI router (decision #148) ----------------------------------
+
+def test_the_default_endpoint_is_the_freellmapi_router_with_its_key():
+    import os
+    with mock.patch.dict(os.environ, {"ALPHA_LLM_API_KEY": "freellmapi-test"}):
+        ex = LocalExtractor()
+    assert ex.base_url == "http://localhost:3001/v1" and ex.model == "auto:fast" and not ex.is_ollama
+    with mock.patch("httpx.post", return_value=_mock_chat_response(json.dumps(GOOD_FRAME))) as p:
+        assert ex.extract_event_json(JOURNAL_SNIPPET) == GOOD_FRAME
+    assert p.call_args.args[0] == "http://localhost:3001/v1/chat/completions"
+    assert p.call_args.kwargs["headers"] == {"Authorization": "Bearer freellmapi-test"}
+    payload = p.call_args.kwargs["json"]
+    assert "keep_alive" not in payload and payload["model"] == "auto:fast"   # a router may reject Ollama's field
+    assert ex.unload() is True                                              # nothing resident to flush
+
+
+def test_the_router_settings_win_over_the_legacy_ollama_ones():
+    import os
+    env = {"ALPHA_LLM_BASE_URL": "http://localhost:3001/v1", "ALPHA_LLM_MODEL": "auto:smart",
+           "OLLAMA_BASE_URL": "http://localhost:11434/v1", "OLLAMA_MODEL": "llama3.2:3b"}
+    with mock.patch.dict(os.environ, env):
+        ex = LocalExtractor()
+    assert (ex.base_url, ex.model, ex.is_ollama) == ("http://localhost:3001/v1", "auto:smart", False)
+    with mock.patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://localhost:11434/v1", "OLLAMA_MODEL": "llama3.2:3b"}):
+        legacy = LocalExtractor()
+    assert legacy.is_ollama and legacy.model == "llama3.2:3b"
+    with mock.patch("httpx.post", return_value=_mock_chat_response(json.dumps(GOOD_FRAME))) as p:
+        legacy.extract_event_json(JOURNAL_SNIPPET)
+    assert p.call_args.kwargs["json"]["keep_alive"] == 0 and p.call_args.kwargs["headers"] == {}
+
+
+def test_a_missing_or_rejected_key_reads_as_unreachable():
+    with mock.patch("httpx.get", return_value=mock.Mock(status_code=401)):
+        assert LocalExtractor().is_reachable() is False
+    with mock.patch("httpx.get", return_value=mock.Mock(status_code=200)):
+        assert LocalExtractor().is_reachable() is True

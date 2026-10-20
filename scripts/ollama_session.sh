@@ -61,7 +61,23 @@ _ollama_reachable() {
 # "skip the LLM work", never as a fatal error: every consumer of this
 # (edge_miner, evolution, local_parser) already fail-opens without
 # Ollama, exactly as the VM does by design (decision #47).
+# Decision #148: the default LLM endpoint is the FreeLLMAPI router; a server is
+# started only where ALPHA_LLM_BASE_URL / OLLAMA_BASE_URL still name Ollama.
+_llm_endpoint() {
+    local k v
+    for k in ALPHA_LLM_BASE_URL OLLAMA_BASE_URL; do
+        v="${!k:-$(grep -E "^$k=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "\"'")}"
+        [ -n "$v" ] && { echo "$k=$v"; return 0; }
+    done
+}
+
 ollama_session_start() {
+    case "$(_llm_endpoint)" in
+        OLLAMA_BASE_URL=*|*:11434*) ;;
+        *) _OLLAMA_SESSION_OWNED=0
+           _ollama_log "LLM endpoint is not Ollama ($(_llm_endpoint | cut -d= -f2- | grep . || echo 'FreeLLMAPI default')) — no server started (#148)"
+           return 1 ;;
+    esac
     if _ollama_reachable; then
         _OLLAMA_SESSION_OWNED=0
         _ollama_log "server already up (owner's own session) — adopting, will NOT kill on exit"

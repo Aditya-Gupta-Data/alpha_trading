@@ -63,6 +63,14 @@ MIN_GAP_MINUTES=180        # the agent may fire hourly; the work is daily
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
 
+# SHADOW TRIAL (2026-10-10, decision #143). While the home node runs in
+# parallel with the Mac for its reliability week, ALPHA_NODE_SHADOW=1 (set
+# by `setup_mininode_cron.sh --shadow`) makes this script do ALL the work —
+# every producer, the read-only pull — but SHIP NOTHING. The Mac still owns
+# the 7-file lane; two machines must never ship the same artifact. The log
+# line "SHADOW: would have shipped k/7" is what the trial report counts.
+SHADOW="${ALPHA_NODE_SHADOW:-0}"
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 # ---------------------------------------------------------------- throttle
@@ -78,7 +86,7 @@ if [ "$FORCE" -eq 0 ] && [ -f "$STAMP" ]; then
     fi
 fi
 
-log "=== mac auto-sync starting (py: $PY) ==="
+log "=== mac auto-sync starting (py: $PY)$([ "$SHADOW" = "1" ] && echo ' [SHADOW TRIAL — ships nothing]') ==="
 
 # ------------------------------------------------------------- 1. producers
 # Sector index bars — the router's momentum leg and the live bullish veto.
@@ -143,10 +151,12 @@ log "darling ids: ok"
 # already pins the gcloud interpreter and names its failures on stderr rather
 # than swallowing them (both fixed 2026-08-05 after it ran dead for 15 days in
 # silence). Per-artifact fail-open: the VM freshness-gates everything anyway.
-log "shipping to the VM"
-"$PY" - <<'PYEOF' 2>&1 | tee -a logs/mac_auto_sync.log
+if [ "$SHADOW" = "1" ]; then log "SHADOW: ship skipped"; else log "shipping to the VM"; fi
+ALPHA_NODE_SHADOW="$SHADOW" "$PY" - <<'PYEOF' 2>&1 | tee -a logs/mac_auto_sync.log
+import os
 from pathlib import Path
 from src import firm_treasury
+SHADOW = os.environ.get("ALPHA_NODE_SHADOW") == "1"
 
 # NOT darling_tiers.json / darlings_levels.json — those are VM-NATIVE since
 # 2026-08-11 (cron 19:18/19:22, built off the VM's own bhavcopy). Shipping a
@@ -168,8 +178,14 @@ for art in MANIFEST:
     if not p.exists():
         failed.append(f"{art}:absent")
         continue
+    if SHADOW:
+        ok.append(art)                     # built and present — counts, never travels
+        continue
     (ok if firm_treasury.vm_push_file(p) else failed).append(art)
-print(f"shipped {len(ok)}/{len(MANIFEST)}: {', '.join(ok) or 'none'}")
+if SHADOW:
+    print(f"SHADOW: would have shipped {len(ok)}/{len(MANIFEST)}: {', '.join(ok) or 'none'}")
+else:
+    print(f"shipped {len(ok)}/{len(MANIFEST)}: {', '.join(ok) or 'none'}")
 if failed:
     print(f"NOT shipped: {', '.join(failed)}")
 PYEOF

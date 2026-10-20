@@ -135,7 +135,10 @@ def _no_writes_into_real_data_or_logs():
 
 # Ambient switches that change ENGINE BEHAVIOUR and exist on the VM.
 # Cleared for every test; a test that needs one sets it explicitly.
-_AMBIENT_ENGINE_SWITCHES = ("PAPER_AUTO_APPROVE",)
+_AMBIENT_ENGINE_SWITCHES = ("PAPER_AUTO_APPROVE",
+                            # the host's LLM endpoint (#148): .env on the node carries a real key
+                            "ALPHA_LLM_BASE_URL", "ALPHA_LLM_API_KEY", "ALPHA_LLM_MODEL",
+                            "OLLAMA_BASE_URL", "OLLAMA_MODEL")
 
 
 @pytest.fixture(autouse=True)

@@ -1,5 +1,5 @@
 {
-  "_note": "Earnings Awareness S1 (docs/earnings_awareness_spec.md, decision #146): the heavyweights whose results move each index underlying the proposer trades. Data, not code: edit freely, no code change needed. PROPOSAL, NOT VERIFIED: the names are the session's best knowledge of the largest index weights (about 2025), never checked against a current NSE factsheet. The Architect picks the names and how many per index (spec section 4, item 2). An index with an empty list abstains (window null with a reason); it is never read as 'clear'. Tickers use the project's .NS convention, the same keys as data/earnings_calendar.json.",
+  "_note": "Earnings Awareness S1 (docs/earnings_awareness_spec.md, decision #150): the heavyweights whose results move each index underlying the proposer trades. Data, not code: edit freely, no code change needed. PROPOSAL, NOT VERIFIED: the names are the session's best knowledge of the largest index weights (about 2025), never checked against a current NSE factsheet. The Architect picks the names and how many per index (spec section 4, item 2). An index with an empty list abstains (window null with a reason); it is never read as 'clear'. Tickers use the project's .NS convention, the same keys as data/earnings_calendar.json.",
   "as_of": null,
   "source": "unverified proposal, pending the Architect's ruling",
   "indices": {

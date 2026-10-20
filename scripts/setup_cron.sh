@@ -154,6 +154,13 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 echo "[Cron Setup] Resolved project root to: $REPO_ROOT"
 
+# The GCP VM is the only execution node (decision #146): this schedule never goes on the home node.
+if [ "${ALPHA_NODE_ROLE:-}" = "analytics" ] || grep -qs '^ALPHA_NODE_ROLE=analytics' "$REPO_ROOT/.env" \
+   || [ "$(hostname -s 2>/dev/null)" = "minipc1" ]; then
+    echo "[Cron Setup] REFUSED: this host is the analytics node; only the VM runs this schedule (decision #146)." >&2
+    exit 1
+fi
+
 # 2. Ensure logs directory exists
 mkdir -p "$REPO_ROOT/logs"
 

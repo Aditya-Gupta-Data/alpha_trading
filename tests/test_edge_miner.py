@@ -43,9 +43,9 @@ def test_run_skips_without_ollama_or_when_not_due():
     with mock.patch.object(em, "due", return_value=False):
         assert em.run_miner()["status"] == "skipped"
     with mock.patch.object(em, "due", return_value=True), \
-         mock.patch.object(em, "ollama_up", return_value=False):
+         mock.patch.object(em, "llm_up", return_value=False):
         result = em.run_miner()
-    assert result["status"] == "skipped" and "Ollama" in result["reason"]
+    assert result["status"] == "skipped" and "LLM endpoint" in result["reason"]
 
 
 def _seed_db(path: Path, existing_triples=()):
@@ -104,12 +104,13 @@ def test_full_cycle_pull_mine_apply_refresh():
                     "triples_skipped": 0}
 
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
              mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
              mock.patch.object(em, "DATA_DIR", data_dir), \
              mock.patch.object(em, "STATE_PATH", state), \
              mock.patch.object(em, "ARCHIVE_DIR", data_dir / "archive"), \
+             mock.patch("src.node_role.is_analytics_node", return_value=False), \
              mock.patch("src.sleep_phase.write_causal_links", fake_task_d):
             result = em.run_miner(
                 runner=_fake_runner_factory([("seed", "RESULTS_IN", "x")],
@@ -151,7 +152,7 @@ def test_no_new_edges_means_no_apply_call():
                     "triples_skipped": 0}
 
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
              mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
              mock.patch.object(em, "DATA_DIR", data_dir), \
@@ -174,7 +175,7 @@ def test_failed_pull_reports_and_writes_no_state():
             return mock.Mock(returncode=1, stdout="", stderr="scp: boom")
 
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
              mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
              mock.patch.object(em, "STATE_PATH", state):
@@ -216,7 +217,7 @@ def test_run_miner_skips_honestly_when_the_extractor_is_dead():
     with tempfile.TemporaryDirectory() as tmp:
         state = Path(tmp) / ".state.json"
         with mock.patch.object(em, "due", return_value=True), \
-             mock.patch.object(em, "ollama_up", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
              mock.patch.object(em, "extractor_ready",
                                return_value=(False, "dummy extraction "
                                              "returned no valid event frame")), \
@@ -231,7 +232,7 @@ def test_injected_extractors_are_not_probed():
     """Tests/callers that inject their own extractor own its readiness —
     the probe only guards the scheduled build-your-own path."""
     with mock.patch.object(em, "due", return_value=True), \
-         mock.patch.object(em, "ollama_up", return_value=True), \
+         mock.patch.object(em, "llm_up", return_value=True), \
          mock.patch.object(em, "extractor_ready") as probe, \
          mock.patch.object(em, "_gcloud", return_value=None):
         result = em.run_miner(extractor=mock.Mock())
@@ -379,3 +380,70 @@ def test_gcloud_runs_with_a_pinned_interpreter():
         em._run(["gcloud", "version"])
     assert seen["env"]["CLOUDSDK_PYTHON"] == sys.executable
     assert seen["timeout"] == em.TRANSPORT_TIMEOUT
+
+
+def test_shadow_cycle_pulls_mines_refreshes_but_never_writes_to_the_vm():
+    """Home node SHADOW TRIAL (2026-10-10, decision #143): apply=False must
+    leave the VM untouched — no edges shipped, no remote apply — while the
+    local copies still refresh and the 20h gate still records a success."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        data_dir, state = tmp / "data", tmp / "data" / ".state.json"
+        data_dir.mkdir()
+        calls = []
+
+        def fake_task_d(conn, extractor=None, window_days=None, today=None):
+            add_edge(conn, "vix_spike", "PRECEDES", "condor_loss",
+                     confidence_score=1.0)
+            return {"outcomes_considered": 5, "triples_written": 1,
+                    "triples_skipped": 0}
+
+        with mock.patch.object(em, "due", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
+             mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
+             mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
+             mock.patch.object(em, "DATA_DIR", data_dir), \
+             mock.patch.object(em, "STATE_PATH", state), \
+             mock.patch.object(em, "ARCHIVE_DIR", data_dir / "archive"), \
+             mock.patch("src.sleep_phase.write_causal_links", fake_task_d):
+            result = em.run_miner(
+                runner=_fake_runner_factory([("seed", "RESULTS_IN", "x")], calls),
+                apply=False)
+
+        assert result["status"] == "ok"
+        assert result["shadow"] is True
+        assert result["new_edges_applied_to_vm"] == 0
+        assert result["new_edges_mined_not_applied"] == 1
+        assert result["local_copies_refreshed"] is True
+        assert state.exists()
+        # snapshot + pull, then snapshot + refresh — and NOTHING in between:
+        # no ship of new_edges.json, no remote apply
+        kinds = ["ssh" if "ssh" in c else "scp" for c in calls]
+        assert kinds == ["ssh", "scp", "ssh", "scp"]
+        assert not any("new_edges.json" in " ".join(c) or "apply_edges.py" in " ".join(c) for c in calls)
+
+
+def test_on_the_analytics_node_the_vm_copy_never_lands_on_its_live_db():
+    """#149: the node's data/brain_map.db is written by its own nightly jobs; the
+    miner's read-only copy of the VM goes to data/vm_snapshot/, and nothing is archived."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        data_dir = tmp / "data"
+        data_dir.mkdir()
+        (data_dir / "brain_map.db").write_text("the node's own live db")
+        calls = []
+        with mock.patch.object(em, "due", return_value=True), \
+             mock.patch.object(em, "llm_up", return_value=True), \
+             mock.patch.object(em, "extractor_ready", return_value=(True, "ok")), \
+             mock.patch.object(em, "_gcloud", return_value="/fake/gcloud"), \
+             mock.patch.object(em, "DATA_DIR", data_dir), \
+             mock.patch.object(em, "STATE_PATH", data_dir / ".state.json"), \
+             mock.patch.object(em, "ARCHIVE_DIR", data_dir / "archive"), \
+             mock.patch("src.node_role.is_analytics_node", return_value=True), \
+             mock.patch("src.sleep_phase.write_causal_links",
+                        lambda *a, **k: {"outcomes_considered": 0, "triples_written": 0, "triples_skipped": 0}):
+            result = em.run_miner(runner=_fake_runner_factory([("seed", "RESULTS_IN", "x")], calls))
+        assert result["status"] == "ok" and result["local_copies_refreshed"]
+        assert calls[-1][-1] == str(data_dir / "vm_snapshot") + "/"
+        assert (data_dir / "brain_map.db").read_text() == "the node's own live db"
+        assert not (data_dir / "archive").exists()

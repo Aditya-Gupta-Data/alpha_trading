@@ -27,7 +27,7 @@ URL = "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{ddmmyy
 DATASET = "participant_oi"
 HTTP_TIMEOUT = 20
 CATEGORIES = ("Client", "DII", "FII", "Pro", "TOTAL")
-# the "dealer" group whose net option position sets the GEX sign (D2a — the Architect picks)
+# the "dealer" group whose net option position sets the GEX sign; D2a ruled 2026-10-20 (#154): non_client
 DEALERS = {"non_client": ("DII", "FII", "Pro"), "pro": ("Pro",), "pro_fii": ("Pro", "FII")}
 DEFAULT_DEALER = "non_client"
 _COLUMNS = {

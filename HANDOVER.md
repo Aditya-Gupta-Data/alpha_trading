@@ -56,7 +56,7 @@ the agent's job under the Session Wrap rule above.
   - the calibrated sign is constant by class (indices always positive, stocks always negative). It is structure, not timing;
   - TCS's dealer gamma went −20 → −51 cr through the rally.
 - **Open:**
-  - D2a (dealer definition), D4 (thresholds — now magnitude / zero-distance, not sign), D6, D7;
+  - D4 (thresholds — now magnitude / zero-distance, not sign), D6, D7. D2a is ruled: `non_client` (#154);
   - a capture-forward cron line for participant OI (VM or node) when the Architect wants it.
 
 ## 2026-10-20 ~13:15 IST — GEX seam 1 (#152): `gamma_profile` + a read-only backfill on `main`; first read on the Mini PC. No trading path touched

@@ -117,6 +117,7 @@ are unchanged.
 |---|---|---|
 | D1 | NO NEW ENGINES (07-27) vs one new pure module | **Ruled 10-20:** one new pure module, `src/analysis/gamma_profile.py` |
 | D2 | Naive sign vs participant-OI calibration | **Ruled 10-20:** naive first, labelled; calibration later |
+| D2a | Which participants are the "dealers" | **Ruled 10-20 (#154):** `non_client` = DII + FII + Pro |
 | D3 | Band and expiries | Default in code: ±5% index / ±10% stock; combined = expiries ≤ 35 days |
 | D4 | Thresholds C, F, M for G1/G2 | Open — set from the backfill's distribution, not guessed |
 | D5 | Authority of G1/G2 | **Ruled 10-20:** shadow-first |
@@ -157,7 +158,7 @@ are unchanged.
 
 **Dealer sign (D2):**
 - From NSE's participant-wise OI: `weight_side = Σ_dealers (long − short) / total OI` for that option class.
-- Dealer definitions: `non_client` (default; D2a open), `pro`, `pro_fii`.
+- Dealer definitions: **`non_client` (ruled D2a, 2026-10-20, #154)**, plus `pro` and `pro_fii` kept as comparisons.
 - Class-wide weights (all index options, all stock options) are applied to every underlying of the class.
   This is an assumption, labelled in every row.
 
@@ -200,7 +201,7 @@ was −10 → −34 cr. This is descriptive only: no outcome test has been run.
   single-stock condor, since stocks are always negative.
 - G2 needs a magnitude or zero-distance trigger, not the sign.
 
-D2a (the dealer definition) is still open.
+D2a was ruled on 2026-10-20 (#154): **non_client** (DII + FII + Pro, the counterparty to clients).
 
 ## 5. Next seams (in order)
 

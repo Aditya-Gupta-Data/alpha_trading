@@ -42,6 +42,17 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-20 ~13:15 IST — GEX seam 1 (#152): `gamma_profile` + a read-only backfill on `main`; first read on the Mini PC. No trading path touched
+
+- **Built:** `src/analysis/gamma_profile.py` (pure per-strike GEX, profile) and `scripts/backfill_gex_profiles.py` (reads `chains/`, writes `gex/<slug>/`). The full blueprint (G1/G2, Greek P&L, D1–D7) is `docs/gex_greek_pnl_spec.md`. Nothing on the VM reads any of it.
+- **Run on the Mini PC:** a snapshot of the VM's chain lake was copied to the node's `data/vm_lake_copy/` (VM read-only, 19 MB, 10-20 13:10; not updated — the node runs no chain_archiver). The backfill wrote 894 day rows over 74 underlyings to `data/vm_lake_copy/gex/`. OI is confirmed as quantity.
+- **Findings (spec §4a):**
+  - the approximate flip does not separate regimes;
+  - the naive sign read TCS/INFY as "positive gamma" straight through the results rally.
+  Next: a re-priced zero-gamma level and the D2 sign calibration, before G1/G2.
+- **Open decisions:** D4 thresholds, D6 (may G2 create trades), D7 (attribution floor).
+- To refresh the copy later: re-run the 10-20 copy (VM tar → Mac → node) and then `venv/bin/python scripts/backfill_gex_profiles.py --root data/vm_lake_copy` on the node.
+
 ## 2026-10-20 ~13:00 IST — Earnings S1–S3 (#150) + the Architect's §4 rulings and a HARD earnings proximity gate (#151): DEPLOYED to the VM 12:5x IST (`b7f923b` → `112f2c7`, which also brings #143–#149's code to the VM); Mini PC pulled 12:57 IST (`fc9cd30`)
 
 - **Deploy record (Architect-approved, done by the agent):**

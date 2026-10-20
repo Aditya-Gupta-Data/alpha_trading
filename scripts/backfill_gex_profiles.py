@@ -117,7 +117,8 @@ def main(argv=None) -> int:
     result = run(args.root, args.slug, args.since, args.dry_run)
     print("\n".join(summary_lines(result)))
     print(f"[gex backfill] {sum(len(v) for v in result.values())} day rows over {len(result)} underlyings"
-          + (" (dry run, nothing written)" if args.dry_run else " -> data/lake/gex/<slug>/"))
+          + (" (dry run, nothing written)" if args.dry_run
+             else f" -> {Path(args.root) if args.root else lake.LAKE_ROOT}/gex/<slug>/"))
     return 0
 
 

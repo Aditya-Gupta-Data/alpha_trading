@@ -123,11 +123,35 @@ are unchanged.
 | D6 | May G2 CREATE a directional trade against the SMA? | Open — recommend refuse-only live, create-trade shadow-only |
 | D7 | Greek attribution granularity and floor | Open — recommend daily EOD, abstain below 80% coverage |
 
+## 4a. First backfill read (2026-10-20, Mini PC, `data/vm_lake_copy/`)
+
+**The run:**
+- 894 day rows over 74 underlyings, no abstentions.
+- Input: a snapshot of the VM's `chains/` copied to the node on 10-20 13:10 IST. The node runs no
+  `chain_archiver` (#146), so the copy is NOT updated.
+- `oi_lot_multiple` = 1.00 on all 9 core underlyings: Dhan OI is quantity.
+
+**Findings (63 sessions at most; naive sign):**
+- The **flip approximation does not separate regimes.** Most "positive" days have spot BELOW the
+  cumulative-net crossing (NIFTY, BANKNIFTY, TCS, INFY, 10-07 → 10-19). A real zero-gamma level must re-price
+  gamma at shifted spots from each strike's IV before G2 may use it.
+- The **naive sign did not warn on the Q2 IT event.** TCS and INFY read positive (pinning) every day through
+  the results rally:
+  - TCS: call wall 2,400 on 10-15, spot 2,465 on 10-16;
+  - INFY: put wall 1,000 → 1,120 as spot ran 992 → 1,161.
+
+  Either the naive sign is wrong for NSE single-stock options, or GEX does not foresee event gaps. G1 must not
+  confirm a condor on a naive-sign wall until D2 is calibrated. The #151 earnings gate is what protects that
+  case today.
+- NIFTY's regime changes often (25 of 63 days negative). BANKNIFTY is mostly positive (56/63).
+
 ## 5. Next seams (in order)
 
 1. **Done:** `gamma_profile.strike_gex` / `profile` / `merge_rows` + the backfill.
-2. Stamp a `gex` block on every proposal from the chain in hand (annotation only), and capture it forward
-   from `chain_archiver`'s end-of-day row.
-3. Stamp `greeks_at_entry` in `options_proposer.to_journal_entry` (`portfolio_greeks.position_greeks`), and
+2. A re-priced zero-gamma level (per-strike IV → gamma at spot ± x%) in `gamma_profile`, and the D2
+   calibration from NSE participant-wise OI — both before any rule reads the profile.
+3. Stamp a `gex` block on every proposal from the chain in hand (annotation only), and capture it forward
+   from `chain_archiver`'s end-of-day row on the VM.
+4. Stamp `greeks_at_entry` in `options_proposer.to_journal_entry` (`portfolio_greeks.position_greeks`), and
    build the `greek_attribution` table plus its backfill.
-4. G1/G2 as shadow Court rows once D4 and D6 are ruled.
+5. G1/G2 as shadow Court rows once D4 and D6 are ruled.

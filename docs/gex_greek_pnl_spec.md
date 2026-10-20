@@ -168,6 +168,40 @@ are unchanged.
 | index | −0.010 | +0.072 |
 | stock | **−0.269** | +0.054 |
 
+## 4c. Seam 2 first read (2026-10-20, Mini PC; 69 participant days 07-13 → 10-19, all files balanced)
+
+**Units check passes:** model gamma / Dhan gamma = 0.91–1.00 on the 9 core underlyings.
+
+**Dhan's own-gamma profile is unusable.** With zero-IV rows counted as missing, NIFTY abstains on 62 of 63 days.
+The model (re-priced) profile is the basis from here.
+
+**Dealer weights move day to day, but their signs never changed in 69 days:**
+
+| non_client weight | min | median | max |
+|---|---|---|---|
+| stock call | −0.36 | −0.29 | −0.22 |
+| stock put | +0.05 | +0.15 | +0.22 |
+| index put | +0.07 | +0.16 | +0.24 |
+| index call | −0.10 | −0.04 | +0.05 |
+
+So the calibrated REGIME at spot is constant by class: every index day positive, every stock day negative
+(TCS, INFY, HDFCBANK, ICICIBANK, RELIANCE 45/45). The sign is a structural fact, not a timing signal. If GEX
+times anything, the information is in the magnitude and the zero-gamma distance.
+
+**Q2 IT, calibrated:** TCS's net dealer gamma went −20 cr (10-07) → −36 cr (10-15) → −51 cr (10-19) as the
+stock rose 18%. That is dealers short calls, buying as it rose — the amplification the naive sign hid. INFY
+was −10 → −34 cr. This is descriptive only: no outcome test has been run.
+
+**NIFTY, calibrated:** positive at spot (dealers long puts). The zero-gamma level sits ~2–4% ABOVE spot
+(10-16: 23,899 vs 23,146).
+
+**For the rules:**
+- G1 (a wall confirms a condor) must not read the naive sign. On the calibrated sign it can never confirm a
+  single-stock condor, since stocks are always negative.
+- G2 needs a magnitude or zero-distance trigger, not the sign.
+
+D2a (the dealer definition) is still open.
+
 ## 5. Next seams (in order)
 
 1. **Done:** `gamma_profile.strike_gex` / `profile` / `merge_rows` + the backfill.

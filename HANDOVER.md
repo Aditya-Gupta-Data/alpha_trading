@@ -42,6 +42,23 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-20 ~14:00 IST — GEX seam 2 (#153) on `main` `3a2257e`: re-priced zero-gamma + the NSE participant-OI dealer sign; still shadow-only
+
+- **Built:** Black-Scholes re-pricing in `gamma_profile` (one OTM IV per strike; Dhan's EOD zero-IV rows are now missing), the zero-gamma search, `src/ingestion/participant_oi.py` (NSE's daily participant-wise OI → dealer side weights; dealers `non_client` default / `pro` / `pro_fii`), and the backfill's repriced + calibrated blocks.
+- **Fixed:** walls are the largest exposure by size. Under calibrated weights they had been inverted.
+- **Mini PC:**
+  - 69 participant-OI days fetched into the node's `data/lake/participant_oi/` (07-13 → 10-19, all balanced);
+  - the GEX backfill re-run over `data/vm_lake_copy`: 894 rows;
+  - no cron line anywhere, nothing on the VM touched.
+- **Findings (spec §4c):**
+  - the units check passes (model/Dhan gamma 0.91–1.00);
+  - Dhan's own-gamma profile is unusable (NIFTY abstains on 62 of 63 days);
+  - the calibrated sign is constant by class (indices always positive, stocks always negative). It is structure, not timing;
+  - TCS's dealer gamma went −20 → −51 cr through the rally.
+- **Open:**
+  - D2a (dealer definition), D4 (thresholds — now magnitude / zero-distance, not sign), D6, D7;
+  - a capture-forward cron line for participant OI (VM or node) when the Architect wants it.
+
 ## 2026-10-20 ~13:15 IST — GEX seam 1 (#152): `gamma_profile` + a read-only backfill on `main`; first read on the Mini PC. No trading path touched
 
 - **Built:** `src/analysis/gamma_profile.py` (pure per-strike GEX, profile) and `scripts/backfill_gex_profiles.py` (reads `chains/`, writes `gex/<slug>/`). The full blueprint (G1/G2, Greek P&L, D1–D7) is `docs/gex_greek_pnl_spec.md`. Nothing on the VM reads any of it.

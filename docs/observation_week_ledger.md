@@ -2402,3 +2402,10 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - `python -m src.equity_desk --reset-halt` at 16:19:34: `cleared`, `halted: false`; ruin count restarts at ₹0 (lifetime desk realized −₹31,239.74).
 - Dashboard box at `b7f923b`, bridge + Streamlit restarted, desk bundle shipped 16:20:25; bridge reads the learner 9/9 priced.
 - No exit rule changed. Unverified until Mon 10-19: real-quote marks on condor chains, the chain-call load, the first hard-cap refusals, the desk's first entries after the reset.
+
+
+## Deploy 2026-10-20 ~12:50 IST (NSE holiday) — VM `b7f923b` → `112f2c7` (#150, #151; brings #143–#149 code to the VM)
+
+- VM clean, no job running; `git pull`; `node_role.execution_refusal()` None on the VM (hostname `alpha-trading-vm`, no `ALPHA_NODE_*`); 281 scoped tests passed; `alpha-trading` + `alpha-discord-bot` restarted; health 200.
+- Live gate read: INFY.NS results in 3 days → gated from the 10-21 session; TCS/HDFCBANK/RELIANCE no announced date; indices not gated.
+- Mini PC NOT updated: unreachable from the Mac (Tailscale relay down on the Mac, LAN timed out). Unverified until 10-21: the first gated refusals, learner-only entries carrying the gate reason, `event_gates` on proposals, the 19:20 calendar run writing `last`.

@@ -42,9 +42,18 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-10-20 ~13:00 IST — Earnings S1–S3 (#150) + the Architect's §4 rulings and a HARD earnings proximity gate (#151) merged to `main`. NOT deployed: the VM still runs `b7f923b`
+## 2026-10-20 ~13:00 IST — Earnings S1–S3 (#150) + the Architect's §4 rulings and a HARD earnings proximity gate (#151): DEPLOYED to the VM 12:5x IST (`b7f923b` → `112f2c7`, which also brings #143–#149's code to the VM). Mini PC NOT pulled (unreachable)
 
-- **What changes when deployed:**
+- **Deploy record (Architect-approved, done by the agent):**
+  1. VM: tree clean, no job running (NSE holiday); `git pull` → `112f2c7`.
+  2. The role guard read on the VM: `execution_refusal()` None, `is_analytics_node()` False, hostname `alpha-trading-vm`, no `ALPHA_NODE_*` in `.env` — the VM stays the execution node.
+  3. 281 scoped tests passed on the VM. `alpha-trading` + `alpha-discord-bot` restarted; health 200.
+  4. Settings read live: pre/post 5/3, `glassbreaking_require_volume` True.
+  5. Gate on the live calendar: INFY.NS results in 3 days (gated from the 10-21 session); TCS, HDFCBANK and RELIANCE have no announced date; NIFTY BANK is an index, so not gated.
+- **Also live on the VM with this pull (#149):** the edge miner and the weekly evolution now REFUSE on the VM (Mini-PC only), and the VM's LLM default endpoint is FreeLLMAPI (#148), which the VM does not run.
+- **Mini PC NOT pulled.** Neither the Tailscale address nor the LAN address answered from the Mac at 12:51. The Mac's Tailscale said the relay was unreachable and MagicSock was not running; the owner toggles the app off/on. The node has no self-pull, so it stays on its old commit (analytics copy only). To finish: `ssh mini_pc1@100.72.160.38 'cd ~/alpha_trading && git pull --ff-only && git log -1 --oneline'`.
+- **VM disk:** 1.4 GB free (86%). The 10-17 ops-agent log flood is unresolved unless the owner ran the cleanup.
+- **What changes now that it is deployed:**
   - **Gate:** a STOCK with results 5 or fewer days away gets no condor, butterfly, credit vertical or bear put. The refusal reads "earnings proximity gate: results in N day(s)…". Bull call spreads pass. Indices are not gated.
   - On a real run the Shadow Learner still takes the refused setup (the #140 advisory-veto path), so the gate's effect is measured. Capital accounts never take it.
   - **Labels:** every spread entry carries its results window — `pre` / `through` / `post` / `clear` / `not_announced` (pre = 5 days, post = 3). Every outcome and shadow row adds `results_crossed` at settlement.

@@ -42,6 +42,17 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-20 ~15:00 IST — GEX seam 3 (#155) on `main`: INR-crore GEX, D4/D6 in the PLANNER, D7 Taylor Greek P&L. Not deployed; live entries unchanged
+
+- **Planner (`trade_planner`):**
+  - D4 gamma zones: ±0.5% transition around S*; otherwise the sign at spot decides.
+  - D6: a short-gamma zone routes to a momentum bull call / bear put, or a long straddle under a 0.5% move. Condors, butterflies and credit verticals are refused there.
+  - Live entries (`options_proposer`) still route on the SMA view (D5). The VM's playbook card gets no GEX input (no participant OI on the VM), so it abstains.
+- **D7:** `src/analysis/greek_attribution.py`. On the next VM deploy, every settlement writes a `greek_attribution` row: seven Taylor terms, coverage, residual. The outcomes ledger is untouched.
+- **NSE figure:** `net_gex_cr` / `abs_gex_cr`, lot applied once (Dhan OI is quantity). The brief's 25/50/15 lots are old; LOT_SIZES is used.
+- **Dry run (Mini PC):** `cd ~/alpha_trading && venv/bin/python scripts/gex_planner_dry_run.py --slug nifty --root data/vm_lake_copy`.
+- **Not deployed to the VM.** The settlement hook and the planner changes reach it on the next pull (after 15:30 or on a holiday).
+
 ## 2026-10-20 ~14:00 IST — GEX seam 2 (#153) on `main` `3a2257e`: re-priced zero-gamma + the NSE participant-OI dealer sign; still shadow-only
 
 - **Built:** Black-Scholes re-pricing in `gamma_profile` (one OTM IV per strike; Dhan's EOD zero-IV rows are now missing), the zero-gamma search, `src/ingestion/participant_oi.py` (NSE's daily participant-wise OI → dealer side weights; dealers `non_client` default / `pro` / `pro_fii`), and the backfill's repriced + calibrated blocks.

@@ -72,6 +72,62 @@ EARNINGS_GATED_STRATEGIES = SHORT_VOL_STRATEGIES | {"bear_put_spread"}
 GLASSBREAKING_BLOCKED_STRATEGIES = EARNINGS_GATED_STRATEGIES
 
 
+# --- GEX zones (Architect ruling 2026-10-20, decision #155: D4 + D6) -------
+
+GEX_TRANSITION_PCT = 0.5      # D4: spot within +/-0.5% of the zero-gamma level S* = transition
+MOMENTUM_MIN_PCT = 0.5        # session move (vs previous close) that picks a direction in short gamma
+MEAN_REVERSION_STRATEGIES = SHORT_VOL_STRATEGIES   # condors, butterflies, credit verticals
+
+
+def gamma_zone(spot, zero_gamma, regime_at_spot, band_pct: float = GEX_TRANSITION_PCT) -> dict:
+    """D4: "transition" when spot is within band_pct of S*; otherwise "long_gamma" / "short_gamma" by the
+    sign of dealer net gamma AT spot. On the textbook curve (negative below S*, positive above) that is
+    exactly spot > S* + 0.5% = long and spot < S* - 0.5% = short; under the ruled non_client sign (#154)
+    NIFTY's curve runs the other way, so the sign at spot decides, never the side of S*. No read = None."""
+    try:
+        s = float(spot)
+    except (TypeError, ValueError):
+        s = None
+    out = {"zone": None, "distance_pct": None, "zero_gamma": zero_gamma, "regime_at_spot": regime_at_spot,
+           "band_pct": band_pct, "reason": None}
+    if not s or regime_at_spot not in ("positive", "negative"):
+        out["reason"] = "no GEX read"
+        return out
+    if zero_gamma:
+        out["distance_pct"] = round((s / float(zero_gamma) - 1) * 100, 3)
+        if abs(out["distance_pct"]) <= band_pct:
+            out["zone"] = "transition"
+            return out
+    out["zone"] = "long_gamma" if regime_at_spot == "positive" else "short_gamma"
+    return out
+
+
+def _short_gamma_plan(base: dict, state: dict, zone: dict) -> dict:
+    """D6: dealers short gamma amplify moves — route to a directional momentum debit spread in the session's
+    direction, or long volatility (ATM straddle) when the move is under MOMENTUM_MIN_PCT. The SMA trend is
+    not consulted; mean-reversion credit structures never come out of here."""
+    atm, step, spot = base["atm"], base["strike_step"], base["spot"]
+    wing = WING_STEPS * step
+    m = state.get("momentum_pct")
+    where = (f"short-gamma zone (spot {zone['distance_pct']:+.2f}% from S* {zone['zero_gamma']:g})"
+             if zone.get("distance_pct") is not None else "short-gamma zone (no S* within the grid)")
+    if m is not None and m >= MOMENTUM_MIN_PCT:
+        return _tradeable(dict(base, view="momentum_bullish"), state, strategy="bull_call_spread", legs=[
+            _leg("BUY", "CE", atm, atm, "long call (ATM)"),
+            _leg("SELL", "CE", atm + wing, atm, "short call (target cap)")],
+            rationale=f"{where}, session {m:+.2f}% up: momentum bull call — SMA read overridden (D6)")
+    if m is not None and m <= -MOMENTUM_MIN_PCT:
+        return _tradeable(dict(base, view="momentum_bearish"), state, strategy="bear_put_spread", legs=[
+            _leg("BUY", "PE", atm, atm, "long put (ATM)"),
+            _leg("SELL", "PE", atm - wing, atm, "short put (target floor)")],
+            rationale=f"{where}, session {m:+.2f}% down: momentum bear put — SMA read overridden (D6)")
+    move = "no session move read" if m is None else f"session {m:+.2f}% (< {MOMENTUM_MIN_PCT:g}%)"
+    return _tradeable(dict(base, view="long_volatility"), state, strategy="long_straddle", legs=[
+        _leg("BUY", "CE", atm, atm, "long call (ATM)"),
+        _leg("BUY", "PE", atm, atm, "long put (ATM)")],
+        rationale=f"{where}, {move}: long volatility (ATM straddle) — SMA read overridden (D6)")
+
+
 def earnings_proximity_block(strategy, days_to_results, gate_days=None):
     """The refusal reason when results are `gate_days` (EARNINGS_PRE_DAYS, 5) or fewer days
     away and `strategy` is gated, else None. Unknown days = no reading = no block."""
@@ -265,15 +321,16 @@ def estimate_plan_economics(plan: dict, vix=None,
     if net >= 0:   # credit structure (condor, bear call spread)
         max_profit = net * lot
         max_loss = max(0.0, width - net) * lot
-    else:          # debit structure (bull call / bear put spread)
+    else:          # debit structure (bull call / bear put spread, long straddle)
         max_loss = -net * lot
-        max_profit = max(0.0, width + net) * lot
+        max_profit = (None if plan.get("strategy") == "long_straddle"      # unbounded: no cap leg
+                      else max(0.0, width + net) * lot)
 
     return dict(plan, legs=legs,
                 net_credit=net if net >= 0 else None,
                 net_debit=round(-net, 2) if net < 0 else None,
                 spread_width=width,
-                max_profit=round(max_profit, 2),
+                max_profit=None if max_profit is None else round(max_profit, 2),
                 max_loss=round(max_loss, 2),
                 pricing={"model": "synthetic_chain", "vix_used": vix,
                          "days_to_expiry": dte})
@@ -289,18 +346,28 @@ def _tradeable(base: dict, state: dict, **kw) -> dict:
 # --- the evaluation matrix ------------------------------------------------
 
 def map_technical_to_strategy(technical_state: dict) -> dict:
-    """The matrix plan, then the #151 event gates: `days_to_results` (earnings
-    proximity) and `glassbreaking` (a `glassbreaking_signals` read) turn a gated
-    structure into no_trade, named."""
-    plan = _matrix_plan(technical_state)
+    """The plan: a short-gamma zone (#155 D4/D6, state key `gex` = {zero_gamma, regime_at_spot}) routes to
+    momentum spreads / long volatility over the SMA matrix; every other zone keeps the matrix. Then the #151
+    event gates (`days_to_results`, `glassbreaking`) turn a gated structure into no_trade, named; a short-gamma
+    zone also refuses any mean-reversion credit structure."""
     state = technical_state or {}
+    gex = state.get("gex") or {}
+    zone = gamma_zone(state.get("spot"), gex.get("zero_gamma"), gex.get("regime_at_spot"))
+    plan = _matrix_plan(technical_state)
+    if zone["zone"] == "short_gamma" and plan.get("spot") is not None:
+        base = {k: plan[k] for k in ("iv_regime", "underlying", "lot_size", "strike_step", "atm", "spot")
+                if k in plan}
+        plan = _short_gamma_plan(dict(base, view=plan.get("view")), state, zone)
+    plan = dict(plan, gamma_zone=zone)
     why = (earnings_proximity_block(plan.get("strategy"), state.get("days_to_results"))
-           or glassbreaking_block(plan.get("strategy"), state.get("glassbreaking")))
+           or glassbreaking_block(plan.get("strategy"), state.get("glassbreaking"))
+           or (f"short-gamma zone: {plan.get('strategy')} is mean reversion, refused (D6, #155)"
+               if zone["zone"] == "short_gamma" and plan.get("strategy") in MEAN_REVERSION_STRATEGIES else None))
     if not why:
         return plan
-    return _no_trade({k: plan[k] for k in ("view", "iv_regime", "underlying", "lot_size",
-                                           "strike_step", "atm", "spot") if k in plan},
-                     plan.get("view"), plan.get("iv_regime"), why)
+    return dict(_no_trade({k: plan[k] for k in ("view", "iv_regime", "underlying", "lot_size",
+                                                "strike_step", "atm", "spot") if k in plan},
+                          plan.get("view"), plan.get("iv_regime"), why), gamma_zone=zone)
 
 
 def _matrix_plan(technical_state: dict) -> dict:

@@ -239,3 +239,6 @@ def _isolated_shared_runtime_files(monkeypatch, tmp_path):
     # the results calendar: entry stamps, the earnings gate and the exit label read it (#150/#151)
     from src.ingestion import earnings_calendar
     monkeypatch.setattr(earnings_calendar, "OUTPUT_PATH", tmp_path / "earnings_calendar.json")
+    # the Greek P&L attribution reads the chain lake at settlement (#155): never the real one
+    from src.analysis import greek_attribution
+    monkeypatch.setattr(greek_attribution, "LAKE_ROOT", tmp_path / "lake")

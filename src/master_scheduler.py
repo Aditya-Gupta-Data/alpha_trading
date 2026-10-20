@@ -275,10 +275,12 @@ def _playbook_lines(underlyings, fetch_fn=None) -> list:
                 "vix": vix, "days_to_results": _gate_days_to_results(u)[0]})   # #151 gate
             vix_text = f"{vix:.1f}" if vix is not None else "n/a"
             if plan["tradeable"]:
+                cap = ("unlimited" if plan.get("max_profit") is None
+                       else f"Rs.{plan['max_profit']:,.0f}")          # a long straddle has no cap (#155)
                 lines.append(
                     f"{u}: {plan['strategy'].replace('_', ' ')} "
                     f"(view {plan['view']}, VIX {vix_text}, "
-                    f"max profit Rs.{plan['max_profit']:,.0f} / "
+                    f"max profit {cap} / "
                     f"loss Rs.{plan['max_loss']:,.0f} per lot)")
             else:
                 lines.append(f"{u}: no trade — {plan['rationale']}")

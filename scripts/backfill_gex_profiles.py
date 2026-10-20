@@ -69,18 +69,18 @@ def day_row(slug: str, day: str, chain_rows: list, participant: dict = None) -> 
         one = [(r["oc"], r.get("expiry"))]
         expiries.append({"expiry": r.get("expiry"), "dte": dte,
                          "oi_lot_multiple": gp.oi_lot_multiple(rows, lot),
-                         "profile": gp.profile(rows, r.get("spot"), band),
-                         "repriced": gp.repriced_profile(one, r.get("spot"), as_of, band, None, grid),
-                         "calibrated": (gp.repriced_profile(one, r.get("spot"), as_of, band, cal, grid)
+                         "profile": gp.profile(rows, r.get("spot"), band, lot),
+                         "repriced": gp.repriced_profile(one, r.get("spot"), as_of, band, None, grid, lot),
+                         "calibrated": (gp.repriced_profile(one, r.get("spot"), as_of, band, cal, grid, lot)
                                         if cal else None)})
         if dte is not None and 0 <= dte <= COMBINED_MAX_DTE:
             near.append(rows)
             near_chains.append(one[0])
     if near:
         combined = {"max_dte": COMBINED_MAX_DTE, "expiries": len(near),
-                    "profile": gp.profile(gp.merge_rows(*near), spot, band),
-                    "repriced": gp.repriced_profile(near_chains, spot, as_of, band, None, grid),
-                    "calibrated": {d: gp.repriced_profile(near_chains, spot, as_of, band, w, grid)
+                    "profile": gp.profile(gp.merge_rows(*near), spot, band, lot),
+                    "repriced": gp.repriced_profile(near_chains, spot, as_of, band, None, grid, lot),
+                    "calibrated": {d: gp.repriced_profile(near_chains, spot, as_of, band, w, grid, lot)
                                    for d, w in weights.items() if w}}
     else:
         combined = {"max_dte": COMBINED_MAX_DTE, "expiries": 0, "repriced": None, "calibrated": {},

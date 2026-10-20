@@ -1,6 +1,6 @@
 # GEX (Gamma Exposure) and Greek P&L — architectural blueprint (2026-10-20, decision #152)
 
-**Status:** seam 1 BUILT (#152); seam 2 BUILT (#153: re-priced zero-gamma level + participant-OI sign, still shadow-only). Seam 1 (`src/analysis/gamma_profile.py` + `scripts/backfill_gex_profiles.py`, read-only,
+**Status:** seam 3 BUILT (#155: INR-crore GEX, D4 zones + D6 routing in the PLANNER, D7 Taylor attribution); seam 1 BUILT (#152); seam 2 BUILT (#153: re-priced zero-gamma level + participant-OI sign, still shadow-only). Seam 1 (`src/analysis/gamma_profile.py` + `scripts/backfill_gex_profiles.py`, read-only,
 no trading path). Everything else below is spec. The Architect approved D1 (one new pure module), D2 (naive
 sign) and D5 (shadow-first) on 2026-10-20; D3 uses the recommended defaults; D4, D6 and D7 are open.
 
@@ -202,6 +202,28 @@ was −10 → −34 cr. This is descriptive only: no outcome test has been run.
 - G2 needs a magnitude or zero-distance trigger, not the sign.
 
 D2a was ruled on 2026-10-20 (#154): **non_client** (DII + FII + Pro, the counterparty to clients).
+
+## 4d. Seam 3 (#155) — the Architect's resolutions
+
+**NSE figure:** `to_crore`: GEX_K = S² × Γ × OI_K × L / 10⁷ with OI_K in contracts.
+- Dhan's OI is quantity, so L is applied once.
+- L comes from `LOT_SIZES` (NIFTY 65, BANKNIFTY 30, FINNIFTY 60, MIDCPNIFTY 120).
+
+**D4:** transition when |spot / S* − 1| ≤ 0.5%. Outside it, the sign of dealer net gamma at spot gives long or
+short gamma. On the textbook curve that is exactly spot above / below S* ± 0.5%.
+
+**D6:** short gamma routes, in the planner, by the session move (vs the previous close):
+- ≥ +0.5% → bull call;
+- ≤ −0.5% → bear put;
+- otherwise → ATM long straddle.
+
+Condors, butterflies and credit verticals are refused there. Long gamma and transition keep the matrix, and
+the #151 gates apply after. The live proposer is NOT wired (D5 stands for live entries).
+
+**D7:** `greek_attribution` — the seven-term Taylor expansion per leg per EOD step, using BS Greeks from OTM IV.
+- The floor: a step counts only when Δ, Γ, Θ and V are available for every leg.
+- Volga, vanna and charm come from finite differences, else 0.
+- Settlement writes its own table.
 
 ## 5. Next seams (in order)
 

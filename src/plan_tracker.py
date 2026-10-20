@@ -1577,6 +1577,12 @@ def record_post_mortem(entry: dict, brain) -> None:
                                     brain_map.hold_crossed_results(entry))
     except Exception:
         pass
+    try:                                                       # #155 D7: Greek P&L attribution, own table
+        from src.analysis import greek_attribution as ga
+        if entry.get("spread"):
+            ga.record(brain, entry, ga.attribute_entry(entry))
+    except Exception:
+        pass
     # Phase 2 (holy-grail plan §5.1): the entry's proposal-time evidence
     # snapshot joins its outcome in brain_map — the labeled row per-layer
     # reliability learns from. Pre-substrate entries (no stamp) skip

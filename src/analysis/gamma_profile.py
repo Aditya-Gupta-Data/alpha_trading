@@ -18,6 +18,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 PCT = 0.01
+CRORE = 1e7
 NAIVE_WEIGHTS = {"call": 1.0, "put": -1.0}
 RISK_FREE = 0.065                                    # assumption; gamma barely moves with r
 IV_BOUNDS = (1.0, 200.0)                             # per cent; outside = no usable IV
@@ -95,6 +96,10 @@ def merge_rows(*row_sets) -> list:
     return sorted(out.values(), key=lambda r: r["strike"])
 
 
+def _round(x, n):
+    return None if x is None else round(x, n)
+
+
 def _flip(rows: list):
     """The level where the strike-ordered cumulative net GEX crosses zero (linear between strikes), or None."""
     cum, prev = 0.0, None
@@ -108,6 +113,19 @@ def _flip(rows: list):
     return None
 
 
+def to_crore(gex_1pct, lot_size=None, oi_unit: str = "quantity"):
+    """The Architect's NSE figure (#155): GEX_K = S^2 x Gamma_K x OI_K x L / 10^7, INR crore, OI_K in CONTRACTS.
+    Dhan's OI is quantity (= contracts x L, measured by `oi_lot_multiple`), so OI_K x L is that quantity and L
+    must not be applied twice; a contracts feed multiplies by L."""
+    if gex_1pct is None:
+        return None
+    base = gex_1pct / PCT / CRORE                    # S^2 x gamma x quantity / 10^7
+    if oi_unit == "quantity":
+        return base
+    lot = _num(lot_size)
+    return base * lot if oi_unit == "contracts" and lot else None
+
+
 def oi_lot_multiple(rows: list, lot_size) -> float | None:
     """Share of nonzero OI values that are whole multiples of `lot_size` (~1.0 = OI is quantity, not contracts)."""
     lot = _num(lot_size)
@@ -117,12 +135,14 @@ def oi_lot_multiple(rows: list, lot_size) -> float | None:
     return round(sum(1 for v in vals if abs(v / lot - round(v / lot)) < 1e-9) / len(vals), 3)
 
 
-def profile(rows: list, spot, band_pct: float) -> dict:
-    """One profile over the strikes within `band_pct` of spot: regime, walls, flip, totals, concentration.
-    Abstains (regime None + reason) when fewer than MIN_COVERAGE of in-band strikes are complete."""
+def profile(rows: list, spot, band_pct: float, lot_size=None, oi_unit: str = "quantity") -> dict:
+    """One profile over the strikes within `band_pct` of spot: regime, walls, flip, totals (rupees per 1% move
+    and the #155 INR-crore figure), concentration. Abstains (regime None + reason) when fewer than
+    MIN_COVERAGE of in-band strikes are complete."""
     spot = _num(spot)
     out = {"spot": spot, "band_pct": band_pct, "strikes_in_band": 0, "coverage": None,
            "regime": None, "net_gex": None, "abs_gex": None, "net_share": None,
+           "net_gex_cr": None, "abs_gex_cr": None, "oi_unit": oi_unit, "lot_size": lot_size,
            "net_doi_gex": None, "call_wall": None, "put_wall": None, "flip": None,
            "spot_vs_flip_pct": None, "concentration": None, "reason": None}
     if not spot or spot <= 0:
@@ -150,6 +170,8 @@ def profile(rows: list, spot, band_pct: float) -> dict:
     out.update(
         regime="positive" if net > 0 else "negative",
         net_gex=round(net, 2), abs_gex=round(gross, 2),
+        net_gex_cr=_round(to_crore(net, lot_size, oi_unit), 4),
+        abs_gex_cr=_round(to_crore(gross, lot_size, oi_unit), 4),
         net_share=round(net / gross, 4) if gross else None,
         net_doi_gex=round(sum(doi), 2) if doi else None,
         call_wall=call_wall["strike"], put_wall=put_wall["strike"], flip=flip,
@@ -279,7 +301,7 @@ def model_gamma_ratio(inputs: list, spot, t_years):
 
 
 def repriced_profile(chains: list, spot, as_of, band_pct: float, weights: dict = None,
-                     grid_pct: float = 6.0) -> dict:
+                     grid_pct: float = 6.0, lot_size=None, oi_unit: str = "quantity") -> dict:
     """One profile over one or more expiries [(oc, expiry)] from model gamma, plus the re-priced
     zero-gamma level and where spot sits against it. Abstains by name like `profile`."""
     S = _num(spot)
@@ -294,8 +316,8 @@ def repriced_profile(chains: list, spot, as_of, band_pct: float, weights: dict =
         ratios.append(model_gamma_ratio(inputs, S, t))
         rows_sets.append(model_strike_gex(inputs, S, t, weights))
         curves.append(gamma_curve(inputs, S, t, weights, grid_pct))
-    out = profile(merge_rows(*rows_sets), S, band_pct) if rows_sets else dict(
-        profile([], S, band_pct), reason="no expiry with a usable chain and time to expiry")
+    out = profile(merge_rows(*rows_sets), S, band_pct, lot_size, oi_unit) if rows_sets else dict(
+        profile([], S, band_pct, lot_size, oi_unit), reason="no expiry with a usable chain and time to expiry")
     curve = sum_curves(*curves)
     zg = zero_gamma(curve, S)
     at_spot = next((y for x, y in curve if abs(x - S) < 1e-6), None) if curve else None

@@ -81,8 +81,10 @@ def test_oi_lot_multiple_tells_quantity_from_contracts():
 
 
 def test_the_module_is_pure():
+    import re
     src = (ROOT / "src" / "analysis" / "gamma_profile.py").read_text()
-    assert "import" not in src.replace("from __future__ import annotations", "")
+    imported = set(re.findall(r"^(?:from|import) ([\w.]+)", src, re.M))
+    assert imported <= {"__future__", "math", "datetime"}          # stdlib maths only: no I/O, no market data
 
 
 # ---------------------------------------------------------------- backfill

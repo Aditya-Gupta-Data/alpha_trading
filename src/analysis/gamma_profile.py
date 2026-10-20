@@ -7,13 +7,23 @@ profile. Advisory only — nothing reads it to trade until a Department 5 ruling
 
 Units: GEX(K) = gamma(K) x OI(K) x spot^2 x 0.01 = rupees of delta per 1% move. OI is taken as reported
 (Dhan reports quantity, not contracts — `oi_lot_multiple` measures that per chain).
-Sign (D2, NAIVE, unverified for NSE): dealers long calls, short puts -> calls +, puts -.
-The flip is the strike-ordered cumulative-net zero crossing — an approximation (gamma is read at today's
-spot only, never re-priced at hypothetical spots).
+Sign: NAIVE_WEIGHTS (dealers long calls, short puts) or weights calibrated from NSE participant-wise OI
+(`ingestion.participant_oi.sign_weights`, seam 2): GEX_side = weight_side x gamma x OI x S^2 x 1%.
+`flip` is the strike-ordered cumulative-net crossing (seam 1, an approximation); `repriced_profile` finds
+the real zero-gamma level by re-pricing Black-Scholes gamma at shifted spots from each strike's OTM IV.
 """
 from __future__ import annotations
 
+import math
+from datetime import datetime, timedelta, timezone
+
 PCT = 0.01
+NAIVE_WEIGHTS = {"call": 1.0, "put": -1.0}
+RISK_FREE = 0.065                                    # assumption; gamma barely moves with r
+IV_BOUNDS = (1.0, 200.0)                             # per cent; outside = no usable IV
+GRID_PCT = {"index": 6.0, "stock": 12.0}             # shifted spots for the zero-gamma search
+GRID_STEPS = 49
+_IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_BAND_PCT = {"index": 5.0, "stock": 10.0}     # D3: strikes within this % of spot
 MIN_COVERAGE = 0.8                                   # share of in-band strikes with gamma+OI on both sides
 
@@ -27,9 +37,12 @@ def _num(x):
 
 
 def _side(node: dict, sign: float, spot: float) -> dict:
-    """One ce/pe node -> {gamma, oi, doi, gex, doi_gex}; gex None when gamma or OI is missing."""
+    """One ce/pe node -> {gamma, oi, doi, gex, doi_gex}; gex None when gamma or OI is missing.
+    Dhan's zero-IV rows (gamma 0 on ITM strikes at EOD) are missing, never a real zero."""
     node = node if isinstance(node, dict) else {}
     gamma = _num((node.get("greeks") or {}).get("gamma"))
+    if gamma == 0 and not _num(node.get("implied_volatility")):
+        gamma = None
     oi = _num(node.get("oi"))
     prev = _num(node.get("previous_oi"))
     doi = oi - prev if oi is not None and prev is not None else None
@@ -39,9 +52,11 @@ def _side(node: dict, sign: float, spot: float) -> dict:
             "doi_gex": gamma * doi * scale if gamma is not None and doi is not None else None}
 
 
-def strike_gex(oc: dict, spot) -> list:
-    """Per-strike GEX rows sorted by strike: call/put/net/abs GEX, the OI-change variant, completeness."""
+def strike_gex(oc: dict, spot, weights: dict = None) -> list:
+    """Per-strike GEX rows sorted by strike from Dhan's own gamma: call/put/net/abs GEX, the OI-change
+    variant, completeness. `weights` = {call, put} side signs/scales (default NAIVE_WEIGHTS)."""
     spot = _num(spot)
+    w = weights or NAIVE_WEIGHTS
     if not spot or spot <= 0 or not isinstance(oc, dict):
         return []
     rows = []
@@ -49,7 +64,7 @@ def strike_gex(oc: dict, spot) -> list:
         strike = _num(key)
         if strike is None or not isinstance(node, dict):
             continue
-        c, p = _side(node.get("ce"), 1.0, spot), _side(node.get("pe"), -1.0, spot)
+        c, p = _side(node.get("ce"), w["call"], spot), _side(node.get("pe"), w["put"], spot)
         complete = c["gex"] is not None and p["gex"] is not None
         rows.append({
             "strike": strike,
@@ -140,4 +155,157 @@ def profile(rows: list, spot, band_pct: float) -> dict:
         call_wall=call_wall["strike"], put_wall=put_wall["strike"], flip=flip,
         spot_vs_flip_pct=round((spot / flip - 1) * 100, 3) if flip else None,
         concentration=round(max(r["abs_gex"] for r in full) / gross, 4) if gross else None)
+    return out
+
+
+# ------------------------------------------------------------- seam 2: re-priced gamma (#153)
+
+def years_to_expiry(expiry, as_of):
+    """Calendar years from `as_of` (ISO; naive = IST) to expiry day 15:30 IST, or None when past/unreadable."""
+    try:
+        exp = datetime.fromisoformat(str(expiry)[:10]).replace(hour=15, minute=30, tzinfo=_IST)
+        now = datetime.fromisoformat(str(as_of))
+    except (TypeError, ValueError):
+        return None
+    now = now if now.tzinfo else now.replace(tzinfo=_IST)
+    t = (exp - now).total_seconds() / (365.0 * 86400)
+    return t if t > 0 else None
+
+
+def bs_gamma(spot, strike, iv_pct, t_years, r: float = RISK_FREE):
+    """Black-Scholes gamma per share (identical for call and put), or None on any unusable input."""
+    S, K, iv, t = _num(spot), _num(strike), _num(iv_pct), _num(t_years)
+    if not S or not K or S <= 0 or K <= 0 or not iv or not t or t <= 0:
+        return None
+    sigma = iv / 100.0
+    root = sigma * math.sqrt(t)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / root
+    return math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) / (S * root)
+
+
+def _iv(node: dict):
+    v = _num((node or {}).get("implied_volatility"))
+    return v if v is not None and IV_BOUNDS[0] <= v <= IV_BOUNDS[1] else None
+
+
+def strike_inputs(oc: dict, spot) -> list:
+    """Per strike: one IV (the OTM side's — puts below spot, calls above — else the other side's), its
+    source, both OIs and Dhan's gammas. Dhan's EOD call/put IVs at one strike disagree; the OTM quote is
+    the traded one."""
+    spot = _num(spot)
+    if not spot or not isinstance(oc, dict):
+        return []
+    out = []
+    for key, node in oc.items():
+        k = _num(key)
+        if k is None or not isinstance(node, dict):
+            continue
+        ce, pe = node.get("ce") or {}, node.get("pe") or {}
+        otm, itm, otm_name = (pe, ce, "pe") if k < spot else (ce, pe, "ce")
+        iv, src = _iv(otm), otm_name
+        if iv is None:
+            iv, src = _iv(itm), ("ce" if otm_name == "pe" else "pe")
+        out.append({"strike": k, "iv": iv, "iv_source": src if iv is not None else None,
+                    "call_oi": _num(ce.get("oi")), "put_oi": _num(pe.get("oi")),
+                    "dhan_call_gamma": _num((ce.get("greeks") or {}).get("gamma")),
+                    "dhan_put_gamma": _num((pe.get("greeks") or {}).get("gamma"))})
+    return sorted(out, key=lambda r: r["strike"])
+
+
+def model_strike_gex(inputs: list, spot, t_years, weights: dict = None) -> list:
+    """strike_gex-shaped rows with Black-Scholes gamma at `spot` from each strike's IV."""
+    S, w = _num(spot), weights or NAIVE_WEIGHTS
+    rows = []
+    for r in inputs or []:
+        g = bs_gamma(S, r["strike"], r["iv"], t_years)
+        ok = g is not None and r["call_oi"] is not None and r["put_oi"] is not None
+        scale = S * S * PCT if S else 0.0
+        cg = w["call"] * g * r["call_oi"] * scale if ok else None
+        pg = w["put"] * g * r["put_oi"] * scale if ok else None
+        rows.append({"strike": r["strike"], "call_gex": cg, "put_gex": pg,
+                     "net_gex": cg + pg if ok else None,
+                     "abs_gex": abs(cg) + abs(pg) if ok else None,
+                     "call_doi_gex": None, "put_doi_gex": None,
+                     "call_oi": r["call_oi"], "put_oi": r["put_oi"], "complete": ok})
+    return rows
+
+
+def gamma_curve(inputs: list, spot, t_years, weights: dict = None, grid_pct: float = 6.0,
+                steps: int = GRID_STEPS) -> list:
+    """[(shifted spot, total net GEX)] across spot x (1 +/- grid_pct%), every complete strike re-priced."""
+    S = _num(spot)
+    if not S or not t_years or steps < 2:
+        return []
+    out = []
+    for i in range(steps):
+        s_i = S * (1 - grid_pct / 100.0 + 2 * grid_pct / 100.0 * i / (steps - 1))
+        rows = [r for r in model_strike_gex(inputs, s_i, t_years, weights) if r["complete"]]
+        out.append((round(s_i, 2), sum(r["net_gex"] for r in rows) if rows else None))
+    return out
+
+
+def sum_curves(*curves) -> list:
+    """Point-wise sum of curves on the same grid (a None anywhere makes that point None)."""
+    curves = [c for c in curves if c]
+    if not curves or len({len(c) for c in curves}) != 1:
+        return []
+    return [(curves[0][i][0], None if any(c[i][1] is None for c in curves)
+             else sum(c[i][1] for c in curves)) for i in range(len(curves[0]))]
+
+
+def zero_gamma(curve: list, spot):
+    """The re-priced zero-gamma level: the sign change of the curve nearest to spot (linear), or None."""
+    S = _num(spot)
+    pts = [(x, y) for x, y in curve or [] if y is not None]
+    found = []
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if y0 == 0:
+            found.append(x0)
+        elif (y0 < 0) != (y1 < 0) and y1 != 0:
+            found.append(x0 + (x1 - x0) * abs(y0) / (abs(y0) + abs(y1)))
+    return round(min(found, key=lambda x: abs(x - S)), 2) if found and S else None
+
+
+def model_gamma_ratio(inputs: list, spot, t_years):
+    """Median of model gamma / Dhan gamma on the OTM side (~1.0 = IV units and time-to-expiry agree)."""
+    ratios = []
+    for r in inputs or []:
+        dg = r["dhan_put_gamma"] if r["iv_source"] == "pe" else r["dhan_call_gamma"]
+        g = bs_gamma(spot, r["strike"], r["iv"], t_years)
+        if g and dg and dg > 0:
+            ratios.append(g / dg)
+    ratios.sort()
+    return round(ratios[len(ratios) // 2], 3) if ratios else None
+
+
+def repriced_profile(chains: list, spot, as_of, band_pct: float, weights: dict = None,
+                     grid_pct: float = 6.0) -> dict:
+    """One profile over one or more expiries [(oc, expiry)] from model gamma, plus the re-priced
+    zero-gamma level and where spot sits against it. Abstains by name like `profile`."""
+    S = _num(spot)
+    curves, rows_sets, ivs, ratios, ts = [], [], [], [], []
+    for oc, expiry in chains or []:
+        t = years_to_expiry(expiry, as_of)
+        inputs = strike_inputs(oc, S)
+        if t is None or not inputs:
+            continue
+        ts.append(t)
+        ivs.append(sum(1 for r in inputs if r["iv"] is not None) / len(inputs))
+        ratios.append(model_gamma_ratio(inputs, S, t))
+        rows_sets.append(model_strike_gex(inputs, S, t, weights))
+        curves.append(gamma_curve(inputs, S, t, weights, grid_pct))
+    out = profile(merge_rows(*rows_sets), S, band_pct) if rows_sets else dict(
+        profile([], S, band_pct), reason="no expiry with a usable chain and time to expiry")
+    curve = sum_curves(*curves)
+    zg = zero_gamma(curve, S)
+    at_spot = next((y for x, y in curve if abs(x - S) < 1e-6), None) if curve else None
+    if at_spot is None and curve:
+        at_spot = curve[len(curve) // 2][1]
+    out.update(weights=dict(weights or NAIVE_WEIGHTS),
+               t_years=round(min(ts), 5) if ts else None,
+               iv_coverage=round(min(ivs), 3) if ivs else None,
+               model_gamma_ratio=next((r for r in ratios if r is not None), None),
+               zero_gamma=zg, spot_vs_zero_pct=round((S / zg - 1) * 100, 3) if zg and S else None,
+               regime_at_spot=(None if at_spot is None else "positive" if at_spot > 0 else "negative"),
+               zero_gamma_within_grid=zg is not None, grid_pct=grid_pct)
     return out

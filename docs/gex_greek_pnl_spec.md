@@ -1,6 +1,6 @@
 # GEX (Gamma Exposure) and Greek P&L — architectural blueprint (2026-10-20, decision #152)
 
-**Status:** seam 1 BUILT (`src/analysis/gamma_profile.py` + `scripts/backfill_gex_profiles.py`, read-only,
+**Status:** seam 1 BUILT (#152); seam 2 BUILT (#153: re-priced zero-gamma level + participant-OI sign, still shadow-only). Seam 1 (`src/analysis/gamma_profile.py` + `scripts/backfill_gex_profiles.py`, read-only,
 no trading path). Everything else below is spec. The Architect approved D1 (one new pure module), D2 (naive
 sign) and D5 (shadow-first) on 2026-10-20; D3 uses the recommended defaults; D4, D6 and D7 are open.
 
@@ -145,11 +145,33 @@ are unchanged.
   case today.
 - NIFTY's regime changes often (25 of 63 days negative). BANKNIFTY is mostly positive (56/63).
 
+## 4b. Seam 2 (#153)
+
+**Re-priced gamma:**
+- IV comes from ONE quote per strike, the OTM side's (puts below spot, calls above). Dhan's EOD ITM calls come
+  back IV 0 / gamma 0, and call/put IVs at one strike disagree (16-10 NIFTY 23100: call 5.1%, put 14.3%).
+- Black-Scholes gamma uses r = 6.5% and time to 15:30 IST on expiry day.
+- The zero-gamma level is the sign change of the total net GEX re-priced across spot ±6% (index) / ±12%
+  (stock) in 49 steps, taking the one nearest spot. `regime_at_spot` is the curve's sign at today's spot.
+- `model_gamma_ratio` (model / Dhan gamma on the OTM side) is the units check.
+
+**Dealer sign (D2):**
+- From NSE's participant-wise OI: `weight_side = Σ_dealers (long − short) / total OI` for that option class.
+- Dealer definitions: `non_client` (default; D2a open), `pro`, `pro_fii`.
+- Class-wide weights (all index options, all stock options) are applied to every underlying of the class.
+  This is an assumption, labelled in every row.
+
+**16-10 weights (non_client):**
+
+| | call | put |
+|---|---|---|
+| index | −0.010 | +0.072 |
+| stock | **−0.269** | +0.054 |
+
 ## 5. Next seams (in order)
 
 1. **Done:** `gamma_profile.strike_gex` / `profile` / `merge_rows` + the backfill.
-2. A re-priced zero-gamma level (per-strike IV → gamma at spot ± x%) in `gamma_profile`, and the D2
-   calibration from NSE participant-wise OI — both before any rule reads the profile.
+2. **Done (#153):** the re-priced zero-gamma level and the D2 participant-OI calibration.
 3. Stamp a `gex` block on every proposal from the chain in hand (annotation only), and capture it forward
    from `chain_archiver`'s end-of-day row on the VM.
 4. Stamp `greeks_at_entry` in `options_proposer.to_journal_entry` (`portfolio_greeks.position_greeks`), and

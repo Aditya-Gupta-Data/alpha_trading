@@ -42,6 +42,29 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-20 ~13:00 IST — Earnings S1–S3 (#150) + the Architect's §4 rulings and a HARD earnings proximity gate (#151) merged to `main`. NOT deployed: the VM still runs `b7f923b`
+
+- **What changes when deployed:**
+  - **Gate:** a STOCK with results 5 or fewer days away gets no condor, butterfly, credit vertical or bear put. The refusal reads "earnings proximity gate: results in N day(s)…". Bull call spreads pass. Indices are not gated.
+  - On a real run the Shadow Learner still takes the refused setup (the #140 advisory-veto path), so the gate's effect is measured. Capital accounts never take it.
+  - **Labels:** every spread entry carries its results window — `pre` / `through` / `post` / `clear` / `not_announced` (pre = 5 days, post = 3). Every outcome and shadow row adds `results_crossed` at settlement.
+  - **Glassbreaking:** the seam is wired. A gap-up ≥ 2% with institutional volume refuses bearish and short-premium structures. The volume feed is NOT wired, so the read abstains until it is: plug it into `options_proposer._glassbreaking_today`. The kill/mode switch is `glassbreaking_require_volume`.
+- **Calendar memory:** the gate needs only the next results date, so it works from the first deploy. The `last` memory (for `post` and `results_crossed`) fills on the first 19:20 calendar run after the deploy. Until then those read None.
+- **Two calls the Architect may reverse (DECISIONS #151):** the learner pass-through, and stock-only gating (an index could read its heavyweights).
+- **Deploy — any time on 10-20 (NSE holiday, Dussehra), else after 15:30 on a trading day.** A running market loop holds the old code in memory; a mid-session pull would mix versions through lazy imports.
+  1. VM: `cd ~/alpha_trading && git pull --ff-only && venv/bin/python -m pytest -q tests/test_event_gates.py tests/test_earnings_awareness.py tests/test_options_proposer.py tests/test_trade_planner.py`
+  2. VM: `sudo systemctl restart alpha-trading alpha-discord-bot`, then health 200.
+  3. Mini PC (analytics copy): `cd ~/alpha_trading && git pull --ff-only`.
+  The new columns are added on the first write (additive).
+- **Also fixed (test-only, failing on plain `main`):**
+  - `test_valuation_scorer` ×3: the fixture filings aged past the 200-day staleness limit on 10-18.
+  - `test_ops_monitor` env override: it assumed a weekday is a trading day; 10-20 is a holiday.
+- **Watch the first session after the deploy:**
+  - "earnings proximity gate" refusals in the scheduler log and `sizing_refused`-style rejections;
+  - learner-only entries with that reason;
+  - `event_gates` on every new proposal;
+  - the 19:20 calendar run writing `last`.
+
 ## 2026-10-17 ~14:30 IST — LLM path LIVE end to end on the Mini PC: FreeLLMAPI → Gemini, miner probe passes
 
 - **Key saved:** `ALPHA_LLM_API_KEY` in the node's `~/alpha_trading/.env` (one line, `freellmapi-` key, owner `mini_pc1`, 600). The owner's first attempt ran in a root shell (`~` = `/root`) and saved nothing; `su - mini_pc1` fixed it.

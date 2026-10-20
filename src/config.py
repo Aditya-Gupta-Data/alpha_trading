@@ -285,10 +285,13 @@ LIVE_QUOTE_INTERVAL_SECONDS = int(_CONFIG.get("live_quote_interval_seconds", 300
 # (one chain per ticker+expiry per live cycle, shared with the ratchet);
 # false = only the ratchet's directional spreads get a real quote.
 REAL_QUOTE_MARKS_ALL = bool(_CONFIG.get("real_quote_marks_all", True))
-# Earnings Awareness S2 (#145 E, docs/earnings_awareness_spec.md): the entry's
-# results window — "pre" = results within this many days and before expiry,
-# "post" = results within the last EARNINGS_POST_DAYS. Annotation only, gates nothing.
-EARNINGS_PRE_DAYS = int(_CONFIG.get("earnings_pre_days", 7))
+# Earnings Awareness (#150, Architect §4 ruling 2026-10-20, #151): "pre" = results
+# within this many days and before expiry, "post" = within the last
+# EARNINGS_POST_DAYS. The same 5 days is the earnings proximity gate's threshold.
+EARNINGS_PRE_DAYS = int(_CONFIG.get("earnings_pre_days", 5))
 EARNINGS_POST_DAYS = int(_CONFIG.get("earnings_post_days", 3))
+# #151 glassbreaking seam: a >= 2% gap-up blocks bearish/short-premium only with
+# institutional volume confirmed; false = the gap alone fires (until the feed is wired).
+GLASSBREAKING_REQUIRE_VOLUME = bool(_CONFIG.get("glassbreaking_require_volume", True))
 # A results calendar older than this many days abstains (window null + reason).
 EARNINGS_CALENDAR_MAX_AGE_DAYS = int(_CONFIG.get("earnings_calendar_max_age_days", 3))

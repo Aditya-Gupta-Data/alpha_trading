@@ -125,7 +125,8 @@ def connect(db_path=None) -> sqlite3.Connection:
         if col not in outcome_cols:
             conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} TEXT")
     # Earnings Awareness S3 (#150): the entry-time results window, NULL on older rows.
-    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER")):
+    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER"),
+                      ("results_crossed", "INTEGER")):           # #151: did the hold cross results
         if col not in outcome_cols:
             conn.execute(f"ALTER TABLE outcomes ADD COLUMN {col} {kind}")
     # DUAL-HORIZON SENTIMENT (Level 1, 2026-08-05). `news_processor` has
@@ -166,7 +167,7 @@ def record_event(conn, date, ticker, event_type, tag,
 def record_outcome(conn, journal_ref, date, ticker, archetype=None,
                    r_multiple=None, result=None, post_mortem=None,
                    regime_trend=None, regime_vix=None, portfolio_id=None,
-                   earnings_window=None, results_before_expiry=None) -> int:
+                   earnings_window=None, results_before_expiry=None, results_crossed=None) -> int:
     """Insert one resolved trade and return its outcome id. `journal_ref`
     is the stable key back to the journal entry; re-recording the same ref
     is a no-op that returns the existing row's id, so future backfills can
@@ -183,11 +184,12 @@ def record_outcome(conn, journal_ref, date, ticker, archetype=None,
         post_mortem = json.dumps(post_mortem)
     cur = conn.execute(
         "INSERT INTO outcomes (journal_ref, date, ticker, archetype, r_multiple, result, post_mortem, "
-        "regime_trend, regime_vix, portfolio_id, earnings_window, results_before_expiry) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (journal_ref) DO NOTHING",
+        "regime_trend, regime_vix, portfolio_id, earnings_window, results_before_expiry, results_crossed) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (journal_ref) DO NOTHING",
         (journal_ref, date, ticker, archetype, r_multiple, result,
          post_mortem, regime_trend, regime_vix, portfolio_id, earnings_window,
-         None if results_before_expiry is None else int(bool(results_before_expiry))),
+         None if results_before_expiry is None else int(bool(results_before_expiry)),
+         None if results_crossed is None else int(bool(results_crossed))),
     )
     conn.commit()
     if cur.lastrowid and cur.rowcount:
@@ -353,6 +355,17 @@ def _get_or_create_event(conn, date, ticker, event_type, tag,
                         sentiment=sentiment, entities=entities, source=source)
 
 
+def hold_crossed_results(entry: dict):
+    """#151 exit label: did a results date fall inside [entry date, exit date]? None = unknown."""
+    try:
+        from src.confluence.evidence import results_crossed
+        outcome = entry.get("outcome") or {}
+        return results_crossed(entry.get("ticker"), entry.get("date"),
+                               outcome.get("exit_date") or outcome.get("settled_at"))
+    except Exception:
+        return None
+
+
 def record_resolved_entry(conn, entry, post_mortem=None):
     """One resolved journal entry -> its `outcomes` row plus the signal /
     pattern-tag events that were "in the air" at entry, all linked. This is
@@ -385,6 +398,7 @@ def record_resolved_entry(conn, entry, post_mortem=None):
         portfolio_id=entry.get("portfolio_id"),
         earnings_window=earnings.get("window"),
         results_before_expiry=earnings.get("results_before_expiry"),
+        results_crossed=hold_crossed_results(entry),
     )
     # One event for the strategy signal (tagged by archetype when it's a
     # known one, else by the normalized signal text) + one per user-chosen

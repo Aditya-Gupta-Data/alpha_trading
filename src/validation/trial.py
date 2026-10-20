@@ -78,10 +78,22 @@ def ensure_schema(conn) -> None:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN mode TEXT")
     if "portfolio_id" not in cols:                 # M1 (#142): the bucket the Court row's evidence belongs to
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN portfolio_id TEXT")
-    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER")):   # #150 S3
+    for col, kind in (("earnings_window", "TEXT"), ("results_before_expiry", "INTEGER"),   # #150 S3
+                      ("results_crossed", "INTEGER")):                                     # #151 exit label
         if col not in cols:
             conn.execute(f"ALTER TABLE shadow_trades ADD COLUMN {col} {kind}")
     conn.commit()
+
+
+def label_results_crossed(conn, host_ref: str, crossed) -> int:
+    """#151: stamp whether the hold crossed results on every unlabelled shadow row of that ref."""
+    if not host_ref or crossed is None:
+        return 0
+    ensure_schema(conn)
+    cur = conn.execute("UPDATE shadow_trades SET results_crossed = ? WHERE (host_ref = ? OR journal_ref = ?) "
+                       "AND results_crossed IS NULL", (int(bool(crossed)), host_ref, host_ref))
+    conn.commit()
+    return cur.rowcount
 
 
 def label_earnings(conn, host_ref: str, window, results_before_expiry) -> int:

@@ -256,7 +256,7 @@ def _playbook_lines(underlyings, fetch_fn=None) -> list:
     live state the entry loop trades on. The proposer's market_view is
     its strongest read, so bullish/bearish map to the planner's strong
     tier. Purely informational — the pipeline's own gates still rule."""
-    from src.options_proposer import market_view
+    from src.options_proposer import _gate_days_to_results, market_view
     from src.trade_planner import map_technical_to_strategy
     fetch_fn = fetch_fn or live_bridge.fetch_live_market_state
     trend_map = {"bullish": "strong_bullish", "bearish": "bearish",
@@ -272,7 +272,7 @@ def _playbook_lines(underlyings, fetch_fn=None) -> list:
             plan = map_technical_to_strategy({
                 "spot": analysis["price"], "underlying": u,
                 "trend": trend_map.get(market_view(analysis), "neutral"),
-                "vix": vix})
+                "vix": vix, "days_to_results": _gate_days_to_results(u)[0]})   # #151 gate
             vix_text = f"{vix:.1f}" if vix is not None else "n/a"
             if plan["tradeable"]:
                 lines.append(

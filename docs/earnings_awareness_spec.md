@@ -1,7 +1,8 @@
 # Earnings Awareness — architectural requirement (draft, 2026-10-16)
 
-**Status:** S1–S3 **BUILT** 2026-10-16 (decision #150, branch `claude/earnings-s1-s3`, not deployed); S4–S6 spec only. Elsewhere, nothing below is built except where marked **EXISTS**.
-**One rule added in the build (see #150):** a stock whose next results date is not yet announced is `clear` only when it cannot report before expiry (last quarter already reported, expiry before the next quarter end); otherwise `window` is null with the reason "not announced".
+**Status:** S1–S3 **BUILT** (decision #150) and the §4 rulings applied plus a hard **earnings proximity gate** (decision #151, 2026-10-20), merged to `main`; S4–S6 spec only. Elsewhere, nothing below is built except where marked **EXISTS**.
+**Not-announced rule (#150, confirmed #151):** a stock whose next results date is not yet announced is `clear` only when it cannot report before expiry (last quarter already reported, expiry before the next quarter end); otherwise `window` is `"not_announced"` with the reason.
+**#151 supersedes the "no hard block" line below for one case:** a stock whose results are 5 or fewer days away gets NO condor, butterfly, credit vertical or bear put (`trade_planner.earnings_proximity_block`, enforced in `options_proposer.build_proposal`). Capital accounts refuse; the Shadow Learner takes the raw setup so the gate is measured. Bull call spreads are not gated.
 **Ruling it serves (Architect, 2026-10-16, decision #145 E):** no blind blackout
 window. The system must know about results in advance, square off an open trade
 when holding it through results is not justified, and eventually learn to trade
@@ -97,16 +98,27 @@ Every spread entry carries one `earnings` block. It is an annotation and gates n
   the Court through the G-gates. Not before S3 holds at least two quarters of events.
 
 ## 3. What this will NOT do
-- No blackout. No entry is blocked because results are near.
+- No blanket blackout. The one block is #151's proximity gate (≤ 5 days, gated
+  structures, the stock's own results); everything else stays annotation.
 - No sizing change keyed on results.
 - No new engine, no new data vendor. The NSE calendar stays the one source.
 
-## 4. Decisions needed from the Architect before S4/S5
-1. `EARNINGS_PRE_DAYS` (default proposal 7) and `EARNINGS_POST_DAYS` (3).
-2. The index heavyweight map: which names and how many per index.
-3. Which structures count as short-volatility for S4/S5: condor and butterfly
-   only, or also credit verticals?
-4. The S5 thresholds X and Y. Proposal: decide them from the S3/S5 shadow data.
+## 4. Architect decisions (ruled 2026-10-20, decision #151)
+1. `EARNINGS_PRE_DAYS` = **5**, `EARNINGS_POST_DAYS` = **3** (5 is also the gate's threshold).
+2. The index heavyweight map is approved as proposed (~2025 weights, unverified against an
+   NSE factsheet); **NIFTY IT** = TCS, INFY, HCLTECH, WIPRO, TECHM.
+3. Short-volatility = **condors, butterflies and credit verticals**
+   (`trade_planner.SHORT_VOL_STRATEGIES`); the gate adds the bear put.
+4. The not-announced rule is confirmed (window `"not_announced"`).
+5. Label at **both** ends: the entry keeps its window; the outcome and every shadow row also
+   get `results_crossed` — whether a results date actually fell inside [entry, exit].
+6. Still open: the S5 thresholds X and Y — from the S3/S5 shadow data.
+
+**Glassbreaking seam (#151):** `trade_planner.glassbreaking_signals` wraps
+`strategies.glassbreaking.early_breakout_signal` (gap-up ≥ 2% + institutional volume, SMA
+bypassed). A fired read refuses bearish/short-premium structures. The volume feed plugs into
+`options_proposer._glassbreaking_today`; until then the read abstains
+(`glassbreaking_require_volume: true`; false = the gap alone fires).
 
 ## 5. Acceptance (per seam, hermetic tests)
 - S1: lake fixtures with a moved date → `last`/`next` correct; a stale calendar

@@ -236,3 +236,6 @@ def _isolated_shared_runtime_files(monkeypatch, tmp_path):
                         tmp_path / ".dhan_chain_throttle")
     monkeypatch.setattr(live_pricer, "TICK_LOCK_FILE",
                         tmp_path / ".live_pricer_tick.lock")
+    # the results calendar: entry stamps, the earnings gate and the exit label read it (#150/#151)
+    from src.ingestion import earnings_calendar
+    monkeypatch.setattr(earnings_calendar, "OUTPUT_PATH", tmp_path / "earnings_calendar.json")

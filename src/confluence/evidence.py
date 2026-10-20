@@ -286,8 +286,9 @@ def _iso_day(value):
 
 def earnings_block(ticker, expiry, today: date = None, doc: dict = None,
                    heavyweights: dict = None) -> dict:
-    """The entry's one `earnings` annotation (spec §2 S2): window pre / through / post / clear,
-    or None with a reason. A stock reads its own dates; an index reads its heavyweights'."""
+    """The entry's one `earnings` annotation (spec §2 S2): window pre / through / post / clear /
+    not_announced (#151: unannounced and able to report before expiry), or None with a reason
+    when the calendar cannot speak. A stock reads its own dates; an index its heavyweights'."""
     from src.config import EARNINGS_POST_DAYS, EARNINGS_PRE_DAYS
     from src.ingestion import earnings_calendar as ec
     today = today or date.today()
@@ -333,6 +334,7 @@ def earnings_block(ticker, expiry, today: date = None, doc: dict = None,
         block["window"] = ("pre" if block["days_to_results"] <= EARNINGS_PRE_DAYS
                            else "through")
     elif unknown:
+        block["window"] = "not_announced"
         block["reason"] = (f"results date not announced for {', '.join(unknown)}"
                            f" — may fall before expiry {exp_iso}")
     else:
@@ -341,6 +343,31 @@ def earnings_block(ticker, expiry, today: date = None, doc: dict = None,
         block["window"] = ("post" if ds is not None and ds <= EARNINGS_POST_DAYS
                            else "clear")
     return block
+
+
+def results_crossed(ticker, start, end, today: date = None, doc: dict = None,
+                    heavyweights: dict = None):
+    """Exit-time label (#151): True when a results date of the ticker (an index: any
+    heavyweight) fell inside the hold [start, end], False when none did, None when the
+    calendar cannot speak or the dates are unknown."""
+    from src.ingestion import earnings_calendar as ec
+    d0, d1 = _iso_day(start), _iso_day(end)
+    if d0 is None or d1 is None:
+        return None
+    doc = ec.load_doc() if doc is None else doc
+    if ec.stale_reason(doc, today or date.today()):
+        return None
+    t = str(ticker or "").strip().upper()
+    if t.endswith(".NS"):
+        names = [t]
+    else:
+        heavy = ec.load_heavyweights() if heavyweights is None else heavyweights
+        names = list(heavy.get(t) or [])
+        if not names:
+            return None
+    lo, hi = d0.isoformat(), d1.isoformat()
+    dates = [ec._lookup(doc.get(k), n) for n in names for k in ("events", "past", "last")]
+    return any(isinstance(d, str) and lo <= d[:10] <= hi for d in dates)
 
 
 def stamp_earnings(entry: dict, today: date = None, doc: dict = None,

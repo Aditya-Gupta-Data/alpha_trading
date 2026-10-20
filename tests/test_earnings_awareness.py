@@ -97,9 +97,10 @@ def test_index_constituent_results_reads_the_window_from_the_map():
     assert ec.index_constituent_results("NIFTY 50", TODAY, _iso(11), doc, HEAVY) is None
 
 
-def test_shipped_heavyweight_map_is_data_for_the_four_index_underlyings():
+def test_shipped_heavyweight_map_is_data_for_the_index_underlyings():
     heavy = ec.load_heavyweights()
-    assert set(heavy) == {"NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE", "NIFTY MID SELECT"}
+    assert set(heavy) == {"NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE", "NIFTY MID SELECT", "NIFTY IT"}
+    assert heavy["NIFTY IT"][:2] == ["TCS.NS", "INFY.NS"]             # #151: TCS and INFY move NIFTY IT
     assert all(t.endswith(".NS") for names in heavy.values() for t in names)
     assert all(len(names) <= 5 for names in heavy.values())
 
@@ -139,9 +140,9 @@ def test_through_post_and_clear_windows():
     assert clear["window"] == "clear" and clear["days_since_results"] == 7
 
 
-def test_unannounced_results_are_unknown_never_clear():
+def test_unannounced_results_are_labelled_not_announced_never_clear():
     b = _block("RELIANCE.NS", 11, _doc(last={"RELIANCE.NS": "2026-07-18"}))
-    assert b["window"] is None and b["results_before_expiry"] is None
+    assert b["window"] == "not_announced" and b["results_before_expiry"] is None   # #151
     assert "not announced for RELIANCE.NS" in b["reason"]
 
 
@@ -290,3 +291,37 @@ def test_strategy_stats_splits_outcomes_by_earnings_window(tmp_path):
     assert (pre["n"], pre["wins"], pre["results_before_expiry"]) == (2, 1, 2)
     assert pre["readable"] is False
     assert "n >= 20" in stats["earnings_basis"]
+
+
+# ------------------------------------------------------------- #151 exit label
+
+def test_the_exit_label_says_whether_the_hold_crossed_results():
+    doc = _doc(events={"INFY.NS": _iso(30)}, last={"TCS.NS": "2026-10-09", "INFY.NS": "2026-07-16"})
+    assert ev.results_crossed("TCS.NS", "2026-10-01", "2026-10-16", TODAY, doc) is True
+    assert ev.results_crossed("TCS.NS", "2026-10-10", "2026-10-16", TODAY, doc) is False
+    assert ev.results_crossed("INFY.NS", "2026-10-01", _iso(30), TODAY, doc) is True       # results on the exit day
+    assert ev.results_crossed("NIFTY IT", "2026-10-01", "2026-10-16", TODAY, doc,
+                              heavyweights={"NIFTY IT": ["TCS.NS", "INFY.NS"]}) is True
+    assert ev.results_crossed("NIFTY MID SELECT", "2026-10-01", "2026-10-16", TODAY, doc,
+                              heavyweights={"NIFTY MID SELECT": []}) is None
+    assert ev.results_crossed("TCS.NS", "2026-10-01", "2026-10-16", TODAY, {}) is None     # calendar missing
+    assert ev.results_crossed("TCS.NS", None, "2026-10-16", TODAY, doc) is None
+
+
+def test_settlement_labels_entry_and_exit(monkeypatch, tmp_path):
+    from src import analyst, plan_tracker, shadow_learner
+    cal = tmp_path / "cal.json"
+    cal.write_text(json.dumps(_doc(last={"HDFCBANK.NS": "2026-10-17"}, as_of=date.today())))
+    monkeypatch.setattr(ec, "OUTPUT_PATH", cal)
+    monkeypatch.setattr(analyst, "generate_post_mortem", lambda p, e: None)
+    conn = brain_map.connect(":memory:")
+    entry = _settled_entry()
+    court = shadow_learner.record_fire(conn, entry, fire_date="2026-10-14")
+    plan_tracker.record_post_mortem(entry, conn)
+    ref = brain_map.journal_ref_for(entry)
+    out = conn.execute("SELECT earnings_window, results_crossed FROM outcomes WHERE journal_ref = ?",
+                       (ref,)).fetchone()
+    assert tuple(out) == ("pre", 1)                     # known at entry: pre; what happened: crossed
+    row = conn.execute("SELECT earnings_window, results_crossed FROM shadow_trades WHERE journal_ref = ?",
+                       (court["ref"],)).fetchone()
+    assert tuple(row) == ("pre", 1)

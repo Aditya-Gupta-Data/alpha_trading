@@ -1,11 +1,36 @@
 {
-  "_note": "Earnings Awareness S1 (docs/earnings_awareness_spec.md, decision #150): the heavyweights whose results move each index underlying the proposer trades. Data, not code: edit freely, no code change needed. PROPOSAL, NOT VERIFIED: the names are the session's best knowledge of the largest index weights (about 2025), never checked against a current NSE factsheet. The Architect picks the names and how many per index (spec section 4, item 2). An index with an empty list abstains (window null with a reason); it is never read as 'clear'. Tickers use the project's .NS convention, the same keys as data/earnings_calendar.json.",
-  "as_of": null,
-  "source": "unverified proposal, pending the Architect's ruling",
+  "_note": "Earnings Awareness S1 (docs/earnings_awareness_spec.md, decisions #150/#151): the heavyweights whose results move each index underlying. Data, not code: edit freely, no code change needed. APPROVED by the Architect 2026-10-20 as proposed (the session's best knowledge of ~2025 index weights, not checked against a current NSE factsheet), with TCS and INFY mapped to NIFTY IT. An index with an empty list abstains (window null with a reason); it is never read as 'clear'. Tickers use the project's .NS convention.",
+  "as_of": "2026-10-20",
+  "source": "Architect ruling 2026-10-20 (#151): approved proposal, ~2025 weights, unverified against an NSE factsheet",
   "indices": {
-    "NIFTY 50": ["HDFCBANK.NS", "ICICIBANK.NS", "RELIANCE.NS", "INFY.NS", "BHARTIARTL.NS"],
-    "NIFTY BANK": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS"],
-    "NIFTY FIN SERVICE": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "BAJFINANCE.NS"],
-    "NIFTY MID SELECT": []
+    "NIFTY 50": [
+      "HDFCBANK.NS",
+      "ICICIBANK.NS",
+      "RELIANCE.NS",
+      "INFY.NS",
+      "BHARTIARTL.NS"
+    ],
+    "NIFTY BANK": [
+      "HDFCBANK.NS",
+      "ICICIBANK.NS",
+      "SBIN.NS",
+      "KOTAKBANK.NS",
+      "AXISBANK.NS"
+    ],
+    "NIFTY FIN SERVICE": [
+      "HDFCBANK.NS",
+      "ICICIBANK.NS",
+      "SBIN.NS",
+      "AXISBANK.NS",
+      "BAJFINANCE.NS"
+    ],
+    "NIFTY MID SELECT": [],
+    "NIFTY IT": [
+      "TCS.NS",
+      "INFY.NS",
+      "HCLTECH.NS",
+      "WIPRO.NS",
+      "TECHM.NS"
+    ]
   }
 }

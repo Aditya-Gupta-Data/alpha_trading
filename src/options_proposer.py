@@ -653,6 +653,20 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
             (leg["strike"], leg["option_type"].upper(), leg["side"].upper()),
             "ltp")
 
+    # EVENT GATES (Architect ruling 2026-10-20, #151): results within
+    # EARNINGS_PRE_DAYS refuse short-vol structures and the bear put; a
+    # confirmed glassbreaking gap-up refuses every bearish/short-premium one.
+    # Capital accounts never take them; on a real run the Shadow Learner
+    # takes the raw setup (the advisory-veto path, #140) so the gate is measured.
+    gates = event_gates(underlying, spread["strategy"], analysis, spot, today=today)
+    if gates["block"]:
+        if book is None and _learner_enabled():
+            advisory_block = advisory_block or gates["block"]
+        else:
+            return {"proposal": None, "view": view, "vix": vix,
+                    "rejected_spread": spread, "expiry": expiry,
+                    "event_gates": gates, "reason": gates["block"]}
+
     # REWARD-TO-RISK GUARDRAIL (decision #98, 2026-09-16): the built
     # structure's max_profit / max_loss must clear the floor for its family
     # (1.5 directional, 0.35 range-bound) BEFORE sizing, margin or any
@@ -724,9 +738,57 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         "regime_read": regime_read(analysis, vix),
         # realized-vol rank on the record (diagnostic; no gate — #110).
         "vol_rank": vol_rank,
+        # #151: what the earnings and glassbreaking gates read.
+        "event_gates": gates,
     }
     return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
             "horizon": horizon, "advisory_block": advisory_block}
+
+
+def _gate_days_to_results(underlying, today: date = None):
+    """(days, reason) to the stock's own next results for the #151 gate; an index or an
+    unreadable calendar is (None, reason). A calendar without its past-results memory
+    still answers: the gate needs only the next date."""
+    t = str(underlying or "").strip().upper()
+    if not t.endswith(".NS"):
+        return None, "index underlying: the gate reads a stock's own results"
+    from src.ingestion import earnings_calendar as ec
+    today = today or date.today()
+    doc = ec.load_doc()
+    why = ec.stale_reason(doc, today)
+    if why and "past-results memory" not in why:
+        return None, why
+    nxt = ec.next_results(t, today, doc)
+    return ((date.fromisoformat(nxt) - today).days, None) if nxt else (None, "no announced results date")
+
+
+def _glassbreaking_today(underlying, today: date, spot: float) -> dict:
+    """SEAM (#151): today's bar for the glassbreaking read. The institutional volume feed
+    plugs in here — `volume` (+ the history's volumes) or `bulk_block_deal`; None = not wired."""
+    return {"date": today.isoformat(), "open": spot, "volume": None, "bulk_block_deal": None}
+
+
+def event_gates(underlying, strategy, analysis: dict, spot, today: date = None) -> dict:
+    """The #151 earnings-proximity and glassbreaking reads for one built structure.
+    Fail-open by name: an unreadable input never refuses a trade."""
+    from src import trade_planner as tp
+    today = today or date.today()
+    out = {"strategy": strategy, "days_to_results": None, "earnings_reason": None,
+           "glassbreaking": None, "block": None}
+    try:
+        out["days_to_results"], out["earnings_reason"] = _gate_days_to_results(underlying, today)
+        out["block"] = tp.earnings_proximity_block(strategy, out["days_to_results"])
+    except Exception as exc:
+        out["earnings_reason"] = f"earnings gate unavailable ({type(exc).__name__}: {exc})"
+    try:
+        closes = (analysis or {}).get("closes") or []
+        read = tp.glassbreaking_signals([{"close": c} for c in closes[-25:]],
+                                        _glassbreaking_today(underlying, today, spot))
+        out["glassbreaking"] = {k: read[k] for k in ("fired", "gap_pct", "volume_confirmed", "reason")}
+        out["block"] = out["block"] or tp.glassbreaking_block(strategy, read)
+    except Exception as exc:
+        out["glassbreaking"] = {"fired": False, "reason": f"unavailable ({type(exc).__name__}: {exc})"}
+    return out
 
 
 def _learner_enabled() -> bool:

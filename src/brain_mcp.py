@@ -215,7 +215,8 @@ def _earnings_split(src: Sources) -> list:
             "archetype AS strategy, COUNT(*) AS n, "
             "SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins, "
             "ROUND(AVG(r_multiple), 2) AS avg_r, "
-            "SUM(CASE WHEN results_before_expiry = 1 THEN 1 ELSE 0 END) AS results_before_expiry "
+            "SUM(CASE WHEN results_before_expiry = 1 THEN 1 ELSE 0 END) AS results_before_expiry, "
+            "SUM(CASE WHEN results_crossed = 1 THEN 1 ELSE 0 END) AS results_crossed "
             f"FROM outcomes WHERE {where} GROUP BY 1, 2 ORDER BY 1, n DESC",
             [prefix + "%" for prefix in EXCLUDED_REF_PREFIXES]))
     except sqlite3.Error:

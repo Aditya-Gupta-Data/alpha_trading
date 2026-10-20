@@ -7,8 +7,12 @@ fallback, sigmoid directionality (expensive scores HIGH — spec scale:
 1 = deeply undervalued), and the end-to-end run() enrichment write.
 """
 import json
+from datetime import date, timedelta
 
 from src.analysis import valuation_scorer as VS
+
+# a filing window that stays fresh (STALE_DAYS = 200): the fixed 31-Mar-2026 aged out on 2026-10-18
+FILED_TO = (date.today() - timedelta(days=30)).strftime("%d-%b-%Y")
 
 
 def _capture(eps=(10.0, 9.0, 8.5, 8.0, 8.0), sales=1000.0,
@@ -19,7 +23,7 @@ def _capture(eps=(10.0, 9.0, 8.5, 8.0, 8.0), sales=1000.0,
                         "net_sale": None if bank else sales,
                         "interest_earned": sales if bank else None,
                         "face_value": face, "paidup_capital": paidup,
-                        "to": "31-Mar-2026"})
+                        "to": FILED_TO})
     return {"is_bank": bank, "periods": periods}
 
 

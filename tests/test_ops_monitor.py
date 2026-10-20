@@ -129,7 +129,8 @@ def test_expected_jobs_env_override(monkeypatch=None):
             # use a weekday-only flag that is checked on any weekday run
             now = datetime.now()
             missing = om.check_heartbeats(logs, now=now)
-            expected_missing = ([] if now.weekday() >= 5
+            from src import nse_calendar          # a weekday NSE holiday excuses it too (2026-10-20)
+            expected_missing = ([] if not nse_calendar.is_trading_day(now.date())
                                 else ["weekday_job.log — did not run today"])
             # default EXPECTED_JOBS is fully replaced by the env list
             assert missing == expected_missing

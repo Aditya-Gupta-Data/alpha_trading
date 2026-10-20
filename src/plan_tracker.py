@@ -1573,6 +1573,8 @@ def record_post_mortem(entry: dict, brain) -> None:
         earn = entry.get("earnings") if isinstance(entry.get("earnings"), dict) else {}
         trial.label_earnings(brain, brain_map.journal_ref_for(entry), earn.get("window"),
                              earn.get("results_before_expiry"))
+        trial.label_results_crossed(brain, brain_map.journal_ref_for(entry),
+                                    brain_map.hold_crossed_results(entry))
     except Exception:
         pass
     # Phase 2 (holy-grail plan §5.1): the entry's proposal-time evidence

@@ -61,6 +61,74 @@ TREND_CONFIRM_PCT = 0.5
 DEFAULT_UNDERLYING = "NIFTY BANK"
 
 
+# --- event gates (Architect ruling 2026-10-20, decision #151) ---------------
+
+# Structures exposed to an earnings gap's vega/gamma (spec §4 item 3) ...
+SHORT_VOL_STRATEGIES = frozenset({"iron_condor", "iron_butterfly",
+                                  "bull_put_spread", "bear_call_spread"})
+# ... and the ones the proximity gate refuses: short-vol plus the bear put.
+EARNINGS_GATED_STRATEGIES = SHORT_VOL_STRATEGIES | {"bear_put_spread"}
+# A confirmed glassbreaking gap-up refuses every bearish or short-premium structure.
+GLASSBREAKING_BLOCKED_STRATEGIES = EARNINGS_GATED_STRATEGIES
+
+
+def earnings_proximity_block(strategy, days_to_results, gate_days=None):
+    """The refusal reason when results are `gate_days` (EARNINGS_PRE_DAYS, 5) or fewer days
+    away and `strategy` is gated, else None. Unknown days = no reading = no block."""
+    if strategy not in EARNINGS_GATED_STRATEGIES or days_to_results is None:
+        return None
+    if gate_days is None:
+        from src.config import EARNINGS_PRE_DAYS as gate_days
+    days = int(days_to_results)
+    if 0 <= days <= int(gate_days):
+        return (f"earnings proximity gate: results in {days} day(s) (<= {int(gate_days)}) — "
+                f"{strategy} refused (#151)")
+    return None
+
+
+def glassbreaking_signals(history: list, today: dict, require_volume: bool = None) -> dict:
+    """The gap-up + institutional-volume read that bypasses the 50/200 SMA trend
+    (`strategies.glassbreaking.early_breakout_signal`, the one rule). SEAM: today's
+    institutional volume is not wired yet — with no `volume` and no `bulk_block_deal`
+    in `today` the read abstains (fired False, volume_confirmed None) unless
+    GLASSBREAKING_REQUIRE_VOLUME is off, when a >= 2% gap alone fires. Pure."""
+    from src.strategies import glassbreaking as gb
+    if require_volume is None:
+        from src.config import GLASSBREAKING_REQUIRE_VOLUME as require_volume
+    out = {"fired": False, "gap_pct": None, "volume_confirmed": None,
+           "sma_bypassed": True, "reason": None, "signal": None}
+    prev = gb._f((history[-1] if history else {}).get("close"))
+    px = gb._f((today or {}).get("open"))
+    if prev is None or prev <= 0 or px is None:
+        out["reason"] = "no previous close or no price for today"
+        return out
+    out["gap_pct"] = round((px - prev) / prev * 100.0, 2)
+    if out["gap_pct"] < gb.GAP_UP_MIN_PCT:
+        out["reason"] = f"no gap-up ({out['gap_pct']:+.2f}% < {gb.GAP_UP_MIN_PCT:g}%)"
+        return out
+    if today.get("volume") is None and today.get("bulk_block_deal") is None:
+        if require_volume:
+            out["reason"] = ("gap-up seen but the institutional volume feed is not wired — "
+                             "abstained")
+            return out
+        out.update(fired=True, reason=f"gap-up {out['gap_pct']:+.2f}% (volume not required)")
+        return out
+    sig = gb.early_breakout_signal(history, today)
+    out["volume_confirmed"] = sig is not None
+    out.update(fired=sig is not None, signal=sig,
+               reason=(f"gap-up {out['gap_pct']:+.2f}% with institutional volume"
+                       if sig else "gap-up without institutional volume"))
+    return out
+
+
+def glassbreaking_block(strategy, read: dict):
+    """The refusal reason when a fired glassbreaking read meets a bearish/short-premium structure."""
+    if not (read or {}).get("fired") or strategy not in GLASSBREAKING_BLOCKED_STRATEGIES:
+        return None
+    return (f"glassbreaking: {read.get('reason')} — the SMA trend read is bypassed and "
+            f"{strategy} refused (#151)")
+
+
 # --- pure classifiers ----------------------------------------------------
 
 def classify_iv(vix) -> str:
@@ -221,6 +289,21 @@ def _tradeable(base: dict, state: dict, **kw) -> dict:
 # --- the evaluation matrix ------------------------------------------------
 
 def map_technical_to_strategy(technical_state: dict) -> dict:
+    """The matrix plan, then the #151 event gates: `days_to_results` (earnings
+    proximity) and `glassbreaking` (a `glassbreaking_signals` read) turn a gated
+    structure into no_trade, named."""
+    plan = _matrix_plan(technical_state)
+    state = technical_state or {}
+    why = (earnings_proximity_block(plan.get("strategy"), state.get("days_to_results"))
+           or glassbreaking_block(plan.get("strategy"), state.get("glassbreaking")))
+    if not why:
+        return plan
+    return _no_trade({k: plan[k] for k in ("view", "iv_regime", "underlying", "lot_size",
+                                           "strike_step", "atm", "spot") if k in plan},
+                     plan.get("view"), plan.get("iv_regime"), why)
+
+
+def _matrix_plan(technical_state: dict) -> dict:
     """The planner. `technical_state` keys (all optional except spot):
 
       spot                    float — REQUIRED anchor for strike math

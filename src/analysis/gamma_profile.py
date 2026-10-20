@@ -144,8 +144,8 @@ def profile(rows: list, spot, band_pct: float) -> dict:
     gross = sum(r["abs_gex"] for r in full)
     doi = [r["call_doi_gex"] + r["put_doi_gex"] for r in full
            if r.get("call_doi_gex") is not None and r.get("put_doi_gex") is not None]
-    call_wall = max(full, key=lambda r: r["call_gex"])
-    put_wall = min(full, key=lambda r: r["put_gex"])
+    call_wall = max(full, key=lambda r: abs(r["call_gex"]))          # largest exposure, whatever the sign
+    put_wall = max(full, key=lambda r: abs(r["put_gex"]))
     flip = _flip(full)
     out.update(
         regime="positive" if net > 0 else "negative",

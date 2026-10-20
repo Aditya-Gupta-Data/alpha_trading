@@ -81,6 +81,7 @@ def test_calibrated_weights_can_reverse_the_naive_regime():
     short_calls = gp.repriced_profile([(oc, EXPIRY)], 100.0, AS_OF, 10.0, {"call": -0.269, "put": 0.054})
     assert naive["regime_at_spot"] == "positive" and short_calls["regime_at_spot"] == "negative"
     assert short_calls["weights"] == {"call": -0.269, "put": 0.054}
+    assert short_calls["call_wall"] == naive["call_wall"]              # walls are by size, not by sign
 
 
 def test_no_usable_chain_abstains_by_name():

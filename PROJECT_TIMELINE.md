@@ -235,6 +235,12 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-21 · 2 commits · 28 files touched
+
+- `d6098e7` feat(events): event engine 1.1 — policy events auto-execute long OTM options on the isolated PAPER_EVENTS book (decision #156)
+- `9b18774` test(mininode): the home-lane block after #149 — section 2 is the scrip master, one @reboot line
+
+
 ### 2026-10-17 · 6 commits · 30 files touched
 
 - `2d34dd9` docs: HANDOVER — #148 FreeLLMAPI + #149 LLM jobs on the Mini PC; node at f74a5a4, Mac agents and FreeLLMAPI install pending (order matters)

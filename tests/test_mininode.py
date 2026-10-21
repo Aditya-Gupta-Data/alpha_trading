@@ -133,8 +133,10 @@ def test_shadow_install_carries_the_switch_and_silences_the_scrip_card():
     assert "ALPHA_NODE_SHADOW=0" in live.stdout
     assert "--quiet" not in live.stdout
     for out in (r.stdout, live.stdout):
-        assert "weekly_recalibration" not in out.split("# 4.")[1].splitlines()[1]
-        assert out.count("@reboot") == 2
+        # #149 (10-17) moved the miner and evolution to the replica block, so the
+        # home-lane block is now: 1. sync (+ its @reboot catch-up), 2. scrip master
+        assert "weekly_recalibration" not in out.split("# 2.")[1].splitlines()[1]
+        assert out.count("@reboot") == 1
         assert "@reboot sleep 90 && cd" in out and "mac_auto_sync.sh" in out
 
 

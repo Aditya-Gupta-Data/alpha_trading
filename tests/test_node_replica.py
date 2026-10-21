@@ -489,7 +489,7 @@ def test_the_replica_block_is_the_vm_schedule_minus_the_token_the_mirror_and_the
     from src import node_role
     mod = _load(SCRIPTS / "node_replica_block.py")
     kept, dropped = mod.render((SCRIPTS / "setup_cron.sh").read_text(), "/home/n/alpha_trading", "/home/n/alpha_trading/venv/bin/python")
-    assert len(kept) >= 15 and len(dropped) == 18
+    assert len(kept) >= 15 and len(dropped) == 20        # 18 + the event engine's VM executor and settler (#156)
     assert all(node_role.never_on_node(d) for d in dropped) and not any(node_role.never_on_node(k) for k in kept)
     joined = "\n".join(kept)
     for needed in ("src.ops_monitor", "src.sleep_phase", "src.analysis.macro_nightly", "src.discovery.nightly",
@@ -498,7 +498,8 @@ def test_the_replica_block_is_the_vm_schedule_minus_the_token_the_mirror_and_the
         assert needed in joined, needed
     for absent in ("renew_token", "publish_dashboard_mirror", "src.master_scheduler", "src.execution.recon_engine",
                    "src.ingestion.intraday_tracker", "src.ingestion.chain_archiver", "src.eod_summary",
-                   "src.ceo_brief", "src.morning_brief", "src.firm_treasury --rotate", "-m src.main "):
+                   "src.ceo_brief", "src.morning_brief", "src.firm_treasury --rotate", "-m src.main ",
+                   "src.event_engine.executor", "src.event_engine.settler"):
         assert absent not in joined, absent
     assert "$" not in joined and "/home/n/alpha_trading/logs/" in joined   # every variable substituted
     # nothing in the real VM installer is lost: kept + dropped == every active schedule line in the heredoc

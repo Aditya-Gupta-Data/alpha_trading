@@ -490,6 +490,13 @@ CRON_TZ=Asia/Kolkata
 #     No-Orphan pins cover every position the VM actually holds (the Mac's
 #     ledger froze on 07-20). Remove the Mac's Saturday 10:00 crontab line.
 0 22 * * 5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.analysis.weekly_recalibration >> "$REPO_ROOT/logs/weekly_recalibration.log" 2>&1
+
+# 37. Event engine 1.1, VM half (decision #156): event cards shipped by the Mini PC are executed on
+#     the isolated PAPER_EVENTS book (long OTM options, Rs.5,000 max loss, both A/B strike paths) at
+#     09:35, and its positions are marked and settled three times a session. Both exit quietly while
+#     config event_engine.execute_enabled is false (the executor) or no position is open (the settler).
+35 9 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.event_engine.executor >> "$REPO_ROOT/logs/event_executor.log" 2>&1
+5 11,13,15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.event_engine.settler >> "$REPO_ROOT/logs/event_settler.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

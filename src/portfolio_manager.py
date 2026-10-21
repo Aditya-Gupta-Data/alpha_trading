@@ -51,7 +51,8 @@ from src.config import (ACCOUNT_RISK_PER_TRADE_PCT,
                         CAPITAL_ROTATION_ENABLED, CAPITAL_ROTATION_RR_MULTIPLE,
                         PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_LIVE_ACCOUNT_ENABLED,
                         PAPER_2L_STARTING_CAPITAL_RS,
-                        SHADOW_LEARNER_CAPITAL_RS, SHADOW_LEARNER_ENABLED)
+                        SHADOW_LEARNER_CAPITAL_RS, SHADOW_LEARNER_ENABLED,
+                        PAPER_EVENTS_CAPITAL_RS)
 from src.position_sizing import fractional_lots
 from src.portfolio import span_stress_factor
 
@@ -951,6 +952,7 @@ ACCOUNT_PAPER_2L = "PAPER_2L"       # the Rs.2L stress-test shadow
 ACCOUNT_PAPER_2L_ROT = "PAPER_2L_ROT"   # the Rs.2L capital-rotation A/B arm (#115)
 ACCOUNT_PAPER_2L_LIVE = "PAPER_2L_LIVE"  # the Rs.2L live-quote arm (#120)
 ACCOUNT_PAPER_SHADOW_LEARNER = "PAPER_SHADOW_LEARNER"  # the Shadow Learner arm (Architect 2026-10-09)
+ACCOUNT_PAPER_EVENTS = "PAPER_EVENTS"    # event engine 1.1 (#156): isolated, auto-executed, long options only
 
 # account_id -> starting capital. The primary's pool is whatever the live
 # `account_state` row says (STARTING_CAPITAL only seeds an empty DB).
@@ -959,7 +961,12 @@ PAPER_ACCOUNTS = {
     ACCOUNT_PAPER_2L_ROT: float(PAPER_2L_STARTING_CAPITAL_RS),
     ACCOUNT_PAPER_2L_LIVE: float(PAPER_2L_STARTING_CAPITAL_RS),
     ACCOUNT_PAPER_SHADOW_LEARNER: float(SHADOW_LEARNER_CAPITAL_RS),   # paper-only data bucket (#140, owner-authorised)
+    ACCOUNT_PAPER_EVENTS: float(PAPER_EVENTS_CAPITAL_RS),             # event engine 1.1 (#156)
 }
+# Accounts on the paper door that are NEVER a shadow of the primary's proposals: they get
+# their own entries from their own engine (the event engine's executor), so
+# shadow_account_ids() must never list them (#156).
+ISOLATED_ACCOUNTS = frozenset({ACCOUNT_PAPER_EVENTS})
 # The accounts that price and SETTLE THEMSELVES on live bid/ask quotes
 # (decision #120, execution/live_pricer). The primary's exit does not close
 # them; release_shadow_locks skips their lock only while live_pricer holds an
@@ -1028,10 +1035,11 @@ def shadow_account_ids() -> tuple:
     if not shadow_accounts_enabled():
         return ()
     return tuple(a for a in PAPER_ACCOUNTS
-                 if (a == ACCOUNT_PAPER_SHADOW_LEARNER and learner_enabled())
+                 if a not in ISOLATED_ACCOUNTS and (
+                 (a == ACCOUNT_PAPER_SHADOW_LEARNER and learner_enabled())
                  or (a != ACCOUNT_PAPER_SHADOW_LEARNER
                      and (a not in ROTATION_ACCOUNTS or rotation_enabled())
-                     and (a not in LIVE_ACCOUNTS or live_account_enabled())))
+                     and (a not in LIVE_ACCOUNTS or live_account_enabled()))))
 
 
 def learner_enabled() -> bool:

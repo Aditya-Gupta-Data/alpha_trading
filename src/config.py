@@ -141,6 +141,16 @@ SHADOW_LEARNER_ENABLED = bool(_CONFIG.get("shadow_learner_enabled", False))
 SHADOW_LEARNER_COOLDOWN_SECONDS = int(_CONFIG.get("shadow_learner_cooldown_seconds", 900))
 SHADOW_LEARNER_MAX_OPEN = int(_CONFIG.get("shadow_learner_max_open", 6))
 SHADOW_LEARNER_CAPITAL_RS = float(_CONFIG.get("shadow_learner_capital_rs", 200000.0))
+# Event engine 1.1 (decision #156): the isolated Rs.10L book that event cards auto-execute into,
+# long OTM options only, Rs.5,000 max loss a trade. execute_enabled gates the VM side.
+PAPER_EVENTS_CAPITAL_RS = float(_CONFIG.get("paper_events_capital_rs", 1000000.0))
+EVENT_ENGINE_DEFAULTS = {
+    "emit_enabled": True, "execute_enabled": False, "max_loss_per_trade_rs": 5000.0,
+    "materiality_threshold_pct": 2.0, "fixed_otm_pct": 3.0, "take_profit_multiple": 5.0,
+    "horizon_days_default": 30, "card_max_age_days": 5, "fees_per_order_rs": 20.0,
+    "llm_daily_call_cap": 40, "move_per_revenue_pct": 1.0, "priced_in_tolerance_pct": 1.0,
+}
+EVENT_ENGINE = dict(EVENT_ENGINE_DEFAULTS, **(_CONFIG.get("event_engine") or {}))
 # M1 multi-bucket ledger (blueprint docs/m1_multi_bucket_ledger_blueprint.md): schema is additive and always
 # present; the switch moves the gate/settle seams onto the buckets. Off until the VM dry-run is verified.
 MULTI_BUCKET_LEDGER = bool(_CONFIG.get("multi_bucket_ledger", False))

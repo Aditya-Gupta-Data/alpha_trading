@@ -60,6 +60,11 @@ TABLES = (
     "daily_context", "simulated_trades", "treasury_state", "capital_allocations", "wealth_lock_ledger",
 )
 SMALL_TABLES = ("paper_accounts", "treasury_state", "portfolios")      # dumped whole
+# Books that live on the VM only and are never replicated to the node (#156: the event engine's
+# auto-executed PAPER_EVENTS). Their rows are left out of every count and dump, so the nightly
+# VM-vs-node reconcile does not call a VM-only book a divergence.
+VM_ONLY_ACCOUNTS = ("PAPER_EVENTS",)
+_NOT_VM_ONLY = "account_id NOT IN (" + ", ".join("'" + a + "'" for a in VM_ONLY_ACCOUNTS) + ")"
 _DATE_COLS = ("issued_at", "created_at", "ts", "timestamp", "date", "opened_at", "closed_at", "updated_at")
 _LIST_CAP = 500
 _HASH_MAX_BYTES = 64 * 1024 * 1024
@@ -252,18 +257,20 @@ def probe_db(root: Path, day: date) -> dict:
         for t in TABLES + SMALL_TABLES:
             if t not in have:
                 continue
-            row = {"rows": conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]}
             cols = [c[1] for c in conn.execute(f"PRAGMA table_info({t})")]
+            keep = f" WHERE {_NOT_VM_ONLY}" if "account_id" in cols else ""
+            row = {"rows": conn.execute(f"SELECT COUNT(*) FROM {t}{keep}").fetchone()[0]}
             dc = next((c for c in _DATE_COLS if c in cols), None)
             if dc:
                 row["today"] = conn.execute(
-                    f"SELECT COUNT(*) FROM {t} WHERE substr({dc},1,10)=?", (d,)).fetchone()[0]
+                    f"SELECT COUNT(*) FROM {t}{keep or ' WHERE 1'} AND substr({dc},1,10)=?", (d,)).fetchone()[0]
             out["tables"][t] = row
         for t in SMALL_TABLES:
             if t in have:
                 cur = conn.execute(f"SELECT * FROM {t} LIMIT 50")
                 names = [c[0] for c in cur.description]
-                out["accounts"][t] = [dict(zip(names, r)) for r in cur.fetchall()]
+                out["accounts"][t] = [dict(zip(names, r)) for r in cur.fetchall()
+                                      if dict(zip(names, r)).get("account_id") not in VM_ONLY_ACCOUNTS]
         if "trade_tickets" in have:
             out["tickets_today"] = sorted(
                 "|".join(str(x) for x in r) for r in conn.execute(

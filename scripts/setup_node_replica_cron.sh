@@ -88,6 +88,9 @@ $VM_LINES
 # node-only LLM jobs (#149): the VM graph's one edge miner, and the weekly evolution
 0 21 * * * cd \"$REPO_ROOT\" && bash scripts/mine_edges.sh >> \"$REPO_ROOT/logs/edge_miner.cron.log\" 2>&1
 0 2 * * 6 cd \"$REPO_ROOT\" && bash scripts/run_evolution.sh >> \"$REPO_ROOT/logs/evolution.cron.log\" 2>&1
+# node-only event engine 1.1 (#156): read news + the inbox, write event cards, ship them to the VM
+40 8 * * 1-5 cd \"$REPO_ROOT\" && \"$PY\" -m src.event_engine.emit >> \"$REPO_ROOT/logs/event_emit.log\" 2>&1
+40 21 * * * cd \"$REPO_ROOT\" && \"$PY\" -m src.event_engine.emit >> \"$REPO_ROOT/logs/event_emit.log\" 2>&1
 30 23 * * * cd \"$REPO_ROOT\" && \"$PY\" -m src.node_reconcile >> \"$REPO_ROOT/logs/node_reconcile.log\" 2>&1${TOKEN_LINE:+
 $TOKEN_LINE}
 $BLOCK_END"

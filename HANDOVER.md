@@ -42,6 +42,18 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-21 — Event engine 1.1 (#156) + the stale mininode test fixed, on `main`. NOT deployed; VM and Mini PC not pulled; `execute_enabled` false
+
+- **Test fix (pushed to `main` `9b18774`):** `test_shadow_install_carries_the_switch_and_silences_the_scrip_card` expected the pre-#149 home-lane block (section 4, two `@reboot`). Suite was 3,167 / 3,167 at that commit.
+- **Event engine 1.1 (decision #156):** `src/event_engine/` — node half `emit` (Mini PC cron 08:40 Mon–Fri + 21:40, through FreeLLMAPI), VM half `executor` 09:35 + `settler` 11:05/13:05/15:05 (VM-only, refuse on the node). Isolated `PAPER_EVENTS` ₹10L on the paper door; long OTM calls/puts only; ≤ ₹5,000 a trade; both strike paths (A fixed 3% OTM, B the LLM's price range) as separate trades; every number tagged `reported` / `estimate:llm` / `estimate:computed`. `discord_daily_budget` 5 → 7. `docs/EVENT_PLAYBOOK.md` saved. 22 tests.
+- **Not done from a cloud session (no gcloud credentials, Mini PC unreachable):** pulling `main` onto the VM and the Mini PC, re-running both cron installers, and the NIFTY GEX dry run. Commands are in the next bullet.
+- **Owner, in order:**
+  1. VM (after 15:30): `cd ~/alpha_trading && git fetch && git merge --ff-only origin/main && venv/bin/python -m pytest tests/test_event_engine.py tests/test_gex_seam3.py -q && bash scripts/setup_cron.sh && sudo systemctl restart alpha-trading alpha-discord-bot`
+  2. Mini PC: `cd ~/alpha_trading && git pull && bash scripts/setup_node_replica_cron.sh && venv/bin/python scripts/gex_planner_dry_run.py --slug nifty --root data/vm_lake_copy`
+  3. Mini PC, first cards: drop a policy text into `data/event_inbox/` and run `venv/bin/python -m src.event_engine.emit --inbox-only`; read `data/event_cards/*.json`.
+  4. VM, during market hours: `venv/bin/python -m src.event_engine.executor --dry-run` and read the planned strikes, lots and premiums. Only then set `event_engine.execute_enabled: true` in the VM's `config.json`.
+- **Known limits:** the VM's option universe is 4 indices + 5 stock options, so most single-stock events abstain (`no option contract in the VM's option universe`); `config/event_company_financials.json` does not exist yet, so every revenue figure is `estimate:llm` until it is seeded.
+
 ## 2026-10-20 ~15:00 IST — GEX seam 3 (#155) on `main`: INR-crore GEX, D4/D6 in the PLANNER, D7 Taylor Greek P&L. Not deployed; live entries unchanged
 
 - **Planner (`trade_planner`):**

@@ -20,7 +20,8 @@ ANALYTICS_HOSTS = ("minipc1",)
 NOT_ON_NODE = ("src.renew_token", "scripts/publish_dashboard_mirror.sh")
 # ... and the live session lane: the loop itself and every 09:10–15:50 Dhan consumer (#146).
 EXECUTION_JOBS = ("src.master_scheduler", "src.live_bridge", "src.execution.recon_engine",
-                  "src.ingestion.intraday_tracker", "src.ingestion.chain_archiver")
+                  "src.ingestion.intraday_tracker", "src.ingestion.chain_archiver",
+                  "src.event_engine.executor", "src.event_engine.settler")   # #156: VM-only
 # ... and the jobs that report on or move the VM's book, or repeat its watchlist cards (#147).
 BOOK_JOBS = ("src.main", "src.suggest", "src.morning_brief", "src.eod_summary", "src.ceo_brief",
              "src.portfolio_report", "src.portfolio_greeks", "src.performance", "src.firm_treasury --rotate",

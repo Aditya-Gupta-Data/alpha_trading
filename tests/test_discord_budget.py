@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import src.notifier as nt
+from src.config import DISCORD_DAILY_BUDGET   # 7 since #156 (was 5)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -32,7 +33,7 @@ def _state(sent, date=None):
 def test_crash_always_pages_even_past_budget():
     with tempfile.TemporaryDirectory() as tmp:
         state, queue = _paths(tmp)
-        state.write_text(_state(sent=5))              # budget spent
+        state.write_text(_state(sent=DISCORD_DAILY_BUDGET))   # budget spent
         v = nt.budget_gate({"event": "system_crash"}, state, queue, enabled=True)
         assert v == "send"
 
@@ -41,7 +42,7 @@ def test_scheduled_digests_spend_the_budget():
     with tempfile.TemporaryDirectory() as tmp:
         state, queue = _paths(tmp)
         assert nt.budget_gate({"event": "eod"}, state, queue, enabled=True) == "send"
-        state.write_text(_state(sent=5))              # exhausted -> spool
+        state.write_text(_state(sent=DISCORD_DAILY_BUDGET))   # exhausted -> spool
         assert nt.budget_gate({"event": "eod"}, state, queue, enabled=True) == "spool"
         assert queue.exists()                          # queued, not lost
 
@@ -65,7 +66,7 @@ def test_budget_resets_on_a_new_ist_day():
         state, queue = _paths(tmp)
         yesterday = (datetime.now(IST).date()
                      - timedelta(days=1)).isoformat()
-        state.write_text(_state(sent=5, date=yesterday))
+        state.write_text(_state(sent=DISCORD_DAILY_BUDGET, date=yesterday))
         assert nt.budget_gate({"event": "eod"}, state, queue, enabled=True) == "send"
 
 

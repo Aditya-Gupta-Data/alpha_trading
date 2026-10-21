@@ -328,3 +328,16 @@ systemd service (Streamlit on :8501) and a 03:05 `git pull` of code only.
 ## Job 36 — Weekly recalibration on the VM (added 2026-10-09, Architect ruling E3)
 
 `0 22 * * 5` → `src.analysis.weekly_recalibration`. Moved from the Mac's Saturday 10:00 crontab: the No-Orphan pins are now built against the VM's live `logs/equity_shadow_journal.jsonl`. **On the Mac:** `( crontab -l | grep -v src.analysis.weekly_recalibration ) | crontab -`. Install on the VM by re-running `scripts/setup_cron.sh`.
+
+
+## Job 37 — Event engine 1.1, VM half (added 2026-10-21, decision #156)
+
+`35 9 * * 1-5` → `src.event_engine.executor` (log `logs/event_executor.log`) and `5 11,13,15 * * 1-5` →
+`src.event_engine.settler` (log `logs/event_settler.log`). The executor turns the event cards the Mini PC
+ships (`data/event_card__<id>.json`) into long OTM options on the isolated `PAPER_EVENTS` book — both A/B
+strike paths, ₹5,000 max loss a trade — and exits quietly while `event_engine.execute_enabled` is false
+(the shipped default). The settler marks at the bid and closes on the pre-expiry rule, 5× take profit,
+the card's horizon, or expiry. Both are `node_role.EXECUTION_JOBS`: the node never runs them.
+**Node side:** `src.event_engine.emit` runs on the Mini PC at 08:40 Mon–Fri and 21:40 daily (node-only lines
+in `scripts/setup_node_replica_cron.sh`). Install both by re-running the installers on each machine.
+

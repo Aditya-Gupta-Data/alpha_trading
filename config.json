@@ -1,4 +1,19 @@
 {
+  "paper_events_capital_rs": 1000000,
+  "event_engine": {
+    "emit_enabled": true,
+    "execute_enabled": false,
+    "max_loss_per_trade_rs": 5000,
+    "materiality_threshold_pct": 2.0,
+    "fixed_otm_pct": 3.0,
+    "take_profit_multiple": 5.0,
+    "horizon_days_default": 30,
+    "card_max_age_days": 5,
+    "fees_per_order_rs": 20,
+    "llm_daily_call_cap": 40,
+    "move_per_revenue_pct": 1.0,
+    "priced_in_tolerance_pct": 1.0
+  },
   "rsi_overbought": 70,
   "rsi_oversold": 30,
   "moving_average_fast": 50,
@@ -31,7 +46,7 @@
   "adaptive_sizing_enabled": true,
   "auto_approve_unsupervised_days": 30,
   "discord_budget_enabled": true,
-  "discord_daily_budget": 5,
+  "discord_daily_budget": 7,
   "treasury_equity_min_pct": 15.0,
   "treasury_equity_max_pct": 60.0,
   "treasury_deadband_rs": 50000,

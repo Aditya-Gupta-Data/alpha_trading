@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-21 · 2 commits · 28 files touched
+### 2026-10-21 · 3 commits · 30 files touched
 
+- `87a681a` docs: restore EVENT_ENGINE_PLAN.md as the historical plan (superseded by decision #156)
 - `d6098e7` feat(events): event engine 1.1 — policy events auto-execute long OTM options on the isolated PAPER_EVENTS book (decision #156)
 - `9b18774` test(mininode): the home-lane block after #149 — section 2 is the scrip master, one @reboot line
 

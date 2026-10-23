@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-23 · 1 commits · 3 files touched
+### 2026-10-23 · 3 commits · 27 files touched
 
+- `ccfb094` docs: HANDOVER + ledger (Issues 49-51) — #157 deployed to VM and Mini PC (e486d58), VM disk rescued, Mini PC power losses
+- `e486d58` fix: post-audit remediation — uncapped learner, gate-first refusals, designed blocks off the ops count, stale-trade marks, event LLM budget, daily GEX cron (#157)
 - `95acfdf` feat(ops): weekly_audit.py — read-only weekly architecture audit from the live files, prints only the WEEKLY_AUDIT_REPORT block
 
 

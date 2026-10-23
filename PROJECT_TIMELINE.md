@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-23 · 1 commits · 3 files touched
+
+- `95acfdf` feat(ops): weekly_audit.py — read-only weekly architecture audit from the live files, prints only the WEEKLY_AUDIT_REPORT block
+
+
 ### 2026-10-21 · 3 commits · 30 files touched
 
 - `87a681a` docs: restore EVENT_ENGINE_PLAN.md as the historical plan (superseded by decision #156)

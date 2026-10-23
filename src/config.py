@@ -139,7 +139,9 @@ REGIME_ADVISORY_ENABLED = bool(_CONFIG.get("regime_advisory_enabled", True))
 # The Shadow Learner (Architect 2026-10-09): raw setups on crossed quotes, no advisory/exposure/cooldown gates.
 SHADOW_LEARNER_ENABLED = bool(_CONFIG.get("shadow_learner_enabled", False))
 SHADOW_LEARNER_COOLDOWN_SECONDS = int(_CONFIG.get("shadow_learner_cooldown_seconds", 900))
-SHADOW_LEARNER_MAX_OPEN = int(_CONFIG.get("shadow_learner_max_open", 6))
+# No open-position cap by default (Architect 2026-10-23): the 15-min cadence per underlying is the throttle; an int re-caps it.
+_LEARNER_CAP = _CONFIG.get("shadow_learner_max_open")
+SHADOW_LEARNER_MAX_OPEN = int(_LEARNER_CAP) if _LEARNER_CAP is not None else None
 SHADOW_LEARNER_CAPITAL_RS = float(_CONFIG.get("shadow_learner_capital_rs", 200000.0))
 # Event engine 1.1 (decision #156): the isolated Rs.10L book that event cards auto-execute into,
 # long OTM options only, Rs.5,000 max loss a trade. execute_enabled gates the VM side.
@@ -148,7 +150,7 @@ EVENT_ENGINE_DEFAULTS = {
     "emit_enabled": True, "execute_enabled": False, "max_loss_per_trade_rs": 5000.0,
     "materiality_threshold_pct": 2.0, "fixed_otm_pct": 3.0, "take_profit_multiple": 5.0,
     "horizon_days_default": 30, "card_max_age_days": 5, "fees_per_order_rs": 20.0,
-    "llm_daily_call_cap": 40, "move_per_revenue_pct": 1.0, "priced_in_tolerance_pct": 1.0,
+    "llm_daily_call_cap": 100, "llm_run_call_cap": 50, "move_per_revenue_pct": 1.0, "priced_in_tolerance_pct": 1.0,
 }
 EVENT_ENGINE = dict(EVENT_ENGINE_DEFAULTS, **(_CONFIG.get("event_engine") or {}))
 # M1 multi-bucket ledger (blueprint docs/m1_multi_bucket_ledger_blueprint.md): schema is additive and always

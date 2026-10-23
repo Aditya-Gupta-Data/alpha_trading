@@ -182,6 +182,9 @@ DEFAULT_CUTOFF = (15, 27)                # no new chain fetch at/after 15:27 IST
 DEFAULT_MAX_FETCHES = 3                  # per tick
 DEFAULT_BUDGET_SECONDS = 15.0            # wall-clock a tick may spend fetching
 STALE_QUOTE_FRACTION = 0.5               # the #70 data-quality rule
+BOOK_MAX_WIDTH_MULT = 3.0                # a live book vouches for its side only when ask <= 3 x bid (2026-10-23)
+BOOK_TRUST_FROM = (9, 30)                # the opening book (09:15-09:30) never overrules the last trade
+MARK_BASIS_CROSSED, MARK_BASIS_FALLBACK = "crossed", "fallback:ltp"
 TICK_FLOOR = 0.05
 FILL_BASIS = "live_crossed"
 EVENT_EXIT, EVENT_ENTRY_REFUSED, EVENT_UNFILLED = "live_exit", "live_entry_refused", "live_exit_unfilled"
@@ -361,6 +364,10 @@ def ensure_schema(conn) -> None:
         conn.execute("ALTER TABLE paper_live_positions ADD COLUMN portfolio_id TEXT")
         if not conn.in_transaction:
             conn.commit()
+    if "mark_basis" not in cols:               # 2026-10-23: crossed | fallback:ltp, additive
+        conn.execute("ALTER TABLE paper_live_positions ADD COLUMN mark_basis TEXT")
+        if not conn.in_transaction:
+            conn.commit()
 
 
 def _accounts():
@@ -400,11 +407,30 @@ def leg_quote(chain: dict, leg: dict) -> dict:
             "ltp": _f(n.get("last_price"))}
 
 
-def crossed_close_price(leg: dict, q: dict) -> tuple:
+def book_trust_open(now: datetime = None) -> bool:
+    """True from 09:30 IST, when a live book may overrule a stale last trade
+    (`_book_vouches`). Always False under pytest — a test opts in by patching this."""
+    if _is_test_env():
+        return False
+    now = now or _now()
+    return (now.hour, now.minute) >= BOOK_TRUST_FROM
+
+
+def _book_vouches(bid, ask, ltp) -> bool:
+    """A two-sided, uncrossed book no wider than ask <= 3 x bid that the last
+    trade has left: the strike stopped trading while its book moved on."""
+    return (bid is not None and ask is not None and ltp is not None and bid <= ask
+            and ask <= BOOK_MAX_WIDTH_MULT * bid and not (bid <= ltp <= ask))
+
+
+def crossed_close_price(leg: dict, q: dict, trust_book: bool = None) -> tuple:
     """(price, reason) to CLOSE one open leg now: a long is sold at the bid
     (no bid → 0.0, it cannot be sold — the structure still marks), a short
     is bought back at the ask (no ask → abstain). Abstains on a crossed
-    book (bid > ask) or a quote > 50% off the last price."""
+    book (bid > ask) or a quote > 50% off the last price — unless the last
+    price is the stale side and a live book vouches for the quote (2026-10-23:
+    an illiquid strike's last trade froze marks for days). `trust_book` None
+    = `book_trust_open()` on the clock."""
     if q.get("absent"):
         return None, "strike absent from the chain"
     bid, ask, ltp = q.get("bid"), q.get("ask"), q.get("ltp")
@@ -419,6 +445,8 @@ def crossed_close_price(leg: dict, q: dict) -> tuple:
             return None, "no ask to buy the short leg back"
         price = ask
     if ltp is not None and abs(price - ltp) > STALE_QUOTE_FRACTION * ltp:
+        if (book_trust_open() if trust_book is None else trust_book) and _book_vouches(bid, ask, ltp):
+            return price, None
         return None, f"quote {price:g} is >50% off last {ltp:g}"
     return price, None
 
@@ -437,13 +465,13 @@ def crossed_open_price(leg: dict, q: dict) -> tuple:
     return price, None
 
 
-def crossed_mark(chain: dict, legs: list) -> dict:
+def crossed_mark(chain: dict, legs: list, trust_book: bool = None) -> dict:
     """{ok, mark_ps, prices: {(strike, type): price}, reason}. An abstaining
     reason names its leg ("SELL 24200CE: no ask ...") — a condor has two
     short legs, and the log line must say which one (audit F02)."""
     prices, mark = {}, 0.0
     for leg in legs:
-        price, why = crossed_close_price(leg, leg_quote(chain, leg))
+        price, why = crossed_close_price(leg, leg_quote(chain, leg), trust_book=trust_book)
         if price is None:
             label = f"{str(leg['side']).upper()} {float(leg['strike']):g}{str(leg['option_type']).upper()}"
             return {"ok": False, "mark_ps": None, "prices": {}, "reason": f"{label}: {why}"}
@@ -643,7 +671,7 @@ def open_rows(conn, account: str = None) -> list:
             "legs_json", "entry_mark_ps", "width_ps", "max_profit_ps", "max_loss_ps", "opened_at",
             "entry_quote_ts", "ratchet_peak_pct", "ratchet_lock_pct", "last_mark_ts", "last_mark_ps",
             "last_profit_ps", "last_capture_pct", "quote_ts", "state", "exit_started_at", "exit_ticket_id",
-            "exit_resolution", "last_exit_attempt_ts")
+            "exit_resolution", "last_exit_attempt_ts", "mark_basis")
     sql = f"SELECT {', '.join(cols)} FROM paper_live_positions WHERE state != ?"
     args = [STATE_CLOSED]
     if account:
@@ -1641,17 +1669,42 @@ def announce_manage_only(conn, refs: list) -> bool:
 
 # ------------------------------------------------------------- the tick
 
-def evaluate(row: dict, chain: dict, today: date) -> dict:
+def fallback_mark(row: dict, chain: dict, trust_book: bool = None):
+    """{mark_ps, profit_ps, capture_pct} for a row the crossed mark abstained
+    on: each leg at its crossed price where one exists, else its last traded
+    price; None when a leg has neither or the mark is impossible. Display and
+    P&L only (2026-10-23) — it never moves the ratchet, fires an exit or settles."""
+    mark = 0.0
+    for leg in row["legs"]:
+        q = leg_quote(chain, leg)
+        price, _ = crossed_close_price(leg, q, trust_book=trust_book)
+        price = q.get("ltp") if price is None else price
+        if price is None:
+            return None
+        mark += _sign(leg["side"]) * price
+    if impossible_mark_reason(row, mark):
+        return None
+    d, max_loss, max_profit = float(row["entry_mark_ps"]), float(row["max_loss_ps"]), float(row["max_profit_ps"])
+    profit_ps = _clamp(mark - d, max_loss, max_profit)
+    return {"mark_ps": round(mark, 4), "profit_ps": round(profit_ps, 4),
+            "capture_pct": round(_capture(profit_ps, max_profit), 2)}
+
+
+def evaluate(row: dict, chain: dict, today: date, now: datetime = None) -> dict:
     """Pure: {ok, reason, mark_ps, profit_ps, capture_pct, peak, lock,
     unconfirmed, signal, prices}. `peak`/`lock` are what the record may
     keep from this read alone: a read that would raise the lock to a new
     rung leaves them at the record's confirmed values and names the raise
     in `unconfirmed` ({peak, lock, capture}) for tick's `_confirm_rung`
-    (audit F01). `signal` is judged against the CONFIRMED lock only."""
+    (audit F01). `signal` is judged against the CONFIRMED lock only. An
+    abstaining read carries `fallback` (`fallback_mark`) for the record only.
+    `now` (the tick's clock) decides `book_trust_open`."""
     from src import plan_tracker as pt, profit_ratchet as pr
-    m = crossed_mark(chain, row["legs"])
+    trust = book_trust_open(now) if now is not None else None
+    m = crossed_mark(chain, row["legs"], trust_book=trust)
     if not m["ok"]:
-        return {"ok": False, "reason": m["reason"], "signal": None}
+        return {"ok": False, "reason": m["reason"], "signal": None,
+                "fallback": fallback_mark(row, chain, trust_book=trust)}
     impossible = impossible_mark_reason(row, m["mark_ps"])
     if impossible:
         return {"ok": False, "reason": impossible, "signal": None}
@@ -1740,9 +1793,19 @@ def _record_mark(conn, row: dict, ev: dict, quote_ts: str) -> None:
     by a failing door was re-stamped as a fresh mark on every 60-s tick
     for as long as the door stayed down."""
     conn.execute("UPDATE paper_live_positions SET last_mark_ts = ?, last_mark_ps = ?, last_profit_ps = ?, "
-                 "last_capture_pct = ?, quote_ts = ?, ratchet_peak_pct = ?, ratchet_lock_pct = ? "
+                 "last_capture_pct = ?, quote_ts = ?, ratchet_peak_pct = ?, ratchet_lock_pct = ?, mark_basis = ? "
                  "WHERE account_id = ? AND journal_ref = ? AND state = ?",
                  (quote_ts, ev["mark_ps"], ev["profit_ps"], ev["capture_pct"], quote_ts, ev["peak"], ev["lock"],
+                  MARK_BASIS_CROSSED, row["account_id"], row["journal_ref"], STATE_OPEN))
+    conn.commit()
+
+
+def _record_fallback_mark(conn, row: dict, fb: dict, quote_ts: str) -> None:
+    """Persist a `fallback_mark` (tagged `fallback:ltp`): the mark and its time move,
+    `quote_ts` and the ratchet peak/lock do not — a fallback is no evidence for a rung."""
+    conn.execute("UPDATE paper_live_positions SET last_mark_ts = ?, last_mark_ps = ?, last_profit_ps = ?, "
+                 "last_capture_pct = ?, mark_basis = ? WHERE account_id = ? AND journal_ref = ? AND state = ?",
+                 (quote_ts, fb["mark_ps"], fb["profit_ps"], fb["capture_pct"], MARK_BASIS_FALLBACK,
                   row["account_id"], row["journal_ref"], STATE_OPEN))
     conn.commit()
 
@@ -1840,14 +1903,16 @@ def _note_abstained(conn, out: dict, row: dict, reason: str, today: date, event:
     position only opened after this tick began — is named, never logged."""
     out["abstained"] += 1
     in_window, days_left = _exit_window(row, today)
+    # a fallback mark is no executable price: name the last CROSSED mark (its quote_ts)
+    last = row.get("quote_ts") if row.get("mark_basis") == MARK_BASIS_FALLBACK else row.get("last_mark_ts")
     out["row_notes"].append({"account_id": row["account_id"], "journal_ref": row["journal_ref"],
                              "kind": "abstained", "reason": reason, "days_left": days_left,
-                             "in_exit_window": in_window, "last_mark_ts": row.get("last_mark_ts")})
+                             "in_exit_window": in_window, "last_mark_ts": last})
     if in_window and event:
         _log_once_a_day(conn, row, EVENT_MARK_ABSTAINED,
                         f"no usable mark inside the forced-exit window ({days_left}d to expiry "
                         f"{row['expiry']}): {reason} — the pre-expiry exit cannot fire on this chain; "
-                        f"last mark {row.get('last_mark_ts') or 'never'}; the expiry backstop still covers it")
+                        f"last mark {last or 'never'}; the expiry backstop still covers it")
 
 
 def _held_detail(signal: str, res: dict) -> str:
@@ -2111,9 +2176,12 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                 # MARK the row — stamped with its own fetch time — but it
                 # does not move the ratchet.
                 stale = key not in fresh and now_epoch_fn() - cached[0] >= interval_s
-                ev = evaluate(row, chain, now.date())
+                ev = evaluate(row, chain, now.date(), now=now)
                 if not ev["ok"]:
                     _note_abstained(conn, out, row, ev["reason"], now.date())
+                    if ev.get("fallback"):
+                        _record_fallback_mark(conn, row, ev["fallback"], quote_ts)
+                        out["fallback_marks"] = out.get("fallback_marks", 0) + 1
                     continue
                 standing = (_standing_hold(row, ev, src, now, interval_s)
                             if ev["signal"] != "hold" and key not in fresh else None)
@@ -2139,7 +2207,7 @@ def tick(now: datetime = None, conn=None, chain_fn=None, sleep_fn=time.sleep, no
                         quote_ts, chain = got
                         src = _CHAIN_CACHE.get(key)
                         stale = False
-                        ev2 = evaluate(row, chain, now.date())
+                        ev2 = evaluate(row, chain, now.date(), now=now)
                         if not ev2["ok"]:
                             _note_abstained(conn, out, row, f"re-verify of {ev['signal']}: {ev2['reason']}",
                                             now.date())

@@ -124,7 +124,22 @@ AUTH_CODES = {
 }
 
 
+# A proposer refusal by design (strategy/event gates, sizing caps, R:R, exposure,
+# structure) is normal operation, not a problem (Architect 2026-10-23); data
+# failures inside "no proposal (...)" (chain unavailable, no quotes) still count.
+DESIGNED_BLOCK_PATTERNS = re.compile(
+    r"(?i)\bno proposal \((?:advisory: )?(?:earnings proximity gate|glassbreaking|sizing refused|"
+    r"rejected_poor_rr|r:r below|exposure gate|range-bound structure blocked|adaptive sizing veto|"
+    r"physical settlement|smart-money|war playbook|learner-only|crisis regime)")
+
+
+def is_designed_block(text: str) -> bool:
+    return bool(DESIGNED_BLOCK_PATTERNS.search(text)) and not DHAN_CODE_PATTERN.search(text)
+
+
 def is_problem_line(text: str) -> bool:
+    if is_designed_block(text):
+        return False
     return bool(PROBLEM_PATTERNS.search(ZERO_STAT_PATTERNS.sub("", text))
                 or DHAN_CODE_PATTERN.search(text))
 
@@ -359,6 +374,7 @@ EXPECTED_JOBS = {
     "earnings_calendar.log": False,  # daily 19:20 IST (results dates)
     "flows_tracker.log": False,      # daily 19:35 IST (FII/DII cash flows)
     "news_processor.log": False,     # daily 19:10 IST (Gemini news sentiment)
+    "gex_daily.log": True,           # Mon-Fri 18:45 IST (participant OI + GEX profiles, cron #38)
     # rss_ingester.log REMOVED 2026-08-05 with its cron (Sequence 2).
     # A heartbeat for a job that no longer runs flags SILENT every
     # night — and health_gate turns that into a permanent block on
@@ -435,7 +451,7 @@ def _save_state(state_path: Path, state: dict) -> None:
 
 
 def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None,
-               baseline_cold_start: bool = False) -> tuple:
+               baseline_cold_start: bool = False, blocks: dict = None) -> tuple:
     """Scan every *.log for NEW problem lines since the last sweep.
 
     Returns (problems, new_state): problems is a list of
@@ -460,6 +476,9 @@ def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None,
     whose headline is "since the last brief" must not open with archaeology.
     `ops_monitor` keeps the replay (its own state file is years old, and on a
     genuinely fresh box one historical dump is useful); the brief opts in.
+
+    `blocks` (optional dict, filled in place): log name -> count of designed
+    refusals seen, which are never problems (`is_designed_block`).
     """
     state = dict(state or {})
     problems = []
@@ -490,6 +509,8 @@ def sweep_logs(logs_dir: Path = LOGS_DIR, state: dict = None,
         seen: dict = {}
         for line in chunk.splitlines():
             text = line.strip()
+            if blocks is not None and text and is_designed_block(text):
+                blocks[path.name] = blocks.get(path.name, 0) + 1
             if not text or not is_problem_line(text):
                 continue
             key = text[:MAX_LINE_CHARS]
@@ -593,7 +614,7 @@ def telemetry_line(t: dict) -> str:
 
 def build_card(problems: list, missing: list, when: str,
                telemetry: dict = None, stale: dict = None,
-               alarms: list = None) -> str:
+               alarms: list = None, designed_blocks: int = 0) -> str:
     """The terse nightly health card.
 
     `stale` is `staleness_guard.alert_payload(...)` — None (the default, and
@@ -610,6 +631,8 @@ def build_card(problems: list, missing: list, when: str,
     if not problems and not missing and not alarms:
         card = (f"✅ **Ops sweep {when}** — all jobs ran, "
                 "no problem lines in any log.")
+        if designed_blocks:
+            card += "\n" + _blocks_line(designed_blocks)
         if stale:
             card += "\n" + stale["text"]
         if telemetry:
@@ -630,11 +653,17 @@ def build_card(problems: list, missing: list, when: str,
     if len(problems) > MAX_CARD_PROBLEMS:
         lines.append(f"…and {len(problems) - MAX_CARD_PROBLEMS} more — "
                      "see logs/problems.jsonl")
+    if designed_blocks:
+        lines.append(_blocks_line(designed_blocks))
     if stale:
         lines.append(stale["text"])
     if telemetry:
         lines.append(telemetry_line(telemetry))
     return "\n".join(lines)
+
+
+def _blocks_line(n: int) -> str:
+    return f"ℹ️ {n} designed refusal(s) (gates, sizing, R:R, exposure) — normal operation, not counted"
 
 
 def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
@@ -649,7 +678,8 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
     that stops the fifth.)"""
     now = now or datetime.now()
     when = now.strftime("%Y-%m-%d %H:%M")
-    problems, new_state = sweep_logs(logs_dir, _load_state(state_path))
+    blocks: dict = {}
+    problems, new_state = sweep_logs(logs_dir, _load_state(state_path), blocks=blocks)
     missing = check_heartbeats(logs_dir, now)
     record_problems(problems, when, problems_path)
     _save_state(state_path, new_state)
@@ -669,7 +699,7 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
     telemetry = system_telemetry()
     alarms = collect_alarms(problems, telemetry, logs_dir, now)
     card = build_card(problems, missing, when, telemetry=telemetry, stale=stale,
-                      alarms=alarms)
+                      alarms=alarms, designed_blocks=sum(blocks.values()))
     print(card, flush=True)
     if notify_fn is None:
         red = any(a.get("red") for a in (alarms or []))
@@ -688,6 +718,7 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
         print(f"  (ops card notify failed: {e})")
     return {"problem_lines": sum(p["count"] for p in problems),
             "distinct_problems": len(problems),
+            "designed_blocks": sum(blocks.values()),
             "silent_jobs": len(missing), "when": when,
             "stale_artifacts": (stale or {}).get("count", 0),
             "disabled_components": (stale or {}).get("disabled", 0),

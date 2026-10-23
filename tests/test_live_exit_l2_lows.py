@@ -138,7 +138,7 @@ def test_a_different_predicate_on_the_cached_snapshot_is_still_re_verified(world
     t = _tick_at(c, datetime(2026, 10, 27, 11, 1), fn, 5060.0)
     assert len(calls) == 1 and t["exits"][0]["held_on_cached_chain"] is True
     real = lp.evaluate
-    monkeypatch.setattr(lp, "evaluate", lambda row, chain, today: dict(real(row, chain, today), signal="profit_take"))
+    monkeypatch.setattr(lp, "evaluate", lambda row, chain, today, **kw: dict(real(row, chain, today, **kw), signal="profit_take"))
     t = _tick_at(c, datetime(2026, 10, 27, 11, 2), fn, 5120.0)
     assert len(calls) == 2                               # new evidence: fetched, as before
     assert t["exits"][0]["signal"] == "profit_take" and "held_on_cached_chain" not in t["exits"][0]

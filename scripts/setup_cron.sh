@@ -497,6 +497,12 @@ CRON_TZ=Asia/Kolkata
 #     config event_engine.execute_enabled is false (the executor) or no position is open (the settler).
 35 9 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.event_engine.executor >> "$REPO_ROOT/logs/event_executor.log" 2>&1
 5 11,13,15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.event_engine.settler >> "$REPO_ROOT/logs/event_settler.log" 2>&1
+
+# 38. Daily participant OI + GEX profiles (Architect 2026-10-23; #152/#153). NSE's participant-wise
+#     OI file for today and any of the last 5 sessions still missing, then the last 7 days' GEX
+#     profiles from the 15:40 chain archive (data/lake/gex/). Advisory only: nothing on the trade path
+#     reads either. 18:45 — no other NSE job runs then, and it lands before the 20:30 heartbeat sweep.
+45 18 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

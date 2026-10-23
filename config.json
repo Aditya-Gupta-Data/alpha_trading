@@ -10,7 +10,8 @@
     "horizon_days_default": 30,
     "card_max_age_days": 5,
     "fees_per_order_rs": 20,
-    "llm_daily_call_cap": 40,
+    "llm_daily_call_cap": 100,
+    "llm_run_call_cap": 50,
     "move_per_revenue_pct": 1.0,
     "priced_in_tolerance_pct": 1.0
   },

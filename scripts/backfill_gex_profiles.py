@@ -9,6 +9,7 @@ no database, no trade path. Analytics host (the Mini PC). Seam 2 (#153) adds the
   python3 scripts/backfill_gex_profiles.py                    # every slug, every archived day
   python3 scripts/backfill_gex_profiles.py --slug nifty --since 2026-10-01 --dry-run
   python3 scripts/backfill_gex_profiles.py --root data/vm_lake_copy --participant-root data/lake
+  python3 scripts/backfill_gex_profiles.py --today            # VM cron #38: the last 5 days' profiles
 """
 from __future__ import annotations
 
@@ -151,9 +152,13 @@ def main(argv=None) -> int:
     ap.add_argument("--root", help="lake root (default data/lake)")
     ap.add_argument("--slug", help="one chains/<slug> only")
     ap.add_argument("--since", help="first day, YYYY-MM-DD")
+    ap.add_argument("--today", action="store_true", help="since 7 days ago (IST): re-reads late participant files")
     ap.add_argument("--dry-run", action="store_true", help="compute and print, write nothing")
     ap.add_argument("--participant-root", help="lake root holding participant_oi/ (default data/lake)")
     args = ap.parse_args(argv)
+    if args.today:
+        from datetime import datetime, timedelta, timezone
+        args.since = (datetime.now(timezone(timedelta(hours=5, minutes=30))).date() - timedelta(days=7)).isoformat()
     result = run(args.root, args.slug, args.since, args.dry_run, args.participant_root)
     print("\n".join(summary_lines(result)))
     print(f"[gex backfill] {sum(len(v) for v in result.values())} day rows over {len(result)} underlyings"

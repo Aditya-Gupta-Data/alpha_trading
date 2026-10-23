@@ -29,6 +29,8 @@ THE FATE CODES (`fate`):
   EXECUTED             — proposed and auto-approved into the book
   PROPOSED_PENDING     — proposed, awaiting a human (or auto-approval
                          declined downstream)
+  REJECTED_EVENT_GATE  — the #151 earnings-proximity / glassbreaking gate;
+                         it leads any other refusal on the same setup
   REJECTED_POOR_RR     — reward-to-risk below the floor (1.5 directional,
                          0.35 range-bound), decision #98
   REJECTED_RISK_CAP    — max loss/lot over the hard per-trade cap
@@ -65,6 +67,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # reworded, its rows land in REJECTED_OTHER with the text attached, which is
 # the visible failure this table is meant to have.
 FATE_PATTERNS = (
+    ("REJECTED_EVENT_GATE", "earnings proximity gate"),   # #151 structural gates lead (2026-10-23)
+    ("REJECTED_EVENT_GATE", "glassbreaking:"),
     ("REJECTED_POOR_RR", "r:r below"),                 # decision #98 guardrail (needles are lower-case)
     ("REJECTED_RISK_CAP", "hard per-trade risk cap"),
     ("REJECTED_RISK_BUDGET", "options risk budget"),

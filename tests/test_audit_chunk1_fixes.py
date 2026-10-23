@@ -760,7 +760,7 @@ def test_a_stored_peak_never_arms_a_rung_the_close_did_not_reach(monkeypatch):
 def test_the_live_arm_stores_a_floored_peak(monkeypatch):
     from src.execution import live_pricer as lp
     captured = {}
-    monkeypatch.setattr(lp, "crossed_mark", lambda chain, legs: {"ok": True, "mark_ps": 70.0 + 0.2 * 130,
+    monkeypatch.setattr(lp, "crossed_mark", lambda chain, legs, **_: {"ok": True, "mark_ps": 70.0 + 0.2 * 130,
                                                                   "prices": {}})
     row = {"legs": [], "entry_mark_ps": 70.0, "max_loss_ps": 70.0, "max_profit_ps": 130.0,
            "ratchet_peak_pct": 59.996, "ratchet_lock_pct": 0.0, "strategy": "bull_call_spread",

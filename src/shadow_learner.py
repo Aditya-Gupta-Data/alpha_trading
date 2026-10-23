@@ -31,12 +31,14 @@ def open_count(conn) -> int:
 
 
 def ready(underlying: str, now: float = None, conn=None) -> tuple:
-    """(ok, reason): the learner's OWN cadence and open-position cap — never the loop's cooldown."""
+    """(ok, reason): the learner's OWN cadence and optional open-position cap (none by default) — never the loop's cooldown."""
     from src.config import SHADOW_LEARNER_COOLDOWN_SECONDS, SHADOW_LEARNER_MAX_OPEN
     now = time.time() if now is None else float(now)
     last = _LAST_TAKE.get(underlying)
     if last is not None and now - last < SHADOW_LEARNER_COOLDOWN_SECONDS:
         return False, f"learner cadence: {int(SHADOW_LEARNER_COOLDOWN_SECONDS - (now - last))}s left on {underlying}"
+    if SHADOW_LEARNER_MAX_OPEN is None:
+        return True, "ready"
     try:
         own = conn is None
         if own:

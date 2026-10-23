@@ -141,7 +141,8 @@ def test_evening_jobs_are_not_due_at_the_brief(logs):
     assert set(ops["pending"]) == {
         "corporate_events.log", "news_processor.log", "earnings_calendar.log",
         "deals_tracker.log", "flows_tracker.log", "daily_archiver.log",
-        "macro_nightly.log", "sleep_phase.log", "discovery_nightly.log"}   # Chunk 5 F7
+        "macro_nightly.log", "sleep_phase.log", "discovery_nightly.log",   # Chunk 5 F7
+        "gex_daily.log"}                                                   # cron #38, 18:45 (2026-10-23)
     # Only the 6 morning/afternoon jobs are judged (suggest + the new
     # 08:05 morning_brief + main/master_scheduler/chain_archiver).
     assert ops["expected_count"] == 6

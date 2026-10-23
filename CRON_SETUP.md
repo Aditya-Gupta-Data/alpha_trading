@@ -341,3 +341,12 @@ the card's horizon, or expiry. Both are `node_role.EXECUTION_JOBS`: the node nev
 **Node side:** `src.event_engine.emit` runs on the Mini PC at 08:40 Mon–Fri and 21:40 daily (node-only lines
 in `scripts/setup_node_replica_cron.sh`). Install both by re-running the installers on each machine.
 
+## Job 38 — Daily participant OI + GEX profiles (added 2026-10-23, decision #157)
+
+`45 18 * * 1-5` → `src.ingestion.participant_oi --today` (NSE's participant-wise OI file for today plus any
+of the last 5 sessions still missing — a late file is picked up the next evening), then
+`scripts/backfill_gex_profiles.py --today` (the last 7 days' GEX profiles from the 15:40 chain archive into
+`data/lake/gex/<slug>/`). Both write to `logs/gex_daily.log` (heartbeat, weekdays). Advisory only: nothing on
+the trade path reads either. 18:45 holds no other NSE job and lands before the 20:30 sweep. The node replica
+renders it too; there it fills the node's own participant-OI lake (the node has no fresh chains).
+

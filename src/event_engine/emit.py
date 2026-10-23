@@ -66,8 +66,12 @@ def run(items=None, llm=None, bars_fn=None, card_dir=None, do_ship=True, ship_fn
     if items is None:
         items = detect.inbox_items() + ([] if inbox_only else detect.rss_items())
     for item in items:
-        iid = detect.item_id(item)
+        iid, tkey = detect.item_id(item), detect.title_key(item)
         if iid in seen:
+            continue
+        if tkey and tkey in seen:                         # the same headline again: no LLM spend, no 2nd card
+            seen.add(iid)
+            summary["skipped"]["duplicate headline"] = summary["skipped"].get("duplicate headline", 0) + 1
             continue
         summary["items"] += 1
         c = detect.classify(item, llm)
@@ -75,7 +79,7 @@ def run(items=None, llm=None, bars_fn=None, card_dir=None, do_ship=True, ship_fn
             if c["event"] is None and c["reason"] != "no primary text (gate 1: headline only)":
                 summary["stopped"] = c["reason"]          # the LLM is down or capped: retry next run
                 break
-            seen.add(iid)
+            _mark_seen(seen, iid, tkey)
             summary["skipped"][c["reason"]] = summary["skipped"].get(c["reason"], 0) + 1
             continue
         summary["classified"] += 1
@@ -92,8 +96,14 @@ def run(items=None, llm=None, bars_fn=None, card_dir=None, do_ship=True, ship_fn
         summary["cards"].append({"event_id": card["event_id"], "suggestions": len(card["suggestions"])})
         if do_ship and card["suggestions"] and ship(path, ship_fn):
             summary["shipped"] += 1
-        seen.add(iid)
+        _mark_seen(seen, iid, tkey)
     return summary
+
+
+def _mark_seen(seen, iid: str, tkey) -> None:
+    seen.add(iid)
+    if tkey:
+        seen.add(tkey)
 
 
 def main(argv=None) -> int:

@@ -12,7 +12,7 @@ cross-batch critic and per-finding verifiers found across the batches.
   (e) F13: the rotation account's held-lock halt check, pinned.
 Hermetic: the `desk` fixture of test_live_entry_rules_l3."""
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -38,7 +38,7 @@ def test_a_the_d7_sweep_isolates_a_ref_whose_expiry_fails(desk, monkeypatch, cap
             raise RuntimeError("disk I/O error")
         return real(conn, journal_ref, why=why)
     monkeypatch.setattr(pm, "expire_pending_lock", flaky)
-    late = datetime(2026, 10, 21, 15, 45, tzinfo=pm.IST)
+    late = datetime.now(pm.IST) + timedelta(days=2)       # journal.log stamps the real clock: past any cutoff
     out = pt.expire_pending_margin(now=late, conn=c)
     printed = capsys.readouterr().out
     assert "b2d7a" not in out and "b2d7b" in out                 # the failing ref did not stop the next

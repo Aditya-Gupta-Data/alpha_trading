@@ -7,12 +7,15 @@ Sources (both fail-open):
   * the publishers' RSS feeds already configured for the RSS ingester (config/rss_feeds.json)
 
 Gate (playbook step 1): a rumour, or an item with no primary text, is never classified as a
-policy event. Every item is seen once (a hash ledger), so a re-run never re-spends the LLM.
+policy event. Every item is seen once (a hash ledger), so a re-run never re-spends the LLM; a
+repeated headline (`title_key`) is skipped before any LLM call.
 """
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+import re
 from pathlib import Path
 
 from src.event_engine import INBOX_DIR, STATE_DIR
@@ -33,6 +36,13 @@ CLASSIFY_PROMPT = (
 def item_id(item: dict) -> str:
     basis = (item.get("url") or "") + "|" + (item.get("title") or "") + "|" + (item.get("text") or "")[:400]
     return hashlib.sha256(basis.encode()).hexdigest()[:16]
+
+
+def title_key(item: dict) -> str | None:
+    """'t:' + a hash of the normalised headline (lower-case, HTML entities decoded, punctuation and
+    spacing dropped), or None when untitled: one story from two feeds is one item (2026-10-23)."""
+    t = re.sub(r"[^a-z0-9]+", " ", html.unescape(item.get("title") or "").lower()).strip()
+    return "t:" + hashlib.sha256(t.encode()).hexdigest()[:16] if t else None
 
 
 def inbox_items(inbox_dir=None) -> list:

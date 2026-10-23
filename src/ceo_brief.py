@@ -129,6 +129,7 @@ JOB_DUE_HOUR = {
     "master_scheduler.log": 9.2,
     "main.log": 15.6,
     "chain_archiver.log": 15.7,
+    "gex_daily.log": 18.75,         # 18:45 Mon-Fri (cron #38, 2026-10-23)
     "news_processor.log": 19.2,
     "earnings_calendar.log": 19.3,
     "corporate_events.log": 19.4,   # 19:25 (WIRED 2026-08-05)

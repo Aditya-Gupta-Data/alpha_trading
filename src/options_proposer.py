@@ -659,9 +659,14 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
     # Capital accounts never take them; on a real run the Shadow Learner
     # takes the raw setup (the advisory-veto path, #140) so the gate is measured.
     gates = event_gates(underlying, spread["strategy"], analysis, spot, today=today)
+    # A structural gate refusal leads the record and outranks the primary's
+    # own cash and sizing below (Architect 2026-10-23): the primary never takes
+    # it, so its cash cannot hide the gate or keep the setup from the learner.
+    gate_routed = False
     if gates["block"]:
         if book is None and _learner_enabled():
-            advisory_block = advisory_block or gates["block"]
+            gate_routed = True
+            advisory_block = gates["block"] + (f"; {advisory_block}" if advisory_block else "")
         else:
             return {"proposal": None, "view": view, "vix": vix,
                     "rejected_spread": spread, "expiry": expiry,
@@ -677,7 +682,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         return {"proposal": None, "view": view, "vix": vix,
                 "rejected_spread": spread, "expiry": expiry,
                 "reward_risk": rr, "reward_risk_floor": rr_floor,
-                "reason": rr_why}
+                "event_gates": gates if gate_routed else None,
+                "reason": f"{gates['block']}; also {rr_why}" if gate_routed else rr_why}
 
     if book is None:
         book = pf.load()
@@ -695,7 +701,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                              margin_per_lot=spread["margin"]["total_margin"] * pf.span_stress_factor(vix),
                              available_cash=cash)
     lots = sizing["lots"]
-    if lots <= 0:
+    if lots <= 0 and not gate_routed:     # gate-routed: learner-only, it sizes on its own equity (shadow_learner.take)
         # `rejected_spread` (2026-08-07) is ADDITIVE OBSERVABILITY: the
         # structure the engine built and then refused. Nothing reads it on
         # the trading path — it exists so `ghost_tracker` can mark a
@@ -708,12 +714,14 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
     # Adaptive sizing feedback (Directive 2, decision #81): the real
     # resolved record may shrink (floor 1 lot) or veto this archetype.
     # Fails open inside the module; a crashed layer changes nothing.
-    try:
-        from src.adaptive_sizing import adjust_option_lots
-        lots, _sizing = adjust_option_lots(spread["strategy"], lots)
-    except Exception:
-        _sizing = None
-    if lots <= 0:
+    _sizing = None
+    if lots > 0:
+        try:
+            from src.adaptive_sizing import adjust_option_lots
+            lots, _sizing = adjust_option_lots(spread["strategy"], lots)
+        except Exception:
+            _sizing = None
+    if lots <= 0 and not gate_routed:
         return {"proposal": None, "view": view, "vix": vix,
                 "rejected_spread": spread, "expiry": expiry,
                 "reason": ("adaptive sizing veto: "
@@ -742,7 +750,7 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         "event_gates": gates,
     }
     return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
-            "horizon": horizon, "advisory_block": advisory_block}
+            "horizon": horizon, "advisory_block": advisory_block, "gate_routed": gate_routed}
 
 
 def _gate_days_to_results(underlying, today: date = None):
@@ -1170,6 +1178,9 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     if learner_on and (learner_only or result.get("advisory_block")):
         return _learner_path(underlying, result, p, "market-loop cooldown" if learner_only
                              else f"advisory: {result['advisory_block']}")
+    if result.get("gate_routed") or int(p.get("lots") or 0) <= 0:   # learner-only setup with no learner: never the primary's
+        return {"proposed": False, "reason": result.get("advisory_block") or "no lots", "entry": None,
+                "rejected": _rejected_facts(underlying, result, p)}
     if "book" not in state:
         from src import exposure_gate
         allowed, exp_reason = exposure_gate.gate_entry(
@@ -1310,8 +1321,8 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
 def run_session(underlying: str = "NIFTY 50") -> None:
     print(f"Options proposer — {underlying} (paper only)\n")
     result = build_proposal(underlying)
-    if result["proposal"] is None:
-        print(f"No proposal: {result['reason']}")
+    if result["proposal"] is None or result.get("advisory_block"):     # a gated/vetoed setup is the learner's only
+        print(f"No proposal: {result.get('advisory_block') or result['reason']}")
         return
     p = result["proposal"]
     # Phase 6C: attach knowledge-graph memory context for the rationale.

@@ -6,8 +6,9 @@ and short in index/stock futures and options. GEX's dealer sign (D2) is calibrat
 group's net long-minus-short share of each option class's total OI becomes that side's weight.
 
 Raw file archived as published (sha256), parsed row written to data/lake/participant_oi/. Advisory only:
-nothing on the trade path reads it. Manual / analytics host; no cron line yet.
+nothing on the trade path reads it. VM cron #38 (18:45 Mon-Fri) runs `--today`, then the day's GEX profile.
 
+  python3 -m src.ingestion.participant_oi --today          # today + any of the last 5 sessions still missing
   python3 -m src.ingestion.participant_oi --day 2026-10-16
   python3 -m src.ingestion.participant_oi --backfill 2026-07-13 2026-10-19
 """
@@ -140,6 +141,24 @@ def backfill(start: str, end: str, root=None, fetch_fn=None, pause: float = 1.0)
     return out
 
 
+def catch_up(today: date, sessions: int = 5, root=None, fetch_fn=None, pause: float = 1.0) -> list:
+    """`run` for each of the last `sessions` NSE trading days up to `today` not yet in the lake —
+    a file NSE published late is picked up on the next evening. One request at a time."""
+    from src import nse_calendar
+    days, d = [], today
+    while len(days) < sessions and (today - d).days < 3 * sessions:
+        if nse_calendar.is_trading_day(d):
+            days.append(d.isoformat())
+        d -= timedelta(days=1)
+    out = []
+    for day in reversed(days):
+        if load(day, root) is None:
+            out.append(run(day, root, fetch_fn))
+            if pause:
+                time.sleep(pause)
+    return out
+
+
 def load(day: str, root=None) -> dict | None:
     """The parsed row for one day from the lake, or None."""
     rows = lake.read_day(DATASET, day, root=root)
@@ -149,10 +168,14 @@ def load(day: str, root=None) -> dict | None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--day")
+    ap.add_argument("--today", action="store_true", help="today (IST) + missing days of the last 5 sessions")
     ap.add_argument("--backfill", nargs=2, metavar=("START", "END"))
     ap.add_argument("--root", help="lake root (default data/lake)")
     args = ap.parse_args(argv)
-    if args.backfill:
+    if args.today:
+        from datetime import datetime, timezone
+        res = catch_up(datetime.now(timezone(timedelta(hours=5, minutes=30))).date(), root=args.root)
+    elif args.backfill:
         res = backfill(args.backfill[0], args.backfill[1], args.root)
     elif args.day:
         res = [run(args.day, args.root)]

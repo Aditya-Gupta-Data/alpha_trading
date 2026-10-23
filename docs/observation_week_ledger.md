@@ -2409,3 +2409,36 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - VM clean, no job running; `git pull`; `node_role.execution_refusal()` None on the VM (hostname `alpha-trading-vm`, no `ALPHA_NODE_*`); 281 scoped tests passed; `alpha-trading` + `alpha-discord-bot` restarted; health 200.
 - Live gate read: INFY.NS results in 3 days → gated from the 10-21 session; TCS/HDFCBANK/RELIANCE no announced date; indices not gated.
 - Mini PC: unreachable at 12:51 (the Mac's Tailscale relay was down; LAN timed out). After the owner toggled Tailscale it was pulled at 12:57, `55ffb9f` → `fc9cd30`; guard = analytics node, live loop refused; 50 tests passed there. Unverified until 10-21: the first gated refusals, learner-only entries carrying the gate reason, `event_gates` on proposals, the 19:20 calendar run writing `last`.
+
+
+## Issue 49 — VM disk at 95%: Google's Ops Agent flooded syslog after its Cloud Logging writes were denied (found 2026-10-23; FIXED 10-23 16:0x IST)
+
+- Verified 10-23 ~15:56 IST: 503 MB available on `/` (9.7 GB, 95%). `/var/log/syslog` 1.27 GB (since the 10-18 00:04 rotation) + `syslog.1` 1.57 GB + the agent's own `subagents/logging-module*.log` 689 MB. Syslog grew 179 KB in 70 s (~220 MB/day); `otelopscol` wrote ~6,150 of the last 3 MB's lines.
+- Cause, from the log: every export failed with `PermissionDenied … 'logging.logEntries.create' denied` (the VM's service account has no Cloud Logging write role), and each failure (error + Go stack) was itself logged to syslog, which the agent then tried to ship. The agent delivered nothing and held ~100 MB RSS (otelopscol 84 MB + fluent-bit 19 MB) on the 964 MB e2-micro.
+- Fix (owner-directed): `systemctl disable --now google-cloud-ops-agent` (its two sub-units are `static`, so neither restarts on boot); the two logging-module files removed; `logrotate -f /etc/logrotate.d/rsyslog` ×2 (both big syslogs compressed, 35 MB `.2.gz`); `journalctl --vacuum-size=100M` freed 0 B (the 217 MB are active files). After: **4.0 GB available (57%)**.
+- Correction to the 10-23 weekly audit: it said the 20:30 ops card "reads ~0.4 GB high (root-reserved space)". Wrong — `shutil.disk_usage().free` is `f_bavail` (verified on the VM: 4.21 = 4.21 GB). The 0.9 → 0.5 GB drop between 10-22 20:30 and 10-23 16:00 was real growth. The calculation is unchanged.
+- Off-ramp: `sudo systemctl enable --now google-cloud-ops-agent` (grant the service account `roles/logging.logWriter` + `roles/monitoring.metricWriter` first, or the loop returns).
+
+
+## Issue 50 — the Mini PC lost power 12 times in the week of 10-19 (found 2026-10-23; NOT fixed — hardware/power)
+
+- Verified from the node's journal: 12 boots between 10-20 04:38 and 10-23 13:47 (`journalctl --list-boots`), gaps of 2–22 min. Every boot: `systemd-fsck … recovering journal`, `Dirty bit is set. Fs was not properly unmounted`, `system.journal corrupted or uncleanly shut down`. The previous boot of each ends mid-stream on routine lines (heartbeat cron, UFW blocks) with no `systemd-shutdown` / `Reached target` line. 0 OOM kills since 10-19, no panic, thermal zones 28–30 °C at boot; the OS sees no UPS or battery (`/sys/class/power_supply` empty).
+- Reading: abrupt loss of power to the box, then BIOS power-on-AC. Not an OS or memory crash. Whether the UPS is not on its output, cannot bridge the cut, or a cable is loose is NOT known from the logs.
+- Effect: the nightly reconcile read DIVERGED 10-19…10-22; 10-22 had four dark spells (22, 6, 10, 11 min).
+
+
+## Issue 51 — frozen live marks, the capped learner, and gate refusals hidden by cash (found by the 10-23 audit; FIXED and DEPLOYED 10-23, decision #157)
+
+- Frozen marks, verified in the VM logs 10-22/10-23: the >50% rule compared each quote to the EXCHANGE's last traded price of the strike, which on an illiquid strike stayed at the pre-move trade (main-book `ba41496d`/`5954b6c0` 14250PE: asks ₹908–1,177 refused against a last trade of ₹520.9). PAPER_2L_LIVE `62d04919` (RELIANCE 1120PE, last mark 10-22 09:23) and learner `7da29e4f` (HDFCBANK 620PE, last mark 10-21 15:25) abstained for want of an ask.
+- The learner held 7 open against its cap of 6 all week (it also mirrors primary entries outside the cap check) and logged `learner cap` on every setup, including the 9 gated INFY butterflies.
+- On 10-21 the INFY butterflies were recorded as `sizing refused` (SPAN ~₹92k > ₹53k cash): the gate's verdict was held in `advisory_block` while the primary's sizing returned first.
+- Pre-deploy open-book dry run (read-only, the VM's 15:40 archived chains of 10-23, old `cd22a2b` vs new code): 10 live-arm rows + 12 main-book spreads, **every exit decision identical (all hold)**; the only difference is a `fallback:ltp` mark on `62d04919` (₹37.6) and `7da29e4f` (₹24.6). On that post-close book the main-book Midcap pair still did not mark (14850CE bid 13.6 vs last 618.5, the book too wide to vouch). Whether they re-mark on Monday depends on the live book; not verified.
+
+
+## Deploy 2026-10-23 — VM `112f2c7` → `cd22a2b` (16:1x IST) → `e486d58` (16:3x IST); Mini PC `0dab426` → `e486d58`
+
+- `cd22a2b` (#155 GEX seam 3 + Greek attribution hook, #156 event engine 1.1, `execute_enabled` false, weekly_audit): VM clean, no job running, 66 scoped tests passed, `setup_cron.sh` (39 lines, #37 added), services restarted, health 200. The leftover manual test card `data/event_card__rbi-9254797919b47095.json` (from `inbox:test_rbi_policy.txt`, 10-21) was deleted first.
+- `e486d58` (#157): Mac suite 3,209 passed (45 s); VM 321 scoped tests passed; `setup_cron.sh` (40 lines, #38 added); `mark_basis` column added by a writable `ensure_schema` before the restart; health 200; disk 4.0 GB free.
+- Job #38 hand-run at 16:32: participant OI 4/5 sessions written (10-23 not yet published, 404), GEX 132 day rows over 38 underlyings in 20 s, `data/lake/gex` 1.2 MB.
+- Mini PC: `git pull` to `e486d58`, replica block reinstalled (33 lines, 0 live-lane lines), execution still refused, 74 tests passed.
+- Unverified until Mon 10-26: book-vouched marks during the session, the first `fallback:ltp` marks, the learner taking gated setups, the ops card's designed-refusal line, the 08:40 / 21:40 emit runs on the 50-call shares.

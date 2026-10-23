@@ -42,6 +42,41 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-23 (Fri, after the close) — Post-audit remediation (#157) DEPLOYED: VM and Mini PC both on `e486d58`; VM disk rescued (0.5 → 4.0 GB); Mini PC restarts = power losses
+
+- **Live now:**
+  - **VM `e486d58`** (via `cd22a2b` the same afternoon): GEX seam 3 + the Greek-attribution settlement hook (#155), the event engine executor/settler (#156; `execute_enabled` still **false**), and #157. 40 cron lines (#37 event engine, #38 daily participant OI + GEX at 18:45). Services restarted, health 200.
+  - **Mini PC `e486d58`:** replica block reinstalled (33 lines, #38 included, 0 trading-loop lines); event `emit` on a 100-call/day LLM budget, 50 per run.
+- **What #157 changes** (DECISIONS #157):
+  - **Learner:** the Shadow Learner has no open-position cap; its 15-min cadence per underlying remains.
+  - **Gate first:** a #151 gate refusal leads the record and reaches the learner even when the primary can't afford the trade. The ledger fate is `REJECTED_EVENT_GATE`.
+  - **Ops card:** designed refusals are no longer counted as problems; they get one ℹ️ line.
+  - **Marks:** from 09:30 a live two-sided book (ask ≤ 3× bid) overrules an illiquid strike's stale last trade. A live-arm row with no usable crossed price gets a `fallback:ltp` mark, for display and P&L only.
+  - **Event engine:** repeated headlines are skipped before the LLM.
+- **VM disk (Issue 49):**
+  - Google's Ops Agent was denied Cloud Logging writes and logged each failure to syslog (~220 MB/day). It is now **disabled**: it delivered nothing.
+  - Syslog has been compressed; 4.0 GB free.
+  - To turn the agent back on, first grant the service account `roles/logging.logWriter` + `roles/monitoring.metricWriter`, then `sudo systemctl enable --now google-cloud-ops-agent`.
+- **Mini PC (Issue 50):** all 12 restarts of the week were abrupt power losses: fsck "dirty bit" and an uncleanly closed journal on every boot, no shutdown sequence, 0 OOM. **Owner: check that the box is on the UPS output and that the UPS bridges a cut.** Nothing in software fixes this.
+- **Two audit premises corrected (recorded in #157 and ledger 49/51):**
+  - The ops card's disk figure was already non-root free space; it is unchanged.
+  - The frozen marks were anchored to the exchange's last trade, not to a stored mark of ours.
+- **Why SCI / GNFC / NAM-INDIA produced no suggestions:** each priced-in verdict was `unknown` ("no prices around the announcement in the bhavcopy lake").
+  - SCI and GNFC: the 08:40 run cannot see the announcement day's close, which arrives at 19:15, and a card is never re-assessed.
+  - NAM-INDIA: the LLM dated the event 2025-02-12, outside the 60-day window.
+  - None of the three is in the VM's 9-name option universe, so the executor would have abstained anyway.
+  - **Not built:** a re-assessment pass for `unknown` cards after the next bhavcopy.
+- **Next, in order:**
+  1. **Mon 10-26 session, read (VM):**
+     - book-vouched marks on `ba41496d` / `5954b6c0` (the Friday post-close book was too wide; not guaranteed);
+     - `fallback:ltp` marks: `SELECT journal_ref, mark_basis, last_mark_ts FROM paper_live_positions WHERE state='open'`;
+     - `[PAPER_SHADOW_LEARNER] … approved` lines on gated setups;
+     - the 20:30 card's ℹ️ line;
+     - `logs/gex_daily.log` at 18:45.
+  2. **Event executor dry run** during market hours (`venv/bin/python -m src.event_engine.executor --dry-run`). Only then consider `execute_enabled: true`; still the Architect's call.
+  3. **Watch the uncapped learner:** it can open one setup per underlying every 15 min. Expect correlated near-duplicates in the Proving Court on busy days. Re-cap it with `shadow_learner_max_open: <n>` in `config.json` if the Architect wants.
+  4. **Power:** fix the Mini PC's power/UPS before relying on it.
+
 ## 2026-10-21 — Event engine 1.1 (#156) + the stale mininode test fixed, on `main`. NOT deployed; VM and Mini PC not pulled; `execute_enabled` false
 
 - **Test fix (pushed to `main` `9b18774`):** `test_shadow_install_carries_the_switch_and_silences_the_scrip_card` expected the pre-#149 home-lane block (section 4, two `@reboot`). Suite was 3,167 / 3,167 at that commit.

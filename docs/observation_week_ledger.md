@@ -2442,3 +2442,11 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Job #38 hand-run at 16:32: participant OI 4/5 sessions written (10-23 not yet published, 404), GEX 132 day rows over 38 underlyings in 20 s, `data/lake/gex` 1.2 MB.
 - Mini PC: `git pull` to `e486d58`, replica block reinstalled (33 lines, 0 live-lane lines), execution still refused, 74 tests passed.
 - Unverified until Mon 10-26: book-vouched marks during the session, the first `fallback:ltp` marks, the learner taking gated setups, the ops card's designed-refusal line, the 08:40 / 21:40 emit runs on the 50-call shares.
+
+
+## Deploy 2026-10-23 ~16:48 IST — VM and Mini PC `e486d58` → `9b609ea` (#158); PAPER_EVENTS executor ON
+
+- Mac suite 3,218 passed (41 s). VM: no job running, 168 scoped tests passed, `setup_cron.sh` (40 lines), services restarted, health 200; `execute_enabled` True; `fo_bhavcopy_lake` FRESH via `content_date:data/fo_liquidity.json` (1.7 days). Mini PC: 67 tests passed, 33 cron lines.
+- First re-assessment, Mini PC 16:49 (`emit --reassess-only`): 11 cards checked, all rewritten once (the materiality rows gained `basis`), 1 shipped. SCI `opposite` (−3.209% vs +3.0%), GNFC `opposite` (−1.874% vs +3.125%) → 2 suggestions. NAM-INDIA re-dated to 2026-10-23, still `unknown`. NIFTY 50 on two RBI cards now judged on its price response: 1.5% base, below the 2% gate.
+- VM executor dry run 16:49: 1 card, SCI and GNFC both `abstained` — "no option contract in the VM's option universe".
+- Unverified: the 21:40 re-check of NAM-INDIA, the first live executor run (10-26 09:35), the learner's once-per-session rule in a live session.

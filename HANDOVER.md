@@ -42,6 +42,26 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-23 (Fri, ~16:50 IST) — #158 DEPLOYED: VM and Mini PC on `9b609ea`; the PAPER_EVENTS executor is ON; event cards re-assessed
+
+- **Live now:**
+  - `event_engine.execute_enabled: true` — the executor trades PAPER_EVENTS at 09:35 Mon–Fri (₹5,000 max loss a trade).
+  - Every emit run (08:40, 21:40, Mini PC) ends with a no-LLM re-assessment of the last 5 days' zero-suggestion cards.
+  - The announcement-date guard: a model date >7 days older than publication is replaced by the publication date.
+  - Index materiality on the price response.
+  - The Shadow Learner takes ONE entry per (underlying, strategy, IST session); the 15-min cadence is gone.
+  - `fo_bhavcopy_lake` is dated by `fo_liquidity.json` `as_of` on the VM (reads fresh, 1.7 days).
+  - Mac suite 3,218 passed. VM: 168 scoped tests, health 200, 40 cron lines. Mini PC: 67 tests, 33 cron lines.
+- **The re-assessment's first run (Mini PC, 16:49, by hand): 11 cards checked, 1 shipped.**
+  - SCI and GNFC resolved to `opposite`: SCI −3.21% vs +3.0% justified, GNFC −1.87% vs +3.13%, window 10-21 → 10-22. The result is 2 bullish long-OTM-call suggestions.
+  - The card is on the VM as `data/event_card__other-c01d879518502f8a.json`. The VM dry run abstains on both: "no option contract in the VM's option universe". Monday's 09:35 run will mark it seen and trade nothing.
+  - NAM-INDIA: re-dated 2025-02-12 → 2026-10-23 and still `unknown`, because the 10-23 close lands at 19:15. **Tonight's 21:40 run is the first real re-check;** read `logs/event_emit.log` for `reassessed`.
+- **Not done / caveats:**
+  - The executor was switched on without the market-hours dry run of 10-21. The first live run is 10-26 09:35.
+  - The option universe still excludes most event names, so most cards will abstain.
+  - A resolved verdict is never re-read, so SCI/GNFC stay on a one-session window.
+- **Next:** Monday 10-26 — read `logs/event_executor.log` (09:35) and `event_actions`. Then the #157 watch list below (fallback marks, book-vouched marks, the learner's first gated entry, now once per session).
+
 ## 2026-10-23 (Fri, after the close) — Post-audit remediation (#157) DEPLOYED: VM and Mini PC both on `e486d58`; VM disk rescued (0.5 → 4.0 GB); Mini PC restarts = power losses
 
 - **Live now:**

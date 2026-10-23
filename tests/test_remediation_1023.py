@@ -14,12 +14,7 @@ from tests.test_event_gates import _build
 
 def test_the_learner_has_no_open_position_cap_by_default(monkeypatch):
     monkeypatch.setattr("src.config.SHADOW_LEARNER_MAX_OPEN", None)
-    sl._LAST_TAKE.clear()
-    assert sl.ready("INFY.NS", now=1000.0, conn=object()) == (True, "ready")   # the book is never read
-    sl.arm("INFY.NS", now=1000.0)
-    ok, why = sl.ready("INFY.NS", now=1100.0)
-    assert not ok and why.startswith("learner cadence")                          # the cadence still throttles
-    sl._LAST_TAKE.clear()
+    assert sl.ready("INFY.NS", now=1000.0, conn=object()) == (True, "ready")   # no strategy, no cap: no read
 
 
 # --------------------------------------------------------------- gate precedence

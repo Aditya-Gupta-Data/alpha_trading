@@ -340,6 +340,9 @@ strike paths, ₹5,000 max loss a trade — and exits quietly while `event_engin
 the card's horizon, or expiry. Both are `node_role.EXECUTION_JOBS`: the node never runs them.
 **Node side:** `src.event_engine.emit` runs on the Mini PC at 08:40 Mon–Fri and 21:40 daily (node-only lines
 in `scripts/setup_node_replica_cron.sh`). Install both by re-running the installers on each machine.
+**Since 2026-10-23 (#158):** `execute_enabled` is **true** (the executor trades PAPER_EVENTS at 09:35), and every emit
+run ends with a no-LLM re-assessment of the last 5 days' zero-suggestion cards — the 21:40 run is the one that sees
+the announcement day's close (bhavcopy 19:15). By hand: `venv/bin/python -m src.event_engine.emit --reassess-only`.
 
 ## Job 38 — Daily participant OI + GEX profiles (added 2026-10-23, decision #157)
 

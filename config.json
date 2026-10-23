@@ -2,7 +2,7 @@
   "paper_events_capital_rs": 1000000,
   "event_engine": {
     "emit_enabled": true,
-    "execute_enabled": false,
+    "execute_enabled": true,
     "max_loss_per_trade_rs": 5000,
     "materiality_threshold_pct": 2.0,
     "fixed_otm_pct": 3.0,

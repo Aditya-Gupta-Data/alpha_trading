@@ -16,12 +16,13 @@ from pathlib import Path
 from src.event_engine import CARD_DIR, CARD_SCHEMA, IST, TAG_LLM, settings
 
 
-def build(item: dict, event: dict, ex: dict, materials: list, priced: list, cfg: dict = None) -> dict:
+def suggestions_for(exposures: list, materials: list, priced: list, cfg: dict = None) -> list:
+    """One suggestion per exposure that passes materiality AND got a priced-in direction."""
     cfg = cfg or settings()
     by_ticker = {m["ticker"]: m for m in materials}
     pin = {p["ticker"]: p for p in priced}
     suggestions = []
-    for e in ex.get("exposures", []):
+    for e in exposures:
         m, p = by_ticker.get(e["ticker"]), pin.get(e["ticker"])
         if not (m and m.get("passes_gate") and p and p.get("direction")):
             continue
@@ -34,12 +35,19 @@ def build(item: dict, event: dict, ex: dict, materials: list, priced: list, cfg:
                                      "source": e.get("price_response_source") or TAG_LLM}},
             "max_loss_per_trade_rs": float(cfg["max_loss_per_trade_rs"]),
             "basis": {"materiality_pct": m["effect_pct"], "materiality_source": m["source"],
+                      "materiality_basis": m.get("basis", "revenue"),
                       "priced_in": p["verdict"], "event_move_pct": p["event_move_pct"],
                       "justified_move_pct": p["justified_move_pct"]},
             "invalidation": f"premium is the stop; exit by the pre-expiry rule, at {cfg['take_profit_multiple']:g}x, "
                             f"or after {int(e.get('horizon_days') or cfg['horizon_days_default'])} days",
             "confidence": 0.0,
         })
+    return suggestions
+
+
+def build(item: dict, event: dict, ex: dict, materials: list, priced: list, cfg: dict = None) -> dict:
+    cfg = cfg or settings()
+    suggestions = suggestions_for(ex.get("exposures", []), materials, priced, cfg)
     from src.event_engine.detect import item_id
     eid = f"{(event.get('type') or 'event')}-{item_id(item)}"
     return {"schema": CARD_SCHEMA, "event_id": eid,

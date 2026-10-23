@@ -17,6 +17,7 @@ from datetime import date
 from src.event_engine import TAG_COMPUTED, settings, worst_tag
 
 AFTER_SESSIONS = 3
+NO_PRICE_REASONS = ("no prices around the announcement in the bhavcopy lake", "no announcement date")
 
 
 def _sign(x: float) -> int:
@@ -60,7 +61,9 @@ def assess(ticker: str, material: dict, announced_on: str, bars_fn=None, cfg: di
         out["reason"] = out["reason"] or mv["reason"]
         return out
     base = float(material["effect_pct"][1])
-    justified = round(base * float(cfg.get("move_per_revenue_pct", 1.0)), 3)
+    # an index's effect is already a price move; a company's is a revenue share, scaled by the model
+    mult = 1.0 if material.get("basis") == "price_response" else float(cfg.get("move_per_revenue_pct", 1.0))
+    justified = round(base * mult, 3)
     move, tol = mv["move_pct"], float(cfg.get("priced_in_tolerance_pct", 1.0))
     out.update(event_move_pct=move, justified_move_pct=justified, window=[mv["from"], mv["to"]],
                source=worst_tag(material.get("source"), TAG_COMPUTED))

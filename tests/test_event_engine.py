@@ -117,7 +117,7 @@ def test_config_discord_seven_and_the_event_block():
     ee = cfg["event_engine"]
     assert ee["max_loss_per_trade_rs"] == 5000 and ee["materiality_threshold_pct"] == 2.0
     assert cfg["paper_events_capital_rs"] == 1000000
-    assert ee["execute_enabled"] is False            # the one flip after the first VM dry run
+    assert ee["execute_enabled"] is True             # flipped by the Architect 2026-10-23 (#158)
 
 
 def test_paper_events_is_on_the_door_but_never_a_shadow_of_the_primary(monkeypatch):

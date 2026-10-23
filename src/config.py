@@ -138,7 +138,6 @@ REGIME_ADVISORY_ENABLED = bool(_CONFIG.get("regime_advisory_enabled", True))
 # Chunk 4 B1: a pending proposal older than this many days is refused at approval (fills at proposal-day prices).
 # The Shadow Learner (Architect 2026-10-09): raw setups on crossed quotes, no advisory/exposure/cooldown gates.
 SHADOW_LEARNER_ENABLED = bool(_CONFIG.get("shadow_learner_enabled", False))
-SHADOW_LEARNER_COOLDOWN_SECONDS = int(_CONFIG.get("shadow_learner_cooldown_seconds", 900))
 # No open-position cap by default (Architect 2026-10-23): the 15-min cadence per underlying is the throttle; an int re-caps it.
 _LEARNER_CAP = _CONFIG.get("shadow_learner_max_open")
 SHADOW_LEARNER_MAX_OPEN = int(_LEARNER_CAP) if _LEARNER_CAP is not None else None

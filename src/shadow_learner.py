@@ -1,16 +1,17 @@
 """The Shadow Learner (Architect directive 2026-10-09): PAPER_SHADOW_LEARNER takes every RAW setup
 the proposer builds — the advisory vetoes, the firm-wide exposure slot (#68) and the market loop's
 2-hour cooldown do not apply to it — on real crossed quotes through the live arm's own book
-(#120 marks, #135 ratchet), inside its own margin wall and cadence. Its fills feed the Proving
-Court as `shadow_trades` rows (mode SHADOW_LEARNER, pattern `learner:<strategy>`)."""
+(#120 marks, #135 ratchet), inside its own margin wall — at most ONE entry per (underlying,
+strategy, IST session date), so a setup gated nine times in a session is measured once (2026-10-23;
+it replaced the 15-min cadence). Its fills feed the Proving Court as `shadow_trades` rows
+(mode SHADOW_LEARNER, pattern `learner:<strategy>`)."""
 import hashlib
-import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 ACCOUNT = "PAPER_SHADOW_LEARNER"
 MODE = "SHADOW_LEARNER"
 PORTFOLIO_ID = f"{ACCOUNT}/IDX_SPREADS"     # M1 (#142): the learner's one bucket
-_LAST_TAKE: dict = {}          # underlying -> epoch of the learner's last entry (process memory)
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def enabled() -> bool:
@@ -30,34 +31,45 @@ def open_count(conn) -> int:
                             (ACCOUNT, STATE_CLOSED)).fetchone()[0])
 
 
-def ready(underlying: str, now: float = None, conn=None) -> tuple:
-    """(ok, reason): the learner's OWN cadence and optional open-position cap (none by default) — never the loop's cooldown."""
-    from src.config import SHADOW_LEARNER_COOLDOWN_SECONDS, SHADOW_LEARNER_MAX_OPEN
-    now = time.time() if now is None else float(now)
-    last = _LAST_TAKE.get(underlying)
-    if last is not None and now - last < SHADOW_LEARNER_COOLDOWN_SECONDS:
-        return False, f"learner cadence: {int(SHADOW_LEARNER_COOLDOWN_SECONDS - (now - last))}s left on {underlying}"
-    if SHADOW_LEARNER_MAX_OPEN is None:
+def session_day(now: float = None) -> str:
+    """The IST session date of epoch `now` (None = the real clock)."""
+    return (datetime.now(IST) if now is None else datetime.fromtimestamp(float(now), IST)).date().isoformat()
+
+
+def taken_this_session(conn, underlying: str, strategy: str, day: str) -> bool:
+    """Has the learner's book a position (any state) on (underlying, strategy) opened on IST `day`?"""
+    from src.execution.live_pricer import ensure_schema
+    ensure_schema(conn)
+    return conn.execute("SELECT 1 FROM paper_live_positions WHERE account_id = ? AND ticker = ? AND strategy = ? "
+                        "AND substr(opened_at, 1, 10) = ? LIMIT 1", (ACCOUNT, underlying, strategy, day)).fetchone() \
+        is not None
+
+
+def ready(underlying: str, now: float = None, conn=None, strategy: str = None) -> tuple:
+    """(ok, reason): one learner entry per (underlying, strategy, IST session date) and the optional
+    open-position cap (none by default) — never the loop's cooldown. With no `strategy` (the market
+    loop's pre-check, before a structure is built) only the cap applies."""
+    from src.config import SHADOW_LEARNER_MAX_OPEN
+    if strategy is None and SHADOW_LEARNER_MAX_OPEN is None:
         return True, "ready"
+    day = session_day(now)
     try:
         own = conn is None
         if own:
             from src import brain_map
             conn = brain_map.connect()
         try:
-            n = open_count(conn)
+            if strategy is not None and taken_this_session(conn, underlying, strategy, day):
+                return False, f"learner already took {strategy} on {underlying} this session ({day})"
+            n = open_count(conn) if SHADOW_LEARNER_MAX_OPEN is not None else 0
         finally:
             if own:
                 conn.close()
     except Exception as exc:
         return False, f"learner book unreadable ({exc})"
-    if n >= SHADOW_LEARNER_MAX_OPEN:
+    if SHADOW_LEARNER_MAX_OPEN is not None and n >= SHADOW_LEARNER_MAX_OPEN:
         return False, f"learner cap: {n} open positions (max {SHADOW_LEARNER_MAX_OPEN})"
     return True, "ready"
-
-
-def arm(underlying: str, now: float = None) -> None:
-    _LAST_TAKE[underlying] = time.time() if now is None else float(now)
 
 
 def record_fire(conn, entry: dict, fire_date: str = None) -> dict:
@@ -154,7 +166,6 @@ def take(entry: dict, reason: str, conn=None, venue_mod=None) -> dict:
         op._live_after_fill(conn, ACCOUNT, entry, stid, sview, rq["quote_ts"])
         if verdict.get("status") == "approved" and sview.get("status") == oms.FILLED:
             record_fire(conn, entry)
-            arm(entry.get("ticker"))
         return verdict
     except Exception as exc:
         verdict["reason"] = f"learner entry failed ({type(exc).__name__}: {exc})"

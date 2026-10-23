@@ -107,9 +107,12 @@ class Artifact:
     """
 
     def __init__(self, name, rel_path, refresh_interval_hours, tolerance,
-                 policy, consumer, producer, note=""):
+                 policy, consumer, producer, note="", content_date=None):
         self.name = name
         self.rel_path = rel_path
+        # (rel_path of a JSON, key): a content date that also dates this artifact — the newer
+        # of it and `rel_path`'s mtime counts, so a host without the raw file is not MISSING
+        self.content_date = content_date
         self.refresh_interval_hours = float(refresh_interval_hours)
         self.tolerance = float(tolerance)
         self.policy = policy
@@ -192,8 +195,13 @@ REGISTRY = {
                      "datacentre IPs, so this can never run on the VM.",
             note="A DIRECTORY, watched by mtime — the clerk mkdir()s a new "
                  "date folder per session, so the parent's mtime moves on "
-                 "every real capture. Monitor-only: the halt stack's own "
-                 "fail-closed age check is the gate.",
+                 "every real capture. The raw lake lives only on the Mac; "
+                 "the shipped fo_liquidity.json's `as_of` is the newest lake "
+                 "day it was derived from, so the VM dates the feed by that "
+                 "(2026-10-23: the bare directory read MISSING every night on "
+                 "the VM). Monitor-only: the halt stack's own fail-closed age "
+                 "check is the gate.",
+            content_date=("data/fo_liquidity.json", "as_of"),
         ),
         Artifact(
             name="darling_tiers",
@@ -387,6 +395,18 @@ def _as_of_epoch(as_of) -> float | None:
         return None
 
 
+def _content_date_epoch(art, root=None) -> float | None:
+    """The date in `art.content_date`'s JSON key as an epoch, or None (absent, unreadable, unset)."""
+    if not art.content_date:
+        return None
+    rel, key = art.content_date
+    try:
+        base = Path(root) if root else ROOT
+        return _as_of_epoch(json.loads((base / rel).read_text()).get(key))
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def check(name: str, now=None, as_of=None, root=None) -> dict:
     """Freshness verdict for one registered artifact.
 
@@ -411,12 +431,17 @@ def check(name: str, now=None, as_of=None, root=None) -> dict:
         signal = "as_of"
         if stamp is None:
             p = art.path(root)
-            if not p.exists():
+            stamps = []
+            if p.exists():
+                stamps.append((os.path.getmtime(p), "mtime"))
+            derived = _content_date_epoch(art, root)
+            if derived is not None:
+                stamps.append((derived, f"content_date:{art.content_date[0]}"))
+            if not stamps:
                 return {**base, "state": MISSING, "age_hours": None,
                         "age_days": None, "signal": "absent",
                         "reason": f"{art.rel_path} does not exist"}
-            stamp = os.path.getmtime(p)
-            signal = "mtime"
+            stamp, signal = max(stamps)
 
         age_h = max(0.0, (_epoch(now) - stamp) / HOUR)
         stale = age_h > art.threshold_hours

@@ -815,7 +815,7 @@ def _learner_path(underlying: str, result: dict, p: dict, reason: str) -> dict:
     entry["learner_only"] = reason
     verdict = {"status": "skipped", "reason": "learner not ready"}
     try:
-        ok, why = shadow_learner.ready(underlying)
+        ok, why = shadow_learner.ready(underlying, strategy=(entry.get("spread") or {}).get("strategy"))
         verdict = shadow_learner.take(entry, reason) if ok else {"status": "skipped", "reason": why}
         entry.setdefault("accounts", {})[shadow_learner.ACCOUNT] = verdict
         journal.log(entry)

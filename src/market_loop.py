@@ -270,7 +270,7 @@ async def run_market_loop(underlyings=UNDERLYINGS,
                       flush=True)
             for underlying in underlyings:
                 if not cooldown.ready(underlying, now):
-                    # the Shadow Learner is exempt from the cooldown: its own cadence applies
+                    # the Shadow Learner is exempt from the cooldown: one entry per (underlying, strategy, session)
                     try:
                         from src import shadow_learner
                         if shadow_learner.enabled() and shadow_learner.ready(underlying)[0]:

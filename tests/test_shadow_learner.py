@@ -22,17 +22,10 @@ def test_switch_and_account_wiring(monkeypatch):
     assert sl.enabled() and sl.ACCOUNT in pm.shadow_account_ids()
 
 
-def test_ready_honours_its_own_cadence_and_cap(monkeypatch):
+def test_ready_honours_the_optional_cap(monkeypatch):
     c = _conn()
-    sl._LAST_TAKE.clear()
-    monkeypatch.setattr("src.config.SHADOW_LEARNER_COOLDOWN_SECONDS", 900)
     monkeypatch.setattr("src.config.SHADOW_LEARNER_MAX_OPEN", 1)
     assert sl.ready("NIFTY 50", now=1000.0, conn=c)[0]
-    sl.arm("NIFTY 50", now=1000.0)
-    ok, why = sl.ready("NIFTY 50", now=1300.0, conn=c)
-    assert not ok and "cadence" in why
-    assert sl.ready("NIFTY BANK", now=1300.0, conn=c)[0]            # per underlying
-    assert sl.ready("NIFTY 50", now=1901.0, conn=c)[0]              # 15 min later
     from src.execution import live_pricer as lp
     lp.ensure_schema(c)
     c.execute("INSERT INTO paper_live_positions (account_id, journal_ref, ticker, strategy, direction, expiry, "

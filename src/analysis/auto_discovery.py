@@ -11,24 +11,22 @@ Build state (corrected 2026-08-01 — the previous header claimed AD-2/3/4
 were "SCAFFOLDED" long after they were built in `d495de3`; it was written
 before that landed and never updated. BUILT-BUT-UNPROVEN is the honest
 state, and the distinction matters: none of this has met real data):
-  * AD-1 — BUILT + real-lake-run 2026-08-01: unsupervised shock scan over
-    CO-STRESS (second-max |z20|, ≥MIN_CHANNELS — see `co_stress` for the
-    full autopsy of the RMS statistic it replaced) + slow-burn motif scan
-    (DTW self-similarity) → a candidate list. Compute-only, writes
+  * AD-1 — BUILT + real-lake-run 2026-08-01 + Phase 2 2026-10-28: unsupervised
+    shock scan over CO-STRESS (`co_stress`), Mahalanobis distributional break
+    (`mahalanobis_stress`), and Frobenius rolling-correlation-matrix shift
+    (`frobenius_corr_break`), plus slow-burn motif scan (`scan_motifs`, DTW
+    self-similarity) → a candidate list. Compute-only, writes
     `data/discovered_candidates.json`, ZERO authority.
-  * AD-2 — BUILT for SHOCK candidates: circular-shift + phase-randomized
-    surrogates (both hole-pattern-preserving; the block bootstrap was
-    retired from the gate — its ~268 splices per surrogate were exactly
-    the discontinuity the statistic detects) + a held-out (OOS)
-    recurrence test; admits only on BOTH nulls AND held-out. Use
-    `gate_many` for scans (ONE shared null — it is candidate-independent).
-    **NOT built: motif significance** — any non-shock candidate returns
-    `status="motif_gate_pending"` and can never be admitted today. The
-    DTW-statistic surrogate test is the missing slice (deliberately
-    deferred 2026-08-01: prove the shock gate on real data first).
-  * AD-3 — PARTIAL: `route_to_court` writes AD-2-admitted candidates to
-    `data/discovered_episodes.json`. Full Dept-5 `validation/registry`
-    enrolment — the lifecycle human episodes face — is NOT built.
+  * AD-2 — BUILT for BOTH SHOCK and MOTIF candidates (Phase 2, 2026-10-28):
+    circular-shift + phase-randomized surrogates (both hole-pattern-preserving)
+    + held-out (OOS) recurrence test; motif candidates additionally require
+    window-perturbation stability (`motif_stability`). An incomplete motif
+    stub without `[start, end]` window bounds returns
+    `status="motif_gate_pending"`.
+  * AD-3 — BUILT (Phase 2, 2026-10-28): `route_to_court` writes AD-2-admitted
+    candidates to `data/discovered_episodes.json` and, when a `conn` is
+    supplied (or via `enrol_in_registry`), enrols admitted discoveries into
+    Department 5's `src/validation/registry.py` (`CANDIDATE` lifecycle).
   * AD-4 — BUILT: `merged_catalog` unions human ∪ auto, tags `source`,
     flags an auto anchor far from every human one as `discovery=True`.
 
@@ -178,16 +176,166 @@ def system_stress(dates, matrix, window=20):
     return out
 
 
+def _invert_matrix(mat: list[list[float]]) -> list[list[float]] | None:
+    """Pure-stdlib Gauss-Jordan matrix inversion with partial pivoting.
+    Returns None if singular."""
+    k = len(mat)
+    if k == 0:
+        return []
+    aug = [
+        [float(mat[r][c]) for c in range(k)]
+        + [1.0 if r == c else 0.0 for c in range(k)]
+        for r in range(k)
+    ]
+    for col in range(k):
+        pivot = max(range(col, k), key=lambda r: abs(aug[r][col]))
+        if abs(aug[pivot][col]) < 1e-12:
+            return None
+        if pivot != col:
+            aug[col], aug[pivot] = aug[pivot], aug[col]
+        div = aug[col][col]
+        for j in range(2 * k):
+            aug[col][j] /= div
+        for r in range(k):
+            if r == col:
+                continue
+            factor = aug[r][col]
+            if factor != 0.0:
+                for j in range(2 * k):
+                    aug[r][j] -= factor * aug[col][j]
+    return [row[k:] for row in aug]
+
+
+def mahalanobis_stress(dates, matrix, window=20, baseline=None,
+                       min_channels=MIN_CHANNELS, ridge=1e-3):
+    """Dimension-normalized Mahalanobis distributional break (`docs/auto_discovery_spec.md` §1.1):
+    `sqrt((z_t^T Sigma_t^-1 z_t) / k)` across the `k >= min_channels` active
+    channels on day `t`, where `Sigma_t` is the trailing empirical covariance
+    over up to `baseline` prior joint observations (with diagonal `ridge`).
+    Pure stdlib (Gauss-Jordan inversion)."""
+    if baseline is None:
+        baseline = MF.Z_BASELINE_SESSIONS
+    zbychan = {c: _z_series(v, window, baseline) for c, v in matrix.items()}
+    chans = sorted(matrix)
+    n = len(dates)
+    out = []
+    for i in range(n):
+        active = [c for c in chans if zbychan[c][i] is not None]
+        k = len(active)
+        if k < min_channels:
+            out.append(None)
+            continue
+        z_now = [float(zbychan[c][i]) for c in active]
+        hist = []
+        lo = max(0, i - baseline)
+        for t in range(lo, i):
+            if all(zbychan[c][t] is not None for c in active):
+                hist.append([float(zbychan[c][t]) for c in active])
+        if len(hist) < max(k + 2, 8):
+            # Fallback to diagonal unit-variance RMS when joint history is thin
+            out.append(math.sqrt(math.fsum(x * x for x in z_now) / k))
+            continue
+        m = len(hist)
+        means = [math.fsum(row[col] for row in hist) / m for col in range(k)]
+        cov = [[0.0] * k for _ in range(k)]
+        for r in range(k):
+            for c in range(r, k):
+                val = math.fsum(
+                    (row[r] - means[r]) * (row[c] - means[c]) for row in hist
+                ) / m
+                if r == c:
+                    val += ridge
+                cov[r][c] = val
+                cov[c][r] = val
+        inv = _invert_matrix(cov)
+        if inv is None:
+            out.append(math.sqrt(math.fsum(x * x for x in z_now) / k))
+            continue
+        quad = 0.0
+        for r in range(k):
+            quad += z_now[r] * math.fsum(inv[r][c] * z_now[c] for c in range(k))
+        out.append(math.sqrt(max(0.0, quad) / k))
+    return out
+
+
+def frobenius_corr_break(dates, matrix, window=5, corr_window=20,
+                         shift_lag=10, min_channels=MIN_CHANNELS):
+    """Dimension-normalized Frobenius norm of the rolling correlation shift
+    (`docs/auto_discovery_spec.md` §1.2):
+    `||R_t - R_{t - shift_lag}||_F / sqrt(k * (k - 1))` over active channels
+    with `k >= min_channels`. Pure stdlib."""
+    zbychan = {c: _z_series(v, window) for c, v in matrix.items()}
+    chans = sorted(matrix)
+    n = len(dates)
+
+    def _corr_pair(ca, cb, end_idx):
+        lo = max(0, end_idx - corr_window + 1)
+        xs, ys = [], []
+        for t in range(lo, end_idx + 1):
+            va, vb = zbychan[ca][t], zbychan[cb][t]
+            if va is not None and vb is not None:
+                xs.append(float(va))
+                ys.append(float(vb))
+        if len(xs) < max(5, corr_window // 2):
+            return None
+        mx, sx = _mean_std(xs)
+        my, sy = _mean_std(ys)
+        if sx < 1e-12 or sy < 1e-12:
+            return None
+        cov = math.fsum((x - mx) * (y - my) for x, y in zip(xs, ys)) / len(xs)
+        return max(-1.0, min(1.0, cov / (sx * sy)))
+
+    out = []
+    for i in range(n):
+        prev_i = i - shift_lag
+        if prev_i < corr_window:
+            out.append(None)
+            continue
+        active = [
+            c for c in chans
+            if zbychan[c][i] is not None and zbychan[c][prev_i] is not None
+        ]
+        if len(active) < min_channels:
+            out.append(None)
+            continue
+        diffs_sq = []
+        valid_channels = set()
+        for idx_a in range(len(active)):
+            for idx_b in range(idx_a + 1, len(active)):
+                ca, cb = active[idx_a], active[idx_b]
+                r_now = _corr_pair(ca, cb, i)
+                r_prev = _corr_pair(ca, cb, prev_i)
+                if r_now is not None and r_prev is not None:
+                    diffs_sq.append((r_now - r_prev) ** 2)
+                    valid_channels.add(ca)
+                    valid_channels.add(cb)
+        if len(valid_channels) < min_channels or not diffs_sq:
+            out.append(None)
+            continue
+        # 2 * sum_{a<b} (r_now - r_prev)^2 divided by k*(k-1) = mean squared off-diag shift
+        out.append(math.sqrt(math.fsum(diffs_sq) / len(diffs_sq)))
+    return out
+
+
 def rank_shock_candidates(lake_dir=None, top_n=SHOCK_TOP_N,
-                          min_gap_days=SHOCK_MIN_GAP_DAYS):
+                          min_gap_days=SHOCK_MIN_GAP_DAYS,
+                          stat="co_stress"):
     """Unsupervised shock anchors: local peaks of CO-STRESS (second-max
-    |z|, ≥MIN_CHANNELS — the 2026-08-01 statistic), kept greedily
-    strongest-first with a min-gap so one crisis = one anchor.
-    Returns [{date, stress}] ranked — UNNAMED, UNPROVEN (AD-2 gates).
-    `stress` carries the co-stress value (key name kept for artifact
-    compatibility; `stat` names the definition)."""
+    |z|, ≥MIN_CHANNELS — the 2026-08-01 statistic), Mahalanobis break
+    (`stat='mahalanobis'`), or Frobenius correlation shift
+    (`stat='frobenius'`), kept greedily strongest-first with a min-gap so
+    one crisis = one anchor.
+    Returns [{date, stress, stat}] ranked — UNNAMED, UNPROVEN (AD-2 gates)."""
     dates, matrix = _aligned_closes(lake_dir)
-    stress = co_stress(dates, matrix)
+    if stat == "mahalanobis":
+        stress = mahalanobis_stress(dates, matrix)
+        stat_label = "mahalanobis_z20"
+    elif stat == "frobenius":
+        stress = frobenius_corr_break(dates, matrix)
+        stat_label = "frobenius_corr_break"
+    else:
+        stress = co_stress(dates, matrix)
+        stat_label = "co_stress_2ndmax_z20"
     scored = sorted(((s, d) for d, s in zip(dates, stress)
                      if s is not None), reverse=True)
     chosen = []
@@ -196,7 +344,7 @@ def rank_shock_candidates(lake_dir=None, top_n=SHOCK_TOP_N,
         if all(abs((dd - date.fromisoformat(c["date"])).days) >= min_gap_days
                for c in chosen):
             chosen.append({"date": d, "stress": round(s, 3),
-                           "stat": "co_stress_2ndmax_z20"})
+                           "stat": stat_label})
         if len(chosen) >= top_n:
             break
     return chosen
@@ -506,6 +654,160 @@ def held_out_confirms(candidate_date, dates, stress, oos_frac=0.6):
     return max(tail) >= 0.7 * obs, f"held-out peak {max(tail):.2f} vs 0.7*{obs:.2f}"
 
 
+def _window_rows_from_z(zbychan: dict, start_idx: int, end_idx: int) -> list[dict]:
+    """Slice `[start_idx, end_idx]` (inclusive) into fingerprint channel rows."""
+    rows = []
+    for i in range(start_idx, end_idx + 1):
+        row = {
+            f"{c}:z60": zbychan[c][i]
+            for c in zbychan
+            if i < len(zbychan[c]) and zbychan[c][i] is not None
+        }
+        rows.append(row)
+    return rows
+
+
+def motif_stability(dates, zbychan, span_a: tuple[int, int],
+                    span_b: tuple[int, int], observed_dtw: float) -> tuple[bool, float]:
+    """Window-perturbation stability (`docs/auto_discovery_spec.md` §3.4):
+    perturb window endpoints by ±1 session and verify DTW distance remains
+    within `max(1.35 * observed_dtw, observed_dtw + 0.35)`."""
+    n = len(dates)
+    a0, a1 = span_a
+    b0, b1 = span_b
+    tol = max(1.35 * observed_dtw, observed_dtw + 0.35)
+    checks = []
+    for da in (-1, 0, 1):
+        for db in (-1, 0, 1):
+            if da == 0 and db == 0:
+                continue
+            na0, na1 = a0 + da, a1 + da
+            nb0, nb1 = b0 + db, b1 + db
+            if na0 < 0 or na1 >= n or nb0 < 0 or nb1 >= n or nb0 <= na1:
+                continue
+            ra = _window_rows_from_z(zbychan, na0, na1)
+            rb = _window_rows_from_z(zbychan, nb0, nb1)
+            d, _ = FP.dtw_distance(ra, rb)
+            if d is not None:
+                checks.append(d <= tol)
+    if not checks:
+        return True, 1.0
+    score = sum(1 for ok in checks if ok) / len(checks)
+    return score >= 0.65, round(score, 4)
+
+
+def held_out_motif_confirms(dates, zbychan, span_a: tuple[int, int],
+                            span_b: tuple[int, int], observed_dtw: float,
+                            oos_frac: float = 0.6) -> tuple[bool, str]:
+    """Out-of-sample recurrence for motifs (`docs/auto_discovery_spec.md` §3.3):
+    confirms if the recurrence window `b` ends in the held-out tail, or if a
+    sliding window in the held-out tail matches window `a` within tolerance."""
+    split = oos_split(dates, oos_frac)
+    if span_b[1] >= split:
+        return True, "motif recurrence window in held-out tail"
+    win_len = span_a[1] - span_a[0] + 1
+    if len(dates) - split < win_len:
+        return False, "held-out tail shorter than motif window"
+    ra = _window_rows_from_z(zbychan, span_a[0], span_a[1])
+    best_tail = None
+    step = max(1, win_len // 4)
+    for s in range(split, len(dates) - win_len + 1, step):
+        rt = _window_rows_from_z(zbychan, s, s + win_len - 1)
+        d, _ = FP.dtw_distance(ra, rt)
+        if d is not None and (best_tail is None or d < best_tail):
+            best_tail = d
+    if best_tail is None:
+        return False, "no comparable window in held-out tail"
+    tol = max(1.35 * observed_dtw, observed_dtw + 0.35)
+    return best_tail <= tol, f"held-out DTW {best_tail:.3f} vs tol {tol:.3f}"
+
+
+def motif_significance(candidate: dict, dates: list, matrix: dict,
+                       z_window: int = 60, n_surrogates: int = 50,
+                       alpha: float = 0.05, oos_frac: float = 0.6,
+                       rng=None) -> dict:
+    """AD-2 DTW surrogate significance gate for a motif candidate
+    `{"a": [start_a, end_a], "b": [start_b, end_b], ...}`.
+    Requires valid 2-endpoint windows `a` and `b`; an incomplete stub returns
+    `status="motif_gate_pending"`."""
+    a = candidate.get("a") or []
+    b = candidate.get("b") or []
+    if len(a) < 2 or len(b) < 2:
+        return {"admitted": False, "status": "motif_gate_pending",
+                "candidate": candidate}
+    if not dates:
+        return {"admitted": False, "status": "no_data", "candidate": candidate}
+    if a[0] not in dates or a[1] not in dates or b[0] not in dates or b[1] not in dates:
+        return {"admitted": False, "status": "date_not_in_lake",
+                "candidate": candidate}
+
+    span_a = (dates.index(a[0]), dates.index(a[1]))
+    span_b = (dates.index(b[0]), dates.index(b[1]))
+    win_len = max(1, span_a[1] - span_a[0] + 1)
+    eff_z = int(candidate.get("z_window") or min(z_window, max(3, win_len // 2)))
+
+    zbychan = {c: _z_series(v, eff_z) for c, v in matrix.items()}
+    rows_a = _window_rows_from_z(zbychan, span_a[0], span_a[1])
+    rows_b = _window_rows_from_z(zbychan, span_b[0], span_b[1])
+    obs_dtw, obs_cov = FP.dtw_distance(rows_a, rows_b)
+    if obs_dtw is None:
+        return {"admitted": False, "status": "unobservable_motif",
+                "candidate": candidate}
+
+    rng = rng or random.Random(0)
+    circ_dtws, phase_dtws = [], []
+    for _ in range(n_surrogates):
+        c_mat = {c: circular_shift(v, rng) for c, v in matrix.items()}
+        c_z = {c: _z_series(v, eff_z) for c, v in c_mat.items()}
+        dc, _ = FP.dtw_distance(
+            _window_rows_from_z(c_z, span_a[0], span_a[1]),
+            _window_rows_from_z(c_z, span_b[0], span_b[1]),
+        )
+        if dc is not None:
+            circ_dtws.append(dc)
+
+        p_mat = {c: phase_randomize(v, rng) for c, v in matrix.items()}
+        p_z = {c: _z_series(v, eff_z) for c, v in p_mat.items()}
+        dp, _ = FP.dtw_distance(
+            _window_rows_from_z(p_z, span_a[0], span_a[1]),
+            _window_rows_from_z(p_z, span_b[0], span_b[1]),
+        )
+        if dp is not None:
+            phase_dtws.append(dp)
+
+    p_circ = surrogate_pvalue(obs_dtw, circ_dtws, "low")
+    p_phase = surrogate_pvalue(obs_dtw, phase_dtws, "low")
+    stab_ok, stab_score = motif_stability(dates, zbychan, span_a, span_b, obs_dtw)
+    oos_ok, oos_detail = held_out_motif_confirms(
+        dates, zbychan, span_a, span_b, obs_dtw, oos_frac=oos_frac
+    )
+    admitted = (p_circ < alpha) and (p_phase < alpha) and stab_ok and oos_ok
+    return {
+        "kind": "motif",
+        "a": list(a[:2]),
+        "b": list(b[:2]),
+        "date": b[0],
+        "observed_dtw": round(obs_dtw, 4),
+        "coverage": obs_cov,
+        "p_circular": round(p_circ, 4),
+        "p_phase": round(p_phase, 4),
+        "stability_ok": stab_ok,
+        "stability_score": stab_score,
+        "held_out_confirmed": oos_ok,
+        "held_out_detail": oos_detail,
+        "admitted": admitted,
+        "n_surrogates": n_surrogates,
+        "alpha": alpha,
+    }
+
+
+def _is_motif_candidate(cand: dict) -> bool:
+    return bool(
+        (cand.get("kind") and cand["kind"] != "shock")
+        or ("a" in cand and "b" in cand and "date" not in cand)
+    )
+
+
 def gate_many(candidates, lake_dir=None, n_surrogates=200, alpha=0.05,
               oos_frac=0.6, rng=None):
     """AD-2 over a whole candidate list against ONE shared null — the way
@@ -513,15 +815,23 @@ def gate_many(candidates, lake_dir=None, n_surrogates=200, alpha=0.05,
     same null every time). Returns [verdict], order preserved."""
     dates, matrix = _aligned_closes(lake_dir)
     if not dates:
-        return [{"admitted": False, "status": "no_data", "candidate": c}
-                for c in candidates]
+        out_empty = []
+        for c in candidates:
+            if _is_motif_candidate(c) and (len(c.get("a") or ()) < 2 or len(c.get("b") or ()) < 2):
+                out_empty.append({"admitted": False, "status": "motif_gate_pending", "candidate": c})
+            else:
+                out_empty.append({"admitted": False, "status": "no_data", "candidate": c})
+        return out_empty
     stress = co_stress(dates, matrix)
-    null = build_null(matrix, 20, n_surrogates, rng or random.Random(0))
+    base_rng = rng or random.Random(0)
+    null = build_null(matrix, 20, n_surrogates, base_rng)
     out = []
     for cand in candidates:
-        if cand.get("kind") and cand["kind"] != "shock":
-            out.append({"admitted": False, "status": "motif_gate_pending",
-                        "candidate": cand})
+        if _is_motif_candidate(cand):
+            out.append(motif_significance(
+                cand, dates, matrix, n_surrogates=min(n_surrogates, 50),
+                alpha=alpha, oos_frac=oos_frac, rng=base_rng
+            ))
             continue
         cdate = cand["date"]
         if cdate not in dates:
@@ -540,14 +850,19 @@ def gate_many(candidates, lake_dir=None, n_surrogates=200, alpha=0.05,
 
 def significance_gate(candidate, lake_dir=None, n_surrogates=200,
                       alpha=0.05, oos_frac=0.6, rng=None, null=None):
-    """AD-2 verdict for ONE shock candidate: beats both null models AND
-    the held-out test → admitted. Reads the core channels once; a motif
-    verdict (same surrogate machinery, DTW statistic) is the next slice.
+    """AD-2 verdict for ONE shock or motif candidate: beats both null models AND
+    the held-out test → admitted. Reads the core channels once.
     Returns the full verdict — nothing is admitted silently.
     For a whole scan use `gate_many` (one shared null)."""
-    if candidate.get("kind") and candidate["kind"] != "shock":
-        return {"admitted": False, "status": "motif_gate_pending",
-                "candidate": candidate}
+    if _is_motif_candidate(candidate):
+        if len(candidate.get("a") or ()) < 2 or len(candidate.get("b") or ()) < 2:
+            return {"admitted": False, "status": "motif_gate_pending",
+                    "candidate": candidate}
+        dates, matrix = _aligned_closes(lake_dir)
+        return motif_significance(
+            candidate, dates, matrix, n_surrogates=n_surrogates,
+            alpha=alpha, oos_frac=oos_frac, rng=rng
+        )
     dates, matrix = _aligned_closes(lake_dir)
     if not dates:
         return {"admitted": False, "status": "no_data", "candidate": candidate}
@@ -573,24 +888,80 @@ def significance_gate(candidate, lake_dir=None, n_surrogates=200,
 DISCOVERED_EPISODES_PATH = ROOT / "data" / "discovered_episodes.json"
 
 
-def route_to_court(admitted_candidates, out_path=None, dry_run=False):
+def enrol_in_registry(admitted_candidates: list, conn,
+                      mining_run: str = "auto_discovery") -> list[dict]:
+    """AD-3 Department-5 `validation/registry` enrolment (`docs/auto_discovery_spec.md` §4):
+    mint a frozen `CANDIDATE` hypothesis in `candidate_patterns` for each
+    AD-2-admitted shock or motif candidate. Idempotent on canonical definition."""
+    from src.validation import registry
+
+    enrolments = []
+    for c in admitted_candidates or []:
+        if not c.get("admitted"):
+            continue
+        kind = c.get("kind", "shock")
+        anchor = c.get("date") or (c.get("b") or [None])[0] or "?"
+        if kind == "motif":
+            definition = {
+                "source": "auto_discovery",
+                "kind": "auto_motif",
+                "window_a": list((c.get("a") or [])[:2]),
+                "window_b": list((c.get("b") or [])[:2]),
+            }
+            desc = f"Auto-discovered slow-burn motif {definition['window_a']} ~ {definition['window_b']}"
+            disc_win = f"{(c.get('a') or ['?'])[0]}..{(c.get('b') or ['?','?'])[-1]}"
+        else:
+            definition = {
+                "source": "auto_discovery",
+                "kind": "auto_shock",
+                "anchor": anchor,
+                "stat": c.get("stat", "co_stress_2ndmax_z20"),
+            }
+            desc = f"Auto-discovered cross-asset shock at {anchor}"
+            disc_win = str(anchor)
+
+        fdr_q = max(
+            float(c.get("p_circular") or 0.05),
+            float(c.get("p_phase") or 0.05),
+        )
+        reg = registry.register(
+            conn,
+            kind=f"auto_{kind}",
+            definition=definition,
+            description=desc,
+            mining_run=mining_run,
+            discovery_window=disc_win,
+            support_n=1,
+            fdr_q=round(fdr_q, 4),
+            insample_stats={k: v for k, v in c.items() if k != "candidate"},
+        )
+        enrolments.append({"anchor": anchor, "kind": kind, **reg})
+    return enrolments
+
+
+def route_to_court(admitted_candidates, out_path=None, dry_run=False,
+                   conn=None, mining_run="auto_discovery"):
     """AD-3: record AD-2-ADMITTED candidates as provisional discovered
     episodes (`source='auto'`) in `data/discovered_episodes.json` — the
-    input the dual-catalog tracker (AD-4) reads. Only candidates whose
-    verdict says `admitted` are written; the rest are dropped with a
-    count. (Full Dept-5 `validation/registry` enrolment — the same
-    lifecycle human episodes face — is the remaining slice; this writes
-    the provisional artifact it will consume.) Idempotent atomic write."""
+    input the dual-catalog tracker (AD-4) reads — AND, when `conn` is
+    supplied, enrol every admitted candidate into Department 5's
+    `src/validation/registry.py` (`CANDIDATE` lifecycle). Only candidates
+    whose verdict says `admitted` are written; the rest are dropped with a
+    count. Idempotent atomic write."""
     admitted = [c for c in admitted_candidates if c.get("admitted")]
     doc = {"built_at": datetime.now().isoformat(timespec="seconds"),
            "source": "auto", "n_admitted": len(admitted),
            "n_rejected": len(admitted_candidates) - len(admitted),
            "episodes": [{"name": f"auto_{c.get('kind', 'shock')}_"
-                                 f"{c.get('date', '?')}",
-                         "anchor": c.get("date"), "kind": c.get("kind",
-                                                                 "shock"),
+                                 f"{c.get('date') or (c.get('b') or ['?'])[0]}",
+                         "anchor": c.get("date") or (c.get("b") or [None])[0],
+                         "kind": c.get("kind", "shock"),
                          "source": "auto", "significance": c}
                         for c in admitted]}
+    if conn is not None:
+        doc["registry_enrolments"] = enrol_in_registry(
+            admitted, conn, mining_run=mining_run
+        )
     if not dry_run:
         p = Path(out_path or DISCOVERED_EPISODES_PATH)
         p.parent.mkdir(parents=True, exist_ok=True)

@@ -270,6 +270,119 @@ def _group_stats(records: list) -> dict:
     }
 
 
+def optimize_expectancy_target(
+    records: list,
+    min_samples: int = MIN_SAMPLES_DEFAULT,
+    friction_pct: float = 0.15,
+) -> dict:
+    """Net-expectancy Apex Target surface optimizer (`docs/self_evolving_brain_map.md` §3.1–3.2):
+    searches candidate `(take_profit_pct, stop_loss_pct)` thresholds across the
+    empirical MFE/MAE surface to maximize net expectancy per trade after
+    `friction_pct` round-trip friction:
+      - If `mae_pct >= S` and `mfe_pct < T` -> stopped out at `-S - friction_pct`.
+      - If `mfe_pct >= T` and `mae_pct < S` -> target filled at `+T - friction_pct`.
+      - If both `mfe_pct >= T` and `mae_pct >= S` -> resolved by realized `pnl` sign
+        (`+T - friction_pct` if winner else `-S - friction_pct`).
+      - If neither reached -> realized excursion proxy (`mfe_pct * 0.5` if winner
+        else `-mae_pct * 0.5`) minus `friction_pct`.
+
+    Abstains below `min_samples` (`20`) or when zero winners exist (§4.2).
+    Advisory only — never overrides live exit rules."""
+    winners = [r for r in records if (r.get("pnl") or 0) > 0]
+    if len(records) < min_samples or not winners:
+        return {
+            "status": "insufficient_data",
+            "reason": (
+                f"{len(records)} usable trades ({len(winners)} winners) < the "
+                f"{min_samples}-trade floor — refusing to optimize expectancy "
+                "surface on noise (spec §4.2)"
+            ),
+        }
+
+    all_mfe = [float(r["mfe_pct"]) for r in records]
+    win_mfe = [float(r["mfe_pct"]) for r in winners]
+    win_mae = [float(r["mae_pct"]) for r in winners]
+
+    tp_grid = sorted({
+        round(percentile(win_mfe, q) or 0.0, 4)
+        for q in (25, 35, 50, 60, 70, 75, 85)
+    } | {
+        round(percentile(all_mfe, q) or 0.0, 4)
+        for q in (40, 50, 65, 75, 85)
+    })
+    tp_grid = [t for t in tp_grid if t > 0.0]
+
+    sl_grid = sorted({
+        round(percentile(win_mae, q) or 0.0, 4)
+        for q in (60, 75, 85, 90)
+    })
+    sl_grid = [s for s in sl_grid if s > 0.0] or [round(max(win_mae) or 1.0, 4)]
+
+    best = None
+    n = len(records)
+    for tp in tp_grid:
+        for sl in sl_grid:
+            payoffs = []
+            hits = 0
+            for r in records:
+                mfe_i = float(r["mfe_pct"])
+                mae_i = float(r["mae_pct"])
+                is_win = (r.get("pnl") or 0) > 0
+                if mfe_i >= tp and mae_i < sl:
+                    payoffs.append(tp - friction_pct)
+                    hits += 1
+                elif mae_i >= sl and mfe_i < tp:
+                    payoffs.append(-sl - friction_pct)
+                elif mfe_i >= tp and mae_i >= sl:
+                    if is_win:
+                        payoffs.append(tp - friction_pct)
+                        hits += 1
+                    else:
+                        payoffs.append(-sl - friction_pct)
+                else:
+                    drift = (0.5 * mfe_i) if is_win else (-0.5 * mae_i)
+                    payoffs.append(drift - friction_pct)
+            net_exp = sum(payoffs) / n
+            cand = (net_exp, tp, sl, hits / n)
+            if best is None or cand[0] > best[0]:
+                best = cand
+
+    net_exp, best_tp, best_sl, hit_rate = best
+    return {
+        "status": "ok",
+        "optimal_take_profit_pct": round(best_tp, 2),
+        "optimal_stop_loss_pct": round(best_sl, 2),
+        "net_expectancy_pct": round(net_exp, 4),
+        "hit_rate_at_target": round(hit_rate, 4),
+        "reward_risk_ratio": round(best_tp / best_sl, 2) if best_sl > 0 else None,
+        "friction_pct": friction_pct,
+        "basis": f"{len(winners)} winners / {n} trades",
+        "note": "ADVISORY ONLY (spec §3.2/§4.4): net-expectancy surface optimum.",
+    }
+
+
+def summarize_by_cluster(
+    records: list,
+    min_samples: int = MIN_SAMPLES_DEFAULT,
+    friction_pct: float = 0.15,
+) -> dict:
+    """Cluster-conditioned MFE/MAE and Apex summary per strategy
+    (`docs/self_evolving_brain_map.md` §3.1). Abstains per cluster whenever
+    that cluster has fewer than `min_samples` trades."""
+    by_strat: dict[str, list] = {}
+    for r in records:
+        by_strat.setdefault(r.get("strategy") or "unknown", []).append(r)
+    out = {}
+    for name, rs in sorted(by_strat.items()):
+        out[name] = {
+            "stats": _group_stats(rs),
+            "expectancy_apex": optimize_expectancy_target(
+                rs, min_samples=min_samples, friction_pct=friction_pct
+            ),
+        }
+    return out
+
+
 def summarize(records: list, min_samples: int = MIN_SAMPLES_DEFAULT) -> dict:
     """The statistical summary + the Apex suggestion (advisory only).
 
@@ -294,6 +407,12 @@ def summarize(records: list, min_samples: int = MIN_SAMPLES_DEFAULT) -> dict:
         "losers": _group_stats(losers),
         "by_strategy": {name: _group_stats(rs)
                         for name, rs in sorted(by_strategy.items())},
+        "expectancy_apex": optimize_expectancy_target(
+            records, min_samples=min_samples
+        ),
+        "by_strategy_apex": summarize_by_cluster(
+            records, min_samples=min_samples
+        ),
     }
 
     if len(records) < min_samples or not winners:

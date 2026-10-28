@@ -147,6 +147,126 @@ def _graph_context(tags, db_path=None, conn=None) -> dict | None:
             "win_rate": round(wins / len(rows), 3)}
 
 
+def _load_readonly_digraph(conn):
+    """Build an in-memory networkx.DiGraph from active `graph_edges` rows using
+    SELECT-only queries so `mode=ro` connections are never asked to run DDL."""
+    if conn is None:
+        return None
+    try:
+        import networkx as nx
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(graph_edges)").fetchall()}
+        if not {"source_node", "target_node", "relation"}.issubset(cols):
+            return None
+        select_cols = ["source_node", "target_node", "relation", "confidence_score"]
+        for opt in ("edge_class", "polarity", "weight", "evidence_count", "extractor", "source"):
+            if opt in cols:
+                select_cols.append(opt)
+        where = " WHERE invalid_at IS NULL" if "invalid_at" in cols else ""
+        rows = conn.execute(
+            f"SELECT {', '.join(select_cols)} FROM graph_edges{where}"
+        ).fetchall()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    g = nx.DiGraph()
+    for r in rows:
+        rdict = dict(r)
+        conf = float(rdict.get("confidence_score") or 1.0)
+        ew = rdict.get("weight")
+        attrs = {
+            "relation": rdict["relation"],
+            "weight": conf,
+            "confidence_score": conf,
+            "edge_weight": float(ew) if ew is not None else None,
+            "edge_class": rdict.get("edge_class"),
+            "polarity": int(rdict["polarity"]) if rdict.get("polarity") is not None else 1,
+            "source": rdict.get("source"),
+        }
+        g.add_edge(rdict["source_node"], rdict["target_node"], **attrs)
+    return g
+
+
+def _graphrag_sweep(parsed_event, conn=None, today: date | None = None) -> dict | None:
+    """Run read-only 3D spreading activation (`log_activation=False`) from
+    `parsed_event` over `conn` (`mode=ro`). Returns the propagation result dict
+    or None when no event, no active edges, or no seed resolves in the graph."""
+    if not isinstance(parsed_event, dict) or conn is None:
+        return None
+    raw_target = parsed_event.get("target_entity")
+    if not raw_target:
+        return None
+    try:
+        from src.knowledge_graph import spreading_activation
+        g = _load_readonly_digraph(conn)
+        if g is None or g.number_of_edges() == 0:
+            return None
+        bias = float(parsed_event.get("directional_bias", 0.0) or 0.0)
+        conf = float(parsed_event.get("confidence_score", 0.0) or 0.0)
+        seed_val = max(-1.0, min(1.0, bias * conf))
+        if seed_val == 0.0:
+            return None
+        canon = canonicalize_entity(raw_target) or str(raw_target).strip().upper()
+        candidates = [
+            str(raw_target).strip(),
+            canon,
+            f"commodity:{canon}",
+            f"macro:{canon}",
+            f"policy:{canon}",
+            f"sector:{canon}",
+        ]
+        try:
+            for r in conn.execute(
+                "SELECT node_id, display_name, aliases_json FROM graph_nodes"
+            ).fetchall():
+                nid = r["node_id"]
+                disp = (r["display_name"] or "").upper()
+                aliases = json.loads(r["aliases_json"] or "[]")
+                if canon.upper() in {nid.upper(), disp} | {str(a).upper() for a in aliases}:
+                    candidates.append(nid)
+        except Exception:
+            pass
+        seeds = {c: seed_val for c in candidates if c in g}
+        if not seeds:
+            return None
+        run_at = (today or datetime.now(IST).date()).isoformat()
+        res = spreading_activation.propagate(
+            g,
+            seeds,
+            conn=conn,
+            run_at=run_at,
+            log_activation=False,
+        )
+        return res if res.get("activated") else None
+    except Exception:
+        return None
+
+
+def _graphrag_for_position(pos: dict, gr_sweep: dict | None) -> dict | None:
+    """Extract read-only 2nd/3rd-order `E(v)` / `M(v,t)` context for `pos` from
+    a precomputed `_graphrag_sweep` result. Zero verdict/alignment authority."""
+    if not gr_sweep or not isinstance(gr_sweep, dict):
+        return None
+    by_node = gr_sweep.get("by_node") or {}
+    if not by_node:
+        return None
+    raw_ticker = str(pos.get("ticker") or "").strip()
+    bucket = _underlying_bucket(raw_ticker) or raw_ticker.upper()
+    stripped = raw_ticker.upper().removesuffix(".NS").removesuffix(".BO")
+    for key in (raw_ticker, stripped, bucket):
+        if key and key in by_node:
+            hit = by_node[key]
+            return {
+                "node_id": hit["node_id"],
+                "energy": hit["energy"],
+                "momentum": hit["momentum"],
+                "dominant_hop": hit["dominant_hop"],
+                "via": hit["via"],
+                "in_universe": hit.get("in_universe", False),
+            }
+    return None
+
+
 # ------------------------------------------------------------- position math
 
 def _position_direction(pos: dict) -> int:
@@ -355,6 +475,7 @@ def evaluate_portfolio_resonance(parsed_event, macro_matrix,
     except sqlite3.Error:
         graph_conn = None
     context_by_strategy: dict = {}
+    gr_sweep = _graphrag_sweep(parsed_event, conn=graph_conn, today=today)
     payloads = []
     for pos in open_positions:
         bucket = _underlying_bucket(pos.get("ticker"))
@@ -391,6 +512,15 @@ def evaluate_portfolio_resonance(parsed_event, macro_matrix,
                          f"for {'/'.join(context['tags'])}, win rate "
                          f"{context['win_rate']:.0%}.)")
 
+        gr_context = _graphrag_for_position(pos, gr_sweep)
+        if gr_context is not None:
+            via_str = " -> ".join(gr_context.get("via") or [])
+            advisory += (
+                f" (GraphRAG hop-{gr_context['dominant_hop']}: "
+                f"E={gr_context['energy']:+.3f}, M={gr_context['momentum']:+.3f}"
+                f"{f' via {via_str}' if via_str else ''}.)"
+            )
+
         payloads.append({
             "trade_id": pos.get("trade_id"),
             "ticker": pos.get("ticker"),
@@ -406,6 +536,7 @@ def evaluate_portfolio_resonance(parsed_event, macro_matrix,
             "actions": actions,
             "suggested_adjustment": adjustment,
             "graph_context": context,
+            "graphrag_context": gr_context,
             "generated_at": datetime.now(IST).isoformat(timespec="seconds"),
         })
     if graph_conn is not None:

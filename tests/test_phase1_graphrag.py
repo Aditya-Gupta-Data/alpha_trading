@@ -809,3 +809,21 @@ def test_phrase_variants_and_generic_names():
         conn, _edge("IRDAI", "feedback", "IRDAI extends time for feedback", pred="regulates"),
         "IRDAI extends time for feedback to October 31")
     assert (ok, why) == (False, "generic_endpoint")
+
+
+def test_membership_links_are_not_diluted_but_causal_hubs_still_are():
+    g = nx.DiGraph()
+    g.add_edge("policy:NORMS", "sector:FINANCIALS", weight=0.5, confidence_score=0.25, polarity=-1)
+    for t in ("HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "NIFTY BANK"):
+        g.add_edge("sector:FINANCIALS", t, weight=0.8, confidence_score=1.0, polarity=1, edge_class="membership")
+    g.add_edge("sector:FINANCIALS", "policy:X", weight=1.0, confidence_score=1.0, polarity=1)
+    assert spreading_activation.transmission_coeff(g, "sector:FINANCIALS", "HDFCBANK") == pytest.approx(0.8)
+    # the lone causal edge out of FINANCIALS is not penalised by the six membership edges
+    assert spreading_activation.transmission_coeff(g, "sector:FINANCIALS", "policy:X") == pytest.approx(1.0)
+    res = spreading_activation.propagate(g, {"policy:NORMS": 1.0}, log_activation=False)
+    hdfc = res["by_node"]["HDFCBANK"]
+    assert hdfc["energy"] < 0 and hdfc["dominant_hop"] == 2
+    hub = nx.DiGraph()
+    for i in range(6):
+        hub.add_edge("commodity:CRUDE_OIL", f"x{i}", weight=1.0, confidence_score=1.0, polarity=1)
+    assert spreading_activation.transmission_coeff(hub, "commodity:CRUDE_OIL", "x0") < 0.4

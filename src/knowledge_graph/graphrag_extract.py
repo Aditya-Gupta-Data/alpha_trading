@@ -535,7 +535,8 @@ def _measure_universe_reach(conn, agg: dict) -> None:
             "WHERE source = ? AND invalid_at IS NULL", (graphrag.STRUCTURAL_SOURCE,)
         ):
             g.add_edge(r["source_node"], r["target_node"], weight=r["weight"],
-                       confidence_score=r["confidence_score"], polarity=r["polarity"])
+                       confidence_score=r["confidence_score"], polarity=r["polarity"],
+                       edge_class="membership")
         for e in agg["edges"]:
             g.add_edge(e["source_node"], e["target_node"], weight=e["weight"],
                        confidence_score=0.5 * float(e["weight"]), polarity=e["polarity"])

@@ -42,7 +42,7 @@ CALL_LEDGER_PATH = ROOT / "logs" / "graphrag_extract_calls.jsonl"
 
 MAX_INPUT_CHARS = 3000
 REVIEW_WEIGHT_THRESHOLD = 0.7
-DEFAULT_DAILY_EXTRACT_CAP = 150
+DEFAULT_DAILY_EXTRACT_CAP = 100
 
 EXTRACT_SYSTEM_PROMPT = (
     "Extract directed supply-chain / demand / regulatory relationships stated "
@@ -264,15 +264,20 @@ def extract_from_item(
     review_ledger_path: Path | str | None = None,
     call_ledger_path: Path | str | None = None,
     daily_cap: int = DEFAULT_DAILY_EXTRACT_CAP,
+    dry_run: bool = False,
     env: dict | None = None,
     hostname: str | None = None,
 ) -> dict:
     """Extract and persist GraphRAG edges from one event/news item.
 
-    Fail-open: never raises. Returns a summary dict with `status`, `written`,
-    `rejected`, `rejected_reasons`, `review_alerts`, and `edges`."""
+    When `dry_run=True`, runs LLM extraction + strict validation against a seeded
+    in-memory copy (or without committing edge writes / Discord alerts) so the
+    1-week Mini PC dry-run (ARCHITECTURE_ROADMAP.md §2.6 step 6) can audit
+    accepted vs rejected edges safely.
+    Fail-open: never raises."""
     summary = {
         "status": "ok",
+        "dry_run": bool(dry_run),
         "written": 0,
         "duplicates": 0,
         "rejected": 0,
@@ -297,15 +302,14 @@ def extract_from_item(
 
         owns_conn = conn is None
         if owns_conn:
-            conn = brain_map.connect(db_path)
+            conn = brain_map.connect(":memory:" if dry_run else db_path)
         try:
             graphrag.ensure_schema(conn)
-            # Ensure nodes are seeded if the catalog is empty
             node_count = conn.execute("SELECT COUNT(*) AS n FROM graph_nodes").fetchone()["n"]
             if node_count == 0:
                 graphrag.seed_nodes(conn, now=extracted_at)
 
-            if already_extracted(conn, chash):
+            if not dry_run and already_extracted(conn, chash):
                 summary["status"] = "skipped (duplicate content_hash)"
                 return summary
 
@@ -316,7 +320,8 @@ def extract_from_item(
                 return summary
 
             raw_resp, model_tag = _ask_llm(extractor, text)
-            _record_call(c_ledger, today_str, chash)
+            if not dry_run:
+                _record_call(c_ledger, today_str, chash)
             if not isinstance(raw_resp, dict) or not isinstance(raw_resp.get("edges"), list):
                 summary["status"] = "skipped (llm unavailable or invalid json)"
                 return summary
@@ -327,6 +332,21 @@ def extract_from_item(
                 if not ok:
                     summary["rejected"] += 1
                     summary["rejected_reasons"][reason] = summary["rejected_reasons"].get(reason, 0) + 1
+                    continue
+                if dry_run:
+                    summary["written"] += 1
+                    summary["edges"].append({
+                        "source_node": norm["source_node"]["node_id"],
+                        "relation": norm["relation"],
+                        "target_node": norm["target_node"]["node_id"],
+                        "edge_class": norm["edge_class"],
+                        "polarity": norm["polarity"],
+                        "weight": norm["strength"],
+                        "quote": norm["quote"],
+                        "touches_universe": bool(
+                            norm["source_node"].get("in_universe") or norm["target_node"].get("in_universe")
+                        ),
+                    })
                     continue
                 res = graphrag.upsert_graphrag_edge(
                     conn,
@@ -355,7 +375,7 @@ def extract_from_item(
                 ):
                     review_candidates.append(edge_record)
 
-            if review_candidates:
+            if review_candidates and not dry_run:
                 summary["review_alerts"] = _notify_review_edges(
                     review_candidates,
                     ledger_path=review_ledger_path,
@@ -369,3 +389,93 @@ def extract_from_item(
         print(f"  (graphrag_extract: fail-open skip [{type(exc).__name__}: {exc}])")
         summary["status"] = f"error ({type(exc).__name__}: {exc})"
         return summary
+
+
+def run_stored_items(
+    days: int = 7,
+    dry_run: bool = True,
+    card_dir: Path | str | None = None,
+    inbox_dir: Path | str | None = None,
+    conn=None,
+    extractor=None,
+    daily_cap: int = DEFAULT_DAILY_EXTRACT_CAP,
+    env: dict | None = None,
+    hostname: str | None = None,
+) -> dict:
+    """Replay the last `days` days of stored event cards + inbox texts through
+    `extract_from_item` (default `dry_run=True` for Step 6 verification on the
+    Mini PC)."""
+    from datetime import timedelta
+    from src.event_engine import CARD_DIR, INBOX_DIR, detect
+
+    cutoff = date.today() - timedelta(days=max(1, int(days)))
+    items: list[dict] = []
+
+    cdir = Path(card_dir) if card_dir is not None else CARD_DIR
+    if cdir.is_dir():
+        for p in sorted(cdir.glob("*.json")):
+            try:
+                card = json.loads(p.read_text())
+                gen = str(card.get("generated_at") or "")[:10]
+                if gen and date.fromisoformat(gen) < cutoff:
+                    continue
+                src = card.get("source") or {}
+                mech_quotes = " ".join(
+                    str(m.get("quote") or "") for m in (card.get("mechanics") or []) if isinstance(m, dict)
+                )
+                text = f"{src.get('title') or ''}\n{mech_quotes}".strip()
+                if text:
+                    items.append({
+                        "event_id": card.get("event_id") or p.stem,
+                        "title": src.get("title") or p.stem,
+                        "text": text,
+                        "url": src.get("url") or "",
+                        "source": src.get("from") or f"card:{p.name}",
+                    })
+            except Exception:
+                continue
+
+    for it in detect.inbox_items(inbox_dir or INBOX_DIR):
+        items.append(it)
+
+    agg = {
+        "days": days,
+        "dry_run": bool(dry_run),
+        "items_checked": 0,
+        "written": 0,
+        "rejected": 0,
+        "rejected_reasons": {},
+        "edges": [],
+    }
+    for it in items:
+        agg["items_checked"] += 1
+        r = extract_from_item(
+            it,
+            conn=conn,
+            extractor=extractor,
+            daily_cap=daily_cap,
+            dry_run=dry_run,
+            env=env,
+            hostname=hostname,
+        )
+        agg["written"] += int(r.get("written") or 0)
+        agg["rejected"] += int(r.get("rejected") or 0)
+        for k, v in (r.get("rejected_reasons") or {}).items():
+            agg["rejected_reasons"][k] = agg["rejected_reasons"].get(k, 0) + v
+        agg["edges"].extend(r.get("edges") or [])
+    return agg
+
+
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="Phase 1 GraphRAG relationship extractor (analytics node only)")
+    ap.add_argument("--days", type=int, default=7, help="Lookback days for stored event cards/inbox items")
+    ap.add_argument("--apply", action="store_true", help="Persist extracted edges to data/brain_map.db (default is dry-run)")
+    a = ap.parse_args(argv)
+    res = run_stored_items(days=a.days, dry_run=not a.apply)
+    print(json.dumps(res, indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

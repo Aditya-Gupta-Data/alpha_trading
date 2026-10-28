@@ -448,3 +448,215 @@ def test_extractor_fail_open_and_node_role_refusal(tmp_path):
     later_stage_ran = True
     assert res["status"].startswith("error (RuntimeError")
     assert later_stage_ran is True
+
+
+def test_expanded_predicates_and_100_daily_cap(tmp_path):
+    """Verify §2.7 owner rulings: expanded predicates (partner_with, exports_to, imports_from)
+    and 100 items/day default cap."""
+    assert graphrag_extract.DEFAULT_DAILY_EXTRACT_CAP == 100
+    for pred, expected_cls in (
+        ("partner_with", "partnership"),
+        ("partners_with", "partnership"),
+        ("exports_to", "supply"),
+        ("imports_from", "demand"),
+        ("supplies_to", "supply"),
+        ("sources_from", "demand"),
+        ("invests_in", "owns"),
+        ("tariffs", "regulates"),
+        ("bans", "regulates"),
+        ("benefits_from", "causal"),
+    ):
+        assert graphrag.PREDICATE_TO_CLASS[pred] == expected_cls
+
+    conn = brain_map.connect(":memory:")
+    graphrag.seed_nodes(conn)
+    text = "Infosys partners with Microsoft on cloud AI and exports software to Europe."
+
+    def fake_llm(sys_prompt, user_text):
+        return {
+            "edges": [
+                {
+                    "subject": "Infosys",
+                    "subject_type": "company",
+                    "predicate": "partner_with",
+                    "object": "Cloud AI",
+                    "object_type": "technology",
+                    "polarity": 1,
+                    "strength": 0.75,
+                    "quote": "Infosys partners with Microsoft on cloud AI",
+                },
+                {
+                    "subject": "Infosys",
+                    "subject_type": "company",
+                    "predicate": "exports_to",
+                    "object": "Europe",
+                    "object_type": "macro",
+                    "polarity": 1,
+                    "strength": 0.65,
+                    "quote": "exports software to Europe",
+                },
+            ]
+        }
+
+    res = graphrag_extract.extract_from_item(
+        text,
+        conn=conn,
+        extractor=fake_llm,
+        call_ledger_path=tmp_path / "calls.jsonl",
+        review_ledger_path=tmp_path / "reviews.jsonl",
+        notify_fn=lambda _: None,
+        env={"ALPHA_NODE_ROLE": "analytics"},
+    )
+    assert res["written"] == 2
+    assert {e["edge_class"] for e in res["edges"]} == {"partnership", "supply"}
+
+
+def test_event_engine_emit_wires_second_order_read_onto_card_and_fails_open(tmp_path, monkeypatch):
+    """Step 5: `event_engine.emit.run` extracts GraphRAG edges and stamps
+    `second_order_read` + `second_order_nodes` onto the emitted event card."""
+    from src.event_engine import detect, emit
+    from src.event_engine.llm import EventLLM
+
+    monkeypatch.setattr(emit, "STATE_DIR", tmp_path / "state")
+    conn = brain_map.connect(":memory:")
+    graphrag.seed_nodes(conn)
+
+    policy_text = (
+        "India cuts import duty on crude oil feedstocks. "
+        "Reliance Industries imports crude oil and supplies petrochemicals to Asian Paints. "
+    ) * 2
+
+    class PolicyFakeExtractor:
+        def chat_json(self, system, user):
+            if system == detect.CLASSIFY_PROMPT:
+                return {
+                    "is_policy_event": True,
+                    "type": "import_duty",
+                    "issuer": "GoI",
+                    "stage": "in_force",
+                    "title": "Crude duty cut",
+                    "announced_on": "2026-10-27",
+                    "key_dates": {},
+                }
+            return {
+                "mechanics": [
+                    {
+                        "rule": "import duty cut",
+                        "before": 10,
+                        "after": 2,
+                        "unit": "%",
+                        "quote": "India cuts import duty on crude oil feedstocks.",
+                    }
+                ],
+                "exposures": [
+                    {
+                        "ticker": "RELIANCE",
+                        "segment": "O2C",
+                        "direction": "positive",
+                        "route": "import",
+                        "revenue_effect_cr": [20000, 30000, 40000],
+                        "annual_revenue_cr": 900000,
+                        "price_response_pct": [2, 4, 6],
+                        "horizon_days": 30,
+                        "reasoning": "cheaper feedstock",
+                    }
+                ],
+            }
+
+    def fake_graph_llm(sys_prompt, user_text):
+        return {
+            "edges": [
+                {
+                    "subject": "Reliance Industries",
+                    "subject_type": "company",
+                    "predicate": "imports_from",
+                    "object": "Crude Oil",
+                    "object_type": "commodity",
+                    "polarity": 1,
+                    "strength": 0.9,
+                    "quote": "Reliance Industries imports crude oil",
+                },
+                {
+                    "subject": "Crude Oil",
+                    "subject_type": "commodity",
+                    "predicate": "drives",
+                    "object": "Petrochemicals",
+                    "object_type": "commodity",
+                    "polarity": 1,
+                    "strength": 0.85,
+                    "quote": "supplies petrochemicals",
+                },
+            ]
+        }
+
+    bars = [
+        {"session": d, "close": 100.0}
+        for d in ("2026-10-23", "2026-10-26", "2026-10-27", "2026-10-28")
+    ]
+    llm = EventLLM(extractor=PolicyFakeExtractor(), cache_dir=tmp_path / "c", ledger=tmp_path / "l.jsonl")
+    summary = emit.run(
+        items=[{"title": "Crude duty cut", "text": policy_text, "source": "inbox:crude.txt"}],
+        llm=llm,
+        bars_fn=lambda sym: bars,
+        card_dir=tmp_path / "cards",
+        do_ship=False,
+        seen=detect.SeenLedger(tmp_path / "seen.txt"),
+        graph_conn=conn,
+        graph_extractor=fake_graph_llm,
+    )
+    assert summary["classified"] == 1
+    assert summary["graphrag_edges_written"] == 2
+    card_data = json.loads(next((tmp_path / "cards").glob("*.json")).read_text())
+    assert "second_order_read" in card_data
+    assert "commodity:CRUDE_OIL" in card_data["second_order_read"]
+    assert len(card_data["second_order_nodes"]) >= 1
+
+
+def test_dry_run_stored_items_writes_nothing_to_db(tmp_path):
+    """Step 6 dry-run helper: `run_stored_items(dry_run=True)` audits stored cards
+    without persisting edges into the caller's database."""
+    conn = brain_map.connect(":memory:")
+    graphrag.seed_nodes(conn)
+    cdir = tmp_path / "cards"
+    cdir.mkdir()
+    (cdir / "ev1.json").write_text(
+        json.dumps({
+            "event_id": "ev-1",
+            "generated_at": "2026-10-28T10:00:00+05:30",
+            "source": {"title": "TCS expands cloud partnership"},
+            "mechanics": [{"quote": "TCS expands cloud partnership with hyperscalers."}],
+        })
+    )
+
+    def fake_llm(sys_prompt, user_text):
+        return {
+            "edges": [
+                {
+                    "subject": "TCS",
+                    "subject_type": "company",
+                    "predicate": "partners_with",
+                    "object": "Hyperscalers",
+                    "object_type": "technology",
+                    "polarity": 1,
+                    "strength": 0.8,
+                    "quote": "TCS expands cloud partnership with hyperscalers",
+                }
+            ]
+        }
+
+    res = graphrag_extract.run_stored_items(
+        days=7,
+        dry_run=True,
+        card_dir=cdir,
+        inbox_dir=tmp_path / "empty_inbox",
+        conn=conn,
+        extractor=fake_llm,
+        env={"ALPHA_NODE_ROLE": "analytics"},
+    )
+    assert res["dry_run"] is True
+    assert res["items_checked"] == 1
+    assert res["written"] == 1
+    # Dry-run writes 0 rows into graph_edges
+    edge_count = conn.execute("SELECT COUNT(*) AS n FROM graph_edges").fetchone()["n"]
+    assert edge_count == 0
+

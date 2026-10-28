@@ -52,28 +52,40 @@ EDGE_CLASSES: tuple[str, ...] = (
     "demand",
     "substitute",
     "competes",
+    "partnership",
     "regulates",
     "owns",
     "macro_sensitivity",
     "causal",
 )
 
-# Closed predicate vocabulary -> edge_class (ARCHITECTURE_ROADMAP.md §2.3)
+# Closed predicate vocabulary -> edge_class (ARCHITECTURE_ROADMAP.md §2.3 + §2.7 owner ruling)
 PREDICATE_TO_CLASS: dict[str, str] = {
     "makes": "supply",
     "sells": "supply",
+    "supplies_to": "supply",
+    "exports_to": "supply",
     "needs": "demand",
     "consumes": "demand",
+    "sources_from": "demand",
+    "imports_from": "demand",
     "substitutes": "substitute",
     "competes_with": "competes",
+    "partner_with": "partnership",
+    "partners_with": "partnership",
+    "joint_venture_with": "partnership",
     "regulates": "regulates",
     "subsidises": "regulates",
     "taxes": "regulates",
+    "tariffs": "regulates",
+    "bans": "regulates",
     "owns": "owns",
     "subsidiary_of": "owns",
+    "invests_in": "owns",
     "sensitive_to": "macro_sensitivity",
     "drives": "causal",
     "hurts": "causal",
+    "benefits_from": "causal",
 }
 
 LLM_EXTRACTED_SOURCE = "llm_extracted"

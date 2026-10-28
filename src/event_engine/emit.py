@@ -87,11 +87,63 @@ def ship(path, ship_fn=None) -> bool:
         return False
 
 
+def _graphrag_second_order(item: dict, ex: dict, mats: list, cfg: dict,
+                           graph_conn=None, graph_extractor=None) -> tuple[dict | None, dict]:
+    """Fail-open Phase 1 GraphRAG hook (analytics node only, context-only):
+      1. Extracts supply-chain/demand/regulatory edges into `brain_map.db` via
+         `graphrag_extract.extract_from_item` (capped at `graphrag_daily_cap`, 100/day).
+      2. Runs 3-hop spreading activation from the item's material exposures and
+         returns `({"line": ..., "nodes": top_5}, extract_summary)` for the card.
+    Muzzled under pytest when no explicit `graph_conn` is injected so existing
+    tests never touch the real `data/brain_map.db`."""
+    import os
+    if not cfg.get("graphrag_enabled", True):
+        return None, {"status": "disabled"}
+    if graph_conn is None and (os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("IS_TEST_ENV")):
+        return None, {"status": "muzzled_in_test"}
+    try:
+        from src import brain_map
+        from src.graph_engine import GraphEngine
+        from src.knowledge_graph import graphrag_extract, spreading_activation
+
+        owns = graph_conn is None
+        conn = brain_map.connect() if owns else graph_conn
+        try:
+            ext_res = graphrag_extract.extract_from_item(
+                item,
+                conn=conn,
+                extractor=graph_extractor,
+                daily_cap=int(cfg.get("graphrag_daily_cap", 100)),
+                env={"ALPHA_ALLOW_LLM_JOBS": "1"} if graph_conn is not None else None,
+            )
+            seeds = spreading_activation.seeds_from_event(ex.get("exposures") or [], mats, conn=conn)
+            second_order = None
+            if seeds:
+                eng = GraphEngine(conn=conn)
+                act = spreading_activation.propagate(
+                    eng,
+                    seeds=seeds,
+                    conn=conn,
+                    trigger_ref=detect.item_id(item),
+                )
+                top5 = (act.get("activated") or [])[:5]
+                line = spreading_activation.format_second_order_line(act, top_n=5)
+                if top5 or line:
+                    second_order = {"line": line, "nodes": top5}
+            return second_order, ext_res
+        finally:
+            if owns and conn is not None:
+                conn.close()
+    except Exception as exc:
+        print(f"  (event_engine: graphrag hook skipped: {exc})")
+        return None, {"status": f"error: {exc}"}
+
+
 def run(items=None, llm=None, bars_fn=None, card_dir=None, do_ship=True, ship_fn=None,
-        seen=None, cfg=None, inbox_only=False) -> dict:
+        seen=None, cfg=None, inbox_only=False, graph_conn=None, graph_extractor=None) -> dict:
     cfg = cfg or settings()
     summary = {"status": "ok", "items": 0, "classified": 0, "cards": [], "shipped": 0,
-               "skipped": {}, "stopped": None}
+               "skipped": {}, "stopped": None, "graphrag_edges_written": 0}
     if not cfg.get("emit_enabled", True):
         summary["status"] = "disabled (event_engine.emit_enabled false)"
         return summary
@@ -132,7 +184,14 @@ def run(items=None, llm=None, bars_fn=None, card_dir=None, do_ship=True, ship_fn
             ex = dict(ex, flags=list(ex.get("flags") or []) + [note])
         priced = [priced_in.assess(e["ticker"], m, announced, bars_fn=bars_fn, cfg=cfg)
                   for e, m in zip(ex["exposures"], mats)]
-        card = card_mod.build(item, dict(c["event"], announced_on=announced), ex, mats, priced, cfg)
+        second_order, gr_res = _graphrag_second_order(
+            item, ex, mats, cfg, graph_conn=graph_conn, graph_extractor=graph_extractor
+        )
+        summary["graphrag_edges_written"] += int((gr_res or {}).get("written") or 0)
+        card = card_mod.build(
+            item, dict(c["event"], announced_on=announced), ex, mats, priced, cfg,
+            second_order=second_order,
+        )
         path = card_mod.write(card, card_dir or CARD_DIR)
         summary["cards"].append({"event_id": card["event_id"], "suggestions": len(card["suggestions"])})
         if do_ship and card["suggestions"] and ship(path, ship_fn):

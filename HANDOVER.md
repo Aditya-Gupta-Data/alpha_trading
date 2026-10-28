@@ -42,6 +42,18 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~20:20 IST) — Phase 1 GraphRAG (Steps 1–5) BUILT on branch `phase1-graphrag` (#162; not yet merged/deployed)
+
+- **Built on `phase1-graphrag` (`src/knowledge_graph/{graphrag,spreading_activation,graphrag_extract}.py`, wired into `src/event_engine/{emit,card}.py`):**
+  - **Schema & Node Catalog (`graphrag.py`):** additive `graph_nodes`, `graph_edge_evidence`, `graph_activation_log` tables + guarded `ALTER TABLE graph_edges` columns (`edge_class`, `polarity`, `weight`, `evidence_count`, `extractor`). `seed_nodes()` seeds the VM option universe (`in_universe=1`), `config/sector_universe.json` sectors + constituents, `config/entity_groups.json` promoter groups + tickers, and back-fills existing `graph_edges` endpoints (`ensure_nodes_from_edges()`). Provenance firewall enforced: all edges stamped `source = 'llm_extracted'` (`decay_lambda = 0.02`, initial `confidence_score = 0.5 * strength`, reinforcement `1 - (1 - c)*(1 - 0.5 * strength)`) and blocked from `vol_bridge` sizing.
+  - **3D Spreading Activation (`spreading_activation.py`):** pure 3-hop synchronous path-simple walk (`gamma = 0.6`, pruning `theta = 0.02`, frontier cap 200, excess fan-out normalization `1 / (1 + ln(1 + max(0, outdeg - 1)))`), signed path aggregation `E(v)` with dominant hop and best path `via`, and 3D temporal momentum `M(v,t) = (0.85 ** delta_days) * M(v, t_prev) + E_today(v)` folded from `graph_activation_log`.
+  - **LLM Extractor (`graphrag_extract.py`):** analytics-node-only (`node_role.llm_jobs_refusal()`), calls `local_parser.LocalExtractor` (`auto:fast`, temp 0). Strict reject-only validator with the owner-ruled 24-predicate vocabulary (9 edge classes including `partner_with`/`partners_with` → `partnership`, `exports_to`/`supplies_to` → `supply`, `imports_from`/`sources_from` → `demand`, `invests_in` → `owns`, `tariffs`/`bans` → `regulates`, `benefits_from` → `causal`), verbatim-quote substring check, unrecognised-company rejection, owner-ruled `100` items/day cap (`DEFAULT_DAILY_EXTRACT_CAP = 100`), and de-duped Discord review alert when a new edge (`weight >= 0.7`) touches an `in_universe` node.
+  - **Event Engine Wiring (`emit.py`, `card.py`):** `_graphrag_second_order` runs fail-open after `detect.in_universe` + `classify` on the analytics node and stamps read-only `second_order_read` + `second_order_nodes` onto emitted event cards (context only, zero execution authority).
+- **Next (Step 6 before merging/deploying to Mini PC):**
+  1. Run the 7-day dry-run on the Mini PC against stored event cards/inbox items:
+     `venv/bin/python -m src.knowledge_graph.graphrag_extract --days 7`
+  2. Log the dry-run findings in `docs/observation_week_ledger.md`, then merge `phase1-graphrag` to `main` and pull on the Mini PC.
+
 ## 2026-10-28 (Wed, ~19:22 IST) — Issue 53 fix DEPLOYED (VM `0ee0492`): skipped learner attempts write no journal row
 
 - **What changed:** `_learner_path` journals a REJECTED row only when the learner takes an attempt or the venue refuses it. Skips (already taken this session) no longer write a row, so each monthly expiry stops scoring a burst of duplicate hypothetical outcomes. The proposal ledger still records every evaluation.

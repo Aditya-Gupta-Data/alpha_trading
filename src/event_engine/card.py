@@ -45,12 +45,13 @@ def suggestions_for(exposures: list, materials: list, priced: list, cfg: dict = 
     return suggestions
 
 
-def build(item: dict, event: dict, ex: dict, materials: list, priced: list, cfg: dict = None) -> dict:
+def build(item: dict, event: dict, ex: dict, materials: list, priced: list, cfg: dict = None,
+          second_order: dict = None) -> dict:
     cfg = cfg or settings()
     suggestions = suggestions_for(ex.get("exposures", []), materials, priced, cfg)
     from src.event_engine.detect import item_id
     eid = f"{(event.get('type') or 'event')}-{item_id(item)}"
-    return {"schema": CARD_SCHEMA, "event_id": eid,
+    card = {"schema": CARD_SCHEMA, "event_id": eid,
             "generated_at": datetime.now(IST).isoformat(timespec="seconds"),
             "source": {"title": item.get("title"), "url": item.get("url"), "from": item.get("source"),
                        "published": item.get("published")},
@@ -59,6 +60,10 @@ def build(item: dict, event: dict, ex: dict, materials: list, priced: list, cfg:
             "mechanics": ex.get("mechanics", []), "exposure": ex.get("exposures", []),
             "materiality": materials, "priced_in": priced, "suggestions": suggestions,
             "flags": ex.get("flags", []), "gates": {"materiality_threshold_pct": cfg["materiality_threshold_pct"]}}
+    if second_order:
+        card["second_order_read"] = second_order.get("line") or ""
+        card["second_order_nodes"] = second_order.get("nodes") or []
+    return card
 
 
 def validate(card: dict) -> list:

@@ -2450,3 +2450,13 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - First re-assessment, Mini PC 16:49 (`emit --reassess-only`): 11 cards checked, all rewritten once (the materiality rows gained `basis`), 1 shipped. SCI `opposite` (−3.209% vs +3.0%), GNFC `opposite` (−1.874% vs +3.125%) → 2 suggestions. NAM-INDIA re-dated to 2026-10-23, still `unknown`. NIFTY 50 on two RBI cards now judged on its price response: 1.5% base, below the 2% gate.
 - VM executor dry run 16:49: 1 card, SCI and GNFC both `abstained` — "no option contract in the VM's option universe".
 - Unverified: the 21:40 re-check of NAM-INDIA, the first live executor run (10-26 09:35), the learner's once-per-session rule in a live session.
+
+
+## Deploy 2026-10-28 18:08–18:15 IST — `main` `772d2b1` → `fc4721f` → `db89b0b` (#159); VM, Mini PC and the dashboard box
+
+- Push: `ui-gex-wiring` fast-forwarded onto `main` (`fc4721f`). Mac suite 3,224 passed.
+- VM: no job running at 18:08; `fc4721f` → 69 scoped tests passed; `setup_cron.sh` → 41 lines (08:50 #38 run added); services restarted, health 200. `latest_gex` read the 10-26 calibrated day for NIFTY 50 (S* 23,005.03, positive), NIFTY BANK (positive, no S* in grid), INFY and HDFCBANK (negative, no S* in grid).
+- Found at deploy and fixed (`db89b0b`, full suite 3,224): the open card printed "GEX no calibrated read" for a calibrated read with no S* in the grid. VM re-pulled, 22 tests passed, health 200.
+- Mini PC: `db89b0b`, 64 tests passed, replica block reinstalled (34 lines, 0 live-lane lines), execution refused on the node.
+- Dashboard box: `ship_ui.sh` from a `db89b0b` checkout (the Mac's node_modules, identical package-lock), bundle 18:11, `alpha-desk-ui` active, `/login` and `/overview` 200 on :8080, the bundle carries the new chart strings.
+- Unverified: the first 08:50 GEX run and the 09:10 card with GEX text (10-29), the pre-LLM skip counts on real feeds, the chart on live data.

@@ -42,6 +42,24 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~18:15 IST) — #159 DEPLOYED: VM and Mini PC on `db89b0b`; the dashboard box runs the new desk bundle
+
+- **Live now:**
+  - **Desk UI (dashboard box, shipped 18:11):** ONE dual-axis portfolios chart. PAPER_10L in ₹ on the left with the optional benchmarks; the ₹2L books in % on the right. The tooltip gives every line's ₹ and % as of the hovered time.
+    - The Compounding panel keeps only its KPI tiles.
+    - Checked in a browser on mock data only; nobody has looked at it on the live desk yet.
+  - **Event engine (Mini PC):** an RSS item spends no LLM call unless its text names one of the 5 option stocks or an index/policy term; inbox texts always go through. Skips are logged as `outside the VM option universe (pre-LLM)` in `logs/event_emit.log`.
+  - **Session playbook (VM, 09:10 card):** the planner gets the previous session's CALIBRATED GEX read (non_client, ≤4 days old) and the session move, so D4/D6 shape the card line ("GEX short gamma vs S* … (day)").
+    - At deploy the newest calibrated day was 10-26 (the 10-27 rows are uncalibrated).
+    - **Live entries still route on the SMA view (D5)**; changing that needs an Architect ruling.
+  - **GEX job (#38) runs twice:** 18:45 and a new 08:50 Mon–Fri run that picks up NSE's late participant file. VM: 41 cron lines. Mini PC: 34 lines, 0 trading-loop lines.
+  - Suite 3,224 passed (Mac). VM scoped tests 69 + 22; Mini PC 64; health 200.
+- **Fixed during the deploy (`db89b0b`):** a calibrated read with no S* in the grid (NIFTY BANK, INFY, HDFCBANK on 10-26) had printed "GEX no calibrated read". It now names its zone.
+- **Next:**
+  1. Thursday 10-29: read the 08:50 run in `logs/gex_daily.log`, the 09:10 open card's GEX text, and `event_emit.log` for the pre-LLM skip counts.
+  2. Open the live desk and hover the chart once on real data.
+  3. Still open from the 10-28 audit: Mini PC power cuts (6 more since 10-23), the Mac-only `sector_index_bars` (the sector veto self-disabled 10-26/27), and 108 "no tradeable quotes" refusals this week.
+
 ## 2026-10-23 (Fri, ~16:50 IST) — #158 DEPLOYED: VM and Mini PC on `9b609ea`; the PAPER_EVENTS executor is ON; event cards re-assessed
 
 - **Live now:**

@@ -246,7 +246,7 @@ def test_playbook_lines_ride_the_planner():
                                "fresh_cross": False, "rsi": 55.0,
                                "price": 52_340.0},
                   "vix": 14.5}
-    lines = ms._playbook_lines(("NIFTY BANK",), fetch_fn=lambda u: fake_state)
+    lines = ms._playbook_lines(("NIFTY BANK",), fetch_fn=lambda u: fake_state, gex_fn=lambda u: {})
     assert len(lines) == 1
     # neutral view + tradeable-IV -> the planner's iron condor with economics
     assert "iron condor" in lines[0]
@@ -254,7 +254,7 @@ def test_playbook_lines_ride_the_planner():
 
 
 def test_playbook_reports_a_dead_feed_without_raising():
-    lines = ms._playbook_lines(("NIFTY BANK",), fetch_fn=lambda u: None)
+    lines = ms._playbook_lines(("NIFTY BANK",), fetch_fn=lambda u: None, gex_fn=lambda u: {})
     assert lines == ["NIFTY BANK: no live read this minute"]
 
 

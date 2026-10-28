@@ -8,7 +8,8 @@ Sources (both fail-open):
 
 Gate (playbook step 1): a rumour, or an item with no primary text, is never classified as a
 policy event. Every item is seen once (a hash ledger), so a re-run never re-spends the LLM; a
-repeated headline (`title_key`) is skipped before any LLM call.
+repeated headline (`title_key`) is skipped before any LLM call, and so is an RSS item that cannot
+reach the VM's option universe (`in_universe`, 2026-10-28).
 """
 from __future__ import annotations
 
@@ -43,6 +44,36 @@ def title_key(item: dict) -> str | None:
     spacing dropped), or None when untitled: one story from two feeds is one item (2026-10-23)."""
     t = re.sub(r"[^a-z0-9]+", " ", html.unescape(item.get("title") or "").lower()).strip()
     return "t:" + hashlib.sha256(t.encode()).hexdigest()[:16] if t else None
+
+
+# Pre-LLM universe relevance (Architect 2026-10-28): the VM trades options on 4 indices + 5 stocks
+# (options_proposer.LOT_SIZES / EQUITY_OPTION_UNDERLYINGS), so a feed item spends an LLM call only when
+# its text names one of those stocks or an index-level / policy term that moves the indices.
+STOCK_ALIASES = {"RELIANCE": ("reliance", "ril"), "HDFCBANK": ("hdfc bank", "hdfcbank"),
+                 "ICICIBANK": ("icici bank", "icicibank"), "INFY": ("infosys", "infy"),
+                 "TCS": ("tcs", "tata consultancy")}
+INDEX_TERMS = ("nifty", "sensex", "midcap", "rbi", "reserve bank", "repo rate", "monetary policy", "crr",
+               "cash reserve ratio", "sebi", "gst", "union budget", "inflation", "rate cut", "rate hike",
+               "fii", "fpi", "foreign investors", "banks", "banking", "lenders", "nbfc", "financial services")
+
+
+def _universe_pattern():
+    from src.options_proposer import EQUITY_OPTION_UNDERLYINGS
+    terms = set(INDEX_TERMS)
+    for sym in EQUITY_OPTION_UNDERLYINGS:
+        base = sym.removesuffix(".NS")
+        terms.add(base.lower())
+        terms.update(STOCK_ALIASES.get(base, ()))
+    return re.compile(r"\b(?:" + "|".join(sorted((re.escape(t) for t in terms), key=len, reverse=True)) + r")\b", re.I)
+
+
+def in_universe(item: dict) -> bool:
+    """True when the item can reach the VM's option universe: a hand-dropped inbox text always
+    (the owner chose it), a feed item only when its title or text names a universe stock or an
+    index-level / policy term. Text only — the exact underlying is the LLM's call, after this."""
+    if str(item.get("source") or "").startswith("inbox:"):
+        return True
+    return bool(_universe_pattern().search(f"{item.get('title') or ''} {item.get('text') or ''}"))
 
 
 def inbox_items(inbox_dir=None) -> list:

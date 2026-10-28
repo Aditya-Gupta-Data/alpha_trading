@@ -73,7 +73,7 @@ tests drive whole sessions offline in milliseconds.
 
 import asyncio
 import signal
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from src import live_bridge
 from src import market_loop
@@ -251,14 +251,55 @@ def _dashboard_link_lines(url_fn=dashboard_link_url, desk_fn=_desk_base) -> list
     return lines
 
 
-def _playbook_lines(underlyings, fetch_fn=None) -> list:
+GEX_READ_MAX_AGE_DAYS = 4        # a Friday profile still reads on Monday; older is no read
+
+
+def latest_gex(underlying: str, today: date = None, root=None) -> dict:
+    """The newest GEX profile from BEFORE `today` for one underlying (data/lake/gex, VM cron #38):
+    {zero_gamma, regime_at_spot, day} on the ruled calibrated non_client sign (#154), walking back to
+    the newest calibrated day within GEX_READ_MAX_AGE_DAYS. {} when there is none — the naive sign is
+    never used (it reads the stocks backwards; the uncalibrated 10-27 rows flipped all five)."""
+    from src import lake
+    from src.ingestion.chain_archiver import UNDERLYINGS as SLUGS
+    slug = SLUGS.get(underlying)
+    if not slug:
+        return {}
+    today = today or ist_now().date()
+    for day in sorted(lake.list_days(f"gex/{slug}", root), reverse=True):
+        age = (today - date.fromisoformat(day)).days
+        if age <= 0:
+            continue
+        if age > GEX_READ_MAX_AGE_DAYS:
+            break
+        row = (lake.read_day(f"gex/{slug}", day, root=root) or [None])[0] or {}
+        cal = ((row.get("combined") or {}).get("calibrated") or {}).get("non_client") or {}
+        if cal.get("regime_at_spot") in ("positive", "negative"):
+            return {"zero_gamma": cal.get("zero_gamma"), "regime_at_spot": cal["regime_at_spot"], "day": day}
+    return {}
+
+
+def _session_move_pct(analysis: dict):
+    """Live price vs the previous close in % (the live state's closes end with the live price); None unread."""
+    closes = (analysis or {}).get("closes") or []
+    try:
+        return round((float(closes[-1]) / float(closes[-2]) - 1) * 100, 3)
+    except (IndexError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _playbook_lines(underlyings, fetch_fn=None, gex_fn=None) -> list:
     """The Phase 6I planner's advisory read per underlying, from the same
     live state the entry loop trades on. The proposer's market_view is
     its strongest read, so bullish/bearish map to the planner's strong
-    tier. Purely informational — the pipeline's own gates still rule."""
+    tier. Since 2026-10-28 the planner also gets the previous session's
+    calibrated GEX read (`latest_gex`) and the session move, so its D4
+    zone and D6 short-gamma routing apply here. Purely informational —
+    live entries still route on the SMA view (D5); the pipeline's own
+    gates still rule."""
     from src.options_proposer import _gate_days_to_results, market_view
     from src.trade_planner import map_technical_to_strategy
     fetch_fn = fetch_fn or live_bridge.fetch_live_market_state
+    gex_fn = gex_fn or latest_gex
     trend_map = {"bullish": "strong_bullish", "bearish": "bearish",
                  "neutral": "neutral"}
     lines = []
@@ -269,11 +310,16 @@ def _playbook_lines(underlyings, fetch_fn=None) -> list:
                 lines.append(f"{u}: no live read this minute")
                 continue
             analysis, vix = state["analysis"], state.get("vix")
+            gex = gex_fn(u)
             plan = map_technical_to_strategy({
                 "spot": analysis["price"], "underlying": u,
                 "trend": trend_map.get(market_view(analysis), "neutral"),
-                "vix": vix, "days_to_results": _gate_days_to_results(u)[0]})   # #151 gate
+                "vix": vix, "days_to_results": _gate_days_to_results(u)[0],   # #151 gate
+                "gex": gex, "momentum_pct": _session_move_pct(analysis)})     # #155 D4/D6
             vix_text = f"{vix:.1f}" if vix is not None else "n/a"
+            zone = (plan.get("gamma_zone") or {}).get("zone")
+            gex_text = (f"; GEX {zone.replace('_', ' ')} vs S* {gex['zero_gamma']:,.0f} ({gex['day']})"
+                        if zone and gex.get("zero_gamma") else "; GEX no calibrated read")
             if plan["tradeable"]:
                 cap = ("unlimited" if plan.get("max_profit") is None
                        else f"Rs.{plan['max_profit']:,.0f}")          # a long straddle has no cap (#155)
@@ -281,9 +327,9 @@ def _playbook_lines(underlyings, fetch_fn=None) -> list:
                     f"{u}: {plan['strategy'].replace('_', ' ')} "
                     f"(view {plan['view']}, VIX {vix_text}, "
                     f"max profit {cap} / "
-                    f"loss Rs.{plan['max_loss']:,.0f} per lot)")
+                    f"loss Rs.{plan['max_loss']:,.0f} per lot{gex_text})")
             else:
-                lines.append(f"{u}: no trade — {plan['rationale']}")
+                lines.append(f"{u}: no trade — {plan['rationale']}{gex_text}")
         except Exception as e:
             lines.append(f"{u}: playbook unavailable ({e})")
     return lines

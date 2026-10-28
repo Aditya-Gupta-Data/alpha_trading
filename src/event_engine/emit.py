@@ -107,6 +107,11 @@ def run(items=None, llm=None, bars_fn=None, card_dir=None, do_ship=True, ship_fn
             seen.add(iid)
             summary["skipped"]["duplicate headline"] = summary["skipped"].get("duplicate headline", 0) + 1
             continue
+        if not detect.in_universe(item):                  # cannot reach the VM's option universe: no LLM spend
+            _mark_seen(seen, iid, tkey)
+            why = "outside the VM option universe (pre-LLM)"
+            summary["skipped"][why] = summary["skipped"].get(why, 0) + 1
+            continue
         summary["items"] += 1
         c = detect.classify(item, llm)
         if not c["ok"]:

@@ -286,7 +286,7 @@ def test_emit_builds_a_card_and_ships_only_suggestions(tmp_path, monkeypatch):
 def test_emit_stops_without_marking_seen_when_the_llm_is_down(tmp_path, monkeypatch):
     monkeypatch.setattr(emit, "STATE_DIR", tmp_path / "state")
     seen = detect.SeenLedger(tmp_path / "seen.txt")
-    item = {"title": "t", "text": POLICY_TEXT}
+    item = {"title": "t", "text": POLICY_TEXT, "source": "inbox:t.md"}     # reaches the LLM (pre-LLM filter)
     s = emit.run(items=[item], llm=_llm(tmp_path, fail=True), card_dir=tmp_path / "cards", do_ship=False,
                  seen=seen, cfg=CFG)
     assert s["stopped"] and "router down" in s["stopped"] and detect.item_id(item) not in seen

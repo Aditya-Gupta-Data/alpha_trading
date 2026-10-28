@@ -502,7 +502,10 @@ CRON_TZ=Asia/Kolkata
 #     OI file for today and any of the last 5 sessions still missing, then the last 7 days' GEX
 #     profiles from the 15:40 chain archive (data/lake/gex/). Advisory only: nothing on the trade path
 #     reads either. 18:45 — no other NSE job runs then, and it lands before the 20:30 heartbeat sweep.
+#     08:50 re-run (2026-10-28): NSE posts the day's participant file after 18:45, so the morning run
+#     folds it into yesterday's profile before the 09:15 session playbook reads it (master_scheduler).
 45 18 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
+50 8 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
 $CRON_BLOCK_END
 EOF
 )

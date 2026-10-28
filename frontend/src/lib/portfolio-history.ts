@@ -54,12 +54,91 @@ export function inWindow(points: PortfolioPoint[], start: number | null): Portfo
   return [...carried, ...inside];
 }
 
-/** recharts rows: one per point, {t, <account>: pct}; lines join with connectNulls. */
-export function toChartRows(points: PortfolioPoint[]): Array<Record<string, number>> {
+/** The book drawn in ₹ on the left axis; every other book is drawn in % on the right (2026-10-28). */
+export const INR_ACCOUNT = "PAPER_10L";
+
+export const inrKey = (account: string) => `${account}_inr`;
+export const pctKey = (account: string) => `${account}_pct`;
+export const benchKey = (key: string) => `bench_${key}`;
+
+/** One line's points, time-sorted — what the tooltip reads its as-of values from. */
+export type SeriesPoint = { t: number; inr: number | null; pct: number | null };
+
+const finite = (v: number | null | undefined): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
+/** Each account's points as a sorted series; points with an unparseable time are dropped. */
+export function seriesByAccount(points: PortfolioPoint[]): Map<string, SeriesPoint[]> {
+  const out = new Map<string, SeriesPoint[]>();
+  for (const p of points) {
+    const t = Date.parse(p.ts);
+    if (Number.isNaN(t)) continue;
+    const list = out.get(p.account) ?? [];
+    list.push({ t, inr: finite(p.equity), pct: finite(p.pct) });
+    out.set(p.account, list);
+  }
+  for (const list of out.values()) list.sort((a, b) => a.t - b.t);
+  return out;
+}
+
+/** A ₹ benchmark (worth of `base` invested on the epoch) as a series; % is against `base`. */
+export function benchmarkSeries(
+  points: { ts: string; value: number }[],
+  base: number,
+  start: number | null,
+): SeriesPoint[] {
   return points
-    .filter((p) => p.pct !== null)
-    .map((p) => ({ t: Date.parse(p.ts), [p.account]: p.pct as number }))
+    .map((p) => {
+      const inr = finite(p.value);
+      return {
+        t: Date.parse(p.ts),
+        inr,
+        pct: inr !== null && base > 0 ? (inr / base - 1) * 100 : null,
+      };
+    })
+    .filter((p) => !Number.isNaN(p.t) && (start === null || p.t >= start))
     .sort((a, b) => a.t - b.t);
+}
+
+/**
+ * The last point at or before `t` (binary search) — the line's value at a hovered
+ * instant it has no point of its own at. Null when the line starts after `t`.
+ */
+export function asOf(series: SeriesPoint[] | undefined, t: number): SeriesPoint | null {
+  const head = series?.[0];
+  if (!series || !head || !Number.isFinite(t) || t < head.t) return null;
+  let lo = 0;
+  let hi = series.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if ((series[mid]?.t ?? Infinity) <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  return series[lo] ?? null;
+}
+
+/**
+ * recharts rows for the dual-axis chart: one per point, carrying only that
+ * point's own keys — INR_ACCOUNT in ₹ (`<acct>_inr`), every other book in %
+ * (`<acct>_pct`), each shown benchmark in ₹ (`bench_<key>`). Sparse by design:
+ * lines join with connectNulls, and the tooltip fills the gaps with asOf.
+ */
+export function toDualRows(
+  accounts: Map<string, SeriesPoint[]>,
+  benchmarks: Map<string, SeriesPoint[]> = new Map(),
+): Array<Record<string, number>> {
+  const rows: Array<Record<string, number>> = [];
+  for (const [account, list] of accounts) {
+    const key = account === INR_ACCOUNT ? inrKey(account) : pctKey(account);
+    for (const p of list) {
+      const v = account === INR_ACCOUNT ? p.inr : p.pct;
+      if (v !== null) rows.push({ t: p.t, [key]: v });
+    }
+  }
+  for (const [key, list] of benchmarks) {
+    for (const p of list) if (p.inr !== null) rows.push({ t: p.t, [benchKey(key)]: p.inr });
+  }
+  return rows.sort((a, b) => (a["t"] ?? 0) - (b["t"] ?? 0));
 }
 
 /** True when some account has at least two points — a line, not a dot. */

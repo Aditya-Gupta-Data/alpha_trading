@@ -352,4 +352,7 @@ of the last 5 sessions still missing — a late file is picked up the next eveni
 `data/lake/gex/<slug>/`). Both write to `logs/gex_daily.log` (heartbeat, weekdays). Advisory only: nothing on
 the trade path reads either. 18:45 holds no other NSE job and lands before the 20:30 sweep. The node replica
 renders it too; there it fills the node's own participant-OI lake (the node has no fresh chains).
+**08:50 re-run (2026-10-28, #159):** `50 8 * * 1-5`, the same two commands. NSE posts the day's participant
+file after 18:45, so the morning run folds it into yesterday's profile before the 09:15 session playbook
+reads it (`master_scheduler.latest_gex`).
 

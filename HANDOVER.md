@@ -42,6 +42,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~19:22 IST) — Issue 53 fix DEPLOYED (VM `0ee0492`): skipped learner attempts write no journal row
+
+- **What changed:** `_learner_path` journals a REJECTED row only when the learner takes an attempt or the venue refuses it. Skips (already taken this session) no longer write a row, so each monthly expiry stops scoring a burst of duplicate hypothetical outcomes. The proposal ledger still records every evaluation.
+- **Already written, left as history:** 264 unresolved skipped rows (107 expire 11-23, 134 on 12-29, 14 on 2027-03-30, 6 on 2027-01-25) will still be scored at those expiries. Flagging them for exclusion from stats would be a separate change.
+- **Deploy:** VM `0ee0492`, 81 scoped tests passed, health 200; first session on it is Thu 10-29. Expect "skipped" learner lines in `master_scheduler.log` with no matching new learner-only journal rows.
+
 ## 2026-10-28 (Wed, ~19:15 IST) — #161 DEPLOYED: expiry liquidity fallback + the new PAPER_2L_LIVE_GEX book (VM `84eb500`; dashboard box bridge + UI)
 
 - **Live now:**

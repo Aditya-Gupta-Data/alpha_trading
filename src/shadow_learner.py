@@ -36,12 +36,12 @@ def session_day(now: float = None) -> str:
     return (datetime.now(IST) if now is None else datetime.fromtimestamp(float(now), IST)).date().isoformat()
 
 
-def taken_this_session(conn, underlying: str, strategy: str, day: str) -> bool:
-    """Has the learner's book a position (any state) on (underlying, strategy) opened on IST `day`?"""
+def taken_this_session(conn, underlying: str, strategy: str, day: str, account: str = ACCOUNT) -> bool:
+    """Has `account`'s live book a position (any state) on (underlying, strategy) opened on IST `day`?"""
     from src.execution.live_pricer import ensure_schema
     ensure_schema(conn)
     return conn.execute("SELECT 1 FROM paper_live_positions WHERE account_id = ? AND ticker = ? AND strategy = ? "
-                        "AND substr(opened_at, 1, 10) = ? LIMIT 1", (ACCOUNT, underlying, strategy, day)).fetchone() \
+                        "AND substr(opened_at, 1, 10) = ? LIMIT 1", (account, underlying, strategy, day)).fetchone() \
         is not None
 
 
@@ -116,14 +116,16 @@ def evidence(conn, strategy: str) -> dict:
             "r_sum": round(sum(float(r[1] or 0) for r in rows), 3)}
 
 
-def take(entry: dict, reason: str, conn=None, venue_mod=None) -> dict:
+def take(entry: dict, reason: str, conn=None, venue_mod=None, account: str = ACCOUNT) -> dict:
     """Open the learner's position on crossed quotes: sizing on its own equity, the margin wall,
     the live re-quote + desk entry rules (F12), one venue ticket, the live book. Returns the verdict
-    (also stamped on entry['accounts'][ACCOUNT]). Never raises."""
+    (also stamped on entry['accounts'][account]). Never raises. `account` (default the learner) is any
+    LIVE account opening its OWN entry — PAPER_2L_LIVE_GEX's GEX trades use it (#161); only the learner
+    writes Court rows."""
     from src import oms, options_proposer as op, portfolio_manager as pm, strategy_router
     from src.config import PAPER_VENUE_ENABLED
     verdict = {"status": "rejected", "lots": 0, "margin_rs": None, "reason": "", "learner_only": reason}
-    entry.setdefault("accounts", {})[ACCOUNT] = verdict
+    entry.setdefault("accounts", {})[account] = verdict
     if not PAPER_VENUE_ENABLED:
         verdict["reason"] = "paper venue off — the learner opens only on a real crossed fill"
         return verdict
@@ -134,22 +136,23 @@ def take(entry: dict, reason: str, conn=None, venue_mod=None) -> dict:
             conn = brain_map.connect()
         spread = entry["spread"]
         ref = entry.get("short_id")
-        sized = pm.size_for_account(conn, ACCOUNT, spread, risk_pct=None, vix=entry.get("vix"))
+        sized = pm.size_for_account(conn, account, spread, risk_pct=None, vix=entry.get("vix"))
         if int(sized.get("lots") or 0) <= 0:
             verdict["reason"] = f"sizing refused: {sized.get('reason')}"
             return verdict
         lots = int(sized["lots"])
         required = pm.required_margin_for({"spread": dict(spread, lots=lots), "vix": entry.get("vix")})
-        gate = pm.paper_request_entry(conn, ACCOUNT, ref, required, lots=lots, primary_lots=int(entry.get("lots") or 1))
+        gate = pm.paper_request_entry(conn, account, ref, required, lots=lots, primary_lots=int(entry.get("lots") or 1))
         if not gate.get("approved"):
             verdict["reason"] = gate.get("reason") or "margin refused"
             return verdict
-        verdict.update(status="approved", lots=lots, margin_rs=required, reason="shadow learner: raw setup",
+        verdict.update(status="approved", lots=lots, margin_rs=required,
+                       reason="shadow learner: raw setup" if account == ACCOUNT else f"{account}: own entry",
                        sizing={k: sized.get(k) for k in ("by_risk", "by_margin", "floor_applied", "risk_pct", "equity")})
-        rq = op._live_requote(conn, ACCOUNT, entry)
+        rq = op._live_requote(conn, account, entry)
         if rq is None:
             return verdict
-        lots_now = op._live_entry_rules(conn, ACCOUNT, entry, rq, lots)
+        lots_now = op._live_entry_rules(conn, account, entry, rq, lots)
         if lots_now is None:
             return verdict
         venue = venue_mod
@@ -157,14 +160,15 @@ def take(entry: dict, reason: str, conn=None, venue_mod=None) -> dict:
             from src.execution import paper_venue as venue
         prop = {"ticker": entry["ticker"], "short_id": ref, "signal": entry.get("signal"),
                 "spread": dict(spread, legs=rq["legs"])}
-        issued = strategy_router.issue(conn, prop, journal_ref=ref, source="shadow_learner",
-                                       account_id=ACCOUNT, lots=lots_now)
+        issued = strategy_router.issue(conn, prop, journal_ref=ref,
+                                       source="shadow_learner" if account == ACCOUNT else "gex_steering",
+                                       account_id=account, lots=lots_now)
         stid = issued["ticket_id"]
         venue.sweep(conn, stamp=False)
         sview = oms.ticket_view(conn, stid) or {}
         verdict.update(ticket_id=stid, venue_status=sview.get("status"))
-        op._live_after_fill(conn, ACCOUNT, entry, stid, sview, rq["quote_ts"])
-        if verdict.get("status") == "approved" and sview.get("status") == oms.FILLED:
+        op._live_after_fill(conn, account, entry, stid, sview, rq["quote_ts"])
+        if account == ACCOUNT and verdict.get("status") == "approved" and sview.get("status") == oms.FILLED:
             record_fire(conn, entry)
         return verdict
     except Exception as exc:

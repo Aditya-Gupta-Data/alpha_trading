@@ -5,7 +5,13 @@
  */
 import type { PortfolioPoint } from "./api";
 
-export const PORTFOLIOS = ["PAPER_10L", "PAPER_2L", "PAPER_2L_ROT", "PAPER_2L_LIVE"] as const;
+export const PORTFOLIOS = [
+  "PAPER_10L",
+  "PAPER_2L",
+  "PAPER_2L_ROT",
+  "PAPER_2L_LIVE",
+  "PAPER_2L_LIVE_GEX",
+] as const;
 
 /** Owner's choice 2026-10-09: human names on the portfolio graph only. */
 export const PORTFOLIO_NAMES: Record<string, string> = {
@@ -13,6 +19,7 @@ export const PORTFOLIO_NAMES: Record<string, string> = {
   PAPER_2L: "Small-Account Test",
   PAPER_2L_ROT: "Capital-Rotation Test",
   PAPER_2L_LIVE: "Live-Quote Test",
+  PAPER_2L_LIVE_GEX: "Live-Quote GEX Test",
 };
 
 export const PORTFOLIO_STROKES: Record<string, string> = {
@@ -20,6 +27,7 @@ export const PORTFOLIO_STROKES: Record<string, string> = {
   PAPER_2L: "#f58518",
   PAPER_2L_ROT: "#54a24b",
   PAPER_2L_LIVE: "#e45756",
+  PAPER_2L_LIVE_GEX: "#b279a2",
 };
 
 export const WINDOWS = ["Today", "1W", "1M", "YTD", "All time"] as const;

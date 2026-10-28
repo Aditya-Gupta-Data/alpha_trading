@@ -150,19 +150,20 @@ def _firm_holdings(conn=None) -> tuple:
         present = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name IN (?, ?)", _FIRM_TABLES)}
+        from src.portfolio_manager import ACCOUNT_PAPER_2L_LIVE_GEX as _GEX
         from src.portfolio_manager import ACCOUNT_PAPER_SHADOW_LEARNER as _LEARNER
         parts, args = [], []
-        # the Shadow Learner is exempt from the #68 slot and never fills it (Architect 2026-10-09)
+        # the Shadow Learner (2026-10-09) and the GEX book (#161) are exempt from the #68 slot and never fill it
         if "paper_live_positions" in present:
             parts.append("SELECT 'live', account_id, journal_ref, ticker, "
                          "strategy, direction, expiry "
-                         "FROM paper_live_positions WHERE state != ? AND account_id != ?")
-            args.extend([STATE_CLOSED, _LEARNER])
+                         "FROM paper_live_positions WHERE state != ? AND account_id NOT IN (?, ?)")
+            args.extend([STATE_CLOSED, _LEARNER, _GEX])
         if "paper_margin_locks" in present:
             parts.append("SELECT 'lock', account_id, journal_ref, NULL, NULL, "
                          "NULL, NULL "
-                         "FROM paper_margin_locks WHERE released_at IS NULL AND account_id != ?")
-            args.append(_LEARNER)
+                         "FROM paper_margin_locks WHERE released_at IS NULL AND account_id NOT IN (?, ?)")
+            args.extend([_LEARNER, _GEX])
         if not parts:
             return [], None
         cols = ("source", "account_id", "journal_ref", "ticker", "strategy",

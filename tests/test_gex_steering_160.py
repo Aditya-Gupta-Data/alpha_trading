@@ -73,10 +73,10 @@ def test_the_proposer_reads_gex_only_when_a_book_is_steered(monkeypatch):
     assert op._gex_steering_read("NIFTY BANK", p, {})["allowed"] is True      # fail-open: no read, no refusal
 
 
-def test_the_shipped_config_steers_paper_2l_alone():
+def test_the_shipped_config_steers_the_gex_book_alone():
     import json
     cfg = json.loads((Path(__file__).resolve().parent.parent / "config.json").read_text())
-    assert cfg["gex_steering_accounts"] == ["PAPER_2L"]
+    assert cfg["gex_steering_accounts"] == ["PAPER_2L_LIVE_GEX"]          # #161: PAPER_2L stays a strict clone
 
 
 def test_the_sector_bars_ship_from_the_node_and_no_longer_from_the_mac():

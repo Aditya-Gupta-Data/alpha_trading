@@ -41,7 +41,7 @@ CAPITAL_EVENT_TYPES = ("clean_sheet", "capital_injection")
 # accounts that mark themselves on crossed quotes in paper_live_positions —
 # must equal portfolio_manager.LIVE_ACCOUNTS (the learner was missing until
 # 2026-10-16, so its mirrored trades were priced twice)
-LIVE_ACCOUNTS = ("PAPER_2L_LIVE", "PAPER_SHADOW_LEARNER")
+LIVE_ACCOUNTS = ("PAPER_2L_LIVE", "PAPER_SHADOW_LEARNER", "PAPER_2L_LIVE_GEX")
 STRATEGY_LABELS = {"bear_put_spread": "Bear Put", "bull_call_spread": "Bull Call",
                    "iron_condor": "Iron Condor", "iron_butterfly": "Iron Butterfly",
                    "equity_long": "Equity Long"}
@@ -490,7 +490,7 @@ def brain_map_html(db_path=None) -> dict:
 
 
 # ------------------------------------------------- equity history (graph)
-EQUITY_ACCOUNTS = ("PAPER_10L", "PAPER_2L", "PAPER_2L_ROT", "PAPER_2L_LIVE")
+EQUITY_ACCOUNTS = ("PAPER_10L", "PAPER_2L", "PAPER_2L_ROT", "PAPER_2L_LIVE", "PAPER_2L_LIVE_GEX")
 EQUITY_WINDOWS = ("Today", "1W", "1M", "YTD", "All time")
 
 

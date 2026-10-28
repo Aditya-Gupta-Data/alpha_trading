@@ -142,6 +142,9 @@ SHADOW_LEARNER_ENABLED = bool(_CONFIG.get("shadow_learner_enabled", False))
 _LEARNER_CAP = _CONFIG.get("shadow_learner_max_open")
 SHADOW_LEARNER_MAX_OPEN = int(_LEARNER_CAP) if _LEARNER_CAP is not None else None
 SHADOW_LEARNER_CAPITAL_RS = float(_CONFIG.get("shadow_learner_capital_rs", 200000.0))
+# PAPER_2L_LIVE_GEX (decision #161): a Rs.2L book that prices and settles its OWN positions on live bid/ask, copies a
+# primary entry only when the calibrated GEX zone agrees, and takes the D6 momentum spread itself when it does not.
+PAPER_2L_LIVE_GEX_ENABLED = bool(_CONFIG.get("paper_2l_live_gex_enabled", False))
 # GEX steering (decision #160): the accounts that copy an SMA entry only when the calibrated GEX zone agrees.
 GEX_STEERING_ACCOUNTS = tuple(_CONFIG.get("gex_steering_accounts") or ())
 # Event engine 1.1 (decision #156): the isolated Rs.10L book that event cards auto-execute into,

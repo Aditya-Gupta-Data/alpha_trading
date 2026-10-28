@@ -55,6 +55,7 @@ const PORTFOLIOS = [
   "PAPER_2L",
   "PAPER_2L_ROT",
   "PAPER_2L_LIVE",
+  "PAPER_2L_LIVE_GEX",
   "PAPER_SHADOW_LEARNER",
   "PAPER_EVENTS",
 ] as const;

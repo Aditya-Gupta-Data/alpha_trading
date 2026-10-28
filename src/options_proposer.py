@@ -417,6 +417,43 @@ def pick_expiry(expiries: list, today: date = None,
     return eligible[-1][0]            # honest best effort: furthest there is
 
 
+def has_live_book(chain: dict, spot=None, band_steps: int = 2 * WING_STEPS) -> bool:
+    """True when a strike within `band_steps` of the money has a positive bid, ask or last price on
+    either side — what `_leg_fill` can price on. A listed but untraded back month (all three zero, as
+    FINNIFTY/MIDCPNIFTY 12-29 on 10-26..28) reads False (Issue 52, 2026-10-28)."""
+    oc = (chain or {}).get("oc") or {}
+    strikes = sorted(float(s) for s in oc)
+    if not strikes:
+        return False
+    try:
+        mid = float(spot if spot is not None else chain.get("last_price"))
+    except (TypeError, ValueError):
+        mid = strikes[len(strikes) // 2]
+    near = sorted(strikes, key=lambda s: abs(s - mid))[: 2 * band_steps + 1]
+    for s in near:
+        node = oc.get(f"{s:.6f}") or oc.get(str(s)) or {}
+        for side in ("ce", "pe"):
+            leg = node.get(side) or {}
+            if any((leg.get(k) or 0) > 0 for k in ("top_bid_price", "top_ask_price", "last_price")):
+                return True
+    return False
+
+
+def _nearer_expiries(expiries, chosen: str, today: date = None, underlying: str = None) -> list:
+    """The eligible expiries (>= the entry floor) before `chosen`, nearest to it first."""
+    today = today or date.today()
+    floor = min_days_to_expiry_for(underlying) if underlying else MIN_DAYS_TO_EXPIRY
+    out = []
+    for exp in sorted(expiries or [], reverse=True):
+        try:
+            days = (date.fromisoformat(exp) - today).days
+        except ValueError:
+            continue
+        if exp < chosen and days >= floor:
+            out.append(exp)
+    return out
+
+
 def _strikes(chain: dict) -> list:
     """Sorted strike floats from a Dhan option-chain payload."""
     return sorted(float(s) for s in (chain.get("oc") or {}))
@@ -471,8 +508,10 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
                    account_cash: float = None,
                    short_strike_otm_pct: float = None,
                    advisory: dict = None, today: date = None,
-                   horizon: str = None, macro_score: float = None) -> dict:
+                   horizon: str = None, macro_score: float = None,
+                   view_override: str = None) -> dict:
     """The full pipeline, every input injectable for offline tests.
+    `view_override` (#161) replaces the SMA view — the GEX book's D6 momentum direction.
 
     `risk_pct` overrides ACCOUNT_RISK_PER_TRADE_PCT (e.g. vol_bridge may
     scale it down 30 % under an Expansion regime).  `short_strike_otm_pct`
@@ -491,6 +530,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         return {"proposal": None, "view": None, "vix": vix,
                 "reason": f"not enough price history for {underlying}"}
     view = market_view(analysis)
+    if view_override in ("bullish", "bearish", "neutral"):
+        view = view_override
 
     if vix is None:
         vix = get_india_vix()
@@ -527,10 +568,12 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         vol_rank = {"available": False, "error": f"{type(exc).__name__}: {exc}"}
 
     horizon = horizon or horizon_for(analysis, macro_score=macro_score)
+    expiries, picked_here = None, expiry is None and chain is None
     if expiry is None:
         # `today` reaches the expiry choice as well as the gate below, so an
         # injected clock judges both against the same day (None = today).
-        expiry = pick_expiry(get_expiry_list(underlying), today=today,
+        expiries = get_expiry_list(underlying)
+        expiry = pick_expiry(expiries, today=today,
                              underlying=underlying, horizon=horizon)
     if expiry is None:
         return {"proposal": None, "view": view, "vix": vix,
@@ -547,8 +590,25 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
     if not settle_ok:
         return {"proposal": None, "view": view, "vix": vix,
                 "reason": settle_why}
+    expiry_fallback = None
     if chain is None:
         chain = get_option_chain(underlying, expiry)
+        # LIQUIDITY FALLBACK (Architect ruling 2026-10-28, Issue 52): a long-horizon pick can land on a
+        # listed but untraded back month; step back to the nearest earlier expiry that has a live book.
+        if picked_here and horizon == "long" and chain and chain.get("oc") \
+                and not has_live_book(chain, analysis.get("price")):
+            for alt in _nearer_expiries(expiries, expiry, today, underlying):
+                alt_chain = get_option_chain(underlying, alt)
+                if alt_chain and has_live_book(alt_chain, analysis.get("price")):
+                    expiry_fallback = {"from": expiry, "to": alt,
+                                       "reason": "no live quotes on the furthest contract (Issue 52)"}
+                    expiry, chain = alt, alt_chain
+                    break
+            if expiry_fallback:
+                settle_ok, settle_why = physical_settlement_gate(underlying, expiry, today=today)
+                if not settle_ok:
+                    return {"proposal": None, "view": view, "vix": vix, "reason": settle_why,
+                            "expiry_fallback": expiry_fallback}
     if not chain or not chain.get("oc"):
         return {"proposal": None, "view": view, "vix": vix,
                 "reason": "option chain unavailable"}
@@ -749,6 +809,8 @@ def build_proposal(underlying: str = "NIFTY 50", *, analysis: dict = None,
         # #151: what the earnings and glassbreaking gates read.
         "event_gates": gates,
     }
+    if expiry_fallback:
+        proposal["expiry_fallback"] = expiry_fallback      # Issue 52: the back month had no live book
     return {"proposal": proposal, "view": view, "vix": vix, "reason": "ok",
             "horizon": horizon, "advisory_block": advisory_block, "gate_routed": gate_routed}
 
@@ -1158,6 +1220,8 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
                  if k in vol_overrides}
     learner_on = "book" not in state and _learner_enabled()
     result = build_proposal(underlying, **state, **bp_extras)
+    if "book" not in state and not learner_only:
+        _gex_own_entry(underlying, state, result)            # #161: PAPER_2L_LIVE_GEX's own D6 trade, isolated
     if result["proposal"] is None:
         # `rejected` rides along for the proposal ledger / ghost tracker
         # (2026-08-07). Additive only — every caller reads `proposed`,
@@ -1837,6 +1901,69 @@ def _proposal_risk_pct(entry: dict):
     quiet-regime default. Read as stored: a value that is not a number
     fails in the sizer, whose callers refuse by name (never a guessed 2%)."""
     return (((entry or {}).get("receipt") or {}).get("vol_overrides") or {}).get("risk_pct")
+
+
+GEX_D6_VIEWS = {"bull_call_spread": "bullish", "bear_put_spread": "bearish"}
+
+
+def _gex_own_entry(underlying: str, state: dict, result: dict, steer_fn=None, take_fn=None, build_fn=None,
+                   conn=None, log_fn=None):
+    """#161: PAPER_2L_LIVE_GEX takes the D6 momentum spread ITSELF when the calibrated short-gamma zone
+    wants one and the primary's SMA routing built something else or nothing. Built by the same builder
+    with the view overridden and sized on the GEX book's own capital; opened on live crossed quotes like
+    PAPER_2L_LIVE, journaled REJECTED for the primary (it never takes it). At most one per (underlying,
+    strategy, IST session), never while the book already holds that structure open. Fail-open, no raise.
+    When the primary built the wanted spread itself, the book copies it through the shadow path."""
+    try:
+        from src import portfolio_manager as pm
+        if not pm.gex_account_enabled():
+            return None
+        account = pm.ACCOUNT_PAPER_2L_LIVE_GEX
+        from src.analysis import gex_steering
+        analysis = (state or {}).get("analysis") or {}
+        primary = (result or {}).get("proposal") or {}
+        primary_strategy = (primary.get("spread") or {}).get("strategy")
+        spot = (primary.get("spread") or {}).get("entry_spot") or analysis.get("price")
+        st = (steer_fn or gex_steering.steer)(underlying, primary_strategy, spot, analysis)
+        wanted = st.get("wanted")
+        if st.get("zone") != "short_gamma" or wanted not in GEX_D6_VIEWS or wanted == primary_strategy:
+            return None
+        from src import brain_map, shadow_learner
+        own = conn is None
+        conn = brain_map.connect() if own else conn
+        try:
+            day = shadow_learner.session_day()
+            if shadow_learner.taken_this_session(conn, underlying, wanted, day, account=account):
+                return {"status": "skipped", "reason": f"{account} already took {wanted} on {underlying} this session"}
+            if conn.execute("SELECT 1 FROM paper_live_positions WHERE account_id = ? AND ticker = ? AND strategy = ? "
+                            "AND state != 'closed' LIMIT 1", (account, underlying, wanted)).fetchone():
+                return {"status": "skipped", "reason": f"{account} already holds {wanted} on {underlying}"}
+            summary = pm.paper_account_summary(conn, account)
+        finally:
+            if own:
+                conn.close()
+        kw = {k: v for k, v in (state or {}).items() if k not in ("vol_overrides", "learner_only", "advisory")}
+        built = (build_fn or build_proposal)(underlying, **kw, view_override=GEX_D6_VIEWS[wanted],
+                                             account_equity=summary["equity"],
+                                             account_cash=summary["available_cash"])
+        p = built.get("proposal")
+        if p is None or built.get("advisory_block") or (p.get("spread") or {}).get("strategy") != wanted:
+            why = built.get("advisory_block") or built.get("reason") or "built a different structure"
+            print(f"  [{account}] {underlying}: no GEX entry ({why})")
+            return {"status": "skipped", "reason": why}
+        why = (f"{account}-only: GEX D6 {wanted.replace('_', ' ')} "
+               f"(primary: {primary_strategy or (result or {}).get('reason') or 'no proposal'})")
+        entry = to_journal_entry(p, "rejected", why)
+        entry["portfolio_family"] = "GEX_D6"
+        entry["gex_steering"] = st
+        verdict = (take_fn or shadow_learner.take)(entry, why, account=account)
+        entry.setdefault("accounts", {})[account] = verdict
+        (log_fn or journal.log)(entry)
+        print(f"  [{account}] {entry.get('short_id')}: {verdict.get('status')} — {verdict.get('reason')}")
+        return verdict
+    except Exception as exc:
+        print(f"  ({underlying}: GEX own entry skipped: {type(exc).__name__}: {exc})")
+        return {"status": "error", "reason": str(exc)}
 
 
 def _gex_steering_read(underlying: str, p: dict, state: dict):

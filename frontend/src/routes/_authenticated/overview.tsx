@@ -189,6 +189,9 @@ function OverviewPage() {
               <AccountCard account={treasury.data.PAPER_2L} />
               {treasury.data.PAPER_2L_ROT && <AccountCard account={treasury.data.PAPER_2L_ROT} />}
               {treasury.data.PAPER_2L_LIVE && <AccountCard account={treasury.data.PAPER_2L_LIVE} />}
+              {treasury.data.PAPER_2L_LIVE_GEX && (
+                <AccountCard account={treasury.data.PAPER_2L_LIVE_GEX} />
+              )}
             </div>
 
             <Panel title="Compounding — PAPER_10L">

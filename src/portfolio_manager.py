@@ -49,7 +49,7 @@ from datetime import datetime, timedelta, timezone
 from src import brain_map, buckets
 from src.config import (ACCOUNT_RISK_PER_TRADE_PCT,
                         CAPITAL_ROTATION_ENABLED, CAPITAL_ROTATION_RR_MULTIPLE,
-                        PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_LIVE_ACCOUNT_ENABLED,
+                        PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_LIVE_GEX_ENABLED, PAPER_2L_LIVE_ACCOUNT_ENABLED,
                         PAPER_2L_STARTING_CAPITAL_RS,
                         SHADOW_LEARNER_CAPITAL_RS, SHADOW_LEARNER_ENABLED,
                         PAPER_EVENTS_CAPITAL_RS)
@@ -952,6 +952,7 @@ ACCOUNT_PAPER_2L = "PAPER_2L"       # the Rs.2L stress-test shadow
 ACCOUNT_PAPER_2L_ROT = "PAPER_2L_ROT"   # the Rs.2L capital-rotation A/B arm (#115)
 ACCOUNT_PAPER_2L_LIVE = "PAPER_2L_LIVE"  # the Rs.2L live-quote arm (#120)
 ACCOUNT_PAPER_SHADOW_LEARNER = "PAPER_SHADOW_LEARNER"  # the Shadow Learner arm (Architect 2026-10-09)
+ACCOUNT_PAPER_2L_LIVE_GEX = "PAPER_2L_LIVE_GEX"    # the GEX steering experiment (#161): self-priced, isolated
 ACCOUNT_PAPER_EVENTS = "PAPER_EVENTS"    # event engine 1.1 (#156): isolated, auto-executed, long options only
 
 # account_id -> starting capital. The primary's pool is whatever the live
@@ -960,6 +961,7 @@ PAPER_ACCOUNTS = {
     ACCOUNT_PAPER_2L: float(PAPER_2L_STARTING_CAPITAL_RS),
     ACCOUNT_PAPER_2L_ROT: float(PAPER_2L_STARTING_CAPITAL_RS),
     ACCOUNT_PAPER_2L_LIVE: float(PAPER_2L_STARTING_CAPITAL_RS),
+    ACCOUNT_PAPER_2L_LIVE_GEX: float(PAPER_2L_STARTING_CAPITAL_RS),        # GEX steering experiment (#161)
     ACCOUNT_PAPER_SHADOW_LEARNER: float(SHADOW_LEARNER_CAPITAL_RS),   # paper-only data bucket (#140, owner-authorised)
     ACCOUNT_PAPER_EVENTS: float(PAPER_EVENTS_CAPITAL_RS),             # event engine 1.1 (#156)
 }
@@ -971,7 +973,7 @@ ISOLATED_ACCOUNTS = frozenset({ACCOUNT_PAPER_EVENTS})
 # (decision #120, execution/live_pricer). The primary's exit does not close
 # them; release_shadow_locks skips their lock only while live_pricer holds an
 # OPEN position for it — no position = the lock is released at zero, named.
-LIVE_ACCOUNTS = frozenset({ACCOUNT_PAPER_2L_LIVE, ACCOUNT_PAPER_SHADOW_LEARNER})
+LIVE_ACCOUNTS = frozenset({ACCOUNT_PAPER_2L_LIVE, ACCOUNT_PAPER_SHADOW_LEARNER, ACCOUNT_PAPER_2L_LIVE_GEX})
 # The accounts allowed to evict (decision #115). PAPER_10L and PAPER_2L are
 # NOT here and never may be: they stay first-come-first-served.
 ROTATION_ACCOUNTS = frozenset({ACCOUNT_PAPER_2L_ROT})
@@ -1031,6 +1033,11 @@ def live_account_enabled() -> bool:
     return shadow_accounts_enabled() and bool(PAPER_2L_LIVE_ACCOUNT_ENABLED)
 
 
+def gex_account_enabled() -> bool:
+    """The #161 GEX book: its own switch, the live arm's (it rides the live tick) and the 2L experiment's."""
+    return live_account_enabled() and bool(PAPER_2L_LIVE_GEX_ENABLED)
+
+
 def shadow_account_ids() -> tuple:
     if not shadow_accounts_enabled():
         return ()
@@ -1039,7 +1046,8 @@ def shadow_account_ids() -> tuple:
                  (a == ACCOUNT_PAPER_SHADOW_LEARNER and learner_enabled())
                  or (a != ACCOUNT_PAPER_SHADOW_LEARNER
                      and (a not in ROTATION_ACCOUNTS or rotation_enabled())
-                     and (a not in LIVE_ACCOUNTS or live_account_enabled()))))
+                     and (a not in LIVE_ACCOUNTS or live_account_enabled())
+                     and (a != ACCOUNT_PAPER_2L_LIVE_GEX or gex_account_enabled()))))
 
 
 def learner_enabled() -> bool:

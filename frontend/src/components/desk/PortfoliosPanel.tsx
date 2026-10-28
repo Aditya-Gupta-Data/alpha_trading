@@ -349,10 +349,10 @@ export function PortfoliosPanel() {
       )}
       <p className="mt-2 text-[11px] text-muted-foreground">
         Left axis: Model Portfolio (PAPER_10L) equity in ₹ — its compounding. Right axis:
-        Small-Account Test (PAPER_2L), Capital-Rotation Test (PAPER_2L_ROT) and Live-Quote Test
-        (PAPER_2L_LIVE) as % return on contributed capital, each from 0% on the day it opened. Hover
-        shows every line&apos;s ₹ and % at that moment; a value carried from an earlier point says
-        when it is from.
+        Small-Account Test (PAPER_2L), Capital-Rotation Test (PAPER_2L_ROT), Live-Quote Test
+        (PAPER_2L_LIVE) and Live-Quote GEX Test (PAPER_2L_LIVE_GEX) as % return on contributed
+        capital, each from 0% on the day it opened. Hover shows every line&apos;s ₹ and % at that
+        moment; a value carried from an earlier point says when it is from.
         {bench && shown.length > 0
           ? ` Benchmarks: ${formatRupees(bench.base)} invested on ${formatIstDate(`${bench.epoch}T15:30:00+05:30`)}.`
           : ""}

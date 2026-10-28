@@ -74,6 +74,7 @@ export interface Treasury {
   PAPER_2L_ROT?: AccountTreasury & { rejections: number };
   /** The live-quote arm (decision #120): marks and exits on crossed bid/ask; absent until its first fill. */
   PAPER_2L_LIVE?: AccountTreasury & { rejections: number };
+  PAPER_2L_LIVE_GEX?: AccountTreasury & { rejections: number };
   equity_curve: EquityPoint[];
   /** Compounding (return / CAGR) is measured from this date — the ₹10L base (#116). */
   base_epoch?: string;

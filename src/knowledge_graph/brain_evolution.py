@@ -320,3 +320,4 @@ def calibration_ship_gate(
             f"Rejected: BS={bs_model:.4f} does not beat climatology ({bs_clim:.4f}) / coin (0.2500)"
         ),
     }
+

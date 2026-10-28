@@ -246,6 +246,71 @@ def strategy_stats(src: Sources, args: dict) -> dict:
                               f"{EARNINGS_CELL_FLOOR_N}"}
 
 
+def graphrag_propagation(src: Sources, args: dict) -> dict:
+    seed = (args.get("seed") or "").strip()
+    if not seed:
+        return {"available": False, "why": "seed is required"}
+    polarity = float(args.get("polarity") if args.get("polarity") is not None else 1.0)
+    polarity = max(-1.0, min(1.0, polarity))
+    if polarity == 0.0:
+        return {"available": False, "why": "non-zero polarity is required"}
+    try:
+        from src.knowledge_graph import resonance, spreading_activation
+        conn = src.conn()
+        g = resonance._load_readonly_digraph(conn)
+        if g is None or g.number_of_edges() == 0:
+            return {"available": False, "seed": seed, "why": "no active graph edges"}
+        canon = seed.upper().removesuffix(".NS").removesuffix(".BO")
+        candidates = [seed, canon, f"commodity:{canon}", f"macro:{canon}",
+                      f"policy:{canon}", f"sector:{canon}"]
+        seeds = {c: polarity for c in candidates if c in g}
+        if not seeds:
+            return {"available": False, "seed": seed, "why": "seed node not present in active graph"}
+        res = spreading_activation.propagate(
+            g, seeds, conn=conn, run_at=args.get("as_of"), log_activation=False
+        )
+        return {
+            "available": True,
+            "seed": seed,
+            "seeds_resolved": list(seeds.keys()),
+            "activated": res.get("activated") or [],
+            "basis": "read-only 3D associative graph propagation (context only)",
+        }
+    except sqlite3.Error as exc:
+        return {"available": False, "seed": seed, "why": str(exc)}
+
+
+def bayesian_win_posterior(src: Sources, args: dict) -> dict:
+    from src.knowledge_graph import brain_evolution
+    conn = src.conn()
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(outcomes)")}
+    except sqlite3.Error as exc:
+        return {"available": False, "why": str(exc)}
+    if not cols:
+        return {"available": False, "why": "outcomes table not present"}
+    jref_col = "journal_ref" if "journal_ref" in cols else "NULL AS journal_ref"
+    hyp_col = "hypothetical" if "hypothetical" in cols else "0 AS hypothetical"
+    sql = f"SELECT date, ticker, archetype, r_multiple, result, {jref_col}, {hyp_col} FROM outcomes WHERE 1=1"
+    params = []
+    if args.get("archetype"):
+        sql += " AND LOWER(archetype) = LOWER(?)"
+        params.append(str(args["archetype"]).strip())
+    if args.get("ticker"):
+        sql += " AND UPPER(ticker) = UPPER(?)"
+        params.append(str(args["ticker"]).strip().upper().removesuffix(".NS").removesuffix(".BO"))
+    rows = [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+    post = brain_evolution.compute_bayesian_confidence(
+        rows,
+        as_of=args.get("as_of"),
+    )
+    return {
+        "available": post["raw_n"] > 0,
+        "posterior": post,
+        "basis": "time-decayed Beta-Bernoulli posterior over learnable paper outcomes (sim/shadow/placebo excluded)",
+    }
+
+
 TOOLS = {
     "darling_tier_table": (
         "Current lifecycle-tier table for the tracked equity cohort "
@@ -300,6 +365,22 @@ TOOLS = {
         "by results window (pre / through / post / clear).",
         {"type": "object", "properties": {}},
         strategy_stats),
+    "graphrag_propagation": (
+        "Multi-hop associative graph propagation (3D energy and temporal "
+        "momentum) from a seed entity or policy node over active edges.",
+        {"type": "object", "properties": {
+            "seed": {"type": "string"},
+            "polarity": {"type": "number"},
+            "as_of": {"type": "string"}}, "required": ["seed"]},
+        graphrag_propagation),
+    "bayesian_win_posterior": (
+        "Time-decayed Beta-Bernoulli posterior win-rate distribution over "
+        "learnable outcome history, optionally filtered by archetype or ticker.",
+        {"type": "object", "properties": {
+            "archetype": {"type": "string"},
+            "ticker": {"type": "string"},
+            "as_of": {"type": "string"}}},
+        bayesian_win_posterior),
 }
 
 

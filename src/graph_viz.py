@@ -60,6 +60,7 @@ def build_graph_json(conn) -> dict:
     of the picture. Never raises; an empty/absent table yields an empty
     graph."""
     nodes, edges = {}, []
+    tables = set()
     try:
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -67,10 +68,15 @@ def build_graph_json(conn) -> dict:
             cols = {r[1] for r in conn.execute(
                 "PRAGMA table_info(graph_edges)")}
             src_col = "source" if "source" in cols else "NULL AS source"
+            ec_col = "edge_class" if "edge_class" in cols else "NULL AS edge_class"
+            pol_col = "polarity" if "polarity" in cols else "NULL AS polarity"
+            wt_col = "weight" if "weight" in cols else "NULL AS weight"
+            ev_col = "evidence_count" if "evidence_count" in cols else "NULL AS evidence_count"
             rows = conn.execute(
                 f"SELECT source_node, relation, target_node, "
                 f"confidence_score, context, valid_from, invalid_at, "
-                f"decay_lambda, {src_col} FROM graph_edges").fetchall()
+                f"decay_lambda, {src_col}, {ec_col}, {pol_col}, {wt_col}, {ev_col} "
+                f"FROM graph_edges").fetchall()
         else:
             rows = []
     except sqlite3.Error:
@@ -82,27 +88,50 @@ def build_graph_json(conn) -> dict:
                      if r["relation"] == "concentrates_in"}
 
     for r in rows:
-        provenance = r["source"] or (
-            "affinity_projected" if r["relation"] == "concentrates_in"
+        rdict = dict(r)
+        provenance = rdict.get("source") or (
+            "affinity_projected" if rdict["relation"] == "concentrates_in"
             else "outcome_derived")
-        for name in (r["source_node"], r["target_node"]):
+        for name in (rdict["source_node"], rdict["target_node"]):
             if name not in nodes:
                 nodes[name] = {"id": name,
                                "kind": _node_kind(name, entity_sources,
                                                   group_targets),
                                "degree": 0}
             nodes[name]["degree"] += 1
-        edges.append({
-            "from": r["source_node"],
-            "to": r["target_node"],
-            "relation": r["relation"],
-            "confidence": round(r["confidence_score"] or 0.0, 3),
-            "context": r["context"] or "",
-            "valid_from": (r["valid_from"] or "")[:10],
-            "expired": r["invalid_at"] is not None,
-            "loss_permanent": r["decay_lambda"] == 0.0,
+        edge_item = {
+            "from": rdict["source_node"],
+            "to": rdict["target_node"],
+            "relation": rdict["relation"],
+            "confidence": round(rdict["confidence_score"] or 0.0, 3),
+            "context": rdict["context"] or "",
+            "valid_from": (rdict["valid_from"] or "")[:10],
+            "expired": rdict["invalid_at"] is not None,
+            "loss_permanent": rdict["decay_lambda"] == 0.0,
             "provenance": provenance,
-        })
+        }
+        if rdict.get("edge_class") is not None:
+            edge_item["edge_class"] = rdict["edge_class"]
+        if rdict.get("polarity") is not None:
+            edge_item["polarity"] = int(rdict["polarity"])
+        if rdict.get("weight") is not None:
+            edge_item["weight"] = round(float(rdict["weight"]), 3)
+        if rdict.get("evidence_count") is not None:
+            edge_item["evidence_count"] = int(rdict["evidence_count"])
+        edges.append(edge_item)
+
+    # GraphRAG node catalog enrichment (node_type + in_universe).
+    try:
+        if "graph_nodes" in tables:
+            for r in conn.execute(
+                "SELECT node_id, node_type, in_universe FROM graph_nodes"
+            ):
+                nid = r["node_id"]
+                if nid in nodes:
+                    nodes[nid]["node_type"] = r["node_type"]
+                    nodes[nid]["in_universe"] = bool(r["in_universe"])
+    except sqlite3.Error:
+        pass
 
     # Affinity table enrichment: deal counts onto entity nodes.
     try:
@@ -130,6 +159,8 @@ def build_graph_json(conn) -> dict:
                                    if e["provenance"] == "outcome_derived"),
             "affinity": sum(1 for e in active
                             if e["provenance"] == "affinity_projected"),
+            "graphrag": sum(1 for e in active
+                            if e["provenance"] == "llm_extracted"),
             "loss_permanent": sum(1 for e in edges if e["loss_permanent"]),
         },
     }
@@ -142,22 +173,22 @@ _TEMPLATE = r"""<!doctype html>
 <style>
 :root{
   --bg:#0B1016; --panel:#121A23cc; --panel-line:#1E2A38; --ink:#E8EDF2;
-  --muted:#7C8A99; --causal:#5B8DB8; --affinity:#C9A227; --loss:#D25353;
+  --muted:#7C8A99; --causal:#5B8DB8; --affinity:#C9A227; --graphrag:#2AA198; --loss:#D25353;
   --win:#4CAF7D; --entity:#C9A227; --group:#8A6D1F; --concept:#4A6076;
 }
 @media (prefers-color-scheme: light){:root{
   --bg:#F2F4F6; --panel:#FFFFFFe6; --panel-line:#D8DEE5; --ink:#1A2430;
-  --muted:#5D6B7A; --causal:#33668F; --affinity:#8F6E12; --loss:#B23A3A;
+  --muted:#5D6B7A; --causal:#33668F; --affinity:#8F6E12; --graphrag:#1B7E76; --loss:#B23A3A;
   --win:#2E7D57; --entity:#8F6E12; --group:#6B540F; --concept:#5D7186;
 }}
 :root[data-theme="light"]{
   --bg:#F2F4F6; --panel:#FFFFFFe6; --panel-line:#D8DEE5; --ink:#1A2430;
-  --muted:#5D6B7A; --causal:#33668F; --affinity:#8F6E12; --loss:#B23A3A;
+  --muted:#5D6B7A; --causal:#33668F; --affinity:#8F6E12; --graphrag:#1B7E76; --loss:#B23A3A;
   --win:#2E7D57; --entity:#8F6E12; --group:#6B540F; --concept:#5D7186;
 }
 :root[data-theme="dark"]{
   --bg:#0B1016; --panel:#121A23cc; --panel-line:#1E2A38; --ink:#E8EDF2;
-  --muted:#7C8A99; --causal:#5B8DB8; --affinity:#C9A227; --loss:#D25353;
+  --muted:#7C8A99; --causal:#5B8DB8; --affinity:#C9A227; --graphrag:#2AA198; --loss:#D25353;
   --win:#4CAF7D; --entity:#C9A227; --group:#8A6D1F; --concept:#4A6076;
 }
 *{box-sizing:border-box;margin:0}
@@ -178,7 +209,7 @@ canvas:active{cursor:grabbing}
 .legend label{display:flex;align-items:center;gap:8px;cursor:pointer}
 .sw{width:18px;height:3px;border-radius:2px;flex:none}
 .sw.causal{background:var(--causal)} .sw.affinity{background:var(--affinity)}
-.sw.loss{background:var(--loss)}
+.sw.graphrag{background:var(--graphrag)} .sw.loss{background:var(--loss)}
 .sw.expired{background:var(--muted);height:0;border-top:2px dashed var(--muted)}
 input[type=search]{width:100%;background:transparent;color:var(--ink);
   border:1px solid var(--panel-line);border-radius:4px;padding:6px 8px;
@@ -203,6 +234,7 @@ input[type=search]:focus{outline:1px solid var(--causal)}
   <div class="legend">
     <label><span class="sw causal"></span><input type="checkbox" id="f-causal" checked> outcome-derived (causal)</label>
     <label><span class="sw affinity"></span><input type="checkbox" id="f-affinity" checked> smart-money affinity</label>
+    <label><span class="sw graphrag"></span><input type="checkbox" id="f-graphrag" checked> graphrag (llm-extracted)</label>
     <label><span class="sw loss"></span> loss-permanent (λ=0)</label>
     <label><span class="sw expired"></span><input type="checkbox" id="f-expired"> show expired</label>
   </div>
@@ -217,7 +249,7 @@ let W,H,DPR; function size(){DPR=devicePixelRatio||1;W=innerWidth;H=innerHeight;
 size(); addEventListener('resize',()=>{size();});
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 let C={}; function theme(){C={bg:css('--bg'),ink:css('--ink'),muted:css('--muted'),
-  causal:css('--causal'),affinity:css('--affinity'),loss:css('--loss'),
+  causal:css('--causal'),affinity:css('--affinity'),graphrag:css('--graphrag'),loss:css('--loss'),
   entity:css('--entity'),group:css('--group'),concept:css('--concept'),
   negative:css('--loss'),positive:css('--win')};}
 theme();
@@ -236,14 +268,17 @@ S.innerHTML = `<span>nodes</span><b>${DATA.stats.nodes}</b>
 <span>active edges</span><b>${DATA.stats.edges_active}</b>
 <span>causal</span><b>${DATA.stats.outcome_derived}</b>
 <span>affinity</span><b>${DATA.stats.affinity}</b>
+<span>graphrag</span><b>${DATA.stats.graphrag||0}</b>
 <span>loss-permanent</span><b>${DATA.stats.loss_permanent}</b>
 <span>expired</span><b>${DATA.stats.edges_expired}</b>`;
 
-let showCausal=true, showAffinity=true, showExpired=false, query='';
+let showCausal=true, showAffinity=true, showGraphrag=true, showExpired=false, query='';
 const vis = e => (e.expired ? showExpired : true) &&
-  (e.provenance==='affinity_projected' ? showAffinity : showCausal);
+  (e.provenance==='affinity_projected' ? showAffinity :
+   e.provenance==='llm_extracted' ? showGraphrag : showCausal);
 document.getElementById('f-causal').onchange = ev=>{showCausal=ev.target.checked;};
 document.getElementById('f-affinity').onchange = ev=>{showAffinity=ev.target.checked;};
+document.getElementById('f-graphrag').onchange = ev=>{showGraphrag=ev.target.checked;};
 document.getElementById('f-expired').onchange = ev=>{showExpired=ev.target.checked;alpha=Math.max(alpha,.3);};
 document.getElementById('q').oninput = ev=>{query=ev.target.value.toLowerCase();};
 
@@ -279,7 +314,8 @@ function draw(){
   for (const e of edges){ if(!vis(e))continue;
     const dim = query && !(e.a.id.toLowerCase().includes(query)||e.b.id.toLowerCase().includes(query));
     ctx.globalAlpha = e.expired? .25 : dim? .12 : .85;
-    ctx.strokeStyle = e.provenance==='affinity_projected'? C.affinity : C.causal;
+    ctx.strokeStyle = e.provenance==='affinity_projected'? C.affinity :
+                      e.provenance==='llm_extracted'? C.graphrag : C.causal;
     ctx.lineWidth = .6 + e.confidence*2.6;
     ctx.setLineDash(e.expired? [4,4] : []);
     ctx.beginPath(); ctx.moveTo(e.a.x,e.a.y); ctx.lineTo(e.b.x,e.b.y); ctx.stroke();

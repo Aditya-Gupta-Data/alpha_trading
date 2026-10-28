@@ -10,10 +10,40 @@ from src import config
 
 PRIMARY_ACCOUNT = "PAPER_10L"
 IDX_FAMILY = "IDX_SPREADS"
+EQ_SWING_FAMILY = "EQ_SWING"
 DARLINGS_FAMILY = "DARLINGS"
+WEALTH_LOCK_FAMILY = "WEALTH_LOCK"
+CROSS_ASSET_FAMILY = "CROSS_ASSET"
 DARLINGS_LOCK_PREFIX = "eqd:"
 HELD_LOCK_REASON = "margin already locked for this entry (bucket)"
 EVENT_LOCKED, EVENT_REFUSED, EVENT_SETTLED, EVENT_HALT = "lock", "entry_refused", "settled", "risk_of_ruin_halt"
+
+# M4 5-Bucket Ceiling & Precedence Contract (docs/ARCHITECTURE_ROADMAP.md §5):
+# Sum of ceilings = 25 + 20 + 30 + 25 + 15 = 115%. These are per-bucket CEILINGS,
+# not target weights; total allocation across all buckets is hard-capped at <= 100%
+# of firm equity in deterministic BUCKET_PRECEDENCE order, and a halted bucket's
+# capital is quarantined so no other bucket can ever borrow it.
+BUCKET_CEILINGS_PCT = {
+    IDX_FAMILY: 25.0,          # B1: Index options spreads <= 25%
+    EQ_SWING_FAMILY: 20.0,     # B2: Equity swing <= 20%
+    DARLINGS_FAMILY: 30.0,     # B3: Darlings delivery <= 30%
+    WEALTH_LOCK_FAMILY: 25.0,  # B4: Long-term + GOLDBEES wealth lock <= 25%
+    CROSS_ASSET_FAMILY: 15.0,  # B5: Cross-asset / macro <= 15%
+}
+BUCKET_PRECEDENCE = (
+    WEALTH_LOCK_FAMILY,
+    DARLINGS_FAMILY,
+    IDX_FAMILY,
+    EQ_SWING_FAMILY,
+    CROSS_ASSET_FAMILY,
+)
+STRATEGY_FAMILIES = {
+    IDX_FAMILY: "index_options",
+    EQ_SWING_FAMILY: "equity_swing",
+    DARLINGS_FAMILY: "darlings",
+    WEALTH_LOCK_FAMILY: "wealth_lock",
+    CROSS_ASSET_FAMILY: "cross_asset",
+}
 
 
 def _now_iso() -> str:
@@ -197,3 +227,88 @@ def summary(conn, account: str = None) -> list:
         out.append(dict(b, equity=equity(b), open_locks=open_locks(conn, pid), available_cash=available_cash(conn, b),
                         drawdown_pct=drawdown_pct(b)))
     return out
+
+
+def allocate_bucket_ceilings(firm_equity_rs: float,
+                             requested_by_family: dict = None,
+                             halted_families=None,
+                             locked_in_halted_by_family: dict = None) -> dict:
+    """M4 5-bucket ceiling and precedence allocator (docs/ARCHITECTURE_ROADMAP.md §5).
+
+    Enforces two invariants simultaneously:
+      1. CEILING + 100% CAP: Each bucket B1..B5 is bounded by its individual percentage
+         ceiling (25% / 20% / 30% / 25% / 15%; sum = 115%), AND total allocation across
+         all buckets is hard-capped at <= 100% of `firm_equity_rs` in deterministic
+         `BUCKET_PRECEDENCE` order.
+      2. HALTED CAPITAL QUARANTINE (NO BORROWING): Any bucket in `halted_families`
+         receives 0 new allocation AND its ring-fenced capital (either explicit
+         `locked_in_halted_by_family[fam]` or its ceiling reservation) is quarantined
+         out of the distributable pool so no active bucket can ever borrow a halted
+         bucket's capital.
+    """
+    firm = round(max(0.0, float(firm_equity_rs or 0.0)), 2)
+    halted = {str(f).strip() for f in (halted_families or ()) if str(f).strip()}
+    ceilings_rs = {
+        fam: round(firm * (pct / 100.0), 2)
+        for fam, pct in BUCKET_CEILINGS_PCT.items()
+    }
+    locked_halted = locked_in_halted_by_family or {}
+    quarantined_rs = 0.0
+    for fam in BUCKET_PRECEDENCE:
+        if fam in halted:
+            q = locked_halted.get(fam, ceilings_rs[fam])
+            quarantined_rs = round(quarantined_rs + max(0.0, float(q)), 2)
+    quarantined_rs = min(firm, quarantined_rs)
+    distributable_rs = round(max(0.0, firm - quarantined_rs), 2)
+
+    remaining = distributable_rs
+    allocations = {}
+    clipped = []
+    for fam in BUCKET_PRECEDENCE:
+        ceiling = ceilings_rs[fam]
+        if fam in halted:
+            allocations[fam] = 0.0
+            continue
+        if requested_by_family is None or fam not in requested_by_family:
+            req = ceiling
+        else:
+            req = max(0.0, float(requested_by_family[fam] or 0.0))
+        desired = min(req, ceiling)
+        granted = round(min(desired, remaining), 2)
+        if granted < desired:
+            clipped.append(fam)
+        allocations[fam] = granted
+        remaining = round(max(0.0, remaining - granted), 2)
+
+    total_allocated = round(sum(allocations.values()), 2)
+    return {
+        "firm_equity_rs": firm,
+        "quarantined_halted_rs": quarantined_rs,
+        "distributable_rs": distributable_rs,
+        "total_allocated_rs": total_allocated,
+        "total_allocated_pct": round((total_allocated / firm) * 100.0, 4) if firm > 0 else 0.0,
+        "precedence": list(BUCKET_PRECEDENCE),
+        "ceilings_rs": ceilings_rs,
+        "allocations": allocations,
+        "clipped_by_total_cap": clipped,
+        "halted_families": sorted(halted),
+    }
+
+
+def can_borrow_from_bucket(conn, borrower_portfolio_id: str,
+                           lender_portfolio_id: str, amount_rs: float = 0.0) -> tuple[bool, str]:
+    """Ring-fence firewall: proves no bucket can ever borrow another bucket's halted or active capital."""
+    if borrower_portfolio_id == lender_portfolio_id:
+        return False, "same_bucket_not_a_transfer"
+    lender = bucket(conn, lender_portfolio_id) if conn is not None else None
+    if lender is not None and lender.get("halted_at"):
+        return (
+            False,
+            f"halted_bucket_quarantine: {lender_portfolio_id} is halted since {lender['halted_at']} "
+            f"— its capital (Rs.{equity(lender):,.2f}) is ring-fenced and cannot be borrowed by {borrower_portfolio_id}",
+        )
+    return (
+        False,
+        f"ring_fence_violation: cross-bucket borrowing from {lender_portfolio_id} to "
+        f"{borrower_portfolio_id} (Rs.{float(amount_rs or 0.0):,.2f}) is forbidden by M1/M4 isolation",
+    )

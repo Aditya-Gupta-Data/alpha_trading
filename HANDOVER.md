@@ -42,6 +42,16 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~21:10 IST) — Phase 2.5 GraphRAG Surfaces (`graph_viz`, `brain_mcp`) & Phase 3 Prep (M4 5-Bucket Ceiling/Precedence Allocator + Halted-Capital Firewall) BUILT on branch `phase1-graphrag` (#164; not yet merged/deployed)
+
+- **Built on `phase1-graphrag` (stacking on #162 and #163):**
+  - **GraphRAG Provenance Lane in Visualizer (`src/graph_viz.py`):** `build_graph_json(conn)` enriches edges with `edge_class`, `polarity`, `weight`, and `evidence_count` from `graph_edges`, joins `node_type` and `in_universe` from `graph_nodes`, and populates `stats["graphrag"]`; `render_html` adds the `--graphrag` teal visual lane and the `id="f-graphrag"` provenance filter toggle.
+  - **Brain-Map MCP Read-Only Tools (`src/brain_mcp.py`):** added `graphrag_propagation` (3-hop spreading activation + temporal momentum over `mode=ro` `brain_map.db`) and `bayesian_win_posterior` (time-decayed Beta-Bernoulli win posterior over `outcomes` filtered by optional `archetype`/`ticker`, respecting `stat_gates.is_learnable_ref` and SEBI zero-advice-verb discipline).
+  - **M4 5-Bucket Ceiling & Precedence Allocator + Halted-Capital Firewall (`src/buckets.py`):** defined `BUCKET_CEILINGS_PCT` (`IDX_SPREADS` 25%, `EQ_SWING` 20%, `DARLINGS` 30%, `WEALTH_LOCK` 25%, `CROSS_ASSET` 15% — sum 115%) and `BUCKET_PRECEDENCE = ("WEALTH_LOCK", "DARLINGS", "IDX_SPREADS", "EQ_SWING", "CROSS_ASSET")`; added `allocate_bucket_ceilings` (enforces per-bucket ceilings, caps total allocation at `<= 100%` of firm equity in precedence order, and quarantines any halted bucket's capital out of the distributable pool so no active bucket can ever borrow a halted bucket's capital) and `can_borrow_from_bucket` (runtime ring-fence returning `halted_bucket_quarantine` when lender is halted, `ring_fence_violation` otherwise).
+  - **Tests:** `tests/test_phase3_buckets_and_surfaces.py` (5 tests covering `graph_viz`, `brain_mcp`, `allocate_bucket_ceilings` 115%→100% cap, halted-bucket quarantine + `can_borrow_from_bucket`, and `scripts/migrate_m1_buckets.py` parity/idempotency); 119/119 passing across Phase 1/2/3 suites.
+- **Next decision point for the Owner:**
+  - **Phase 3 Remote Kill-Switch (`docs/ARCHITECTURE_ROADMAP.md` §5 line 270):** requires an owner ruling on the authentication method before building (signed Discord command vs authenticated gateway endpoint reusing the #125 desk-halt latch).
+
 ## 2026-10-28 (Wed, ~20:50 IST) — Phase 1.5 (GraphRAG Consumer + Placebo Harness) & Phase 2 (Self-Evolving Brain Map + Cycle Hunter AD-1..AD-3 + Expectancy Apex) BUILT on branch `phase1-graphrag` (#163; not yet merged/deployed)
 
 - **Built on `phase1-graphrag` (stacking on #162):**

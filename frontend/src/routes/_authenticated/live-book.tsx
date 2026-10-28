@@ -49,6 +49,25 @@ const COLUMNS: Array<{ key: SortKey | null; label: string; numeric?: boolean }> 
   { key: null, label: "Ratchet" },
 ];
 
+const PORTFOLIOS = [
+  "ALL",
+  "PAPER_10L",
+  "PAPER_2L",
+  "PAPER_2L_ROT",
+  "PAPER_2L_LIVE",
+  "PAPER_SHADOW_LEARNER",
+  "PAPER_EVENTS",
+] as const;
+
+const SELECT_CLASS =
+  "num rounded-sm border border-input bg-background px-2 py-1 text-[11px] text-foreground";
+
+/** A row's accounts as exact names ("PAPER_10L, PAPER_2L" → two): PAPER_2L must not match PAPER_2L_ROT. */
+function accountList(accounts: string | string[] | null | undefined): string[] {
+  const parts = Array.isArray(accounts) ? accounts : String(accounts ?? "").split(",");
+  return parts.map((a) => a.trim()).filter(Boolean);
+}
+
 function pnlClass(value: number | null) {
   if (value === null) return "text-muted-foreground";
   return value >= 0 ? "text-pnl-up" : "text-pnl-down";
@@ -63,6 +82,7 @@ function ratchetLine(trade: OpenTrade) {
 function LiveBookPage() {
   const { data, isPending, isError } = useQuery(openTradesQuery);
   const [strategy, setStrategy] = useState<string>("ALL");
+  const [portfolio, setPortfolio] = useState<string>("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("entered");
   const [asc, setAsc] = useState(false);
 
@@ -72,18 +92,20 @@ function LiveBookPage() {
   }, [data]);
 
   const rows = useMemo(() => {
-    const filtered = (data ?? []).filter((t) => strategy === "ALL" || t.strategy === strategy);
+    const filtered = (data ?? []).filter(
+      (t) =>
+        (strategy === "ALL" || t.strategy === strategy) &&
+        (portfolio === "ALL" || accountList(t.accounts).includes(portfolio)),
+    );
     return [...filtered].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
       if (av === null || av === undefined) return 1;
       if (bv === null || bv === undefined) return -1;
       if (typeof av === "number" && typeof bv === "number") return asc ? av - bv : bv - av;
-      return asc
-        ? String(av).localeCompare(String(bv))
-        : String(bv).localeCompare(String(av));
+      return asc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
     });
-  }, [data, strategy, sortKey, asc]);
+  }, [data, strategy, portfolio, sortKey, asc]);
 
   function toggleSort(key: SortKey | null) {
     if (!key) return;
@@ -105,20 +127,36 @@ function LiveBookPage() {
       <Panel
         title={`Open positions (${rows.length})`}
         right={
-          <label className="num flex items-center gap-2 text-[11px] text-muted-foreground uppercase">
-            Strategy
-            <select
-              value={strategy}
-              onChange={(e) => setStrategy(e.target.value)}
-              className="num rounded-sm border border-input bg-background px-2 py-1 text-[11px] text-foreground"
-            >
-              {strategies.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <label className="num flex items-center gap-2 text-[11px] text-muted-foreground uppercase">
+              Strategy
+              <select
+                value={strategy}
+                onChange={(e) => setStrategy(e.target.value)}
+                className={SELECT_CLASS}
+              >
+                {strategies.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="num flex items-center gap-2 text-[11px] text-muted-foreground uppercase">
+              Portfolio
+              <select
+                value={portfolio}
+                onChange={(e) => setPortfolio(e.target.value)}
+                className={SELECT_CLASS}
+              >
+                {PORTFOLIOS.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         }
       >
         {isError ? (
@@ -126,7 +164,13 @@ function LiveBookPage() {
         ) : isPending ? (
           <EmptyState label="Loading positions…" />
         ) : rows.length === 0 ? (
-          <EmptyState label="No open positions" />
+          <EmptyState
+            label={
+              strategy === "ALL" && portfolio === "ALL"
+                ? "No open positions"
+                : "No open positions match these filters"
+            }
+          />
         ) : (
           <>
             {/* Desktop table */}
@@ -212,9 +256,7 @@ function LiveBookPage() {
                     </div>
                     <StatusPill
                       label={trade.mtm_rs === null ? "NO MTM" : trade.mtm_rs >= 0 ? "UP" : "DOWN"}
-                      tone={
-                        trade.mtm_rs === null ? "neutral" : trade.mtm_rs >= 0 ? "ok" : "bad"
-                      }
+                      tone={trade.mtm_rs === null ? "neutral" : trade.mtm_rs >= 0 ? "ok" : "bad"}
                     />
                   </div>
                   <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">

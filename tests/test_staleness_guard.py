@@ -62,7 +62,7 @@ def test_twenty_day_old_file_is_stale_and_names_its_producer(tmp_path):
     assert v["signal"] == "mtime"
     # the reason must carry the age, the limit, AND who was supposed to refresh it
     assert "20.0 days old" in v["reason"]
-    assert "mac_auto_sync.sh" in v["reason"]
+    assert "node_sector_bars.sh" in v["reason"]
 
 
 def test_twenty_day_old_file_generates_the_alert_payload(tmp_path):
@@ -296,9 +296,9 @@ def test_the_vm_native_tier_chain_points_at_the_vm_not_the_mac():
 
 
 def test_the_mac_only_artifacts_point_at_the_sync_agent():
-    for name in ("sector_index_bars", "bars_cache", "darling_ids",
-                 "fo_liquidity", "darlings_valuation"):
+    for name in ("bars_cache", "darling_ids", "fo_liquidity", "darlings_valuation"):
         assert "mac_auto_sync.sh" in SG.REGISTRY[name].producer, name
+    assert "node_sector_bars.sh" in SG.REGISTRY["sector_index_bars"].producer      # moved, #160
 
 
 # ------------------------ the unscheduled perishable feed (audit, 2026-08-13)

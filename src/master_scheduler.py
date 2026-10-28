@@ -73,12 +73,14 @@ tests drive whole sessions offline in milliseconds.
 
 import asyncio
 import signal
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from src import live_bridge
 from src import market_loop
 from src import nse_calendar
 from src.market_loop import MARKET_CLOSE, MARKET_OPEN, UNDERLYINGS, ist_now
+from src.analysis.gex_steering import GEX_READ_MAX_AGE_DAYS, latest_gex  # noqa: F401 — the playbook's GEX read (#159)
+from src.analysis.gex_steering import session_move_pct as _session_move_pct
 
 SESSION_POLL_SECONDS = 30    # how often the supervisor rechecks the clock
 
@@ -249,42 +251,6 @@ def _dashboard_link_lines(url_fn=dashboard_link_url, desk_fn=_desk_base) -> list
     if "access_key=" not in url or base:
         lines.append("Same access key as before.")
     return lines
-
-
-GEX_READ_MAX_AGE_DAYS = 4        # a Friday profile still reads on Monday; older is no read
-
-
-def latest_gex(underlying: str, today: date = None, root=None) -> dict:
-    """The newest GEX profile from BEFORE `today` for one underlying (data/lake/gex, VM cron #38):
-    {zero_gamma, regime_at_spot, day} on the ruled calibrated non_client sign (#154), walking back to
-    the newest calibrated day within GEX_READ_MAX_AGE_DAYS. {} when there is none — the naive sign is
-    never used (it reads the stocks backwards; the uncalibrated 10-27 rows flipped all five)."""
-    from src import lake
-    from src.ingestion.chain_archiver import UNDERLYINGS as SLUGS
-    slug = SLUGS.get(underlying)
-    if not slug:
-        return {}
-    today = today or ist_now().date()
-    for day in sorted(lake.list_days(f"gex/{slug}", root), reverse=True):
-        age = (today - date.fromisoformat(day)).days
-        if age <= 0:
-            continue
-        if age > GEX_READ_MAX_AGE_DAYS:
-            break
-        row = (lake.read_day(f"gex/{slug}", day, root=root) or [None])[0] or {}
-        cal = ((row.get("combined") or {}).get("calibrated") or {}).get("non_client") or {}
-        if cal.get("regime_at_spot") in ("positive", "negative"):
-            return {"zero_gamma": cal.get("zero_gamma"), "regime_at_spot": cal["regime_at_spot"], "day": day}
-    return {}
-
-
-def _session_move_pct(analysis: dict):
-    """Live price vs the previous close in % (the live state's closes end with the live price); None unread."""
-    closes = (analysis or {}).get("closes") or []
-    try:
-        return round((float(closes[-1]) / float(closes[-2]) - 1) * 100, 3)
-    except (IndexError, TypeError, ValueError, ZeroDivisionError):
-        return None
 
 
 def _playbook_lines(underlyings, fetch_fn=None, gex_fn=None) -> list:

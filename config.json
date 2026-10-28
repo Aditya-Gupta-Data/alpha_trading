@@ -1,4 +1,5 @@
 {
+  "gex_steering_accounts": ["PAPER_2L"],
   "paper_events_capital_rs": 1000000,
   "event_engine": {
     "emit_enabled": true,

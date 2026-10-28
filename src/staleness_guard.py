@@ -145,8 +145,8 @@ REGISTRY = {
             policy=IGNORE,
             consumer="analysis.sector_trend.is_sector_bullish → "
                      "analysis.regime_filters._sector_bearish (LIVE bullish veto)",
-            producer="Mac auto-sync — scripts/mac_auto_sync.sh (LaunchAgent "
-                     "com.aditrader.sync, at login + hourly while awake)",
+            producer="Mini PC — scripts/node_sector_bars.sh (node cron 08:30 + "
+                     "16:10 Mon-Fri, decision #160; the Mac auto-sync before)",
             note="Was PRODUCERLESS from 2026-07-16 to 2026-08-05 (written once "
                  "by yfinance and never refreshed) while still feeding a LIVE "
                  "bullish veto — the bug this whole module was built for. "

@@ -3,7 +3,7 @@
 scripts/fetch_sector_bars.py — THE producer for data/sector_index_bars.json
 ===========================================================================
 
-**MAC-ONLY. NEVER RUN THIS ON THE VM.** yfinance is a Mac-lane dependency
+**NEVER RUN THIS ON THE VM.** Runs on the Mini PC since 2026-10-28 (scripts/node_sector_bars.sh, #160); yfinance is a Mac-lane dependency
 (not in requirements.txt), Yahoo rate-limits/blocks datacentre IPs, and the
 boundary doctrine keeps every crawler off the VM's address. `src/` must stay
 free of a yfinance import, which is why this is a script and not an

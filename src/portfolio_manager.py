@@ -1717,6 +1717,12 @@ def paper_lock_released(conn, account: str, journal_ref: str) -> bool:
     return row is not None and row[0] is not None
 
 
+def _gex_steering_accounts() -> tuple:
+    """#160: the books that copy an SMA entry only when the calibrated GEX zone agrees."""
+    from src import config
+    return tuple(config.GEX_STEERING_ACCOUNTS)
+
+
 def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                              risk_pct: float = None, marks_fn=None,
                              evict_fn=None, allow_rotation: bool = False) -> dict:
@@ -1782,6 +1788,14 @@ def evaluate_shadow_accounts(journal_ref: str, proposal: dict, conn=None,
                         continue
                     out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
                                     "reason": reason}
+                    continue
+                steering = proposal.get("gex_steering") or {}
+                if account in _gex_steering_accounts() and steering.get("allowed") is False:
+                    # #160: a GEX-steered book copies an SMA entry only when the calibrated zone agrees
+                    paper_log_event(conn, account, "gex_steering_refused", journal_ref,
+                                    f"entry {journal_ref} refused: {steering.get('reason')}")
+                    out[account] = {"status": "rejected", "lots": 0, "margin_rs": None,
+                                    "reason": steering.get("reason") or "gex steering"}
                     continue
                 if account in LIVE_ACCOUNTS and not _legs_all_quoted(spread):
                     paper_log_event(conn, account, "sizing_refused", journal_ref,

@@ -344,6 +344,13 @@ in `scripts/setup_node_replica_cron.sh`). Install both by re-running the install
 run ends with a no-LLM re-assessment of the last 5 days' zero-suggestion cards — the 21:40 run is the one that sees
 the announcement day's close (bhavcopy 19:15). By hand: `venv/bin/python -m src.event_engine.emit --reassess-only`.
 
+## Mini PC: sector bars (added 2026-10-28, decision #160)
+
+`10 16 * * 1-5` and `30 8 * * 1-5` (node replica block, node-only lines) → `scripts/node_sector_bars.sh`:
+`fetch_sector_bars.py` (yfinance, home IP) then `firm_treasury.vm_push_file` to the VM's `data/`. Log
+`logs/sector_bars.log`. The Mac's auto-sync no longer fetches or ships `sector_index_bars.json` — that takes
+effect on the Mac only once its checkout runs this `scripts/mac_auto_sync.sh` (it is on an older branch).
+
 ## Job 38 — Daily participant OI + GEX profiles (added 2026-10-23, decision #157)
 
 `45 18 * * 1-5` → `src.ingestion.participant_oi --today` (NSE's participant-wise OI file for today plus any

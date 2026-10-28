@@ -4,11 +4,9 @@
 # WHY THIS EXISTS (2026-08-11). Three artifacts can only be BUILT on the Mac
 # and are only USEFUL on the VM:
 #
-#   sector_index_bars.json  yfinance. Yahoo rate-limits/blocks datacentre IPs
-#                           and `src/` must stay free of a yfinance import, so
-#                           scripts/fetch_sector_bars.py says MAC-ONLY, NEVER
-#                           RUN ON THE VM — and it means it. Feeds the router's
-#                           momentum leg and a LIVE bullish veto.
+#   sector_index_bars.json  MOVED to the Mini PC 2026-10-28 (decision #160):
+#                           scripts/node_sector_bars.sh fetches (home IP, so
+#                           Yahoo answers) and ships it. Still never the VM.
 #   darlings_valuation.json needs the fundamentals + deep-read corpus, which
 #                           lives on the Mac. Measured on the VM 2026-08-11:
 #                           0 of 109 darlings scored, and the empty file it
@@ -89,12 +87,9 @@ fi
 log "=== mac auto-sync starting (py: $PY)$([ "$SHADOW" = "1" ] && echo ' [SHADOW TRIAL — ships nothing]') ==="
 
 # ------------------------------------------------------------- 1. producers
-# Sector index bars — the router's momentum leg and the live bullish veto.
-# The script's own merge rule is extend-forward-never-rewrite, so a bad fetch
-# can shorten nothing.
-log "sector bars: fetching"
-"$PY" scripts/fetch_sector_bars.py >> logs/mac_auto_sync.log 2>&1 \
-    && log "sector bars: ok" || log "sector bars: FAILED (keeping the stored file)"
+# Sector index bars MOVED to the Mini PC (decision #160, 2026-10-28):
+# scripts/node_sector_bars.sh fetches and ships them at 08:30/16:10 Mon-Fri.
+# This Mac slept through sessions and the live bullish veto self-disabled.
 
 # Valuation — Mac-only corpus. NEVER run this on the VM (see the header).
 log "valuation: scoring"
@@ -161,7 +156,7 @@ SHADOW = os.environ.get("ALPHA_NODE_SHADOW") == "1"
 # NOT darling_tiers.json / darlings_levels.json — those are VM-NATIVE since
 # 2026-08-11 (cron 19:18/19:22, built off the VM's own bhavcopy). Shipping a
 # Mac copy over them would reintroduce the staleness this script ends.
-MANIFEST = ("sector_index_bars.json", "darlings_valuation.json",
+MANIFEST = ("darlings_valuation.json",                     # sector bars: the Mini PC (#160)
             "darlings_queue.json", "darling_pins.json",
             "fo_liquidity.json", "darling_ids.json",
             # bars_cache added 2026-08-11: it was refreshed here but never

@@ -153,6 +153,7 @@ def _no_ambient_engine_switches(monkeypatch):
     for mod in (_cfg, _pm):
         monkeypatch.setattr(mod, "SHADOW_LEARNER_ENABLED", False, raising=False)
     monkeypatch.setattr(_cfg, "MULTI_BUCKET_LEDGER", False, raising=False)
+    monkeypatch.setattr(_cfg, "GEX_STEERING_ACCOUNTS", (), raising=False)     # #160: the live switch, off in tests
 
 
 @pytest.fixture(autouse=True)

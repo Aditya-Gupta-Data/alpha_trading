@@ -1262,6 +1262,9 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
         # margin, its own halts. Records only; the primary decision above
         # is already made. Stamped on the row so "approved for 10L, refused
         # for 2L" is readable per trade. Fail-open inside the seam.
+        steering = _gex_steering_read(underlying, p, state)
+        if steering is not None:
+            p["gex_steering"] = entry["gex_steering"] = steering
         entry["accounts"] = _judge_shadow_accounts(entry["short_id"], p,
                                                    risk_pct=bp_extras.get("risk_pct"))
     journal.log(entry)
@@ -1783,7 +1786,8 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
             marks_fn, evict_fn = _rotation_fns(rotation)
             target["accounts"] = _judge_shadow_accounts(
                 trade_id, {"spread": spread, "lots": spread.get("lots"),
-                           "vix": (target.get("receipt") or {}).get("vix")},
+                           "vix": (target.get("receipt") or {}).get("vix"),
+                           "gex_steering": target.get("gex_steering")},     # #160: the proposal-time read holds
                 risk_pct=_proposal_risk_pct(target),
                 allow_rotation=True, marks_fn=marks_fn, evict_fn=evict_fn)
         # Audit F14 (L3 review) + L3 residual (a): a shadow account (the
@@ -1833,6 +1837,21 @@ def _proposal_risk_pct(entry: dict):
     quiet-regime default. Read as stored: a value that is not a number
     fails in the sizer, whose callers refuse by name (never a guessed 2%)."""
     return (((entry or {}).get("receipt") or {}).get("vol_overrides") or {}).get("risk_pct")
+
+
+def _gex_steering_read(underlying: str, p: dict, state: dict):
+    """#160: the calibrated GEX verdict on this proposal for the steered books, or None when no book is
+    steered. Fail-open: an unreadable lake is "no read" (allowed), never a refusal."""
+    from src.config import GEX_STEERING_ACCOUNTS
+    if not GEX_STEERING_ACCOUNTS:
+        return None
+    try:
+        from src.analysis import gex_steering
+        spread = p.get("spread") or {}
+        return gex_steering.steer(underlying, spread.get("strategy"), spread.get("entry_spot"),
+                                  (state or {}).get("analysis"))
+    except Exception as exc:
+        return {"allowed": True, "zone": None, "reason": f"GEX read unavailable ({type(exc).__name__})"}
 
 
 def _judge_shadow_accounts(journal_ref: str, proposal: dict, risk_pct=None,

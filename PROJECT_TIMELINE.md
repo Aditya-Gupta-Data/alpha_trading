@@ -235,6 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-10-28 · 3 commits · 15 files touched
+
+- `197df34` docs: HANDOVER + ledger — #159 deployed to VM, Mini PC and the dashboard box (db89b0b)
+- `db89b0b` fix(scheduler): a calibrated GEX read with no S* in the grid names its zone on the open card, not 'no calibrated read' (#159)
+- `fc4721f` feat: one dual-axis portfolio chart with an as-of tooltip; pre-LLM option-universe filter; calibrated GEX into the session playbook (#159)
+
+
 ### 2026-10-23 · 5 commits · 35 files touched
 
 - `972c6e1` docs: HANDOVER + ledger — #158 deployed to VM and Mini PC (9b609ea), executor on, first card re-assessment (SCI/GNFC resolved, both abstain on the VM)

@@ -276,3 +276,104 @@ def promotable(real_wins: int, real_n: int, sim_wins: int, sim_n: int,
         return out
     out.update(promote=True, reason="clears floor + real evidence + LB")
     return out
+
+
+# ----------------------------------------- unified paper-proof standard
+
+def backfill_hypothesis_metadata(
+    window_start: str = "2016-01-01",
+    window_end: str = "2023-12-31",
+    universe_kind: str = "archive_survivors",
+) -> dict:
+    """Explicit survivorship-bias disclosure for historical backfills
+    (`docs/ARCHITECTURE_ROADMAP.md` §5 line 273):
+    bhavcopy 2016-2023 and `archive/` NIFTY-50 universes list names alive today
+    unless delisted symbols are included. Backfilled results are treated
+    strictly as hypotheses, never as forward evidence (`sample_source='backfilled'`),
+    and never touch append-only forward ledgers (`CLAUDE.md` Rule 3)."""
+    return {
+        "sample_source": "backfilled",
+        "window_start": str(window_start),
+        "window_end": str(window_end),
+        "universe_kind": str(universe_kind),
+        "survivorship_bias_warning": True,
+        "evidence_status": "hypothesis_only_not_forward_proof",
+        "forward_ledger_untouched": True,
+        "note": (
+            "Historical backfill over surviving constituents carries survivorship "
+            "bias; treat findings as hypotheses only, never as forward proof "
+            "(docs/ARCHITECTURE_ROADMAP.md §5)."
+        ),
+    }
+
+
+def evaluate_paper_proof_standard(
+    vector_name: str,
+    sample_source: str,
+    metric_pre_registered: bool,
+    n_samples: int | None,
+    min_n: int = MIN_VALIDATION_N,
+    wilson_lb: float | None = None,
+    null_bound: float = 0.50,
+    placebo_p_value: float | None = None,
+    max_placebo_alpha: float = 0.05,
+) -> dict:
+    """Unified 'Proven on Paper' standard across all six roadmap vectors
+    (`docs/ARCHITECTURE_ROADMAP.md` §5 line 275):
+      1. Forward (not backfilled/in-sample) sample (`sample_source == 'forward'`).
+      2. Pre-registered metric (`metric_pre_registered is True`).
+      3. Stated sample size `n_samples >= min_n`.
+      4. Beats null / shuffled-placebo comparison (`wilson_lb > null_bound` and
+         `placebo_p_value < max_placebo_alpha`).
+
+    Returns `{proven_on_paper, vector, checks, n_samples, min_n, wilson_lb,
+    null_bound, placebo_p_value, max_placebo_alpha, reasons}`."""
+    src_norm = str(sample_source or "").strip().lower()
+    is_forward = src_norm == "forward"
+    is_pre_reg = bool(metric_pre_registered) is True
+    n_ok = isinstance(n_samples, int) and not isinstance(n_samples, bool) and n_samples >= int(min_n)
+
+    lb_ok = wilson_lb is not None and float(wilson_lb) > float(null_bound)
+    placebo_ok = (
+        placebo_p_value is not None
+        and 0.0 <= float(placebo_p_value) < float(max_placebo_alpha)
+    )
+    beats_null_and_placebo = lb_ok and placebo_ok
+
+    reasons = []
+    if not is_forward:
+        reasons.append(
+            f"sample_source={sample_source!r} is not 'forward' (backfilled/in-sample "
+            "results are hypotheses only, never paper proof)"
+        )
+    if not is_pre_reg:
+        reasons.append("metric was not pre-registered before forward observation")
+    if not n_ok:
+        reasons.append(f"n_samples={n_samples!r} below required min_n={min_n}")
+    if not lb_ok:
+        reasons.append(f"wilson_lb={wilson_lb!r} does not beat null_bound={null_bound}")
+    if not placebo_ok:
+        reasons.append(
+            f"placebo_p_value={placebo_p_value!r} does not clear max_placebo_alpha={max_placebo_alpha}"
+        )
+
+    proven = is_forward and is_pre_reg and n_ok and beats_null_and_placebo
+    return {
+        "proven_on_paper": proven,
+        "vector": str(vector_name or "unknown"),
+        "sample_source": src_norm,
+        "checks": {
+            "forward_only": is_forward,
+            "metric_pre_registered": is_pre_reg,
+            "n_stated_and_sufficient": n_ok,
+            "beats_null_and_placebo": beats_null_and_placebo,
+        },
+        "n_samples": n_samples if isinstance(n_samples, int) and not isinstance(n_samples, bool) else None,
+        "min_n": int(min_n),
+        "wilson_lb": round(float(wilson_lb), 4) if wilson_lb is not None else None,
+        "null_bound": round(float(null_bound), 4),
+        "placebo_p_value": round(float(placebo_p_value), 4) if placebo_p_value is not None else None,
+        "max_placebo_alpha": round(float(max_placebo_alpha), 4),
+        "reasons": reasons or ["all four paper-proof gates passed"],
+    }
+

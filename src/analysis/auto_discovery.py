@@ -400,10 +400,20 @@ def discover(lake_dir=None, out_path=None, dry_run=False) -> dict:
     Writes `data/discovered_candidates.json`. NO authority — every
     candidate must clear AD-2 (significance) then the court before it is
     an episode."""
+    from src.validation import stat_gates
+
+    dates, _ = _aligned_closes(lake_dir)
+    win_start = dates[0] if dates else "2016-01-01"
+    win_end = dates[-1] if dates else "2023-12-31"
     doc = {
         "built_at": datetime.now().isoformat(timespec="seconds"),
         "note": ("AD-1 unsupervised candidates — UNPROVEN. Not episodes "
                  "until AD-2 significance + the candidate court pass."),
+        "provenance": stat_gates.backfill_hypothesis_metadata(
+            window_start=win_start,
+            window_end=win_end,
+            universe_kind="macro_and_survivor_lake",
+        ),
         "shock_candidates": rank_shock_candidates(lake_dir),
         "motif_candidates": scan_motifs(lake_dir),
     }

@@ -59,6 +59,20 @@ def _fill_fraction_default(_leg: dict) -> float:
     return 1.0
 
 
+def verify_wings_first_order(legs: list) -> bool:
+    """True iff every BUY (protective long) leg precedes every SELL (short) leg."""
+    seen_sell = False
+    for leg in legs or []:
+        side = str(leg.get("side") or "").upper()
+        if side == "BUY":
+            if seen_sell:
+                return False
+        else:
+            seen_sell = True
+    return True
+
+
+
 def slipped_price(limit: float, side: str, frac: float) -> float:
     """A BUY pays up by `frac`, a SELL receives `frac` less. Never below a
     tick of 0.05."""
@@ -169,12 +183,19 @@ def journal_shadow_fill(conn, ticket_id: str) -> bool:
 
 
 def sweep(conn=None, today: date = None, slippage_fn=None, fill_fraction_fn=None,
-          journal_mod=None, stamp: bool = True) -> dict:
+          journal_mod=None, stamp: bool = True,
+          enforce_wings_first: bool = False) -> dict:
     """One venue pass over every PENDING/PARTIAL leg — every account's
-    tickets, same slippage. Returns {legs, filled, partial, rejected,
-    refused, tickets_filled, stamped, shadow_journaled, by_account}."""
+    tickets, same slippage. When `enforce_wings_first=True`, protective BUY
+    legs are always worked before SELL legs per ticket, and if any BUY leg on
+    a multi-leg ticket is rejected or unfilled, remaining SELL legs on that
+    ticket are cancelled (`wings_first_guard: protective BUY leg not filled`)
+    so the paper book never takes a naked short leg. Returns {legs, filled,
+    partial, rejected, refused, cancelled_unhedged, tickets_filled, stamped,
+    shadow_journaled, by_account}."""
     summary = {"venue": VENUE, "legs": 0, "filled": 0, "partial": 0, "rejected": 0,
-               "refused": 0, "tickets_filled": [], "stamped": 0, "shadow_journaled": 0,
+               "refused": 0, "cancelled_unhedged": 0, "tickets_filled": [],
+               "stamped": 0, "shadow_journaled": 0,
                "by_account": {}, "skip": None}
     own = None
     if conn is None:
@@ -186,24 +207,48 @@ def sweep(conn=None, today: date = None, slippage_fn=None, fill_fraction_fn=None
     try:
         oms.ensure_schema(conn)
         touched = set()
-        for leg in oms.open_legs(conn):
+        pending_legs = oms.open_legs(conn)
+        if enforce_wings_first:
+            pending_legs = sorted(
+                pending_legs,
+                key=lambda l: (
+                    l["ticket_id"],
+                    0 if str(l.get("side") or "").upper() == "BUY" else 1,
+                    int(l.get("leg_index") or 0),
+                ),
+            )
+        failed_wing_tickets = set()
+        for leg in pending_legs:
             ticket = conn.execute("SELECT * FROM trade_tickets WHERE ticket_id = ?",
                                   (leg["ticket_id"],)).fetchone()
             if ticket is None:
                 oms.reject(conn, leg["leg_id"], f"{VENUE}: orphan leg, no ticket")
                 summary["rejected"] += 1
                 continue
+            tid = leg["ticket_id"]
+            side_up = str(leg.get("side") or "").upper()
+            if enforce_wings_first and tid in failed_wing_tickets and side_up != "BUY":
+                oms.cancel(conn, leg["leg_id"], "wings_first_guard: protective BUY leg not filled")
+                summary["cancelled_unhedged"] += 1
+                touched.add(tid)
+                continue
             summary["legs"] += 1
             r = fill_leg(conn, leg, dict(ticket), slippage_fn, fill_fraction_fn, today)
             if r.get("rejected"):
                 summary["rejected"] += 1
+                if enforce_wings_first and side_up == "BUY":
+                    failed_wing_tickets.add(tid)
             elif not r.get("ok"):
                 summary["refused"] += 1
+                if enforce_wings_first and side_up == "BUY":
+                    failed_wing_tickets.add(tid)
             elif r.get("state") == oms.FILLED:
                 summary["filled"] += 1
             else:
                 summary["partial"] += 1
-            touched.add(leg["ticket_id"])
+                if enforce_wings_first and side_up == "BUY":
+                    failed_wing_tickets.add(tid)
+            touched.add(tid)
         for tid in sorted(touched):
             if oms.ticket_status(conn, tid) == oms.FILLED:
                 summary["tickets_filled"].append(tid)

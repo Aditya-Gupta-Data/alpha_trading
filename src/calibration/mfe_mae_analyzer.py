@@ -439,6 +439,133 @@ def summarize(records: list, min_samples: int = MIN_SAMPLES_DEFAULT) -> dict:
     return summary
 
 
+def dry_run_open_book(
+    open_entries: list,
+    summary: dict,
+    court_verdict: dict | None = None,
+    static_profit_take_fraction: float = 0.65,
+) -> dict:
+    """Read-only open-book dry-run for MFE/MAE Expectancy Apex exits
+    (`docs/ARCHITECTURE_ROADMAP.md` §5 line 274):
+    compares each open position's current static exit rule against the
+    cluster-conditioned (or global) Expectancy Apex suggestion without mutating
+    `open_entries`, `journal.jsonl`, or `brain_map.db`.
+
+    Enforces the Court verdict gate: `deploy_ready` is True ONLY when a
+    Department-5 Court verdict (`proven_on_paper=True` or `promote=True`) is
+    supplied; `live_override` is permanently `False` (advisory-only contract)."""
+    by_strat = (summary or {}).get("by_strategy_apex") or {}
+    global_apex = (summary or {}).get("expectancy_apex") or {}
+    positions = []
+    skipped_closed = 0
+
+    for entry in open_entries or []:
+        if entry.get("outcome") is not None:
+            skipped_closed += 1
+            continue
+        decision = str(entry.get("decision") or "").lower()
+        if decision in ("rejected", "voided"):
+            skipped_closed += 1
+            continue
+
+        spread = entry.get("spread") or {}
+        plan = entry.get("plan") or {}
+        if spread:
+            strat = spread.get("strategy") or "unknown"
+            direction = direction_for_strategy(strat)
+            ref_spot = float(spread.get("entry_spot") or entry.get("price") or 0.0)
+            static_rule = {
+                "kind": "options_spread",
+                "profit_take_fraction": static_profit_take_fraction,
+                "mid_trade_stop": None,
+            }
+        else:
+            strat = plan.get("variant") or "equity_swing"
+            direction = LONG if str(entry.get("action") or "").upper() == "BUY" else None
+            ref_spot = float(entry.get("price") or 0.0)
+            sl_price = plan.get("stop_loss")
+            tp_price = plan.get("target")
+            static_sl_pct = (
+                round((ref_spot - float(sl_price)) / ref_spot * 100.0, 2)
+                if ref_spot > 0 and sl_price
+                else None
+            )
+            static_tp_pct = (
+                round((float(tp_price) - ref_spot) / ref_spot * 100.0, 2)
+                if ref_spot > 0 and tp_price
+                else None
+            )
+            static_rule = {
+                "kind": "equity_swing",
+                "static_take_profit_pct": static_tp_pct,
+                "static_stop_loss_pct": static_sl_pct,
+            }
+
+        cluster_apex = (by_strat.get(strat) or {}).get("expectancy_apex") or {}
+        chosen_apex = (
+            cluster_apex
+            if cluster_apex.get("status") == "ok"
+            else (global_apex if global_apex.get("status") == "ok" else {"status": "insufficient_data"})
+        )
+        apex_source = (
+            f"cluster:{strat}"
+            if cluster_apex.get("status") == "ok"
+            else ("global" if global_apex.get("status") == "ok" else "abstained")
+        )
+
+        cand_tp_price = None
+        cand_sl_price = None
+        if chosen_apex.get("status") == "ok" and ref_spot > 0 and direction in (LONG, SHORT):
+            tp_pct = float(chosen_apex["optimal_take_profit_pct"]) / 100.0
+            sl_pct = float(chosen_apex["optimal_stop_loss_pct"]) / 100.0
+            if direction == LONG:
+                cand_tp_price = round(ref_spot * (1.0 + tp_pct), 2)
+                cand_sl_price = round(ref_spot * (1.0 - sl_pct), 2)
+            else:
+                cand_tp_price = round(ref_spot * (1.0 - tp_pct), 2)
+                cand_sl_price = round(ref_spot * (1.0 + sl_pct), 2)
+
+        positions.append({
+            "trade_id": entry.get("short_id") or entry.get("id"),
+            "ticker": entry.get("ticker"),
+            "strategy": strat,
+            "direction": direction,
+            "ref_spot": round(ref_spot, 2) if ref_spot > 0 else None,
+            "static_exit": static_rule,
+            "apex_source": apex_source,
+            "apex_candidate": {
+                "status": chosen_apex.get("status", "insufficient_data"),
+                "optimal_take_profit_pct": chosen_apex.get("optimal_take_profit_pct"),
+                "optimal_stop_loss_pct": chosen_apex.get("optimal_stop_loss_pct"),
+                "net_expectancy_pct": chosen_apex.get("net_expectancy_pct"),
+                "implied_tp_spot": cand_tp_price,
+                "implied_sl_spot": cand_sl_price,
+            },
+        })
+
+    court_passed = bool(
+        court_verdict
+        and (
+            court_verdict.get("proven_on_paper") is True
+            or court_verdict.get("promote") is True
+        )
+    )
+    return {
+        "mode": "open_book_dry_run",
+        "n_open_evaluated": len(positions),
+        "skipped_closed_or_rejected": skipped_closed,
+        "court_approved": court_passed,
+        "deploy_ready": court_passed,
+        "live_override": False,
+        "status": (
+            "COURT_APPROVED_ADVISORY"
+            if court_passed
+            else "DRY_RUN_ONLY_AWAITING_COURT"
+        ),
+        "positions": positions,
+    }
+
+
 # ---------------------------------------------------------------- output
 
 def render_summary(summary: dict, skipped: dict, source: str) -> str:

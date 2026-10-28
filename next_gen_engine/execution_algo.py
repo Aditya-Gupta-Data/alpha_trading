@@ -127,3 +127,69 @@ def sequence_spread_legs(legs: list) -> list:
     buys = [l for l in legs if str(l.get("side", "")).lower() == "buy"]
     rest = [l for l in legs if str(l.get("side", "")).lower() != "buy"]
     return buys + rest
+
+
+def work_multi_leg_chase(
+    legs: list,
+    quotes_by_leg: dict,
+    window_s: float = DEFAULT_WINDOW_S,
+    steps: int = DEFAULT_STEPS,
+    tick: float = DEFAULT_TICK,
+) -> dict:
+    """Work a multi-leg spread in protective-wings-first order (`sequence_spread_legs`)
+    using `plan_limit_chase` + `simulate_chase_fill` (`docs/ARCHITECTURE_ROADMAP.md` §5 Vector 1).
+
+    If any protective `BUY` leg fails to fill within its chase window (or encounters
+    an invalid/crossed book), execution halts immediately (`aborted_unhedged_wing`)
+    and no subsequent short `SELL` leg is ever submitted — guaranteeing zero
+    naked-short exposure at every instant."""
+    ordered = sequence_spread_legs(legs)
+    results = []
+    wing_failed = False
+
+    for idx, leg in enumerate(ordered):
+        side = str(leg.get("side", "")).lower()
+        leg_key = leg.get("leg_id") or leg.get("strike") or idx
+        q_series = quotes_by_leg.get(leg_key) or []
+        if wing_failed and side != "buy":
+            results.append({
+                "leg_key": leg_key,
+                "side": side,
+                "strike": leg.get("strike"),
+                "filled": False,
+                "aborted": True,
+                "reason": "aborted_unhedged_wing: protective BUY leg did not fill",
+            })
+            continue
+        if not q_series:
+            res = {"filled": False, "error": "no quotes for leg"}
+        else:
+            q0 = q_series[0]
+            plan = plan_limit_chase(
+                side,
+                top_bid=float(q0.get("top_bid") or 0.0),
+                top_ask=float(q0.get("top_ask") or 0.0),
+                window_s=window_s,
+                steps=steps,
+                tick=tick,
+            )
+            res = simulate_chase_fill(plan, q_series)
+        entry = {
+            "leg_key": leg_key,
+            "side": side,
+            "strike": leg.get("strike"),
+            **res,
+        }
+        results.append(entry)
+        if side == "buy" and not res.get("filled"):
+            wing_failed = True
+
+    all_filled = bool(results) and all(r.get("filled") for r in results)
+    return {
+        "mode": "PAPER",
+        "wings_first_verified": True,
+        "all_filled": all_filled,
+        "aborted_unhedged_wing": wing_failed,
+        "legs": results,
+    }
+

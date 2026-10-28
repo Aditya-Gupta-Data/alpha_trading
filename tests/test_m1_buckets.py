@@ -43,12 +43,17 @@ def test_plan_seeds_by_the_rulings_and_parity_holds():
     c = _db()
     p = m1.plan(c)
     by = {b["portfolio_id"]: b for b in p["buckets"]}
-    assert set(by) == {"PAPER_10L/IDX_SPREADS", "PAPER_10L/DARLINGS", "PAPER_2L/IDX_SPREADS",
-                       "PAPER_SHADOW_LEARNER/IDX_SPREADS"}
+    assert set(by) == {
+        "PAPER_10L/IDX_SPREADS", "PAPER_10L/EQ_SWING", "PAPER_10L/DARLINGS",
+        "PAPER_10L/WEALTH_LOCK", "PAPER_10L/CROSS_ASSET",
+        "PAPER_2L/IDX_SPREADS", "PAPER_SHADOW_LEARNER/IDX_SPREADS",
+    }
     d, i = by["PAPER_10L/DARLINGS"], by["PAPER_10L/IDX_SPREADS"]
     assert d["starting_capital"] == 300000.0 and d["realized_pnl"] == -2000.0      # treasury budget + eqd: P&L
     assert i["realized_pnl"] == 52000.0                                              # the rest of the realized
-    assert round(d["starting_capital"] + d["realized_pnl"] + i["starting_capital"] + i["realized_pnl"], 2) == 1050000.0
+    total_5_buckets = sum(by[f"PAPER_10L/{fam}"]["starting_capital"] + by[f"PAPER_10L/{fam}"]["realized_pnl"]
+                          for fam in ("IDX_SPREADS", "EQ_SWING", "DARLINGS", "WEALTH_LOCK", "CROSS_ASSET"))
+    assert round(total_5_buckets, 2) == 1050000.0
     assert by["PAPER_SHADOW_LEARNER/IDX_SPREADS"]["max_drawdown_pct"] is None        # no latch on the learner
     assert p["ok"] and all(x["ok"] for x in p["parity"])
 
@@ -57,7 +62,7 @@ def test_apply_is_transactional_idempotent_and_refuses_on_parity(tmp_path):
     c = _db()
     p = m1.plan(c)
     n = m1.apply(c, p)
-    assert n["buckets"] == 4 and n["locks"] == 4
+    assert n["buckets"] == 7 and n["locks"] == 4
     assert c.execute("SELECT portfolio_id FROM margin_locks WHERE journal_ref = 'eqd:aaaa'").fetchone()[0] == "PAPER_10L/DARLINGS"
     assert c.execute("SELECT portfolio_id FROM paper_margin_locks").fetchone()[0] == "PAPER_2L/IDX_SPREADS"
     assert c.execute("SELECT bucket_equity FROM account_state_v").fetchone()[0] == 1050000.0

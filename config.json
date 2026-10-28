@@ -14,6 +14,7 @@
     "fees_per_order_rs": 20,
     "llm_daily_call_cap": 300,
     "llm_run_call_cap": 150,
+    "graphrag_enabled": true,
     "move_per_revenue_pct": 1.0,
     "priced_in_tolerance_pct": 1.0
   },

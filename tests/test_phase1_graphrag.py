@@ -830,3 +830,20 @@ def test_membership_links_are_not_diluted_but_causal_hubs_still_are():
     for i in range(6):
         hub.add_edge("commodity:CRUDE_OIL", f"x{i}", weight=1.0, confidence_score=1.0, polarity=1)
     assert spreading_activation.transmission_coeff(hub, "commodity:CRUDE_OIL", "x0") < 0.4
+
+
+def test_out_of_vocabulary_predicates_are_logged_for_review(tmp_path):
+    log = tmp_path / "rejected_predicates.log"
+
+    def fake_llm(sys_prompt, user_text):
+        return {"edges": [_edge("RBI", "Banks", "RBI raises rates", pred="raises"),
+                          _edge("RBI", "Banks", "RBI raises rates", pol=-1, pred="hurts")]}
+    res = graphrag_extract.extract_from_item(
+        {"title": "x", "text": "RBI raises rates for banks.", "event_id": "ev-9"},
+        conn=brain_map.connect(":memory:"), extractor=fake_llm, dry_run=True,
+        env={"ALPHA_NODE_ROLE": "analytics"}, rejected_predicates_path=log)
+    assert res["rejected_reasons"] == {"invalid_predicate": 1}
+    rows = [json.loads(l) for l in log.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["predicate"] == "raises" and rows[0]["source_ref"] == "ev-9"
+    assert rows[0]["dry_run"] is True
+    assert "raises" not in graphrag.PREDICATE_TO_CLASS

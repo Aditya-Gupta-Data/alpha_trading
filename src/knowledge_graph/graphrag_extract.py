@@ -41,6 +41,7 @@ from src.knowledge_graph import graphrag
 ROOT = Path(__file__).resolve().parent.parent.parent
 REVIEW_LEDGER_PATH = ROOT / "logs" / "graphrag_review_alerts.jsonl"
 CALL_LEDGER_PATH = ROOT / "logs" / "graphrag_extract_calls.jsonl"
+REJECTED_PREDICATES_PATH = ROOT / "logs" / "rejected_predicates.log"
 
 MAX_INPUT_CHARS = 6000
 REVIEW_WEIGHT_THRESHOLD = 0.7
@@ -244,6 +245,27 @@ def _notify_review_edges(
         return 0
 
 
+def _log_rejected_predicate(raw_edge: dict, source_ref, dry_run: bool, path: Path | str | None = None) -> None:
+    """One JSON line per out-of-vocabulary predicate, for periodic review (vocabulary is NOT auto-expanded)."""
+    if path is None and _default_writes_muzzled():
+        return
+    p = Path(path) if path is not None else REJECTED_PREDICATES_PATH
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as f:
+            f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "predicate": str(raw_edge.get("predicate") or "")[:80],
+                "subject": str(raw_edge.get("subject") or "")[:120],
+                "object": str(raw_edge.get("object") or "")[:120],
+                "quote": str(raw_edge.get("quote") or "")[:240],
+                "source_ref": source_ref,
+                "dry_run": bool(dry_run),
+            }) + "\n")
+    except OSError:
+        pass
+
+
 def _calls_today(call_ledger_path: Path, today_str: str) -> int:
     try:
         if not call_ledger_path.exists():
@@ -274,6 +296,7 @@ def extract_from_item(
     notify_fn=None,
     review_ledger_path: Path | str | None = None,
     call_ledger_path: Path | str | None = None,
+    rejected_predicates_path: Path | str | None = None,
     daily_cap: int = DEFAULT_DAILY_EXTRACT_CAP,
     dry_run: bool = False,
     env: dict | None = None,
@@ -343,6 +366,8 @@ def extract_from_item(
             for raw_edge in raw_resp["edges"]:
                 ok, reason, norm = validate_raw_edge(conn, raw_edge, text)
                 if not ok:
+                    if reason == "invalid_predicate" and isinstance(raw_edge, dict):
+                        _log_rejected_predicate(raw_edge, source_ref, dry_run, rejected_predicates_path)
                     summary["rejected"] += 1
                     summary["rejected_reasons"][reason] = summary["rejected_reasons"].get(reason, 0) + 1
                     continue

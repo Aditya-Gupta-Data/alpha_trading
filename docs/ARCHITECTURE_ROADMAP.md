@@ -9,7 +9,7 @@ decision-log entry: when Phase 1 starts, add a numbered entry to `DECISIONS.md`
 
 | Phase | Name | Vector | Status |
 |---|---|---|---|
-| **1 (FIRST)** | Qualitative 3D Associative Knowledge Graph (GraphRAG) | Vector 3 | blueprint below, **no code** |
+| **1 (FIRST)** | Qualitative 3D Associative Knowledge Graph (GraphRAG) | Vector 3 | Steps 1–4 built on branch `phase1-graphrag` (`#162`, 10 tests); Step 5 awaits §2.7 owner ruling |
 | **2 (SECOND)** | Self-Evolving Brain Map + Unsupervised Auto-Discovery (Cycle Hunter) | Vector 4 | not started; builds on `docs/self_evolving_brain_map.md`, `docs/cycle_hunter_plan.md`, `docs/auto_discovery_spec.md` |
 | **3+ (LATER)** | OMS pipeline, multi-bucket allocation, multi-seat topology | — | not started; see `docs/m1_multi_bucket_ledger_blueprint.md`, decisions #143/#144/#146 |
 

@@ -170,22 +170,32 @@ class GraphEngine:
         try:
             ensure_schema(conn)
             for row in conn.execute(
-                "SELECT source_node, relation, target_node, confidence_score, "
-                "context FROM graph_edges WHERE invalid_at IS NULL"
+                "SELECT * FROM graph_edges WHERE invalid_at IS NULL"
             ):
+                keys = row.keys()
                 src, relation, tgt, score, context = (
                     row["source_node"], row["relation"], row["target_node"],
                     row["confidence_score"], row["context"],
                 )
                 # A DiGraph keeps one edge per (src, tgt); if the store holds
                 # duplicates, the strongest link wins so traversal ranks it.
-                weight = 0.0 if score is None else float(score)
+                conf = 0.0 if score is None else float(score)
+                raw_w = row["weight"] if "weight" in keys else None
+                weight = float(raw_w) if raw_w is not None else conf
                 if self.graph.has_edge(src, tgt) and \
-                        self.graph[src][tgt].get("weight", 0.0) >= weight:
+                        (self.graph[src][tgt].get("confidence_score") or 0.0) >= conf:
                     continue
-                self.graph.add_edge(src, tgt, relation=relation,
-                                    confidence_score=score, weight=weight,
-                                    context=context)
+                attrs = {
+                    "relation": relation,
+                    "confidence_score": score,
+                    "weight": weight,
+                    "edge_weight": float(raw_w) if raw_w is not None else None,
+                    "context": context,
+                }
+                for col in ("edge_class", "polarity", "evidence_count", "extractor", "source"):
+                    if col in keys:
+                        attrs[col] = row[col]
+                self.graph.add_edge(src, tgt, **attrs)
         finally:
             if owns_conn:
                 conn.close()

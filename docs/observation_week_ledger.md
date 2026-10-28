@@ -2460,3 +2460,10 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Mini PC: `db89b0b`, 64 tests passed, replica block reinstalled (34 lines, 0 live-lane lines), execution refused on the node.
 - Dashboard box: `ship_ui.sh` from a `db89b0b` checkout (the Mac's node_modules, identical package-lock), bundle 18:11, `alpha-desk-ui` active, `/login` and `/overview` 200 on :8080, the bundle carries the new chart strings.
 - Unverified: the first 08:50 GEX run and the 09:10 card with GEX text (10-29), the pre-LLM skip counts on real feeds, the chart on live data.
+
+
+## Deploy 2026-10-28 18:30 IST — Live Book portfolio filter, dashboard box only (`main` `59c7e58` → `48aac47`)
+
+- Pushed `48aac47` (fast-forward). Mac suite 3,224 passed; frontend `tsc` 0 errors, eslint clean.
+- `ship_ui.sh` from a detached `48aac47` checkout (the Mac's `node_modules`, identical package-lock). Bundle 18:30, `alpha-desk-ui` and nginx active, `/login` `/overview` `/live-book` 200 on :8080 and `/login` `/live-book` 200 through the cloudflared tunnel; the bundle carries the new filter strings and still carries the #159 chart.
+- Unverified: the filter on the live book's real rows (needs the owner's access key).

@@ -42,6 +42,15 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~18:30 IST) — Live Book PORTFOLIO filter shipped to the dashboard box (`48aac47`, UI only)
+
+- **Live now:** the Live Book has a PORTFOLIO dropdown beside STRATEGY: ALL, PAPER_10L, PAPER_2L, PAPER_2L_ROT, PAPER_2L_LIVE, PAPER_SHADOW_LEARNER, PAPER_EVENTS.
+  - A row matches on an EXACT account name from its comma-joined `accounts`, so PAPER_2L never pulls in the ROT or LIVE rows.
+  - Shipped 18:30. `alpha-desk-ui` is active; `/login`, `/overview` and `/live-book` answer 200 on the box and through the tunnel.
+  - Checked in a browser on mock data (desktop and phone). Not yet looked at on the live book.
+- **Known gap:** PAPER_EVENTS always shows "No open positions match these filters", because `/api/open-trades` (`src/dashboard/data.py open_trades`) does not read `event_positions`. That book holds no positions today. Wire it in the bridge if the Architect wants event trades on the Live Book.
+- No VM or Mini PC change; both stay on `db89b0b`'s code (`main` now `48aac47`, frontend + docs only).
+
 ## 2026-10-28 (Wed, ~18:15 IST) — #159 DEPLOYED: VM and Mini PC on `db89b0b`; the dashboard box runs the new desk bundle
 
 - **Live now:**

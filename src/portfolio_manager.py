@@ -1247,6 +1247,27 @@ def paper_halt_latched(conn, account: str) -> bool:
     return bool(row) and row[0] == HALT_LATCH_EVENT
 
 
+def paper_latch_halt(conn, account: str, why: str = "") -> bool:
+    """Arm the risk-of-ruin halt latch for ANY paper account (idempotent; True if
+    this call armed it). The primary delegates to `latch_halt()`; the Shadow
+    Learner (`ACCOUNT_PAPER_SHADOW_LEARNER`) has no latch by design (#140)."""
+    if _is_primary(account):
+        return latch_halt(conn, why=why)
+    if account == ACCOUNT_PAPER_SHADOW_LEARNER or account not in PAPER_ACCOUNTS:
+        return False
+    try:
+        ensure_accounts_schema(conn)
+        get_paper_account(conn, account)
+        if paper_halt_latched(conn, account):
+            return False
+        paper_log_event(conn, account, HALT_LATCH_EVENT, None,
+                        why or "risk-of-ruin threshold breached")
+        return True
+    except Exception as e:
+        print(f"  (paper halt latch not persisted for {account} — {e})")
+        return False
+
+
 def paper_trading_halted(conn, account: str) -> bool:
     """The shadow account's own risk-of-ruin brake: same 10% rule, same
     latch semantics (Dept 3 ruling 2026-08-17), its own events table. No

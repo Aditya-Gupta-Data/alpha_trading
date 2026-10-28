@@ -215,3 +215,73 @@ def test_migrate_m1_buckets_plan_parity_and_idempotent_apply():
     assert counts2["buckets"] == 0
     assert counts2["locks"] == 0
     conn.close()
+
+
+def test_remote_kill_switch_discord_halt_owner_auth_and_latch_lifecycle(monkeypatch):
+    from src import discord_bot as bot
+    from src import equity_desk
+
+    conn = brain_map.connect(":memory:")
+    pm.ensure_accounts_schema(conn)
+    pm.get_account(conn)
+    pm.get_paper_account(conn, pm.ACCOUNT_PAPER_2L)
+    conn.execute(
+        "INSERT INTO portfolios (portfolio_id, account_id, strategy_family, starting_capital, "
+        "realized_pnl, peak_equity, risk_per_trade_pct, max_drawdown_pct, daily_loss_pct, created_at) "
+        "VALUES ('PAPER_10L/DARLINGS', 'PAPER_10L', 'darlings', 300000.0, 0, 300000.0, 2.0, 10.0, 3.0, 'now')"
+    )
+    conn.commit()
+
+    # 1. Fail-closed when AUTHORIZED_DISCORD_USER_ID is unset or wrong caller ID
+    monkeypatch.delenv("AUTHORIZED_DISCORD_USER_ID", raising=False)
+    monkeypatch.setattr(bot, "_load_env", lambda: None)
+    unauth1 = bot._execute_halt_command("trip", "all", "emergency", user_id=999999, conn=conn)
+    assert unauth1["ok"] is False and unauth1["status"] == "unauthorized"
+    assert not pm.halt_latched(conn) and not equity_desk.desk_halt_latched(conn)
+
+    monkeypatch.setenv("AUTHORIZED_DISCORD_USER_ID", "123456789")
+    unauth2 = bot._execute_halt_command("trip", "all", "intruder", user_id=999999, conn=conn)
+    assert unauth2["ok"] is False and unauth2["status"] == "unauthorized"
+    assert not pm.halt_latched(conn) and not equity_desk.desk_halt_latched(conn)
+
+    # 2. Authorized owner trips the remote kill-switch across all scopes
+    tripped = bot._execute_halt_command(
+        "trip", "all", "mobile panic button test", user_id=123456789, conn=conn
+    )
+    assert tripped["ok"] is True and tripped["status"] == "tripped"
+    assert pm.halt_latched(conn) is True
+    assert equity_desk.desk_halt_latched(conn) is True
+    assert pm.paper_halt_latched(conn, pm.ACCOUNT_PAPER_2L) is True
+    assert pm.paper_halt_latched(conn, pm.ACCOUNT_PAPER_SHADOW_LEARNER) is False
+    assert buckets.bucket(conn, "PAPER_10L/DARLINGS")["halted_at"] is not None
+    reply_trip = bot._format_halt_reply(tripped)
+    assert "REMOTE KILL-SWITCH LATCHED" in reply_trip
+
+    # Verify entries are blocked while latched
+    refused_primary = pm.request_entry(conn, "opt_after_halt", 25_000.0)
+    assert refused_primary["approved"] is False
+    refused_2l = pm.paper_request_entry(conn, pm.ACCOUNT_PAPER_2L, "opt_after_halt", 10_000.0)
+    assert refused_2l["approved"] is False
+
+    # 3. Status command reports all latched targets
+    st = bot._execute_halt_command("status", "all", "", user_id=123456789, conn=conn)
+    assert st["ok"] is True and st["targets"]["firm_PAPER_10L"]["latched"] is True
+    assert st["targets"]["equity_desk_DARLINGS"]["latched"] is True
+    assert "HALTED (latched)" in bot._format_halt_reply(st)
+
+    # 4. Clearing without a `why` reason is refused (#92 / #125)
+    no_why = bot._execute_halt_command("clear", "all", "   ", user_id=123456789, conn=conn)
+    assert no_why["ok"] is False and no_why["status"] == "missing_why"
+    assert pm.halt_latched(conn) is True
+
+    # 5. Authorized clear with a valid `why` unlatches and audits the clear
+    cleared = bot._execute_halt_command(
+        "clear", "all", "false alarm verified on phone", user_id=123456789, conn=conn
+    )
+    assert cleared["ok"] is True and cleared["status"] == "cleared"
+    assert pm.halt_latched(conn) is False
+    assert equity_desk.desk_halt_latched(conn) is False
+    assert pm.paper_halt_latched(conn, pm.ACCOUNT_PAPER_2L) is False
+    assert buckets.bucket(conn, "PAPER_10L/DARLINGS")["halted_at"] is None
+    assert "KILL-SWITCH CLEAR EXECUTED" in bot._format_halt_reply(cleared)
+    conn.close()

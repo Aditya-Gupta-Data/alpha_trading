@@ -535,6 +535,300 @@ async def positions(interaction: discord.Interaction):
     await interaction.followup.send(embed=_positions_embed(items))
 
 
+# -------------------------------------------- Phase 3 Remote Kill-Switch (#165)
+#
+# Owner ruling (2026-10-28, docs/ARCHITECTURE_ROADMAP.md §5):
+# The remote mobile kill-switch is exposed ONLY as the `/halt` slash command
+# in `src/discord_bot.py`, strictly restricted to the owner's Discord user ID
+# (`AUTHORIZED_DISCORD_USER_ID` in `.env` / environment). Fail-closed: if
+# `AUTHORIZED_DISCORD_USER_ID` is unset, non-numeric, or does not match the
+# caller's integer Discord ID, `/halt` refuses before touching any state.
+
+def _authorized_owner_id() -> int | None:
+    """Return the configured integer `AUTHORIZED_DISCORD_USER_ID`, or None if
+    missing/malformed (fail-closed)."""
+    _load_env()
+    raw = str(os.environ.get("AUTHORIZED_DISCORD_USER_ID") or "").strip()
+    if not raw.isdigit():
+        return None
+    val = int(raw)
+    return val if val > 0 else None
+
+
+def _is_authorized_owner(user_id) -> bool:
+    """True iff `user_id` is a valid integer matching `AUTHORIZED_DISCORD_USER_ID`."""
+    expected = _authorized_owner_id()
+    if expected is None or user_id is None:
+        return False
+    try:
+        return int(user_id) == expected
+    except (TypeError, ValueError):
+        return False
+
+
+def _execute_halt_command(action: str = "trip",
+                          scope: str = "all",
+                          why: str = "",
+                          user_id=None,
+                          conn=None) -> dict:
+    """Execute the remote kill-switch (`trip` | `status` | `clear`) on the
+    #92 firm halt latch, #125 equity-desk halt latch, paper accounts, and M1/M4
+    buckets. Fail-closed on authorization before any DB touch."""
+    if not _is_authorized_owner(user_id):
+        return {
+            "ok": False,
+            "status": "unauthorized",
+            "error": (
+                "Unauthorized: `/halt` is restricted to the owner's Discord "
+                "user ID (`AUTHORIZED_DISCORD_USER_ID`)."
+            ),
+        }
+
+    act_raw = str(action or "trip").strip().lower()
+    if act_raw in ("trip", "arm", "halt", "latch"):
+        act = "trip"
+    elif act_raw in ("status", "check", "state"):
+        act = "status"
+    elif act_raw in ("clear", "reset", "unhalt"):
+        act = "clear"
+    else:
+        return {
+            "ok": False,
+            "status": "invalid_action",
+            "error": f"Unknown `/halt` action {action!r} — use `trip`, `status`, or `clear`.",
+        }
+
+    scope_raw = str(scope or "all").strip()
+    scope_upper = scope_raw.upper()
+    why_clean = str(why or "").strip()
+    who = f"owner (discord:{int(user_id)})"
+
+    if act == "clear" and not why_clean:
+        return {
+            "ok": False,
+            "status": "missing_why",
+            "action": "clear",
+            "scope": scope_raw,
+            "error": "Refused: clearing a latched halt requires a stated `why` reason (#92/#125).",
+        }
+
+    from src import brain_map, buckets, equity_desk, portfolio_manager as pm
+
+    own_conn = conn is None
+    if own_conn:
+        conn = brain_map.connect()
+    try:
+        pm.ensure_accounts_schema(conn)
+        reason_stamp = (
+            f"remote kill-switch (/halt by discord:{int(user_id)})"
+            + (f" — {why_clean}" if why_clean else "")
+        )
+
+        # Resolve which targets `scope` addresses
+        is_all = scope_upper in ("ALL", "*")
+        is_firm = is_all or scope_upper in ("FIRM", "PRIMARY", pm.ACCOUNT_PAPER_10L)
+        is_desk = is_all or scope_upper in ("DESK", "EQUITY_DESK", "DARLINGS")
+        paper_targets = []
+        if is_all:
+            paper_targets = [
+                a for a in pm.PAPER_ACCOUNTS
+                if a != pm.ACCOUNT_PAPER_SHADOW_LEARNER
+            ]
+        elif scope_upper in pm.PAPER_ACCOUNTS:
+            paper_targets = [scope_upper]
+
+        bucket_rows = buckets.summary(conn)
+        bucket_targets = []
+        if is_all:
+            bucket_targets = [
+                b["portfolio_id"] for b in bucket_rows
+                if b.get("max_drawdown_pct") is not None
+            ]
+        else:
+            for b in bucket_rows:
+                if b["portfolio_id"].upper() == scope_upper or b["strategy_family"].upper() == scope_upper:
+                    bucket_targets.append(b["portfolio_id"])
+
+        if not (is_firm or is_desk or paper_targets or bucket_targets):
+            return {
+                "ok": False,
+                "status": "unknown_scope",
+                "action": act,
+                "scope": scope_raw,
+                "error": (
+                    f"Unknown scope {scope_raw!r} — use `all`, `firm`, `desk`, "
+                    "a paper account ID (`PAPER_2L`, `PAPER_2L_LIVE`, …), or a bucket ID."
+                ),
+            }
+
+        if act == "trip":
+            tripped = {}
+            if is_firm:
+                newly = pm.latch_halt(conn, why=reason_stamp)
+                tripped["firm_PAPER_10L"] = {
+                    "newly_latched": newly,
+                    "latched": pm.halt_latched(conn),
+                    "halted": pm.trading_halted(conn),
+                }
+            if is_desk:
+                newly = equity_desk.latch_desk_halt(conn, why=reason_stamp)
+                tripped["equity_desk_DARLINGS"] = {
+                    "newly_latched": newly,
+                    "latched": equity_desk.desk_halt_latched(conn),
+                }
+            for acct in paper_targets:
+                newly = pm.paper_latch_halt(conn, acct, why=reason_stamp)
+                tripped[acct] = {
+                    "newly_latched": newly,
+                    "latched": pm.paper_halt_latched(conn, acct),
+                    "halted": pm.paper_trading_halted(conn, acct),
+                }
+            for pid in bucket_targets:
+                newly = buckets.latch_bucket_halt(conn, pid, why=reason_stamp)
+                b_now = buckets.bucket(conn, pid) or {}
+                tripped[f"bucket:{pid}"] = {
+                    "newly_latched": newly,
+                    "latched": bool(b_now.get("halted_at")),
+                }
+            return {
+                "ok": True,
+                "status": "tripped",
+                "action": "trip",
+                "scope": scope_raw,
+                "why": why_clean or "remote kill-switch",
+                "who": who,
+                "targets": tripped,
+            }
+
+        if act == "clear":
+            cleared = {}
+            if is_firm:
+                cleared["firm_PAPER_10L"] = pm.clear_halt(conn, why=why_clean, who=who)
+            if is_desk:
+                cleared["equity_desk_DARLINGS"] = equity_desk.clear_desk_halt(
+                    conn, why=why_clean, who=who
+                )
+            for acct in paper_targets:
+                cleared[acct] = pm.paper_clear_halt(conn, acct, why=why_clean, who=who)
+            for pid in bucket_targets:
+                cleared[f"bucket:{pid}"] = buckets.clear_bucket_halt(
+                    conn, pid, why=why_clean, who=who
+                )
+            return {
+                "ok": True,
+                "status": "cleared",
+                "action": "clear",
+                "scope": scope_raw,
+                "why": why_clean,
+                "who": who,
+                "targets": cleared,
+            }
+
+        # act == "status"
+        state = {}
+        if is_firm:
+            state["firm_PAPER_10L"] = {
+                "latched": pm.halt_latched(conn),
+                "halted": pm.trading_halted(conn),
+                "drawdown_pct": pm.drawdown_pct(conn),
+            }
+        if is_desk:
+            ds = equity_desk.desk_state(conn)
+            state["equity_desk_DARLINGS"] = {
+                "latched": equity_desk.desk_halt_latched(conn),
+                "halted": ds["ruin_halted"],
+                "realized_rs": ds["realized"],
+                "budget_rs": ds["budget"],
+            }
+        for acct in paper_targets:
+            state[acct] = {
+                "latched": pm.paper_halt_latched(conn, acct),
+                "halted": pm.paper_trading_halted(conn, acct),
+                "drawdown_pct": pm.paper_drawdown_pct(conn, acct),
+            }
+        for pid in bucket_targets:
+            b_now = buckets.bucket(conn, pid)
+            if b_now:
+                state[f"bucket:{pid}"] = {
+                    "latched": bool(b_now.get("halted_at")),
+                    "halted_at": b_now.get("halted_at"),
+                    "halt_reason": b_now.get("halt_reason"),
+                    "drawdown_pct": buckets.drawdown_pct(b_now),
+                }
+        return {
+            "ok": True,
+            "status": "status",
+            "action": "status",
+            "scope": scope_raw,
+            "targets": state,
+        }
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _format_halt_reply(result: dict) -> str:
+    """Pure formatter for `/halt` responses (bounded by `DISCORD_MSG_LIMIT`)."""
+    if not isinstance(result, dict) or not result.get("ok"):
+        err = (result or {}).get("error") or "Kill-switch command refused."
+        return f"🛑 **Kill-Switch Refused** — {err}"
+
+    act = result.get("action")
+    targets = result.get("targets") or {}
+    lines = []
+    if act == "trip":
+        lines.append(
+            f"🛑 **REMOTE KILL-SWITCH LATCHED** (`scope={result.get('scope')}`) "
+            f"by `{result.get('who')}` — *{result.get('why')}*"
+        )
+        for name, info in targets.items():
+            badge = "🔴 LATCHED (new)" if info.get("newly_latched") else "🔴 LATCHED (already armed)"
+            lines.append(f"• `{name}`: {badge}")
+    elif act == "clear":
+        lines.append(
+            f"🔓 **KILL-SWITCH CLEAR EXECUTED** (`scope={result.get('scope')}`) "
+            f"by `{result.get('who')}` — *{result.get('why')}*"
+        )
+        for name, info in targets.items():
+            state = "🔴 STILL HALTED" if info.get("halted") else "🟢 LIVE"
+            lines.append(f"• `{name}`: {state} — {info.get('reason', '')}")
+    else:
+        lines.append(f"🎛️ **Kill-Switch Status** (`scope={result.get('scope')}`)")
+        for name, info in targets.items():
+            is_h = info.get("halted") or info.get("latched")
+            badge = "🔴 HALTED (latched)" if info.get("latched") else ("🔴 HALTED" if is_h else "🟢 LIVE")
+            dd = info.get("drawdown_pct")
+            dd_str = f" · dd {dd:.2f}%" if isinstance(dd, (int, float)) else ""
+            lines.append(f"• `{name}`: {badge}{dd_str}")
+    text = "\n".join(lines)
+    return text[:DISCORD_MSG_LIMIT]
+
+
+@tree.command(
+    name="halt",
+    description="Remote kill-switch: trip, check status, or clear the desk/firm halt latch (owner only)",
+)
+@app_commands.describe(
+    action="trip (default: latch halts immediately), status (read-only), or clear (requires why)",
+    scope="all (default), firm (PAPER_10L), desk (DARLINGS #125), or a specific account/bucket ID",
+    why="Reason for tripping or clearing the halt latch (mandatory for clear)",
+)
+async def halt(interaction: discord.Interaction,
+               action: str = "trip",
+               scope: str = "all",
+               why: str = ""):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    uid = getattr(getattr(interaction, "user", None), "id", None)
+    try:
+        result = await asyncio.to_thread(
+            _execute_halt_command, action, scope, why, uid
+        )
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ `/halt` failed: {e}", ephemeral=True)
+        return
+    await interaction.followup.send(_format_halt_reply(result), ephemeral=True)
+
+
 @client.event
 async def on_message(message: discord.Message):
     if message.author == client.user or message.author.bot:

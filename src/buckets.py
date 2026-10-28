@@ -129,6 +129,59 @@ def _halt(conn, b: dict, journal_ref: str = None) -> dict | None:
     return None
 
 
+def latch_bucket_halt(conn, portfolio_id: str, why: str = "", commit: bool = True) -> bool:
+    """Arm a bucket's halt latch (idempotent; True if this call armed it).
+    Buckets with `max_drawdown_pct IS NULL` (e.g. Shadow Learner, #140) have no latch."""
+    b = bucket(conn, portfolio_id)
+    if b is None or b.get("max_drawdown_pct") is None or b.get("halted_at"):
+        return False
+    now = _now_iso()
+    reason = str(why or "remote kill-switch halt latched").strip()
+    conn.execute("UPDATE portfolios SET halted_at = ?, halt_reason = ? WHERE portfolio_id = ? "
+                 "AND halted_at IS NULL", (now, reason, portfolio_id))
+    _event(conn, portfolio_id, "ruin_halt_latched", None, reason)
+    if commit:
+        conn.commit()
+    return True
+
+
+def clear_bucket_halt(conn, portfolio_id: str, why: str = "", who: str = "owner", commit: bool = True) -> dict:
+    """Audited door out of a latched bucket halt (mirrors `pm.clear_halt` / `equity_desk.clear_desk_halt`)."""
+    b = bucket(conn, portfolio_id)
+    if b is None:
+        return {"cleared": False, "portfolio_id": portfolio_id,
+                "reason": f"refused: unknown or retired bucket {portfolio_id!r}"}
+    if not why or not str(why).strip():
+        return {"cleared": False, "portfolio_id": portfolio_id,
+                "reason": "refused: clearing a bucket halt requires a stated why"}
+    if not b.get("halted_at"):
+        return {"cleared": False, "portfolio_id": portfolio_id,
+                "reason": "no latched bucket halt to clear", "halted": False}
+    dd = drawdown_pct(b)
+    mdd = b.get("max_drawdown_pct")
+    conn.execute("UPDATE portfolios SET halted_at = NULL, halt_reason = NULL WHERE portfolio_id = ?",
+                 (portfolio_id,))
+    _event(conn, portfolio_id, "ruin_halt_cleared", None,
+           f"latched bucket halt cleared by {who} at drawdown {dd:.2f}% "
+           + (f"(limit {float(mdd):g}%) " if mdd is not None else "")
+           + f"— {why}")
+    b_after = bucket(conn, portfolio_id)
+    re_halt = _halt(conn, b_after)
+    if commit:
+        conn.commit()
+    still = bool(re_halt)
+    return {
+        "cleared": True,
+        "portfolio_id": portfolio_id,
+        "drawdown_pct": dd,
+        "why": why,
+        "who": who,
+        "halted": still,
+        "reason": ("cleared, but drawdown is still past the limit — the latch re-armed immediately"
+                   if still else "cleared; bucket entries are live again"),
+    }
+
+
 def gate(conn, account: str, journal_ref: str, margin: float, lots: int = 1, dry_run: bool = False,
          portfolio_id: str = None):
     """The bucket's entry guard. None = not routed (switch off / no bucket row): the flat ledger decides.

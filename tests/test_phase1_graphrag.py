@@ -603,6 +603,7 @@ def test_event_engine_emit_wires_second_order_read_onto_card_and_fails_open(tmp_
         seen=detect.SeenLedger(tmp_path / "seen.txt"),
         graph_conn=conn,
         graph_extractor=fake_graph_llm,
+        cfg=dict(emit.settings(), graphrag_enabled=True),
     )
     assert summary["classified"] == 1
     assert summary["graphrag_edges_written"] == 2
@@ -660,3 +661,11 @@ def test_dry_run_stored_items_writes_nothing_to_db(tmp_path):
     edge_count = conn.execute("SELECT COUNT(*) AS n FROM graph_edges").fetchone()["n"]
     assert edge_count == 0
 
+
+
+def test_graphrag_hook_is_off_by_default_until_the_dry_run_passes(tmp_path):
+    from src import config
+    from src.event_engine import emit
+    assert config.EVENT_ENGINE_DEFAULTS["graphrag_enabled"] is False
+    so, res = emit._graphrag_second_order({"title": "x"}, {}, [], {}, graph_conn=object())
+    assert so is None and res == {"status": "disabled"}

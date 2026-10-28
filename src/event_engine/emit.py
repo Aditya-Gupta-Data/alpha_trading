@@ -97,7 +97,7 @@ def _graphrag_second_order(item: dict, ex: dict, mats: list, cfg: dict,
     Muzzled under pytest when no explicit `graph_conn` is injected so existing
     tests never touch the real `data/brain_map.db`."""
     import os
-    if not cfg.get("graphrag_enabled", True):
+    if not cfg.get("graphrag_enabled", False):
         return None, {"status": "disabled"}
     if graph_conn is None and (os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("IS_TEST_ENV")):
         return None, {"status": "muzzled_in_test"}

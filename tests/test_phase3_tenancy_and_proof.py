@@ -338,3 +338,4 @@ def test_wings_first_multi_leg_chase_and_paper_venue_unhedged_wing_guard():
     assert view_after["status"] == oms.REJECTED
     states_by_side = {l["side"]: l["state"] for l in view_after["legs"]}
     assert states_by_side == {"BUY": oms.REJECTED, "SELL": oms.CANCELLED}
+

@@ -307,3 +307,4 @@ def check_seat_permission(
         "target_tenant_id": target_tid,
         "reason": "ok",
     }
+

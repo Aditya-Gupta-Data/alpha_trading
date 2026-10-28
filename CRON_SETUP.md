@@ -343,7 +343,8 @@ in `scripts/setup_node_replica_cron.sh`). Install both by re-running the install
 **Since 2026-10-23 (#158):** `execute_enabled` is **true** (the executor trades PAPER_EVENTS at 09:35), and every emit
 run ends with a no-LLM re-assessment of the last 5 days' zero-suggestion cards — the 21:40 run is the one that sees
 the announcement day's close (bhavcopy 19:15). By hand: `venv/bin/python -m src.event_engine.emit --reassess-only`.
-**Since 2026-10-28 (#162, Phase 1 GraphRAG):** on the Mini PC (`node_role.llm_jobs_refusal()`), `src.event_engine.emit`
+**Since 2026-10-28 (#162, Phase 1 GraphRAG) — OFF by default (`event_engine.graphrag_enabled: false`) until the 7-day
+dry-run below passes; turn on by setting it `true` in the Mini PC's config.** When on, on the Mini PC (`node_role.llm_jobs_refusal()`), `src.event_engine.emit`
 also runs `src.knowledge_graph.graphrag_extract` (daily cap `event_engine.graphrag_daily_cap` = 100) and 3-hop
 `spreading_activation` after `detect.in_universe` + `classify`, stamping a read-only `second_order_read` /
 `second_order_nodes` block onto emitted event cards (context only, zero execution authority). Manual 7-day dry-run on

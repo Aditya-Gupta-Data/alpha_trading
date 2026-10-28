@@ -243,3 +243,34 @@ AD-2 has admitted zero discoveries so far (decision log, 08-01); the gate stays.
 OMS pipeline hardening, multi-bucket allocation (`docs/m1_multi_bucket_ledger_blueprint.md`),
 multi-seat topology. Constraint: the VM stays the single execution node (#146);
 the Mini PC stays analytics-only (#143/#144).
+
+---
+
+## 5. FULL "PAPER-PROVE EVERYTHING" VISION — six vectors (owner text, condensed 2026-10-28)
+
+*Condensed from the Architect's brief, not copied. Status column checked against
+the repo today (file existence only — "exists" means a module is there, not that
+it is proven). Lines in **'single quotes'** are the agent's own additions.*
+
+**Thesis:** every institutional component (execution, reconciliation, multi-bucket
+allocation, GraphRAG, cycle discovery) is built and statistically proven on paper
+before any real rupee. Paper-only (CLAUDE.md Rule 7) stays binding.
+
+| # | Vector | Owner's scope | Repo status 10-28 | Phase |
+|---|---|---|---|---|
+| 1 | Execution & OMS | limit-chasing multi-leg algo (`next_gen_engine/execution_algo.py`), wings-first leg order, order state machine (PENDING/PARTIAL/FILLED/REJECTED/CANCELLED, idempotent), read-only broker recon daemon, remote kill-switch | `src/oms.py`, `src/execution/{paper_venue,live_pricer,recon_engine}.py`, `next_gen_engine/execution_algo.py`, desk-halt latch (#125) all **exist**; recon is GET-only (#94). Remote mobile kill-switch: **not verified** | 3+ |
+| 2 | Multi-bucket allocation (M4) | 5 ring-fenced buckets B1 options ≤25%, B2 swing ≤20%, B3 darlings ≤30%, B4 long-term + GOLDBEES wealth lock ≤25%, B5 cross-asset/macro ≤15%; `corporate_actions.py` split/bonus adjuster | blueprint `docs/m1_multi_bucket_ledger_blueprint.md` (design only); `wealth_lock.py`, `firm_treasury.py` exist; `corporate_actions.py` **absent** | 3+ |
+| 3 | GraphRAG | weighted directed entity graph, 2nd/3rd-order signal discovery | §2 above | **1** |
+| 4 | Self-evolving Brain Map / Cycle Hunter | 2016–2023 bhavcopy backfill, AD-1–AD-4 (Mahalanobis, Frobenius corr-shift), MFE/MAE-optimised exits | AD-1/AD-2 built (zero admissions), `calibration/mfe_mae_analyzer.py` exists | **2** |
+| 5 | Playbooks & staged positions | Stage-B 60-session forward clock, H4 pyramid in shadow, `PAPER_EVENTS` ₹10L sandbox | Stage B clock running (#86, target ~Oct 13+, slack 0), H4 shadowed, `PAPER_EVENTS` executor ON (#157) | in flight |
+| 6 | Topology / multi-seat (M6) | VM = execution, Mini PC = analytics/LLM; per-tenant SQLite isolation, role permissions | role split LIVE (#146/#147); tenancy **not started** | 3+ |
+
+### Agent additions (not in the owner's brief)
+
+- **'Kill-switch first.'** 'Of everything in Phase 3, the remote kill-switch is the cheapest and highest-value: reuse the existing desk-halt latch (#125) behind a signed Discord command or a tiny authenticated endpoint. Needs an owner ruling on the auth method before building.'
+- **'Corporate actions can move up.'** 'Phase 1 and Phase 2 both read historical bars; a split-unadjusted bar corrupts GraphRAG outcome pairing and the 2016–2023 backfill. Build `corporate_actions.py` (golden-file tests on a known split and a known bonus) before the Phase 2 backfill, even though M4 itself is Phase 3+.'
+- **'Bucket caps need an enforcement test.'** 'The 25/20/30/25/15 caps sum to 115%. Intentional ceilings, but the allocator must define precedence when all buckets want their ceiling, and a test must prove no bucket can borrow another’s halted capital.'
+- **'Survivorship in the backfill.'** 'bhavcopy 2016–2023 only lists names alive today unless delisted symbols are included; the archive/ NIFTY-50 set is already known to be survivor-biased. Record this in the Phase 2 spec and treat backfilled results as hypotheses, never as forward evidence (append-only forward ledgers stay untouched, Rule 3).'
+- **'MFE/MAE exits:'** 'the existing analyzer is the starting point; replacing static targets is a sizing/exit change, so it still needs the dry-run over the open book and a Court verdict before any deploy.'
+- **'Proof standard for "proven on paper":'** 'one definition for all six vectors: forward (not backfilled) sample, pre-registered metric, placebo/shuffled comparison, n stated. Otherwise "proven" drifts.'
+- **'Sequencing guard:'** 'Phase 1 and 2 are analytics-node work and cannot touch the execution path, so they can run without disturbing the live VM; Phase 3 items touch the VM and need the open-book dry-run protocol.'

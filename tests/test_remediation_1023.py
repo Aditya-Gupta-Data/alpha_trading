@@ -173,7 +173,7 @@ def test_the_shipped_config_carries_the_100_call_day_split_50_50():
     import json
     from pathlib import Path
     ee = json.loads((Path(__file__).resolve().parent.parent / "config.json").read_text())["event_engine"]
-    assert ee["llm_daily_call_cap"] == 100 and ee["llm_run_call_cap"] == 50
+    assert ee["llm_daily_call_cap"] == 300 and ee["llm_run_call_cap"] == 150
 
 
 # --------------------------------------------------------------- daily participant OI + GEX

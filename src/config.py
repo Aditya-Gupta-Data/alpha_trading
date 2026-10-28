@@ -154,7 +154,7 @@ EVENT_ENGINE_DEFAULTS = {
     "emit_enabled": True, "execute_enabled": False, "max_loss_per_trade_rs": 5000.0,
     "materiality_threshold_pct": 2.0, "fixed_otm_pct": 3.0, "take_profit_multiple": 5.0,
     "horizon_days_default": 30, "card_max_age_days": 5, "fees_per_order_rs": 20.0,
-    "llm_daily_call_cap": 100, "llm_run_call_cap": 50, "move_per_revenue_pct": 1.0, "priced_in_tolerance_pct": 1.0,
+    "llm_daily_call_cap": 300, "llm_run_call_cap": 150, "move_per_revenue_pct": 1.0, "priced_in_tolerance_pct": 1.0,
     "graphrag_enabled": False, "graphrag_daily_cap": 100,
 }
 EVENT_ENGINE = dict(EVENT_ENGINE_DEFAULTS, **(_CONFIG.get("event_engine") or {}))

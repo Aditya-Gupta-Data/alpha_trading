@@ -100,12 +100,107 @@ def _book_field(journal_path=None) -> str:
     equities = _open_approved_equities(entries)
     total = len(spreads) + len(equities)
     lines = [f"{len(spreads)} option spread(s), {len(equities)} equity "
-            f"position(s) — {total} open going into today."]
+             f"position(s) — {total} open going into today."]
     try:
         from src import firm_mtm
         lines.append(firm_mtm.render_line())
     except Exception:
         pass
+    return "\n".join(lines)
+
+
+# ------------------------------------------- S4: open-book earnings watch (#167)
+
+def open_book_earnings_watch(entries=None, journal_path=None,
+                             calendar_doc=None, calendar_path=None,
+                             today=None, marks_by_ref=None,
+                             heavyweights=None) -> dict:
+    """Earnings Awareness S4 (docs/earnings_awareness_spec.md §2 S4):
+    list every open spread position whose underlying (or index heavyweight)
+    reports before its expiry: structure, days to results, real-quote P&L,
+    and max loss.
+
+    When the earnings calendar is missing or stale (> EARNINGS_CALENDAR_MAX_AGE_DAYS),
+    returns {"status": "skipped", "reason": <why>, "items": []} and never guesses.
+    """
+    from src.confluence import evidence as ev
+    today_date = ec._as_date(today)
+    doc = calendar_doc if calendar_doc is not None else ec.load_doc(calendar_path)
+    skip = ec.stale_reason(doc, today_date)
+    if skip:
+        return {"status": "skipped", "reason": skip, "items": []}
+
+    rows = entries if entries is not None else _read_journal(journal_path)
+    marks = dict(marks_by_ref or {})
+    items = []
+    for entry in _open_approved_spreads(rows):
+        spread = entry.get("spread") or {}
+        ticker = entry.get("ticker") or spread.get("underlying")
+        expiry = spread.get("expiry")
+        if not ticker or not expiry:
+            continue
+        block = ev.earnings_block(ticker, expiry, today=today_date,
+                                  doc=doc, heavyweights=heavyweights)
+        if block.get("results_before_expiry") is not True:
+            continue
+        ref = entry.get("short_id") or ""
+        mark = marks.get(ref) if isinstance(marks.get(ref), dict) else {}
+        real_pnl = mark.get("real_pnl_rs")
+        if real_pnl is None:
+            real_pnl = entry.get("real_pnl_rs")
+        lots = int(spread.get("lots", 1) or 1)
+        try:
+            max_loss_rs = round(float(spread.get("max_loss") or 0.0) * lots, 2)
+        except (TypeError, ValueError):
+            max_loss_rs = None
+        items.append({
+            "short_id": ref,
+            "ticker": ticker,
+            "strategy": spread.get("strategy") or "spread",
+            "expiry": expiry,
+            "window": block.get("window"),
+            "days_to_results": block.get("days_to_results"),
+            "next_results": block.get("next_results"),
+            "basis": block.get("basis"),
+            "index_constituents_reporting": block.get("index_constituents_reporting") or [],
+            "real_pnl_rs": round(float(real_pnl), 2) if real_pnl is not None else None,
+            "max_loss_rs": max_loss_rs,
+        })
+    return {"status": "ok", "reason": None, "items": items}
+
+
+def _earnings_watch_field(entries=None, journal_path=None,
+                          calendar_doc=None, calendar_path=None,
+                          today=None, marks_by_ref=None,
+                          heavyweights=None) -> str | None:
+    """Render the S4 Open-Book Earnings Watch section, or None when empty/skipped."""
+    watch = open_book_earnings_watch(
+        entries=entries, journal_path=journal_path,
+        calendar_doc=calendar_doc, calendar_path=calendar_path,
+        today=today, marks_by_ref=marks_by_ref, heavyweights=heavyweights,
+    )
+    items = watch.get("items") or []
+    if not items:
+        return None
+    lines = []
+    for item in items:
+        strat = str(item["strategy"]).replace("_", " ")
+        ref_str = f" (`{item['short_id']}`)" if item.get("short_id") else ""
+        d = item.get("days_to_results")
+        when = "today" if d == 0 else f"in {d}d ({item.get('next_results')})"
+        if item.get("basis") == "index_heavyweights" and item.get("index_constituents_reporting"):
+            names = ", ".join(c["ticker"] for c in item["index_constituents_reporting"])
+            when = f"{when} via {names}"
+        pnl_txt = (f"real-quote P&L Rs.{item['real_pnl_rs']:+,.2f}"
+                   if item.get("real_pnl_rs") is not None
+                   else "real-quote P&L unpriced pre-open")
+        loss_txt = (f"max loss Rs.{item['max_loss_rs']:,.2f}"
+                    if item.get("max_loss_rs") is not None
+                    else "max loss n/a")
+        lines.append(
+            f"• **{item['ticker']}** {strat}{ref_str} (exp {item['expiry']}) — "
+            f"results {when} | {pnl_txt} | {loss_txt}"
+        )
     return "\n".join(lines)
 
 
@@ -236,7 +331,9 @@ def build_morning_brief(watchlist_path=None, journal_path=None,
                         regime_sentence_fn=None, halt_lines_fn=None,
                         clock=None, darlings_daily_path=None,
                         levels_path=None, darling_closes=None,
-                        darling_levels=None) -> dict:
+                        darling_levels=None, calendar_doc=None,
+                        entries=None, marks_by_ref=None,
+                        heavyweights=None) -> dict:
     """Build the payload. Every seam is a parameter so the card is
     assertable offline; each field fails open independently."""
     today = (clock or _today)()
@@ -274,6 +371,24 @@ def build_morning_brief(watchlist_path=None, journal_path=None,
                            calendar_path=calendar_path,
                            calendar=calendar, today=today_date)[:1024],
                        "inline": False})
+    except Exception:
+        pass
+
+    # S4 (#167): Open-Book Earnings Watch — open spreads whose underlying or
+    # index heavyweight reports before expiry.
+    try:
+        eff_doc = calendar_doc
+        if eff_doc is None and calendar is not None and calendar_path is None:
+            eff_doc = calendar if (isinstance(calendar, dict) and "as_of" in calendar) else {}
+        watch_txt = _earnings_watch_field(
+            entries=entries, journal_path=journal_path,
+            calendar_doc=eff_doc, calendar_path=calendar_path,
+            today=today_date, marks_by_ref=marks_by_ref,
+            heavyweights=heavyweights,
+        )
+        if watch_txt:
+            fields.append({"name": "📊 Open-Book Earnings Watch",
+                           "value": watch_txt[:1024], "inline": False})
     except Exception:
         pass
 

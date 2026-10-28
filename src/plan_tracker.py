@@ -1577,6 +1577,11 @@ def record_post_mortem(entry: dict, brain) -> None:
                                     brain_map.hold_crossed_results(entry))
     except Exception:
         pass
+    try:                                                       # #167 S5: pair earnings_exit_shadow with actual settlement
+        from src import live_bridge as lb
+        lb.resolve_earnings_exit_shadow(brain, entry)
+    except Exception:
+        pass
     try:                                                       # #155 D7: Greek P&L attribution, own table
         from src.analysis import greek_attribution as ga
         if entry.get("spread"):

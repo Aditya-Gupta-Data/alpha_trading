@@ -982,6 +982,446 @@ def _notify_discord(text: str) -> bool:
         return False
 
 
+# --------------------- Earnings Awareness S4 & S5 (#167, docs/earnings_awareness_spec.md)
+
+from pathlib import Path as _BridgePath
+
+EARNINGS_WATCH_LEDGER_PATH = (
+    _BridgePath(__file__).resolve().parent.parent / "logs" / "earnings_watch_alerts.jsonl"
+)
+
+_EARNINGS_EXIT_SHADOW_SCHEMA = """
+CREATE TABLE IF NOT EXISTS earnings_exit_shadow (
+    journal_ref             TEXT PRIMARY KEY,
+    short_id                TEXT,
+    ticker                  TEXT NOT NULL,
+    strategy                TEXT NOT NULL,
+    shadow_date             TEXT NOT NULL,
+    results_date            TEXT NOT NULL,
+    trigger_reason          TEXT NOT NULL,
+    spot                    REAL,
+    body_distance_pct       REAL,
+    would_exit_mark_ps      REAL NOT NULL,
+    would_pnl_rs            REAL NOT NULL,
+    real_capture_pct        REAL NOT NULL,
+    capture_threshold_pct   REAL,
+    body_proximity_pct      REAL,
+    note                    TEXT,
+    actual_exit_date        TEXT,
+    actual_resolution       TEXT,
+    actual_pnl_rs           REAL,
+    pnl_diff_rs             REAL
+);
+"""
+
+
+def ensure_earnings_exit_shadow_schema(conn) -> None:
+    """Additive earnings_exit_shadow table in brain_map.db (#167, Seam S5)."""
+    conn.executescript(_EARNINGS_EXIT_SHADOW_SCHEMA)
+    conn.commit()
+
+
+def _read_watch_ledger(ledger_path=None) -> set:
+    """Return {(short_id, day_iso)} already alerted in the S4 watch ledger."""
+    import json as _json
+    import os as _os
+    if ledger_path is None:
+        if _os.environ.get("PYTEST_CURRENT_TEST") or _os.environ.get("IS_TEST_ENV"):
+            return set()
+        ledger_path = EARNINGS_WATCH_LEDGER_PATH
+    p = _BridgePath(ledger_path)
+    if not p.exists():
+        return set()
+    seen = set()
+    try:
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = _json.loads(line)
+                if row.get("short_id") and row.get("date"):
+                    seen.add((str(row["short_id"]), str(row["date"])))
+            except ValueError:
+                continue
+    except OSError:
+        return set()
+    return seen
+
+
+def _append_watch_ledger(row: dict, ledger_path=None) -> None:
+    import json as _json
+    import os as _os
+    if ledger_path is None:
+        if _os.environ.get("PYTEST_CURRENT_TEST") or _os.environ.get("IS_TEST_ENV"):
+            return
+        ledger_path = EARNINGS_WATCH_LEDGER_PATH
+    p = _BridgePath(ledger_path)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(f"  (earnings watch ledger append failed: {exc})", flush=True)
+
+
+def _crossed_basket_metrics(spread: dict, quotes: dict) -> tuple[float | None, float | None, float | None]:
+    """Return (square_off_mark_ps, real_pnl_rs, real_capture_pct) on crossed leg quotes."""
+    if not quotes:
+        return None, None, None
+    real_capture_pct = real_capture_from_quotes(spread, quotes)
+    if real_capture_pct is None:
+        return None, None, None
+    try:
+        m_exit = sum(
+            (1.0 if l["side"].upper() == "BUY" else -1.0)
+            * float(quotes[(float(l["strike"]), str(l["option_type"]).upper())])
+            for l in spread.get("legs") or []
+        )
+        lot = int(spread["lot_size"])
+        lots = int(spread.get("lots", 1) or 1)
+        qty = lot * lots
+        max_profit_ps = float(spread["max_profit"]) / lot if lot else 0.0
+        real_pnl_rs = round(float(real_capture_pct) / 100.0 * max_profit_ps * qty, 2)
+        return round(float(m_exit), 2), real_pnl_rs, round(float(real_capture_pct), 2)
+    except (KeyError, TypeError, ValueError):
+        return None, None, None
+
+
+def check_earnings_watch_cards(
+    entries=None, *,
+    today: date = None,
+    doc: dict = None,
+    heavyweights: dict = None,
+    quotes_fn=None,
+    notify_fn=None,
+    ledger_path=None,
+    pre_days: int = None,
+) -> dict:
+    """Earnings Awareness S4 (docs/earnings_awareness_spec.md §2 S4 & §5):
+    When an open short-volatility structure (`SHORT_VOL_STRATEGIES`: condor,
+    butterfly, credit verticals) has results inside `EARNINGS_PRE_DAYS` and
+    before expiry, fire ONE Discord review card per ref per IST day
+    (de-duplicated via `ledger_path`, fail-open).
+
+    Acceptance (§5):
+      - One card per ref per day;
+      - A broken or stale calendar sends NO card and logs a named skip;
+      - States the facts and the square-off price on real quotes;
+      - Advisory only — human decides; NO automatic exit in this seam.
+    """
+    from src import config as _config
+    from src.confluence import evidence as ev
+    from src.ingestion import earnings_calendar as ec
+    from src.trade_planner import SHORT_VOL_STRATEGIES
+
+    today_date = pt._as_date(today) if today is not None else ist_now().date()
+    today_iso = today_date.isoformat()
+    doc = ec.load_doc() if doc is None else doc
+    skip_reason = ec.stale_reason(doc, today_date)
+    if skip_reason:
+        print(f"[Live Bridge] earnings watch skipped: {skip_reason}", flush=True)
+        return {"status": "skipped", "reason": skip_reason, "cards_sent": 0, "cards": []}
+
+    eff_pre_days = int(_config.EARNINGS_PRE_DAYS if pre_days is None else pre_days)
+    seen = _read_watch_ledger(ledger_path)
+    send = notify_fn or _notify_discord
+    cards = []
+
+    for entry in _open_spreads(entries):
+        spread = entry.get("spread") or {}
+        strategy = str(spread.get("strategy") or "").lower()
+        if strategy not in SHORT_VOL_STRATEGIES:
+            continue
+        ref = str(entry.get("short_id") or "")
+        if not ref or (ref, today_iso) in seen:
+            continue
+        ticker = entry.get("ticker") or spread.get("underlying")
+        expiry = spread.get("expiry")
+        block = ev.earnings_block(ticker, expiry, today=today_date,
+                                  doc=doc, heavyweights=heavyweights)
+        dtr = block.get("days_to_results")
+        if block.get("results_before_expiry") is not True or dtr is None:
+            continue
+        if not (0 <= int(dtr) <= eff_pre_days):
+            continue
+
+        if quotes_fn is None:
+            quotes, q_reason = _leg_quotes_for(entry, quiet=True)
+        else:
+            quotes, q_reason = quotes_fn(entry), None
+        mark_ps, real_pnl_rs, real_capture_pct = _crossed_basket_metrics(spread, quotes)
+        lots = int(spread.get("lots", 1) or 1)
+        max_loss_rs = round(float(spread.get("max_loss") or 0.0) * lots, 2)
+
+        when_txt = ("reports TODAY" if int(dtr) == 0
+                    else f"reports in {int(dtr)}d ({block.get('next_results')})")
+        if block.get("basis") == "index_heavyweights" and block.get("index_constituents_reporting"):
+            names = ", ".join(c["ticker"] for c in block["index_constituents_reporting"])
+            when_txt = f"{when_txt} via {names}"
+        if mark_ps is not None and real_pnl_rs is not None:
+            quote_txt = (f"square-off on real quotes: Rs.{mark_ps:,.2f}/sh "
+                         f"(real-quote P&L Rs.{real_pnl_rs:+,.2f}, "
+                         f"{real_capture_pct:.0f}% of max profit)")
+        else:
+            why_unpriced = f" ({q_reason})" if q_reason else ""
+            quote_txt = f"square-off on real quotes: unavailable{why_unpriced}"
+
+        card_text = (
+            f"⚠️ **Earnings Watch Review — {ticker} {strategy.replace('_', ' ')}** "
+            f"(`{ref}`, exp {expiry})\n"
+            f"Underlying {when_txt}. {quote_txt}; max loss Rs.{max_loss_rs:,.2f}.\n"
+            f"_Advisory review only — a human decides; no automatic exit._"
+        )
+        delivered = True
+        if send is not None:
+            try:
+                res = send(card_text)
+                if res is False:
+                    delivered = False
+            except Exception as exc:
+                print(f"  (earnings watch card send failed for {ref}: {exc})", flush=True)
+                delivered = False
+        if not delivered:
+            continue
+
+        record = {
+            "short_id": ref,
+            "date": today_iso,
+            "ticker": ticker,
+            "strategy": strategy,
+            "expiry": expiry,
+            "days_to_results": int(dtr),
+            "next_results": block.get("next_results"),
+            "square_off_mark_ps": mark_ps,
+            "real_pnl_rs": real_pnl_rs,
+            "real_capture_pct": real_capture_pct,
+            "max_loss_rs": max_loss_rs,
+            "card": card_text,
+        }
+        seen.add((ref, today_iso))
+        _append_watch_ledger(record, ledger_path)
+        cards.append(record)
+
+    return {"status": "ok", "reason": None, "cards_sent": len(cards), "cards": cards}
+
+
+def _is_last_session_before_results(today_date: date, next_results_iso: str) -> bool:
+    """True when `today_date` is the last NSE trading session strictly before
+    `next_results_iso` (or `today_date == res_date` on a trading day when results
+    release after market hours today)."""
+    from src import nse_calendar
+    try:
+        res_date = date.fromisoformat(str(next_results_iso)[:10])
+    except (TypeError, ValueError):
+        return False
+    if res_date < today_date:
+        return False
+    prev_session = nse_calendar.previous_trading_day(res_date)
+    return today_date == prev_session or (
+        today_date == res_date and nse_calendar.is_trading_day(today_date)
+    )
+
+
+def _min_short_body_distance_pct(spread: dict, spot: float | None) -> float | None:
+    """Minimum distance (% of spot) from `spot` to any short (SELL) leg strike."""
+    if spot is None or float(spot) <= 0:
+        return None
+    s = float(spot)
+    dists = []
+    for leg in spread.get("legs") or []:
+        if str(leg.get("side") or "").upper() == "SELL" and leg.get("strike") is not None:
+            dists.append(abs(s - float(leg["strike"])) / s * 100.0)
+    return min(dists) if dists else None
+
+
+def evaluate_earnings_square_off_shadow(
+    entries=None, *,
+    conn=None,
+    today: date = None,
+    doc: dict = None,
+    heavyweights: dict = None,
+    spot_by_ticker: dict = None,
+    quotes_fn=None,
+    shadow_path=None,
+    capture_threshold_pct: float = None,
+    body_proximity_pct: float = None,
+) -> dict:
+    """Earnings Awareness S5 (docs/earnings_awareness_spec.md §2 S5 & §5):
+    Proactive square-off candidate rule evaluated in SHADOW mode ONLY.
+
+    Candidate rule: at the last session before results, flag an open
+    short-volatility structure (`SHORT_VOL_STRATEGIES`) when holding it into
+    results is unjustified on real quotes:
+      1. `real_capture_pct >= capture_threshold_pct` (default X = 30.0% of max
+         profit — bank it before the earnings gap), OR
+      2. a short strike/body sits within `body_proximity_pct` of spot
+         (default Y = 1.5%).
+
+    Writes `earnings_exit_shadow` rows ("would have squared off at Rs.P/sh on
+    real quotes") to `conn` (and optional `shadow_path` JSONL).
+    Acceptance (§5): shadow rows ONLY; NO OMS `EXIT` ticket or position mutation
+    exists on this path until Department 5 rules on n >= 20 shadow rows.
+    """
+    import json as _json
+    from src import brain_map
+    from src import config as _config
+    from src.confluence import evidence as ev
+    from src.ingestion import earnings_calendar as ec
+    from src.trade_planner import SHORT_VOL_STRATEGIES
+
+    today_date = pt._as_date(today) if today is not None else ist_now().date()
+    today_iso = today_date.isoformat()
+    doc = ec.load_doc() if doc is None else doc
+    skip_reason = ec.stale_reason(doc, today_date)
+    if skip_reason:
+        return {"status": "skipped", "reason": skip_reason, "rows": []}
+
+    cap_thresh = float(
+        _config.EARNINGS_SHADOW_CAPTURE_PCT
+        if capture_threshold_pct is None else capture_threshold_pct
+    )
+    body_thresh = float(
+        _config.EARNINGS_SHADOW_BODY_PROXIMITY_PCT
+        if body_proximity_pct is None else body_proximity_pct
+    )
+    spots = dict(spot_by_ticker or {})
+    if conn is not None:
+        ensure_earnings_exit_shadow_schema(conn)
+
+    rows = []
+    for entry in _open_spreads(entries):
+        spread = entry.get("spread") or {}
+        strategy = str(spread.get("strategy") or "").lower()
+        if strategy not in SHORT_VOL_STRATEGIES:
+            continue
+        ticker = entry.get("ticker") or spread.get("underlying")
+        expiry = spread.get("expiry")
+        block = ev.earnings_block(ticker, expiry, today=today_date,
+                                  doc=doc, heavyweights=heavyweights)
+        next_res = block.get("next_results")
+        if block.get("results_before_expiry") is not True or not next_res:
+            continue
+        if not _is_last_session_before_results(today_date, next_res):
+            continue
+
+        if quotes_fn is None:
+            quotes, _why = _leg_quotes_for(entry, quiet=True)
+        else:
+            quotes = quotes_fn(entry)
+        mark_ps, would_pnl_rs, real_capture_pct = _crossed_basket_metrics(spread, quotes)
+        if mark_ps is None or would_pnl_rs is None or real_capture_pct is None:
+            continue
+
+        spot = spots.get(ticker)
+        if spot is None:
+            spot = spread.get("entry_spot")
+        body_dist = _min_short_body_distance_pct(spread, spot)
+
+        reasons = []
+        if real_capture_pct >= cap_thresh:
+            reasons.append("capture_above_threshold")
+        if body_dist is not None and body_dist <= body_thresh:
+            reasons.append("body_near_spot")
+        if not reasons:
+            continue
+
+        ref = brain_map.journal_ref_for(entry)
+        row = {
+            "journal_ref": ref,
+            "short_id": entry.get("short_id"),
+            "ticker": ticker,
+            "strategy": strategy,
+            "shadow_date": today_iso,
+            "results_date": next_res,
+            "trigger_reason": "+".join(reasons),
+            "spot": round(float(spot), 2) if spot is not None else None,
+            "body_distance_pct": round(float(body_dist), 3) if body_dist is not None else None,
+            "would_exit_mark_ps": mark_ps,
+            "would_pnl_rs": would_pnl_rs,
+            "real_capture_pct": real_capture_pct,
+            "capture_threshold_pct": cap_thresh,
+            "body_proximity_pct": body_thresh,
+            "note": (f"would have squared off at Rs.{mark_ps:.2f}/sh "
+                     f"(Rs.{would_pnl_rs:+,.2f}) on real quotes"),
+            "actual_exit_date": None,
+            "actual_resolution": None,
+            "actual_pnl_rs": None,
+            "pnl_diff_rs": None,
+        }
+        if conn is not None:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO earnings_exit_shadow (
+                    journal_ref, short_id, ticker, strategy, shadow_date, results_date,
+                    trigger_reason, spot, body_distance_pct, would_exit_mark_ps,
+                    would_pnl_rs, real_capture_pct, capture_threshold_pct,
+                    body_proximity_pct, note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["journal_ref"], row["short_id"], row["ticker"], row["strategy"],
+                    row["shadow_date"], row["results_date"], row["trigger_reason"],
+                    row["spot"], row["body_distance_pct"], row["would_exit_mark_ps"],
+                    row["would_pnl_rs"], row["real_capture_pct"],
+                    row["capture_threshold_pct"], row["body_proximity_pct"], row["note"],
+                ),
+            )
+            conn.commit()
+        if shadow_path is not None:
+            p = _BridgePath(shadow_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with p.open("a", encoding="utf-8") as fh:
+                fh.write(_json.dumps(row, sort_keys=True) + "\n")
+        rows.append(row)
+
+    return {"status": "ok", "reason": None, "rows": rows}
+
+
+def resolve_earnings_exit_shadow(conn, entry: dict) -> dict | None:
+    """Settlement comparison for Seam S5 (#167): when `entry` resolves in
+    `plan_tracker`, pair any matching `earnings_exit_shadow` row with the
+    actual settlement (`actual_exit_date`, `actual_resolution`, `actual_pnl_rs`,
+    `pnl_diff_rs = would_pnl_rs - actual_pnl_rs`)."""
+    if conn is None or not isinstance(entry, dict):
+        return None
+    outcome = entry.get("outcome")
+    if not isinstance(outcome, dict) or outcome.get("pnl_rs") is None:
+        return None
+    from src import brain_map
+    ensure_earnings_exit_shadow_schema(conn)
+    ref = brain_map.journal_ref_for(entry)
+    cur = conn.execute(
+        "SELECT would_pnl_rs FROM earnings_exit_shadow WHERE journal_ref = ?",
+        (ref,),
+    ).fetchone()
+    if cur is None:
+        return None
+    would_pnl = float(cur["would_pnl_rs"])
+    actual_pnl = float(outcome["pnl_rs"])
+    diff = round(would_pnl - actual_pnl, 2)
+    conn.execute(
+        """
+        UPDATE earnings_exit_shadow
+           SET actual_exit_date = ?,
+               actual_resolution = ?,
+               actual_pnl_rs = ?,
+               pnl_diff_rs = ?
+         WHERE journal_ref = ?
+        """,
+        (outcome.get("exit_date"), outcome.get("resolution"), actual_pnl, diff, ref),
+    )
+    conn.commit()
+    return {
+        "journal_ref": ref,
+        "would_pnl_rs": would_pnl,
+        "actual_pnl_rs": actual_pnl,
+        "pnl_diff_rs": diff,
+        "actual_exit_date": outcome.get("exit_date"),
+        "actual_resolution": outcome.get("resolution"),
+    }
+
+
 def _manage_only_arm(lp_mod):
     """Audit F14 (policy default, 2026-10-06 — the off switch stops NEW live
     entries, never abandons open ones). With paper_2l_live_account_enabled

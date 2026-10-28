@@ -73,7 +73,7 @@ Every spread entry carries one `earnings` block. It is an annotation and gates n
 - `mcp strategy_stats` gains a `by_earnings_window` split. This is the dataset
   the learning step needs. Nothing is decided on it until each cell has n ≥ 20.
 
-### S4 — Open-book watch (advisory; extend `live_bridge` / `morning_brief`)
+### S4 — Open-book watch (advisory; extend `live_bridge` / `morning_brief`) — **BUILT (#167)**
 - Each morning, list every open position whose underlying (or index heavyweight)
   reports before its expiry: structure, days to results, real-quote P&L, max loss.
 - When a short-volatility structure (condor, butterfly) has results inside
@@ -82,7 +82,7 @@ Every spread entry carries one `earnings` block. It is an annotation and gates n
   the facts and the square-off price on real quotes. A human decides.
 - No automatic exit in this seam.
 
-### S5 — Proactive square-off (exit rule; shadow first)
+### S5 — Proactive square-off (exit rule; shadow first) — **BUILT (#167, shadow mode)**
 - Candidate rule: square off a short-volatility structure at the last session
   before results when holding it is unjustified, e.g. real-quote capture already
   above X% of max profit (bank it), or the body sits within Y% of spot.

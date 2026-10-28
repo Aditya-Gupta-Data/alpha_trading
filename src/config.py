@@ -312,3 +312,8 @@ EARNINGS_POST_DAYS = int(_CONFIG.get("earnings_post_days", 3))
 GLASSBREAKING_REQUIRE_VOLUME = bool(_CONFIG.get("glassbreaking_require_volume", True))
 # A results calendar older than this many days abstains (window null + reason).
 EARNINGS_CALENDAR_MAX_AGE_DAYS = int(_CONFIG.get("earnings_calendar_max_age_days", 3))
+# Earnings Awareness S5 (#167, docs/earnings_awareness_spec.md §2 S5): shadow-first
+# candidate thresholds on the last session before results (X% capture of max profit
+# or short body within Y% of spot). Shadow logging only; zero OMS exit tickets.
+EARNINGS_SHADOW_CAPTURE_PCT = float(_CONFIG.get("earnings_shadow_capture_pct", 30.0))
+EARNINGS_SHADOW_BODY_PROXIMITY_PCT = float(_CONFIG.get("earnings_shadow_body_proximity_pct", 1.5))

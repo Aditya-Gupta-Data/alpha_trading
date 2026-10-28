@@ -42,6 +42,17 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~23:05 IST) — Earnings Awareness Seams S4 & S5 (`morning_brief`, `live_bridge`, `plan_tracker`) BUILT on branch `phase1-graphrag` (#167; `docs/earnings_awareness_spec.md` S1–S5 complete)
+
+- **Built on `phase1-graphrag` (stacking on #162–#166):**
+  - **S4 Open-Book Earnings Watch (`src/morning_brief.py`, `src/live_bridge.py`, #167):**
+    - `morning_brief.open_book_earnings_watch` + `_earnings_watch_field` (`📊 Open-Book Earnings Watch` in `build_morning_brief`): lists every open spread whose underlying (or index heavyweight via `earnings_calendar.index_constituent_results`) reports before its expiry (`0 <= days_to_results <= days_to_expiry`), reporting structure, expiry, days to results, real-quote P&L, and max loss; a broken or stale calendar logs a named skip (`status="skipped"`) and omits the section.
+    - `live_bridge.check_earnings_watch_cards`: when an open short-volatility spread (`trade_planner.SHORT_VOL_STRATEGIES`: `iron_condor`, `iron_butterfly`, `bull_put_spread`, `bear_call_spread`) has results inside `EARNINGS_PRE_DAYS` (`5` days, #151), prices the square-off on crossed real quotes (`_leg_quotes_for` + `real_capture_from_quotes`) and sends **at most ONE advisory Discord review card per ref per IST day** (de-duplicated in `logs/earnings_watch_alerts.jsonl`, fail-open). A broken/stale calendar sends zero cards and logs `[Live Bridge] earnings watch skipped: <reason>`. Human decides; no automatic exit.
+  - **S5 Proactive Square-Off Shadow Logger (`src/live_bridge.py`, `src/plan_tracker.py`, `src/config.py`, #167):**
+    - `live_bridge.evaluate_earnings_square_off_shadow` + `ensure_earnings_exit_shadow_schema`: on the last NSE trading session before results (`_is_last_session_before_results`), evaluates open short-volatility structures on crossed real quotes and writes an idempotent shadow row to `earnings_exit_shadow` in `brain_map.db` (`"would have squared off at Rs.P/sh (Rs.X) on real quotes"`) when `real_capture_pct >= EARNINGS_SHADOW_CAPTURE_PCT` (`30.0%`) or a short strike sits within `EARNINGS_SHADOW_BODY_PROXIMITY_PCT` (`1.5%`) of spot. Issues **zero OMS `EXIT` tickets**.
+    - `live_bridge.resolve_earnings_exit_shadow` (wired into `plan_tracker.record_post_mortem`, fail-open): pairs the `earnings_exit_shadow` row with `actual_exit_date`, `actual_resolution`, `actual_pnl_rs`, and `pnl_diff_rs = would_pnl_rs - actual_pnl_rs` when the trade settles.
+  - **Tests:** `tests/test_earnings_awareness.py` (+3 tests covering S4 morning brief watch, S4 one-card-per-ref-per-day + broken-calendar skip, and S5 shadow-only logging + settlement comparison; 14/14 passing in `test_earnings_awareness.py`).
+
 ## 2026-10-28 (Wed, ~21:30 IST) — Phase 3+ Multi-Seat Tenancy (`src/tenancy.py`), Unified Paper-Proof Standard (`stat_gates.py`), MFE/MAE Open-Book Dry-Run (`mfe_mae_analyzer.py`), & Wings-First Execution Guards BUILT on branch `phase1-graphrag` (#166; all 6 Roadmap Vectors complete on branch)
 
 - **Built on `phase1-graphrag` (stacking on #162, #163, #164, #165):**

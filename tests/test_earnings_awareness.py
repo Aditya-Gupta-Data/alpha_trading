@@ -1,4 +1,4 @@
-"""Earnings Awareness S1-S3 (decision #150, docs/earnings_awareness_spec.md). Fully offline."""
+"""Earnings Awareness S1-S5 (decisions #150, #151, #167, docs/earnings_awareness_spec.md). Fully offline."""
 import json
 from datetime import date, timedelta
 
@@ -325,3 +325,188 @@ def test_settlement_labels_entry_and_exit(monkeypatch, tmp_path):
     row = conn.execute("SELECT earnings_window, results_crossed FROM shadow_trades WHERE journal_ref = ?",
                        (court["ref"],)).fetchone()
     assert tuple(row) == ("pre", 1)
+
+
+# ------------------------------------------------------------------ S4 & S5 (#167)
+
+def _open_condor_entry(short_id="cond0001", ticker="HDFCBANK.NS", expiry="2026-10-27"):
+    """Credit spread / iron condor with net entry credit 100/sh (max_profit=10000, max_loss=20000, lot=100)."""
+    return {
+        "short_id": short_id,
+        "date": "2026-10-12",
+        "action": "SPREAD",
+        "ticker": ticker,
+        "decision": "approved",
+        "outcome": None,
+        "spread": {
+            "underlying": ticker,
+            "strategy": "iron_condor",
+            "expiry": expiry,
+            "lot_size": 100,
+            "lots": 1,
+            "max_profit": 10000.0,
+            "max_loss": 20000.0,
+            "entry_spot": 1600.0,
+            "legs": [
+                {"side": "SELL", "option_type": "PE", "strike": 1550.0, "premium": 60.0},
+                {"side": "BUY", "option_type": "PE", "strike": 1500.0, "premium": 10.0},
+                {"side": "SELL", "option_type": "CE", "strike": 1650.0, "premium": 60.0},
+                {"side": "BUY", "option_type": "CE", "strike": 1700.0, "premium": 10.0},
+            ],
+        },
+    }
+
+
+def _crossed_quotes_for_60pct_capture(_entry):
+    """Entry mark = -100/sh; exit mark = -40/sh -> profit +60/sh (60% of 100/sh max profit = +Rs.6,000)."""
+    return {
+        (1550.0, "PE"): 25.0,
+        (1500.0, "PE"): 5.0,
+        (1650.0, "CE"): 25.0,
+        (1700.0, "CE"): 5.0,
+    }
+
+
+def test_s4_morning_brief_lists_open_positions_reporting_before_expiry(tmp_path):
+    from src import morning_brief as mb
+    entries = [
+        _open_condor_entry("cond0001", "HDFCBANK.NS", _iso(11)),
+        _open_condor_entry("nb0001", "NIFTY BANK", _iso(11)),
+    ]
+    doc = _doc(events={"HDFCBANK.NS": _iso(2), "ICICIBANK.NS": _iso(4)})
+    watch = mb.open_book_earnings_watch(
+        entries=entries, calendar_doc=doc, today=TODAY,
+        marks_by_ref={"cond0001": {"real_pnl_rs": 6000.0}},
+        heavyweights=HEAVY,
+    )
+    assert watch["status"] == "ok" and len(watch["items"]) == 2
+    by_ref = {i["short_id"]: i for i in watch["items"]}
+    assert by_ref["cond0001"]["days_to_results"] == 2
+    assert by_ref["cond0001"]["real_pnl_rs"] == 6000.0
+    assert by_ref["cond0001"]["max_loss_rs"] == 20000.0
+    assert by_ref["nb0001"]["basis"] == "index_heavyweights"
+
+    card = mb.build_morning_brief(
+        watchlist_path=tmp_path / "none.yaml",
+        journal_path=tmp_path / "none.jsonl",
+        calendar=doc["events"],
+        calendar_doc=doc,
+        entries=entries,
+        marks_by_ref={"cond0001": {"real_pnl_rs": 6000.0}},
+        heavyweights=HEAVY,
+        clock=lambda: TODAY.isoformat(),
+    )
+    watch_fields = [f for f in card["fields"] if f["name"] == "📊 Open-Book Earnings Watch"]
+    assert len(watch_fields) == 1
+    val = watch_fields[0]["value"]
+    assert "HDFCBANK.NS" in val and "Rs.+6,000.00" in val and "max loss Rs.20,000.00" in val
+    assert "NIFTY BANK" in val and "via HDFCBANK.NS, ICICIBANK.NS" in val
+
+    # Broken/stale calendar skips cleanly with named reason
+    stale_watch = mb.open_book_earnings_watch(
+        entries=entries, calendar_doc=_doc(as_of=TODAY - timedelta(days=5)),
+        today=TODAY, heavyweights=HEAVY,
+    )
+    assert stale_watch["status"] == "skipped" and "stale" in stale_watch["reason"]
+
+
+def test_s4_one_discord_review_card_per_ref_per_day_and_broken_calendar_skips(tmp_path, capsys):
+    from src import live_bridge as lb
+    ledger = tmp_path / "earnings_watch_alerts.jsonl"
+    sent = []
+    entries = [_open_condor_entry("cond0001", "HDFCBANK.NS", _iso(11))]
+    doc = _doc(events={"HDFCBANK.NS": _iso(2)})
+
+    # 1. First pass today sends exactly 1 card with real-quote square-off price
+    res1 = lb.check_earnings_watch_cards(
+        entries, today=TODAY, doc=doc, quotes_fn=_crossed_quotes_for_60pct_capture,
+        notify_fn=lambda msg: sent.append(msg) or True, ledger_path=ledger,
+    )
+    assert res1["status"] == "ok" and res1["cards_sent"] == 1
+    assert len(sent) == 1
+    assert "cond0001" in sent[0]
+    assert "Rs.-40.00/sh" in sent[0] and "Rs.+6,000.00" in sent[0]
+    assert "60% of max profit" in sent[0]
+    assert "no automatic exit" in sent[0]
+
+    # 2. Second pass on the SAME day is de-duplicated (0 cards sent)
+    res2 = lb.check_earnings_watch_cards(
+        entries, today=TODAY, doc=doc, quotes_fn=_crossed_quotes_for_60pct_capture,
+        notify_fn=lambda msg: sent.append(msg) or True, ledger_path=ledger,
+    )
+    assert res2["status"] == "ok" and res2["cards_sent"] == 0
+    assert len(sent) == 1
+
+    # 3. Next IST day sends 1 fresh card
+    next_day = TODAY + timedelta(days=1)
+    doc_next = _doc(events={"HDFCBANK.NS": _iso(2)}, as_of=next_day)
+    res3 = lb.check_earnings_watch_cards(
+        entries, today=next_day, doc=doc_next, quotes_fn=_crossed_quotes_for_60pct_capture,
+        notify_fn=lambda msg: sent.append(msg) or True, ledger_path=ledger,
+    )
+    assert res3["status"] == "ok" and res3["cards_sent"] == 1
+    assert len(sent) == 2
+
+    # 4. Broken/stale calendar sends NO card and logs a named skip
+    capsys.readouterr()
+    broken_res = lb.check_earnings_watch_cards(
+        entries, today=TODAY, doc={}, quotes_fn=_crossed_quotes_for_60pct_capture,
+        notify_fn=lambda msg: sent.append(msg) or True, ledger_path=ledger,
+    )
+    out = capsys.readouterr().out
+    assert broken_res["status"] == "skipped" and broken_res["cards_sent"] == 0
+    assert "earnings watch skipped: earnings calendar missing" in out
+    assert len(sent) == 2
+
+
+def test_s5_shadow_square_off_logs_only_shadow_rows_and_compares_at_settlement(tmp_path, monkeypatch):
+    from src import analyst, live_bridge as lb, plan_tracker
+    conn = brain_map.connect(":memory:")
+    shadow_file = tmp_path / "earnings_exit_shadow.jsonl"
+
+    # TODAY is Friday 2026-10-16; results on Saturday 2026-10-17 -> Friday is the last session before results
+    entry_a = _open_condor_entry("earn0001", "HDFCBANK.NS", "2026-10-27")
+    entry_b = _open_condor_entry("earn0002", "INFY.NS", "2026-10-27")
+    doc = _doc(events={"HDFCBANK.NS": "2026-10-17", "INFY.NS": "2026-10-19"})  # Sat & Mon -> Fri is last session
+
+    def quotes_by_entry(e):
+        if e["short_id"] == "earn0001":
+            return _crossed_quotes_for_60pct_capture(e)  # 60% capture >= 30% threshold
+        # earn0002: only 10% capture (-90/sh exit mark), but spot 1645 is within 0.3% of short 1650 CE!
+        return {
+            (1550.0, "PE"): 50.0,
+            (1500.0, "PE"): 5.0,
+            (1650.0, "CE"): 50.0,
+            (1700.0, "CE"): 5.0,
+        }
+
+    res = lb.evaluate_earnings_square_off_shadow(
+        [entry_a, entry_b], conn=conn, today=TODAY, doc=doc,
+        spot_by_ticker={"HDFCBANK.NS": 1600.0, "INFY.NS": 1645.0},
+        quotes_fn=quotes_by_entry, shadow_path=shadow_file,
+    )
+    assert res["status"] == "ok" and len(res["rows"]) == 2
+    by_id = {r["short_id"]: r for r in res["rows"]}
+    assert by_id["earn0001"]["trigger_reason"] == "capture_above_threshold"
+    assert by_id["earn0001"]["would_pnl_rs"] == 6000.0
+    assert by_id["earn0002"]["trigger_reason"] == "body_near_spot"
+    assert by_id["earn0002"]["would_pnl_rs"] == 1000.0
+
+    # Acceptance (§5): S5 writes shadow rows only; NO EXIT ticket exists on this path
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "earnings_exit_shadow" in tables
+    if "order_audit" in tables:
+        assert conn.execute("SELECT COUNT(*) FROM order_audit").fetchone()[0] == 0
+    assert entry_a["outcome"] is None and entry_b["outcome"] is None
+
+    # Now settle earn0001 via plan_tracker.record_post_mortem after an earnings gap caused a -Rs.800.0 loss
+    monkeypatch.setattr(analyst, "generate_post_mortem", lambda p, e: None)
+    settled_a = _settled_entry()  # short_id="earn0001", outcome.pnl_rs = -800.0
+    plan_tracker.record_post_mortem(settled_a, conn)
+
+    shadow_row = conn.execute(
+        "SELECT would_pnl_rs, actual_pnl_rs, pnl_diff_rs, actual_exit_date, actual_resolution "
+        "FROM earnings_exit_shadow WHERE short_id = 'earn0001'"
+    ).fetchone()
+    assert tuple(shadow_row) == (6000.0, -800.0, 6800.0, "2026-10-27", "expiry")
+

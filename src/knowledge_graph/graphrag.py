@@ -236,7 +236,9 @@ CANONICAL_ENTITIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "sector:FINANCIALS": ("sector", "FINANCIALS", (
         "banks", "bank", "banking", "banking sector", "banking system", "indian banks", "lenders",
         "psu banks", "public sector banks", "private banks", "private sector banks", "bfsi", "bfsi sector",
-        "financial sector", "financial services", "financials", "nbfcs", "nbfc", "top nbfcs")),
+        "financial sector", "financial services", "financials", "nbfcs", "nbfc", "top nbfcs",
+        "systemically important banks", "domestic systemically important banks", "d-sibs", "d sibs",
+        "large banks", "big banks", "commercial banks", "scheduled commercial banks")),
     "sector:IT": ("sector", "IT", (
         "it", "it sector", "it services", "it companies", "information technology", "software services",
         "indian it", "tech services", "it stocks")),

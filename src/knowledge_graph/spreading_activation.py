@@ -14,7 +14,9 @@ Math summary (ARCHITECTURE_ROADMAP.md §2.4):
        a_0(v) = s * m,  where s in {-1, +1} (sentiment) and m in (0, 1] (materiality)
   2. Edge transmission coefficient (u -> v):
        t(u -> v) = w(u -> v) * c(u -> v) * p(u -> v) * eps(u)
-       eps(u)    = 1 / (1 + ln(1 + outdeg(u)))
+       eps(u)    = 1 / (1 + ln(1 + outdeg(u)))   over u's non-membership edges;
+       membership edges (sector -> stock/index, #168) use eps = 1: a sector shock
+       lands in full on every member instead of being split between them.
   3. Synchronous path-simple propagation for hop k = 1 .. K (K = 3):
        Each simple path P = (v_0 -> v_1 -> ... -> v_k) contributes:
          contrib(P) = gamma^k * a_0(v_0) * prod_{i=1..k} t(v_{i-1} -> v_i)
@@ -97,7 +99,11 @@ def transmission_coeff(graph, u: str, v: str) -> float:
         w = 1.0
         c = 1.0
 
-    eps = fanout_factor(graph.out_degree(u))
+    if data.get("edge_class") == "membership":
+        eps = 1.0
+    else:
+        eps = fanout_factor(sum(1 for _, _, d in graph.out_edges(u, data=True)
+                                if d.get("edge_class") != "membership"))
     return w * c * float(polarity) * eps
 
 

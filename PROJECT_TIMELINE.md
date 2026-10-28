@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-28 · 5 commits · 17 files touched
+### 2026-10-28 · 7 commits · 30 files touched
 
+- `f9b15da` docs: HANDOVER + ledger (Issue 52) — #160 deployed: sector bars from the Mini PC, GEX steering for PAPER_2L (444e8bf)
+- `444e8bf` feat: sector bars move to the Mini PC; GEX steering for PAPER_2L only (#160)
 - `17e0c7c` docs: HANDOVER + ledger — Live Book portfolio filter shipped to the dashboard box (48aac47)
 - `48aac47` feat(desk): Live Book portfolio filter beside the strategy filter — exact account-name match
 - `197df34` docs: HANDOVER + ledger — #159 deployed to VM, Mini PC and the dashboard box (db89b0b)

@@ -42,6 +42,24 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~19:15 IST) — #161 DEPLOYED: expiry liquidity fallback + the new PAPER_2L_LIVE_GEX book (VM `84eb500`; dashboard box bridge + UI)
+
+- **Live now:**
+  - **Expiry fallback (Issue 52):** a self-picked long-horizon expiry with no live book near the money steps back to the nearest earlier quoted contract (`expiry_fallback` on the proposal).
+  - **PAPER_2L_LIVE_GEX:** a ₹2,00,000 live-quote book with PAPER_2L_LIVE's pricing, settlement, ratchet and pre-expiry exit. It is the ONLY GEX-steered book. It copies a primary entry when the calibrated zone allows it.
+    - In a short-gamma zone it builds and takes the D6 momentum spread itself when the primary built something else or nothing (`_gex_own_entry`): one per underlying/strategy/session, journaled REJECTED for the primary.
+    - It never fills the firm-wide #68 slot.
+    - Seeded on the VM 19:12:58.
+  - **PAPER_2L is unchanged** (a scaled clone); `gex_steering_accounts: ["PAPER_2L_LIVE_GEX"]`.
+  - **Dashboard box:** API on `84eb500` (it had been on `772d2b1`, so the #159/#160 bridge changes also landed). UI bundle 19:13. Mirror published by hand at 19:14; the API serves the GEX book at ₹2,00,000. "Live-Quote GEX Test" is on the % axis, has an account card, and is in the Live Book filter.
+  - **Not checked:** the live desk in a browser (needs the owner's key).
+  - Suite 3,243 (Mac); VM 136 scoped; health 200.
+- **Watch Thu 10-29:**
+  - `[PAPER_2L_LIVE_GEX]` lines in `logs/master_scheduler.log`: own D6 entries (`… -only: GEX D6 …`) and steering refusals (`gex_steering_refused`).
+  - Its positions in `paper_live_positions`.
+  - `expiry_fallback` on FIN SERVICE / MID SELECT proposals, and fewer "no tradeable quotes" refusals.
+- **Off-ramps:** `paper_2l_live_gex_enabled: false` (the book), `gex_steering_accounts: []` (steering), each followed by a restart.
+
 ## 2026-10-28 (Wed, ~18:55 IST) — #160 DEPLOYED: sector bars ship from the Mini PC; GEX steering live for PAPER_2L only (VM + Mini PC on `444e8bf`)
 
 - **Live now:**

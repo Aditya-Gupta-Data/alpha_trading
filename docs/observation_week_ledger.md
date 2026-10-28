@@ -2481,3 +2481,10 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Mac suite 3,231 passed. VM: no job running (the 18:45 GEX run had finished: 153 rows / 35 underlyings), 75 scoped tests passed, services restarted, health 200, `GEX_STEERING_ACCOUNTS` ('PAPER_2L',).
 - Mini PC: 73 tests passed, replica block reinstalled (36 lines, 0 live-lane), `node_sector_bars.sh` first run 18:54–18:55: 7/7 indices as of 10-28, shipped; VM file 18:55, guard FRESH (0.0 days), `sector_trend` reads FINANCIALS as of 10-28.
 - Unverified: a live PAPER_2L steering refusal; the Mac still ships its copy until its checkout runs `main`.
+
+
+## Deploy 2026-10-28 19:12–19:15 IST — #161 to the VM and the dashboard box (`main` `371e47e` → `84eb500`)
+
+- Mac suite 3,243. VM: evening ingestion jobs only (no session); `84eb500`, 136 scoped tests passed, services restarted, health 200; `gex_account_enabled()` True, steering ('PAPER_2L_LIVE_GEX',); `paper_accounts` row PAPER_2L_LIVE_GEX 200000.0 created 2026-10-28T19:12:58.
+- Dashboard box: `/opt/alpha_trading` `772d2b1` → `84eb500`, `alpha-api-bridge` active; `ship_ui.sh` bundle 19:13 (new strings present); `/login` `/overview` `/live-book` 200 locally and through the tunnel; mirror published by hand 19:14 (`publish_dashboard_mirror.sh`), the API's treasury lists PAPER_2L_LIVE_GEX (equity 200000.0, 0 locks).
+- Unverified: the fallback and the GEX book in a live session (10-29); the desk viewed with the owner's key.

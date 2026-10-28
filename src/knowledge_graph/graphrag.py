@@ -57,6 +57,7 @@ EDGE_CLASSES: tuple[str, ...] = (
     "owns",
     "macro_sensitivity",
     "causal",
+    "membership",
 )
 
 # Closed predicate vocabulary -> edge_class (ARCHITECTURE_ROADMAP.md §2.3 + §2.7 owner ruling)
@@ -232,7 +233,42 @@ CANONICAL_ENTITIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "commodity:CRUDE_OIL": ("commodity", "CRUDE OIL", ("crude", "crude oil", "oil", "brent", "wti",
                                                        "brent crude", "oil prices")),
     "commodity:GOLD": ("commodity", "GOLD", ("gold", "gold prices", "bullion")),
+    "sector:FINANCIALS": ("sector", "FINANCIALS", (
+        "banks", "bank", "banking", "banking sector", "banking system", "indian banks", "lenders",
+        "psu banks", "public sector banks", "private banks", "private sector banks", "bfsi", "bfsi sector",
+        "financial sector", "financial services", "financials", "nbfcs", "nbfc", "top nbfcs")),
+    "sector:IT": ("sector", "IT", (
+        "it", "it sector", "it services", "it companies", "information technology", "software services",
+        "indian it", "tech services", "it stocks")),
+    "sector:ENERGY": ("sector", "ENERGY", (
+        "energy", "energy sector", "oil and gas", "oil & gas", "oil and gas sector", "refiners", "refining",
+        "oil marketing companies", "omcs", "petrochemicals")),
+    "sector:AUTO": ("sector", "AUTO", (
+        "auto", "autos", "auto sector", "automobile", "automobiles", "automakers", "carmakers",
+        "car makers", "passenger vehicles", "two-wheelers")),
+    "sector:PHARMA": ("sector", "PHARMA", (
+        "pharma", "pharma sector", "pharmaceuticals", "drugmakers", "drug makers", "drug companies")),
+    "sector:FMCG": ("sector", "FMCG", ("fmcg", "fmcg sector", "consumer staples", "consumer goods")),
+    "sector:METAL": ("sector", "METAL", ("metal", "metals", "metal sector", "steel", "steelmakers")),
 }
+
+# Modifiers stripped before a second canonical lookup ("rising crude oil prices" -> "crude oil").
+_LEADING_MODIFIERS = ("rising", "falling", "higher", "lower", "high", "low", "elevated", "soaring",
+                      "surging", "easing", "sticky", "global", "domestic", "indian")
+_TRAILING_MODIFIERS = ("price hikes", "price hike", "prices", "price", "hikes", "hike", "concerns",
+                       "worries", "fears", "pressures", "pressure", "costs", "cost", "rates", "levels",
+                       "outlook", "sector", "stocks", "shares")
+
+# "it"/"us" are pronouns unless written IT / US or type-prefixed.
+_PRONOUN_ALIASES = frozenset({"it", "us"})
+
+# Endpoint names too generic to mean anything on their own — rejected, never repaired.
+GENERIC_ENDPOINTS = frozenset({
+    "scheme", "the scheme", "schemes", "sops", "feedback", "policy", "the policy", "plan", "proposal",
+    "measures", "move", "step", "steps", "norms", "rules", "regulations", "guidelines", "framework",
+    "reforms", "announcement", "decision", "order", "it is", "this", "that", "market", "markets",
+    "companies", "company", "firms", "people", "consumers", "investors", "sentiment", "market sentiment",
+})
 
 
 def _build_canon_index() -> dict[str, str]:
@@ -246,9 +282,35 @@ def _build_canon_index() -> dict[str, str]:
 def canonical_entity_for(raw_name: str) -> str | None:
     """The canonical node_id for an institution/macro alias (type prefix ignored), else None."""
     raw = str(raw_name or "").strip()
+    prefixed = ":" in raw and raw.split(":", 1)[0].lower() in NODE_TYPES
+    if prefixed:
+        raw = raw.split(":", 1)[1]
+    norm = _normalize_alias(raw.replace("_", " ").replace("-", " "))
+    if norm in _PRONOUN_ALIASES and not (prefixed or raw.isupper()):
+        return None
+    hit = _CANON_INDEX.get(norm)
+    if hit is not None:
+        return hit
+    words = norm.split()
+    changed = True
+    while changed and words:
+        changed = False
+        if words[0] in _LEADING_MODIFIERS and len(words) > 1:
+            words, changed = words[1:], True
+        for mod in _TRAILING_MODIFIERS:
+            mw = mod.split()
+            if len(words) > len(mw) and words[-len(mw):] == mw:
+                words, changed = words[:-len(mw)], True
+                break
+    return _CANON_INDEX.get(" ".join(words))
+
+
+def is_generic_endpoint(raw_name: str) -> bool:
+    """True for names like "scheme" / "policy:FEEDBACK" that carry no entity."""
+    raw = str(raw_name or "").strip()
     if ":" in raw and raw.split(":", 1)[0].lower() in NODE_TYPES:
         raw = raw.split(":", 1)[1]
-    return _CANON_INDEX.get(_normalize_alias(raw.replace("_", " ").replace("-", " ")))
+    return _normalize_alias(raw.replace("_", " ")) in GENERIC_ENDPOINTS
 
 
 def _normalize_alias(text: str) -> str:
@@ -361,6 +423,56 @@ def ensure_nodes_from_edges(conn, now: str | None = None) -> int:
         added += 1
     conn.commit()
     return added
+
+
+STRUCTURAL_SOURCE = "structural_seed"
+STRUCTURAL_WEIGHT = 0.8
+# Traded indices a sector feeds beyond its own `nse_index` (config/sector_universe.json).
+SECTOR_EXTRA_INDICES = {"FINANCIALS": ("NIFTY FIN SERVICE",)}
+
+
+def has_structural_edges(conn) -> bool:
+    ensure_schema(conn)
+    return conn.execute("SELECT 1 FROM graph_edges WHERE source = ? LIMIT 1",
+                        (STRUCTURAL_SOURCE,)).fetchone() is not None
+
+
+def seed_structural_edges(conn, sector_universe_path: Path | str | None = None, now: str | None = None) -> int:
+    """sector -contains-> stock and sector -feeds-> traded index edges, so energy that
+    lands on a sector can reach the option universe. Decay-exempt, +1, source
+    `structural_seed` (context only — never `outcome_derived`). Idempotent."""
+    from src import graph_engine
+    from src.options_proposer import LOT_SIZES
+
+    ensure_schema(conn)
+    path = Path(sector_universe_path) if sector_universe_path else SECTOR_UNIVERSE_PATH
+    try:
+        sectors = json.loads(path.read_text()).get("sectors", {})
+    except (OSError, ValueError):
+        return 0
+    indices = {i.upper() for i in LOT_SIZES}
+    pairs = []
+    for name, meta in sorted(sectors.items()):
+        if not isinstance(meta, dict):
+            continue
+        sec = f"sector:{name.strip().upper()}"
+        for t in meta.get("constituents") or []:
+            base = str(t).strip().upper().removesuffix(".NS")
+            if base:
+                pairs.append((sec, "contains", base))
+        targets = [str(meta.get("nse_index") or "").upper(), *SECTOR_EXTRA_INDICES.get(name.strip().upper(), ())]
+        for idx in targets:
+            if idx in indices:
+                pairs.append((sec, "feeds", idx))
+    for src, rel, tgt in pairs:
+        graph_engine.add_edge(conn, src, rel, tgt, confidence_score=1.0, decay_lambda=0.0,
+                              valid_from=now, source=STRUCTURAL_SOURCE)
+        conn.execute(
+            "UPDATE graph_edges SET edge_class = 'membership', polarity = 1, weight = ?, "
+            "evidence_count = 1, extractor = 'seed' WHERE source_node = ? AND relation = ? AND target_node = ?",
+            (STRUCTURAL_WEIGHT, src, rel, tgt))
+    conn.commit()
+    return len(pairs)
 
 
 def seed_nodes(
@@ -508,6 +620,7 @@ def seed_nodes(
             now=ts,
         )
 
+    structural = seed_structural_edges(conn, sector_universe_path=sec_path, now=ts)
     backfilled = ensure_nodes_from_edges(conn, now=ts)
     conn.commit()
     count_after = conn.execute("SELECT COUNT(*) AS n FROM graph_nodes").fetchone()["n"]
@@ -516,6 +629,7 @@ def seed_nodes(
         "added_nodes": count_after - count_before,
         "sectors_seeded": sectors_seeded,
         "groups_seeded": groups_seeded,
+        "structural_edges": structural,
         "backfilled_from_edges": backfilled,
     }
 

@@ -12,7 +12,8 @@ Guardrails (ARCHITECTURE_ROADMAP.md §2.3):
   3. Strict validator (reject, never repair):
        - closed predicate vocabulary (`graphrag.PREDICATE_TO_CLASS`)
        - `quote` MUST be a non-empty verbatim substring of the input text
-       - `subject != object` after canonical node resolution
+       - `subject != object` after canonical node resolution (aliases + modifier stripping)
+       - generic endpoints ("scheme", "feedback", "sentiment") are rejected
        - both endpoints resolve via alias table or as valid non-company nodes (`in_universe=0`)
        - `polarity in (-1, 1)` — a neutral (0) or missing direction is rejected, `strength` clamped `0..1`
   4. Provenance firewall: all edges written with `source = 'llm_extracted'`,
@@ -140,6 +141,10 @@ def validate_raw_edge(conn, raw_edge: dict, source_text: str) -> tuple[bool, str
     obj_raw = str(raw_edge.get("object") or "").strip()
     subj_type = str(raw_edge.get("subject_type") or "").strip().lower()
     obj_type = str(raw_edge.get("object_type") or "").strip().lower()
+
+    for name in (subj_raw, obj_raw):
+        if graphrag.is_generic_endpoint(name) and graphrag.canonical_entity_for(name) is None:
+            return False, "generic_endpoint", None
 
     subj_node = graphrag.resolve_node(conn, subj_raw, declared_type=subj_type)
     obj_node = graphrag.resolve_node(conn, obj_raw, declared_type=obj_type)
@@ -314,6 +319,8 @@ def extract_from_item(
             node_count = conn.execute("SELECT COUNT(*) AS n FROM graph_nodes").fetchone()["n"]
             if node_count == 0:
                 graphrag.seed_nodes(conn, now=extracted_at)
+            elif not dry_run and not graphrag.has_structural_edges(conn):
+                graphrag.seed_structural_edges(conn, now=extracted_at)
 
             if not dry_run and already_extracted(conn, chash):
                 summary["status"] = "skipped (duplicate content_hash)"
@@ -462,11 +469,14 @@ def run_stored_items(
         "rejected_reasons": {},
         "distinct_nodes": 0,
         "nodes_in_2plus_edges": 0,
+        "edges_reaching_universe": 0,
+        "universe_reached": {},
         "edges": [],
     }
     owns_conn = conn is None and dry_run
     if owns_conn:
         conn = brain_map.connect(":memory:")
+        graphrag.seed_nodes(conn)
     seen_text: set[str] = set()
     seen_edge: set[tuple] = set()
     try:
@@ -497,6 +507,8 @@ def run_stored_items(
                     continue
                 seen_edge.add(key)
                 agg["edges"].append(e)
+        if conn is not None:
+            _measure_universe_reach(conn, agg)
     finally:
         if owns_conn:
             conn.close()
@@ -508,6 +520,35 @@ def run_stored_items(
     agg["distinct_nodes"] = len(degree)
     agg["nodes_in_2plus_edges"] = sum(1 for d in degree.values() if d >= 2)
     return agg
+
+
+def _measure_universe_reach(conn, agg: dict) -> None:
+    """Propagate +1 from each accepted edge's source over (structural edges + accepted
+    edges) and record which option-universe nodes it reaches within the hop limit."""
+    try:
+        import networkx as nx
+        from src.knowledge_graph import spreading_activation
+
+        g = nx.DiGraph()
+        for r in conn.execute(
+            "SELECT source_node, target_node, weight, confidence_score, polarity FROM graph_edges "
+            "WHERE source = ? AND invalid_at IS NULL", (graphrag.STRUCTURAL_SOURCE,)
+        ):
+            g.add_edge(r["source_node"], r["target_node"], weight=r["weight"],
+                       confidence_score=r["confidence_score"], polarity=r["polarity"])
+        for e in agg["edges"]:
+            g.add_edge(e["source_node"], e["target_node"], weight=e["weight"],
+                       confidence_score=0.5 * float(e["weight"]), polarity=e["polarity"])
+        for e in agg["edges"]:
+            res = spreading_activation.propagate(g, {e["source_node"]: 1.0}, conn=conn, log_activation=False)
+            hits = sorted(a["node_id"] for a in res.get("activated") or [] if a.get("in_universe"))
+            e["reaches_universe"] = hits
+            if hits:
+                agg["edges_reaching_universe"] += 1
+            for n in hits:
+                agg["universe_reached"][n] = agg["universe_reached"].get(n, 0) + 1
+    except Exception as exc:
+        print(f"  (graphrag_extract: universe reach skipped [{exc}])", file=sys.stderr)
 
 
 def main(argv=None) -> int:

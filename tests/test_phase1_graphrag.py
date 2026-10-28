@@ -657,8 +657,8 @@ def test_dry_run_stored_items_writes_nothing_to_db(tmp_path):
     assert res["dry_run"] is True
     assert res["items_checked"] == 1
     assert res["written"] == 1
-    # Dry-run writes 0 rows into graph_edges
-    edge_count = conn.execute("SELECT COUNT(*) AS n FROM graph_edges").fetchone()["n"]
+    # Dry-run writes 0 extracted rows into graph_edges (seeded structural links aside)
+    edge_count = conn.execute("SELECT COUNT(*) AS n FROM graph_edges WHERE source != 'structural_seed'").fetchone()["n"]
     assert edge_count == 0
 
 
@@ -766,3 +766,46 @@ def test_cli_stdout_is_pure_json_and_logs_go_to_stderr(tmp_path, monkeypatch, ca
     out, err = capsys.readouterr()
     assert json.loads(out) == {"days": 3, "edges": []}
     assert "timed out" in err
+
+
+def test_sector_links_carry_energy_from_rbi_to_the_traded_banks():
+    conn = brain_map.connect(":memory:")
+    res = graphrag.seed_nodes(conn)
+    assert res["structural_edges"] > 0
+    row = conn.execute("SELECT source, decay_lambda, polarity, edge_class FROM graph_edges "
+                       "WHERE source_node='sector:FINANCIALS' AND target_node='HDFCBANK'").fetchone()
+    assert tuple(row) == ("structural_seed", 0.0, 1, "membership")
+    # the structural lane never reaches vol_bridge's sizing signal
+    assert "structural_seed" not in {r[0] for r in conn.execute(
+        "SELECT source FROM graph_edges WHERE source = 'outcome_derived'")}
+    ok, why, norm = graphrag_extract.validate_raw_edge(
+        conn, _edge("RBI", "PSU banks", "RBI tightens leverage rules", pol=-1, pred="hurts"),
+        "RBI tightens leverage rules for lenders")
+    assert ok and norm["target_node"]["node_id"] == "sector:FINANCIALS"
+
+
+def test_dry_run_reports_which_traded_names_an_edge_reaches(tmp_path):
+    def fake_llm(sys_prompt, user_text):
+        return {"edges": [_edge("RBI", "Banks", "RBI tightens leverage rules", pol=-1, pred="hurts"),
+                          _edge("Goa government", "Aviation turbine fuel", "VAT cut on ATF",
+                                st="policy", ot="commodity", pred="taxes")]}
+    res = graphrag_extract.run_stored_items(
+        days=7, card_dir=tmp_path / "none", inbox_dir=tmp_path / "none",
+        rss_items=[{"title": "x", "text": "RBI tightens leverage rules. VAT cut on ATF.", "url": "1"}],
+        extractor=fake_llm, env={"ALPHA_NODE_ROLE": "analytics"})
+    by_src = {e["source_node"]: e["reaches_universe"] for e in res["edges"]}
+    assert {"HDFCBANK", "ICICIBANK", "NIFTY BANK"} <= set(by_src["policy:RESERVE_BANK_OF_INDIA"])
+    assert by_src["policy:GOA_GOVERNMENT"] == []
+    assert res["edges_reaching_universe"] == 1
+
+
+def test_phrase_variants_and_generic_names():
+    assert graphrag.canonical_entity_for("commodity:RISING_CRUDE_OIL_PRICES") == "commodity:CRUDE_OIL"
+    assert graphrag.canonical_entity_for("macro:INFLATION_CONCERNS") == "macro:INFLATION"
+    assert graphrag.canonical_entity_for("it") is None and graphrag.canonical_entity_for("IT") == "sector:IT"
+    conn = brain_map.connect(":memory:")
+    graphrag.ensure_schema(conn)
+    ok, why, _ = graphrag_extract.validate_raw_edge(
+        conn, _edge("IRDAI", "feedback", "IRDAI extends time for feedback", pred="regulates"),
+        "IRDAI extends time for feedback to October 31")
+    assert (ok, why) == (False, "generic_endpoint")

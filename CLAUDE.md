@@ -21,6 +21,7 @@ Then, depending on the task:
 - finding a file → `MODULES.md`
 - asking "why is it like this?" → `DECISIONS.md` (85 numbered decisions)
 - what runs when → `CRON_SETUP.md`
+- what to build next / long-term order → `docs/ARCHITECTURE_ROADMAP.md` (Phase 1 GraphRAG blueprint, then Phase 2 Cycle Hunter, then OMS/multi-bucket/multi-seat; owner-fixed order 2026-10-28)
 
 Do not skip this because the request looks small. Most of the expensive
 mistakes available in this repo — archiving a live module, rewriting an

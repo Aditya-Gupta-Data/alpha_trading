@@ -2467,3 +2467,17 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Pushed `48aac47` (fast-forward). Mac suite 3,224 passed; frontend `tsc` 0 errors, eslint clean.
 - `ship_ui.sh` from a detached `48aac47` checkout (the Mac's `node_modules`, identical package-lock). Bundle 18:30, `alpha-desk-ui` and nginx active, `/login` `/overview` `/live-book` 200 on :8080 and `/login` `/live-book` 200 through the cloudflared tunnel; the bundle carries the new filter strings and still carries the #159 chart.
 - Unverified: the filter on the live book's real rows (needs the owner's access key).
+
+
+## Issue 52 — "no tradeable quotes" from dead back-month contracts (found 2026-10-28; NOT fixed)
+
+- Verified on the VM's 15:40 chain archive: FINNIFTY 12-29 had 0–2 of 288–290 legs bid on 10-26..28, 2027-01-25 0/268; MIDCPNIFTY 12-29 2–6/518, 2027-01-25 0/454; near month 11-23 quoted normally.
+- `pick_expiry(horizon="long")` takes the furthest listed contract when the chain does not reach 90 days, so every long-horizon signal on those indices landed on an unquoted contract: FIN SERVICE 17/17 evaluations on each of 10-26/27/28, MID SELECT 17 on 10-27 and 11 on 10-28. RELIANCE (17 on 10-28) and HDFCBANK (7 until 11:31) hit the newly listed January contract after the 10-27 roll.
+- Not the >50%-off-last rule and not the fetch: the legs had no bid, ask or last price at all.
+
+
+## Deploy 2026-10-28 18:53–18:56 IST — #160 to VM and Mini PC (`main` `f6c2bec` → `444e8bf`)
+
+- Mac suite 3,231 passed. VM: no job running (the 18:45 GEX run had finished: 153 rows / 35 underlyings), 75 scoped tests passed, services restarted, health 200, `GEX_STEERING_ACCOUNTS` ('PAPER_2L',).
+- Mini PC: 73 tests passed, replica block reinstalled (36 lines, 0 live-lane), `node_sector_bars.sh` first run 18:54–18:55: 7/7 indices as of 10-28, shipped; VM file 18:55, guard FRESH (0.0 days), `sector_trend` reads FINANCIALS as of 10-28.
+- Unverified: a live PAPER_2L steering refusal; the Mac still ships its copy until its checkout runs `main`.

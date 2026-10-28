@@ -42,6 +42,24 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-28 (Wed, ~18:55 IST) — #160 DEPLOYED: sector bars ship from the Mini PC; GEX steering live for PAPER_2L only (VM + Mini PC on `444e8bf`)
+
+- **Live now:**
+  - **Sector bars:** the Mini PC fetches `sector_index_bars.json` at 08:30 and 16:10 Mon–Fri (`scripts/node_sector_bars.sh`, log `logs/sector_bars.log`) and ships it to the VM.
+    - First ship at 18:55: 7/7 indices as of 10-28. On the VM the staleness guard reads FRESH and the sector veto computes from it.
+    - The Mac still ships its own copy until its checkout is moved to `main` (it runs an older branch). That's an owner step: `git checkout main && git pull --ff-only origin main` on the Mac.
+  - **GEX steering, PAPER_2L only** (`gex_steering_accounts: ["PAPER_2L"]`):
+    - In a calibrated short-gamma zone, PAPER_2L copies only the D6 momentum spread (bull call at +0.5% or more, bear put at −0.5% or less) and refuses anything else by name (`gex_steering_refused` in `paper_account_events`).
+    - Every other book is unchanged.
+    - At deploy the calibrated read was 10-27 (the 18:45 run fetched the late file): HDFCBANK and RELIANCE short gamma, NIFTY BANK positive.
+    - Refuse-only: PAPER_2L settles on the primary's P&L, so it cannot take the D6 alternative itself (that needs a ruling).
+- **Diagnosed, not fixed:**
+  - The "no tradeable quotes" refusals come from the long-horizon expiry pick choosing dead back-month contracts: FIN SERVICE/MID SELECT 12-29 and 2027-01-25, and new January stock contracts after the 10-27 roll. Fix: pick the furthest *quoted* expiry.
+  - The learner journals a rejected row on every skipped attempt, so each monthly expiry scores a burst of hypothetical outcomes (52 on 10-26, 47 hypothetical). Sizing ignores them; the outcomes table does not.
+- **Next:**
+  1. Thu 10-29: the 08:30 node sector ship, the 08:50 GEX run, and any `gex_steering_refused` events for PAPER_2L.
+  2. Decide on the expiry-pick fix and on PAPER_2L self-pricing.
+
 ## 2026-10-28 (Wed, ~18:30 IST) — Live Book PORTFOLIO filter shipped to the dashboard box (`48aac47`, UI only)
 
 - **Live now:** the Live Book has a PORTFOLIO dropdown beside STRATEGY: ALL, PAPER_10L, PAPER_2L, PAPER_2L_ROT, PAPER_2L_LIVE, PAPER_SHADOW_LEARNER, PAPER_EVENTS.

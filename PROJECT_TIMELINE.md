@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-10-28 · 7 commits · 30 files touched
+### 2026-10-28 · 9 commits · 36 files touched
 
+- `57fd377` docs: HANDOVER + ledger — #161 deployed: expiry fallback + PAPER_2L_LIVE_GEX (84eb500), box bridge + UI
+- `84eb500` feat: expiry liquidity fallback (Issue 52) + PAPER_2L_LIVE_GEX, a live-quote GEX-steered book (#161)
 - `f9b15da` docs: HANDOVER + ledger (Issue 52) — #160 deployed: sector bars from the Mini PC, GEX steering for PAPER_2L (444e8bf)
 - `444e8bf` feat: sector bars move to the Mini PC; GEX steering for PAPER_2L only (#160)
 - `17e0c7c` docs: HANDOVER + ledger — Live Book portfolio filter shipped to the dashboard box (48aac47)

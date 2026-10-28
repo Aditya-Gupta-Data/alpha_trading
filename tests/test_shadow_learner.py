@@ -101,3 +101,19 @@ def test_take_refuses_cleanly_with_the_venue_off(monkeypatch):
     v = sl.take(entry, "advisory: test")
     assert v["status"] == "rejected" and "venue off" in v["reason"]
     assert entry["accounts"][sl.ACCOUNT] is v and v["learner_only"] == "advisory: test"
+
+
+def test_a_skipped_learner_attempt_writes_no_journal_row(monkeypatch):
+    """2026-10-28: every skipped attempt used to be journaled REJECTED and scored as a duplicate hypothetical."""
+    from src import options_proposer as op
+    logged = []
+    monkeypatch.setattr(op.journal, "log", lambda e: logged.append(e))
+    monkeypatch.setattr(sl, "ready", lambda u, **k: (False, "learner already took bear_put_spread on X this session"))
+    p = {"action": "SPREAD", "ticker": "NIFTY BANK", "shares": 30, "price": 1.0, "signal": "s", "lots": 1,
+         "spread": {"strategy": "bear_put_spread", "lots": 1, "legs": [], "expiry": "2026-11-23"}}
+    out = op._learner_path("NIFTY BANK", {"proposal": p}, p, "exposure gate")
+    assert out["learner"]["status"] == "skipped" and logged == []
+    monkeypatch.setattr(sl, "ready", lambda u, **k: (True, "ready"))
+    monkeypatch.setattr(sl, "take", lambda e, r: {"status": "approved", "lots": 1})
+    op._learner_path("NIFTY BANK", {"proposal": p}, p, "exposure gate")
+    assert len(logged) == 1 and logged[0]["decision"] == "rejected"

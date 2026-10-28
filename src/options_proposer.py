@@ -871,7 +871,10 @@ def _learner_enabled() -> bool:
 
 def _learner_path(underlying: str, result: dict, p: dict, reason: str) -> dict:
     """A setup the primary's gates refused: journaled REJECTED (hypothetical for the
-    primary) and taken by the Shadow Learner on crossed quotes. Fail-open."""
+    primary) and taken by the Shadow Learner on crossed quotes. Fail-open. A SKIPPED
+    attempt (already taken this session, the optional cap) is not journaled (2026-10-28):
+    each one became a duplicate hypothetical row, scored in a burst at expiry (52 on
+    10-26); the proposal ledger still records every evaluation."""
     from src import shadow_learner
     entry = to_journal_entry(p, "rejected", f"learner-only: {reason}")
     entry["learner_only"] = reason
@@ -880,7 +883,8 @@ def _learner_path(underlying: str, result: dict, p: dict, reason: str) -> dict:
         ok, why = shadow_learner.ready(underlying, strategy=(entry.get("spread") or {}).get("strategy"))
         verdict = shadow_learner.take(entry, reason) if ok else {"status": "skipped", "reason": why}
         entry.setdefault("accounts", {})[shadow_learner.ACCOUNT] = verdict
-        journal.log(entry)
+        if verdict.get("status") != "skipped":
+            journal.log(entry)
     except Exception as exc:
         verdict = {"status": "error", "reason": str(exc)}
     print(f"  [{shadow_learner.ACCOUNT}] {entry.get('short_id')}: {verdict.get('status')} — {verdict.get('reason')}")

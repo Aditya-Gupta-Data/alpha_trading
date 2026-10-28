@@ -2488,3 +2488,10 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Mac suite 3,243. VM: evening ingestion jobs only (no session); `84eb500`, 136 scoped tests passed, services restarted, health 200; `gex_account_enabled()` True, steering ('PAPER_2L_LIVE_GEX',); `paper_accounts` row PAPER_2L_LIVE_GEX 200000.0 created 2026-10-28T19:12:58.
 - Dashboard box: `/opt/alpha_trading` `772d2b1` → `84eb500`, `alpha-api-bridge` active; `ship_ui.sh` bundle 19:13 (new strings present); `/login` `/overview` `/live-book` 200 locally and through the tunnel; mirror published by hand 19:14 (`publish_dashboard_mirror.sh`), the API's treasury lists PAPER_2L_LIVE_GEX (equity 200000.0, 0 locks).
 - Unverified: the fallback and the GEX book in a live session (10-29); the desk viewed with the owner's key.
+
+
+## Issue 53 — skipped learner attempts journaled as duplicate hypothetical rows (found 2026-10-28; FIXED in code)
+
+- Verified on the VM: the 52 outcomes dated 10-26 included 47 REJECTED journal rows (46 `learner-only: exposure gate`, 38 of them written on 10-19), scored together in the pre-expiry window before the 10-27 expiry (49 wins, +66.56R). `_learner_path` journaled a REJECTED row on EVERY attempt, including the ones the learner skipped.
+- Fix: a skipped attempt writes no journal row; the proposal ledger still records the evaluation. `adaptive_sizing` was never affected (it skips hypothetical outcomes and collapses duplicates); the `outcomes` table and anything counting it were.
+- Left as recorded: 264 unresolved skipped rows already in the journal (107 expiring 2026-11-23, 134 on 2026-12-29, 14 on 2027-03-30, 6 on 2027-01-25) will still be scored at those expiries.

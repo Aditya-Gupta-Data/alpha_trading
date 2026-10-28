@@ -207,7 +207,7 @@ def test_migrate_m1_buckets_plan_parity_and_idempotent_apply():
     assert all(c["ok"] for c in p["parity"])
 
     counts1 = migrate_m1_buckets.apply(conn, p)
-    assert counts1["buckets"] == 3
+    assert counts1["buckets"] == 6
     assert counts1["locks"] == 3
 
     # Re-running apply is idempotent (0 new buckets or duplicate locks inserted).

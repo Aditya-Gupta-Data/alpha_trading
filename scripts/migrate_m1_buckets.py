@@ -1,10 +1,16 @@
-# MANUAL OFFLINE TOOL — M1 multi-bucket ledger migration (blueprint docs/m1_multi_bucket_ledger_blueprint.md).
-"""Seed the buckets from the flat ledger and backfill portfolio_id. DRY-RUN by default: prints the
+# MANUAL OFFLINE TOOL — M1/M4 multi-bucket ledger migration (blueprint docs/m1_multi_bucket_ledger_blueprint.md).
+"""Seed the 5 buckets from the flat ledger and backfill portfolio_id. DRY-RUN by default: prints the
 plan and the PARITY check and writes nothing. `--apply` writes inside one transaction, only when
 PARITY holds, and logs one `m1_bucket_migration` account event. Idempotent (INSERT OR IGNORE).
 
-Rulings (Architect 2026-10-09): PAPER_10L → DARLINGS seeded with treasury_state's budget, the rest of
-its equity → IDX_SPREADS; PAPER_2L / ROT / LIVE / SHADOW_LEARNER → one IDX_SPREADS bucket each.
+Rulings (Architect 2026-10-09, Roadmap M4):
+  PAPER_10L 5-Bucket Allocation:
+    B1: PAPER_10L/IDX_SPREADS  (options spreads, maps all existing options capital and open positions)
+    B2: PAPER_10L/EQ_SWING     (equity swing, 0 active positions)
+    B3: PAPER_10L/DARLINGS     (darlings delivery, treasury budget if present, 0 active options positions)
+    B4: PAPER_10L/WEALTH_LOCK  (long-term wealth lock, 0 active positions)
+    B5: PAPER_10L/CROSS_ASSET  (cross-asset macro, 0 active positions)
+  Paper shadow accounts: one IDX_SPREADS bucket each.
 
     python3 scripts/migrate_m1_buckets.py              # dry-run
     python3 scripts/migrate_m1_buckets.py --apply
@@ -17,7 +23,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 TOL = 0.01
-FAMILY = {"IDX": "index_options", "DARLINGS": "darlings"}
+FAMILY = {
+    "IDX": "index_options",
+    "EQ_SWING": "equity_swing",
+    "DARLINGS": "darlings",
+    "WEALTH_LOCK": "wealth_lock",
+    "CROSS_ASSET": "cross_asset",
+}
 
 
 def _q(conn, sql, args=()):
@@ -29,12 +41,12 @@ def _one(conn, sql, args=()):
     return r[0] if r and r[0] is not None else 0.0
 
 
-def plan(conn) -> dict:
+def plan(conn, five_buckets: bool = True) -> dict:
     """The seeds, the backfill counts and the PARITY check — read-only."""
     from src import portfolio_manager as pm
     conn.row_factory = sqlite3.Row
     pm.ensure_accounts_schema(conn)
-    out = {"buckets": [], "backfill": {}, "parity": [], "ok": True}
+    out = {"buckets": [], "backfill": {}, "parity": [], "active_positions": {}, "ok": True}
     now = datetime.now().replace(microsecond=0).isoformat()
     # --- PAPER_10L: DARLINGS (treasury budget) + IDX_SPREADS (the rest)
     acct = pm.get_account(conn)
@@ -46,22 +58,64 @@ def plan(conn) -> dict:
     idx_realized = float(acct["realized_pnl"]) - darl_realized
     darl_start = float(budget)
     idx_start = equity - darl_start - darl_realized - idx_realized
-    for pid, fam, start, real, mdd, dl in (
-            ("PAPER_10L/IDX_SPREADS", "index_options", idx_start, idx_realized, pm.MAX_DRAWDOWN_PCT, pm.MAX_DAILY_LOSS_PCT),
-            ("PAPER_10L/DARLINGS", "darlings", darl_start, darl_realized, 10.0, None)):
-        out["buckets"].append({"portfolio_id": pid, "account_id": "PAPER_10L", "strategy_family": fam,
-                               "starting_capital": round(start, 2), "realized_pnl": round(real, 2),
-                               "risk_per_trade_pct": pm.ACCOUNT_RISK_PER_TRADE_PCT,
-                               "max_drawdown_pct": mdd, "daily_loss_pct": dl, "created_at": now})
+
+    if five_buckets:
+        # M4: All 5 buckets for PAPER_10L.
+        # B1 gets all options capital; B2, B4, B5 initialize with 0 capital / 0 positions.
+        # B3 holds darling treasury budget if configured, else 0.
+        bucket_defs = (
+            ("PAPER_10L/IDX_SPREADS", FAMILY["IDX"], idx_start, idx_realized, pm.MAX_DRAWDOWN_PCT, pm.MAX_DAILY_LOSS_PCT),
+            ("PAPER_10L/EQ_SWING", FAMILY["EQ_SWING"], 0.0, 0.0, 10.0, 3.0),
+            ("PAPER_10L/DARLINGS", FAMILY["DARLINGS"], darl_start, darl_realized, 10.0, None),
+            ("PAPER_10L/WEALTH_LOCK", FAMILY["WEALTH_LOCK"], 0.0, 0.0, None, None),
+            ("PAPER_10L/CROSS_ASSET", FAMILY["CROSS_ASSET"], 0.0, 0.0, 10.0, 3.0),
+        )
+    else:
+        # Legacy M1 2-bucket pair
+        bucket_defs = (
+            ("PAPER_10L/IDX_SPREADS", FAMILY["IDX"], idx_start, idx_realized, pm.MAX_DRAWDOWN_PCT, pm.MAX_DAILY_LOSS_PCT),
+            ("PAPER_10L/DARLINGS", FAMILY["DARLINGS"], darl_start, darl_realized, 10.0, None),
+        )
+
+    for pid, fam, start, real, mdd, dl in bucket_defs:
+        out["buckets"].append({
+            "portfolio_id": pid,
+            "account_id": "PAPER_10L",
+            "strategy_family": fam,
+            "starting_capital": round(start, 2),
+            "realized_pnl": round(real, 2),
+            "risk_per_trade_pct": pm.ACCOUNT_RISK_PER_TRADE_PCT,
+            "max_drawdown_pct": mdd,
+            "daily_loss_pct": dl,
+            "created_at": now,
+        })
+
+    # --- Active positions per bucket: B1 gets all open options positions, B2, B4, B5 have 0
+    open_opt_positions = int(_one(conn, "SELECT COUNT(*) FROM margin_locks WHERE released_at IS NULL AND journal_ref NOT LIKE 'eqd:%'"))
+    open_darl_positions = int(_one(conn, "SELECT COUNT(*) FROM margin_locks WHERE released_at IS NULL AND journal_ref LIKE 'eqd:%'"))
+    out["active_positions"] = {
+        "PAPER_10L/IDX_SPREADS": open_opt_positions,
+        "PAPER_10L/EQ_SWING": 0,
+        "PAPER_10L/DARLINGS": open_darl_positions,
+        "PAPER_10L/WEALTH_LOCK": 0,
+        "PAPER_10L/CROSS_ASSET": 0,
+    }
+
     # --- shadows: one IDX bucket each (options-only by ruling)
     for a in _q(conn, "SELECT account_id, starting_capital, realized_pnl FROM paper_accounts ORDER BY account_id"):
         learner = a["account_id"] == pm.ACCOUNT_PAPER_SHADOW_LEARNER
-        out["buckets"].append({"portfolio_id": f"{a['account_id']}/IDX_SPREADS", "account_id": a["account_id"],
-                               "strategy_family": "index_options", "starting_capital": float(a["starting_capital"]),
-                               "realized_pnl": float(a["realized_pnl"]),
-                               "risk_per_trade_pct": pm.ACCOUNT_RISK_PER_TRADE_PCT,
-                               "max_drawdown_pct": None if learner else pm.MAX_DRAWDOWN_PCT,
-                               "daily_loss_pct": None if learner else pm.MAX_DAILY_LOSS_PCT, "created_at": now})
+        out["buckets"].append({
+            "portfolio_id": f"{a['account_id']}/IDX_SPREADS",
+            "account_id": a["account_id"],
+            "strategy_family": FAMILY["IDX"],
+            "starting_capital": float(a["starting_capital"]),
+            "realized_pnl": float(a["realized_pnl"]),
+            "risk_per_trade_pct": pm.ACCOUNT_RISK_PER_TRADE_PCT,
+            "max_drawdown_pct": None if learner else pm.MAX_DRAWDOWN_PCT,
+            "daily_loss_pct": None if learner else pm.MAX_DAILY_LOSS_PCT,
+            "created_at": now,
+        })
+
     # --- backfill map (what each existing row already says)
     t = _tables(conn)
     bf = out["backfill"]
@@ -76,29 +130,48 @@ def plan(conn) -> dict:
         bf["outcomes→PAPER_10L/IDX"] = _one(conn, "SELECT COUNT(*) FROM outcomes WHERE journal_ref NOT LIKE 'sim:%'")
     if "shadow_trades" in t:
         bf["shadow_trades→PAPER_10L/IDX"] = _one(conn, "SELECT COUNT(*) FROM shadow_trades")
+
     # --- PARITY: Σ bucket equity == account equity; Σ open bucket locks == open account locks
     by_acct = {}
     for b in out["buckets"]:
         by_acct[b["account_id"]] = by_acct.get(b["account_id"], 0.0) + b["starting_capital"] + b["realized_pnl"]
-    out["parity"].append(_parity("PAPER_10L equity", by_acct.get("PAPER_10L", 0.0), equity))
+
+    # 1. Total equity across all 5 buckets == legacy flat account equity
+    paper_10l_equity = by_acct.get("PAPER_10L", 0.0)
+    out["parity"].append(_parity("PAPER_10L equity", paper_10l_equity, equity))
+
+    # 2. Paper accounts equity parity
     for a in _q(conn, "SELECT account_id, starting_capital, realized_pnl FROM paper_accounts"):
         out["parity"].append(_parity(f"{a['account_id']} equity", by_acct.get(a["account_id"], 0.0),
                                      float(a["starting_capital"]) + float(a["realized_pnl"])))
+
+    # 3. Open margin locks parity
     open_primary = _one(conn, "SELECT COALESCE(SUM(margin_rs), 0) FROM margin_locks WHERE released_at IS NULL")
     open_darl = _one(conn, "SELECT COALESCE(SUM(margin_rs), 0) FROM margin_locks WHERE released_at IS NULL "
                            "AND journal_ref LIKE 'eqd:%'")
-    out["parity"].append(_parity("PAPER_10L open locks", open_darl + (open_primary - open_darl), open_primary))
+    open_idx = open_primary - open_darl
+    out["parity"].append(_parity("PAPER_10L open locks", open_darl + open_idx, open_primary))
+
     for a in _q(conn, "SELECT account_id FROM paper_accounts"):
         o = _one(conn, "SELECT COALESCE(SUM(margin_rs), 0) FROM paper_margin_locks WHERE account_id = ? "
                        "AND released_at IS NULL", (a["account_id"],))
         out["parity"].append(_parity(f"{a['account_id']} open locks", o, o))
+
+    # 4. Strict capital + deployed margin parity: (Available Cash across all 5 buckets) + Deployed Margin == Total Equity
+    available_cash = paper_10l_equity - open_primary
+    out["parity"].append(_parity("PAPER_10L capital + deployed margin", available_cash + open_primary, equity))
+
     out["ok"] = all(p["ok"] for p in out["parity"])
     return out
 
 
 def _parity(name, buckets, account):
-    return {"check": name, "buckets": round(float(buckets), 2), "account": round(float(account), 2),
-            "ok": abs(float(buckets) - float(account)) <= TOL}
+    return {
+        "check": name,
+        "buckets": round(float(buckets), 2),
+        "account": round(float(account), 2),
+        "ok": abs(float(buckets) - float(account)) <= TOL,
+    }
 
 
 def _tables(conn):
@@ -168,12 +241,13 @@ def apply(conn, p: dict) -> dict:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="M1/M4 multi-bucket ledger migration")
     ap.add_argument("--db", default=str(ROOT / "data" / "brain_map.db"))
-    ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--apply", action="store_true", help="Apply migration to database (default: dry-run)")
+    ap.add_argument("--legacy-m1", action="store_true", help="Seed only the 2 legacy M1 buckets instead of all 5")
     a = ap.parse_args(argv)
     conn = sqlite3.connect(a.db)
-    p = plan(conn)
+    p = plan(conn, five_buckets=not a.legacy_m1)
     for b in p["buckets"]:
         print(json.dumps(b))
     print("backfill:", json.dumps(p["backfill"]))

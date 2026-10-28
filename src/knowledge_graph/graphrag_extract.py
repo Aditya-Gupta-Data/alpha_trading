@@ -523,8 +523,10 @@ def run_stored_items(
 
 
 def _measure_universe_reach(conn, agg: dict) -> None:
-    """Propagate +1 from each accepted edge's source over (structural edges + accepted
-    edges) and record which option-universe nodes it reaches within the hop limit."""
+    """For each accepted edge, seed its TARGET with the edge's polarity (the effect this
+    edge carries) and propagate over (structural edges + accepted edges); record which
+    option-universe nodes that effect reaches. Seeding the source would credit an edge
+    with every path its (often hub) source has, e.g. any Government edge reaching banks."""
     try:
         import networkx as nx
         from src.knowledge_graph import spreading_activation
@@ -540,9 +542,15 @@ def _measure_universe_reach(conn, agg: dict) -> None:
         for e in agg["edges"]:
             g.add_edge(e["source_node"], e["target_node"], weight=e["weight"],
                        confidence_score=0.5 * float(e["weight"]), polarity=e["polarity"])
+        universe = {r["node_id"] for r in conn.execute("SELECT node_id FROM graph_nodes WHERE in_universe = 1")}
         for e in agg["edges"]:
-            res = spreading_activation.propagate(g, {e["source_node"]: 1.0}, conn=conn, log_activation=False)
-            hits = sorted(a["node_id"] for a in res.get("activated") or [] if a.get("in_universe"))
+            tgt = e["target_node"]
+            res = spreading_activation.propagate(g, {tgt: float(e["polarity"] or 1)}, conn=conn,
+                                                 log_activation=False)
+            hits = {a["node_id"] for a in res.get("activated") or [] if a.get("in_universe")}
+            if tgt in universe:
+                hits.add(tgt)
+            hits = sorted(hits)
             e["reaches_universe"] = hits
             if hits:
                 agg["edges_reaching_universe"] += 1

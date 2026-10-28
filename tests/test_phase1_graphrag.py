@@ -787,15 +787,18 @@ def test_sector_links_carry_energy_from_rbi_to_the_traded_banks():
 def test_dry_run_reports_which_traded_names_an_edge_reaches(tmp_path):
     def fake_llm(sys_prompt, user_text):
         return {"edges": [_edge("RBI", "Banks", "RBI tightens leverage rules", pol=-1, pred="hurts"),
+                          _edge("RBI", "Rupee", "RBI sells dollars", pred="regulates", ot="macro"),
                           _edge("Goa government", "Aviation turbine fuel", "VAT cut on ATF",
                                 st="policy", ot="commodity", pred="taxes")]}
     res = graphrag_extract.run_stored_items(
         days=7, card_dir=tmp_path / "none", inbox_dir=tmp_path / "none",
-        rss_items=[{"title": "x", "text": "RBI tightens leverage rules. VAT cut on ATF.", "url": "1"}],
+        rss_items=[{"title": "x", "text": "RBI tightens leverage rules. RBI sells dollars. VAT cut on ATF.", "url": "1"}],
         extractor=fake_llm, env={"ALPHA_NODE_ROLE": "analytics"})
-    by_src = {e["source_node"]: e["reaches_universe"] for e in res["edges"]}
-    assert {"HDFCBANK", "ICICIBANK", "NIFTY BANK"} <= set(by_src["policy:RESERVE_BANK_OF_INDIA"])
-    assert by_src["policy:GOA_GOVERNMENT"] == []
+    by_tgt = {e["target_node"]: e["reaches_universe"] for e in res["edges"]}
+    assert {"HDFCBANK", "ICICIBANK", "NIFTY BANK"} <= set(by_tgt["sector:FINANCIALS"])
+    # RBI's rupee edge does not borrow RBI's separate path to the banks
+    assert by_tgt["macro:INR"] == []
+    assert by_tgt["commodity:AVIATION_TURBINE_FUEL"] == []
     assert res["edges_reaching_universe"] == 1
 
 

@@ -318,8 +318,12 @@ def _playbook_lines(underlyings, fetch_fn=None, gex_fn=None) -> list:
                 "gex": gex, "momentum_pct": _session_move_pct(analysis)})     # #155 D4/D6
             vix_text = f"{vix:.1f}" if vix is not None else "n/a"
             zone = (plan.get("gamma_zone") or {}).get("zone")
-            gex_text = (f"; GEX {zone.replace('_', ' ')} vs S* {gex['zero_gamma']:,.0f} ({gex['day']})"
-                        if zone and gex.get("zero_gamma") else "; GEX no calibrated read")
+            if zone and gex.get("zero_gamma"):
+                gex_text = f"; GEX {zone.replace('_', ' ')} vs S* {gex['zero_gamma']:,.0f} ({gex['day']})"
+            elif zone:
+                gex_text = f"; GEX {zone.replace('_', ' ')}, no S* within the grid ({gex['day']})"
+            else:
+                gex_text = "; GEX no calibrated read"
             if plan["tradeable"]:
                 cap = ("unlimited" if plan.get("max_profit") is None
                        else f"Rs.{plan['max_profit']:,.0f}")          # a long straddle has no cap (#155)

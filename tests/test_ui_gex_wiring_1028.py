@@ -62,6 +62,9 @@ def test_the_playbook_routes_a_short_gamma_zone_through_d6():
     line = ms._playbook_lines(("NIFTY BANK",), fetch_fn=lambda u: state, gex_fn=lambda u: gex)[0]
     assert "bear put spread" in line and "view momentum_bearish" in line           # -1.25% session: D6 momentum
     assert "GEX short gamma vs S* 54,000 (2026-10-27)" in line
+    no_flip = dict(gex, zero_gamma=None)                                              # a read, S* off the grid
+    flipless = ms._playbook_lines(("NIFTY BANK",), fetch_fn=lambda u: state, gex_fn=lambda u: no_flip)[0]
+    assert "GEX short gamma, no S* within the grid (2026-10-27)" in flipless and "bear put spread" in flipless
     none = ms._playbook_lines(("NIFTY BANK",), fetch_fn=lambda u: state, gex_fn=lambda u: {})[0]
     assert "iron condor" in none and "GEX no calibrated read" in none               # no read: the SMA matrix
 

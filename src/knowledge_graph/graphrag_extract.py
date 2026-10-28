@@ -14,7 +14,7 @@ Guardrails (ARCHITECTURE_ROADMAP.md §2.3):
        - `quote` MUST be a non-empty verbatim substring of the input text
        - `subject != object` after canonical node resolution
        - both endpoints resolve via alias table or as valid non-company nodes (`in_universe=0`)
-       - `polarity in (-1, 0, 1)`, `strength` clamped `0..1`
+       - `polarity in (-1, 1)` — a neutral (0) or missing direction is rejected, `strength` clamped `0..1`
   4. Provenance firewall: all edges written with `source = 'llm_extracted'`,
      `decay_lambda = 0.02`, initial `confidence_score = 0.5 * strength`, and
      reinforcement `1 - (1 - c) * (1 - 0.5 * strength)`.
@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -40,7 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 REVIEW_LEDGER_PATH = ROOT / "logs" / "graphrag_review_alerts.jsonl"
 CALL_LEDGER_PATH = ROOT / "logs" / "graphrag_extract_calls.jsonl"
 
-MAX_INPUT_CHARS = 3000
+MAX_INPUT_CHARS = 6000
 REVIEW_WEIGHT_THRESHOLD = 0.7
 DEFAULT_DAILY_EXTRACT_CAP = 100
 
@@ -48,7 +49,10 @@ EXTRACT_SYSTEM_PROMPT = (
     "Extract directed supply-chain / demand / regulatory relationships stated "
     "or directly implied by the text. Return ONLY JSON "
     '{"edges":[{"subject":str,"subject_type":str,"predicate":str,"object":str,'
-    '"object_type":str,"polarity":-1|0|1,"strength":0..1,"quote":str}]}. '
+    '"object_type":str,"polarity":-1|1,"strength":0..1,"quote":str}]}. '
+    "polarity is +1 when the subject strengthens/raises/benefits the object and -1 when it "
+    "weakens/cuts/hurts it; leave out any relationship whose direction is not clear. "
+    "Name institutions in full (Reserve Bank of India, Government of India), not abbreviations. "
     "predicate in "
     + json.dumps(sorted(graphrag.PREDICATE_TO_CLASS.keys()))
     + ". subject_type and object_type in "
@@ -118,6 +122,8 @@ def validate_raw_edge(conn, raw_edge: dict, source_text: str) -> tuple[bool, str
             return False, "invalid_polarity", None
     else:
         pol_int = int(raw_pol)
+    if pol_int == 0:
+        return False, "neutral_polarity", None
 
     raw_strength = raw_edge.get("strength")
     if isinstance(raw_strength, bool) or raw_strength is None:
@@ -229,7 +235,7 @@ def _notify_review_edges(
                     )
         return len(fresh)
     except Exception as exc:
-        print(f"  (graphrag_extract: review notify skipped [{exc}])")
+        print(f"  (graphrag_extract: review notify skipped [{exc}])", file=sys.stderr)
         return 0
 
 
@@ -386,7 +392,7 @@ def extract_from_item(
             if owns_conn and conn is not None:
                 conn.close()
     except Exception as exc:
-        print(f"  (graphrag_extract: fail-open skip [{type(exc).__name__}: {exc}])")
+        print(f"  (graphrag_extract: fail-open skip [{type(exc).__name__}: {exc}])", file=sys.stderr)
         summary["status"] = f"error ({type(exc).__name__}: {exc})"
         return summary
 
@@ -401,10 +407,12 @@ def run_stored_items(
     daily_cap: int = DEFAULT_DAILY_EXTRACT_CAP,
     env: dict | None = None,
     hostname: str | None = None,
+    rss_items: list | None = None,
 ) -> dict:
-    """Replay the last `days` days of stored event cards + inbox texts through
-    `extract_from_item` (default `dry_run=True` for Step 6 verification on the
-    Mini PC)."""
+    """Replay the last `days` days of stored event cards + inbox texts (+ optional
+    live RSS items) through `extract_from_item`; default `dry_run=True` (Step 6).
+    A dry-run shares ONE in-memory graph across items so node reuse is measurable;
+    repeated texts and repeated edges are counted once."""
     from datetime import timedelta
     from src.event_engine import CARD_DIR, INBOX_DIR, detect
 
@@ -420,62 +428,105 @@ def run_stored_items(
                 if gen and date.fromisoformat(gen) < cutoff:
                     continue
                 src = card.get("source") or {}
-                mech_quotes = " ".join(
-                    str(m.get("quote") or "") for m in (card.get("mechanics") or []) if isinstance(m, dict)
-                )
-                text = f"{src.get('title') or ''}\n{mech_quotes}".strip()
-                if text:
+                body = str(src.get("text") or "").strip()
+                if not body:
+                    body = " ".join(
+                        str(m.get("quote") or "") for m in (card.get("mechanics") or []) if isinstance(m, dict)
+                    ).strip()
+                if src.get("title") or body:
                     items.append({
                         "event_id": card.get("event_id") or p.stem,
                         "title": src.get("title") or p.stem,
-                        "text": text,
+                        "text": body,
                         "url": src.get("url") or "",
                         "source": src.get("from") or f"card:{p.name}",
+                        "full_text": bool(src.get("text")),
                     })
             except Exception:
                 continue
 
     for it in detect.inbox_items(inbox_dir or INBOX_DIR):
-        items.append(it)
+        items.append(dict(it, full_text=True))
+    for it in rss_items or []:
+        items.append(dict(it, full_text=True))
 
     agg = {
         "days": days,
         "dry_run": bool(dry_run),
         "items_checked": 0,
+        "items_full_text": 0,
+        "items_duplicate_text": 0,
         "written": 0,
+        "duplicate_edges_dropped": 0,
         "rejected": 0,
         "rejected_reasons": {},
+        "distinct_nodes": 0,
+        "nodes_in_2plus_edges": 0,
         "edges": [],
     }
-    for it in items:
-        agg["items_checked"] += 1
-        r = extract_from_item(
-            it,
-            conn=conn,
-            extractor=extractor,
-            daily_cap=daily_cap,
-            dry_run=dry_run,
-            env=env,
-            hostname=hostname,
-        )
-        agg["written"] += int(r.get("written") or 0)
-        agg["rejected"] += int(r.get("rejected") or 0)
-        for k, v in (r.get("rejected_reasons") or {}).items():
-            agg["rejected_reasons"][k] = agg["rejected_reasons"].get(k, 0) + v
-        agg["edges"].extend(r.get("edges") or [])
+    owns_conn = conn is None and dry_run
+    if owns_conn:
+        conn = brain_map.connect(":memory:")
+    seen_text: set[str] = set()
+    seen_edge: set[tuple] = set()
+    try:
+        for it in items:
+            chash = content_hash_for(compose_input_text(it))
+            if chash in seen_text:
+                agg["items_duplicate_text"] += 1
+                continue
+            seen_text.add(chash)
+            agg["items_checked"] += 1
+            agg["items_full_text"] += int(bool(it.get("full_text")))
+            r = extract_from_item(
+                {k: v for k, v in it.items() if k != "full_text"},
+                conn=conn,
+                extractor=extractor,
+                daily_cap=daily_cap,
+                dry_run=dry_run,
+                env=env,
+                hostname=hostname,
+            )
+            agg["rejected"] += int(r.get("rejected") or 0)
+            for k, v in (r.get("rejected_reasons") or {}).items():
+                agg["rejected_reasons"][k] = agg["rejected_reasons"].get(k, 0) + v
+            for e in r.get("edges") or []:
+                key = (e.get("source_node"), e.get("relation"), e.get("target_node"))
+                if key in seen_edge:
+                    agg["duplicate_edges_dropped"] += 1
+                    continue
+                seen_edge.add(key)
+                agg["edges"].append(e)
+    finally:
+        if owns_conn:
+            conn.close()
+    agg["written"] = len(agg["edges"])
+    degree: dict[str, int] = {}
+    for e in agg["edges"]:
+        for n in (e.get("source_node"), e.get("target_node")):
+            degree[n] = degree.get(n, 0) + 1
+    agg["distinct_nodes"] = len(degree)
+    agg["nodes_in_2plus_edges"] = sum(1 for d in degree.values() if d >= 2)
     return agg
 
 
 def main(argv=None) -> int:
     import argparse
+    import contextlib
     ap = argparse.ArgumentParser(description="Phase 1 GraphRAG relationship extractor (analytics node only)")
     ap.add_argument("--days", type=int, default=7, help="Lookback days for stored event cards/inbox items")
     ap.add_argument("--apply", action="store_true", help="Persist extracted edges to data/brain_map.db (default is dry-run)")
+    ap.add_argument("--rss", action="store_true", help="Also replay today's in-universe RSS items (full feed text)")
     a = ap.parse_args(argv)
-    res = run_stored_items(days=a.days, dry_run=not a.apply)
+    # stdout carries only the JSON result; every progress/log line goes to stderr.
+    with contextlib.redirect_stdout(sys.stderr):
+        rss = None
+        if a.rss:
+            from src.event_engine import detect
+            rss = [it for it in detect.rss_items() if detect.in_universe(it)]
+        res = run_stored_items(days=a.days, dry_run=not a.apply, rss_items=rss)
     print(json.dumps(res, indent=2, default=str))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

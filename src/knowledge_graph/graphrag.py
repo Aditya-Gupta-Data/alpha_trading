@@ -196,6 +196,61 @@ def ensure_schema(conn) -> None:
     conn.commit()
 
 
+# Canonical institutions/macro entities: every alias collapses onto ONE node so
+# "RBI", "Reserve Bank of India" and "the central bank" stop fragmenting the graph.
+CANONICAL_ENTITIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "policy:RESERVE_BANK_OF_INDIA": ("policy", "RESERVE BANK OF INDIA", (
+        "rbi", "reserve bank of india", "reserve bank", "india s central bank", "indian central bank",
+        "rbi governor", "rbi mpc", "monetary policy committee", "mpc")),
+    "policy:SEBI": ("policy", "SECURITIES AND EXCHANGE BOARD OF INDIA", (
+        "sebi", "securities and exchange board of india", "market regulator", "capital markets regulator")),
+    "policy:GOVERNMENT_OF_INDIA": ("policy", "GOVERNMENT OF INDIA", (
+        "government", "govt", "gov", "goi", "centre", "the centre", "center", "central government",
+        "union government", "government of india", "indian government", "india s government",
+        "ministry", "the ministry", "cabinet", "union cabinet", "modi government")),
+    "policy:MINISTRY_OF_FINANCE": ("policy", "MINISTRY OF FINANCE", (
+        "finance ministry", "ministry of finance", "mof", "finance minister", "fm", "dea")),
+    "policy:GST_COUNCIL": ("policy", "GST COUNCIL", ("gst council", "gst panel")),
+    "policy:REPO_RATE": ("policy", "REPO RATE", (
+        "repo rate", "benchmark repo rate", "policy rate", "benchmark rate", "key policy rate")),
+    "macro:US_FEDERAL_RESERVE": ("macro", "US FEDERAL RESERVE", (
+        "fed", "the fed", "us fed", "federal reserve", "us federal reserve", "fomc")),
+    "macro:PEOPLES_BANK_OF_CHINA": ("macro", "PEOPLE'S BANK OF CHINA", (
+        "pboc", "people s bank of china", "peoples bank of china", "china s central bank",
+        "chinese central bank")),
+    "macro:INDIA": ("macro", "INDIA", ("india", "indian economy")),
+    "macro:CHINA": ("macro", "CHINA", ("china", "beijing", "chinese government", "china s government")),
+    "macro:USA": ("macro", "UNITED STATES", ("us", "usa", "u s", "united states", "america", "washington",
+                                              "us government", "trump administration")),
+    "macro:INR": ("macro", "INDIAN RUPEE", ("rupee", "inr", "indian rupee", "currency", "the rupee")),
+    "macro:USD": ("macro", "US DOLLAR", ("dollar", "dollars", "usd", "us dollar", "greenback")),
+    "macro:INDIA_10Y_BOND_YIELD": ("macro", "INDIA 10Y BOND YIELD", (
+        "bond yield", "bond yields", "india s 10-year bond", "10-year bond", "10-year bond yield",
+        "india 10-year yield", "g-sec yield", "gsec yield", "government bond yield")),
+    "macro:INFLATION": ("macro", "INFLATION", ("inflation", "cpi", "cpi inflation", "retail inflation",
+                                               "wpi", "wholesale inflation")),
+    "commodity:CRUDE_OIL": ("commodity", "CRUDE OIL", ("crude", "crude oil", "oil", "brent", "wti",
+                                                       "brent crude", "oil prices")),
+    "commodity:GOLD": ("commodity", "GOLD", ("gold", "gold prices", "bullion")),
+}
+
+
+def _build_canon_index() -> dict[str, str]:
+    idx = {}
+    for node_id, (_t, display, aliases) in CANONICAL_ENTITIES.items():
+        for a in (*aliases, display, node_id, node_id.split(":", 1)[1].replace("_", " ")):
+            idx[_normalize_alias(a.replace("-", " "))] = node_id
+    return idx
+
+
+def canonical_entity_for(raw_name: str) -> str | None:
+    """The canonical node_id for an institution/macro alias (type prefix ignored), else None."""
+    raw = str(raw_name or "").strip()
+    if ":" in raw and raw.split(":", 1)[0].lower() in NODE_TYPES:
+        raw = raw.split(":", 1)[1]
+    return _CANON_INDEX.get(_normalize_alias(raw.replace("_", " ").replace("-", " ")))
+
+
 def _normalize_alias(text: str) -> str:
     s = re.sub(r"[^a-z0-9&\-]+", " ", (text or "").lower()).strip()
     return re.sub(r"\s+", " ", s)
@@ -204,6 +259,9 @@ def _normalize_alias(text: str) -> str:
 def _canonical_token(text: str) -> str:
     s = re.sub(r"[^A-Z0-9&_]+", "_", (text or "").upper().strip())
     return re.sub(r"_+", "_", s).strip("_")
+
+
+_CANON_INDEX: dict[str, str] = _build_canon_index()
 
 
 def canonical_node_id(raw_name: str, node_type: str) -> str:
@@ -475,6 +533,21 @@ def resolve_node(conn, raw_name: str, declared_type: str | None = None) -> dict 
     norm = _normalize_alias(raw)
     upper = raw.upper().removesuffix(".NS").strip()
     dtype = (declared_type or "").strip().lower()
+
+    # 0. Canonical alias map first (RBI -> Reserve Bank of India, Govt -> Government of India)
+    canon = canonical_entity_for(raw)
+    if canon is not None:
+        ctype, cdisp, caliases = CANONICAL_ENTITIES[canon]
+        row = conn.execute(
+            "SELECT node_id, node_type, display_name, in_universe, sector FROM graph_nodes WHERE node_id = ?",
+            (canon,),
+        ).fetchone()
+        if row is None:
+            upsert_node(conn, node_id=canon, node_type=ctype, display_name=cdisp,
+                        aliases=list(caliases), in_universe=0)
+            return {"node_id": canon, "node_type": ctype, "display_name": cdisp,
+                    "in_universe": 0, "sector": None}
+        return dict(row)
 
     # 1. Direct node_id match (exact or upper ticker)
     candidates = [raw, upper]

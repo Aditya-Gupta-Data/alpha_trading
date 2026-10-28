@@ -623,7 +623,7 @@ def test_dry_run_stored_items_writes_nothing_to_db(tmp_path):
     (cdir / "ev1.json").write_text(
         json.dumps({
             "event_id": "ev-1",
-            "generated_at": "2026-10-28T10:00:00+05:30",
+            "generated_at": f"{__import__('datetime').date.today().isoformat()}T10:00:00+05:30",
             "source": {"title": "TCS expands cloud partnership"},
             "mechanics": [{"quote": "TCS expands cloud partnership with hyperscalers."}],
         })
@@ -669,3 +669,100 @@ def test_graphrag_hook_is_off_by_default_until_the_dry_run_passes(tmp_path):
     assert config.EVENT_ENGINE_DEFAULTS["graphrag_enabled"] is False
     so, res = emit._graphrag_second_order({"title": "x"}, {}, [], {}, graph_conn=object())
     assert so is None and res == {"status": "disabled"}
+
+
+# ===========================================================================
+# 10-28 extractor patch: aliasing, strict polarity, full text, dedupe, stderr
+# ===========================================================================
+
+def _edge(subj, obj, quote, pol=1, pred="regulates", st="policy", ot="sector"):
+    return {"subject": subj, "subject_type": st, "predicate": pred, "object": obj,
+            "object_type": ot, "polarity": pol, "strength": 0.8, "quote": quote}
+
+
+def test_institution_aliases_collapse_onto_one_canonical_node():
+    conn = brain_map.connect(":memory:")
+    graphrag.ensure_schema(conn)
+    ids = {graphrag.resolve_node(conn, n, declared_type=t)["node_id"] for n, t in (
+        ("RBI", "policy"), ("Reserve Bank of India", "macro"), ("policy:RBI", "policy"),
+        ("India's central bank", "policy"))}
+    assert ids == {"policy:RESERVE_BANK_OF_INDIA"}
+    govt = {graphrag.resolve_node(conn, n, declared_type=t)["node_id"] for n, t in (
+        ("Govt", "macro"), ("Government", "policy"), ("policy:MINISTRY", "policy"), ("the Centre", "macro"))}
+    assert govt == {"policy:GOVERNMENT_OF_INDIA"}
+    n = conn.execute("SELECT COUNT(*) AS n FROM graph_nodes WHERE node_id LIKE '%RESERVE_BANK%' "
+                     "OR node_id LIKE '%RBI%'").fetchone()["n"]
+    assert n == 1
+
+
+def test_neutral_or_missing_polarity_is_rejected():
+    conn = brain_map.connect(":memory:")
+    graphrag.ensure_schema(conn)
+    text = "Sebi is reviewing short-selling rules."
+    ok, why, _ = graphrag_extract.validate_raw_edge(conn, _edge("SEBI", "Short selling", "Sebi is reviewing short-selling", pol=0), text)
+    assert (ok, why) == (False, "neutral_polarity")
+    ok, why, _ = graphrag_extract.validate_raw_edge(conn, _edge("SEBI", "Short selling", "Sebi is reviewing short-selling", pol=None), text)
+    assert (ok, why) == (False, "invalid_polarity")
+    ok, why, norm = graphrag_extract.validate_raw_edge(conn, _edge("SEBI", "Short selling", "Sebi is reviewing short-selling", pol=-1), text)
+    assert ok and norm["polarity"] == -1 and norm["source_node"]["node_id"] == "policy:SEBI"
+
+
+def test_card_keeps_the_article_text_and_replay_feeds_it_to_the_extractor(tmp_path):
+    from datetime import date
+    from src.event_engine import card as card_mod
+    body = "The Reserve Bank of India raised the repo rate by 25 bps to curb inflation. " * 3
+    c = card_mod.build({"title": "RBI hikes", "text": body, "url": "u", "source": "rss"},
+                       {"type": "policy"}, {}, [], [], {"materiality_threshold_pct": 2.0, "fixed_otm_pct": 3.0,
+                                                         "take_profit_multiple": 5.0, "horizon_days_default": 30})
+    assert c["source"]["text"] == body
+    c["generated_at"] = f"{date.today().isoformat()}T10:00:00+05:30"
+    cdir = tmp_path / "cards"
+    cdir.mkdir()
+    (cdir / "a.json").write_text(json.dumps(c))
+    seen = []
+
+    def fake_llm(sys_prompt, user_text):
+        seen.append(user_text)
+        return {"edges": []}
+
+    res = graphrag_extract.run_stored_items(days=7, card_dir=cdir, inbox_dir=tmp_path / "none",
+                                            extractor=fake_llm, env={"ALPHA_NODE_ROLE": "analytics"})
+    assert res["items_full_text"] == 1
+    assert "curb inflation" in seen[0]
+    assert "polarity is +1" in graphrag_extract.EXTRACT_SYSTEM_PROMPT
+
+
+def test_replay_dedupes_repeated_texts_and_edges_and_shares_one_graph(tmp_path):
+    q1 = "RBI raised the repo rate"
+    q2 = "Reserve Bank of India tightened liquidity for banks"
+    items = [
+        {"title": "a", "text": q1 + ". Banks reprice loans.", "url": "1"},
+        {"title": "a", "text": q1 + ". Banks reprice loans.", "url": "1"},   # same text twice
+        {"title": "b", "text": q1 + ". " + q2 + ".", "url": "2"},
+    ]
+
+    def fake_llm(sys_prompt, user_text):
+        edges = [_edge("RBI", "Repo rate", q1, pred="regulates", ot="policy")]
+        if q2 in user_text:
+            edges.append(_edge("Reserve Bank of India", "Banks", q2, pol=-1))
+        return {"edges": edges}
+
+    res = graphrag_extract.run_stored_items(days=7, card_dir=tmp_path / "none", inbox_dir=tmp_path / "none",
+                                            rss_items=items, extractor=fake_llm,
+                                            env={"ALPHA_NODE_ROLE": "analytics"})
+    assert res["items_duplicate_text"] == 1 and res["items_checked"] == 2
+    assert res["duplicate_edges_dropped"] == 1
+    assert res["written"] == len(res["edges"]) == 2
+    assert {e["source_node"] for e in res["edges"]} == {"policy:RESERVE_BANK_OF_INDIA"}
+    assert res["nodes_in_2plus_edges"] == 1
+
+
+def test_cli_stdout_is_pure_json_and_logs_go_to_stderr(tmp_path, monkeypatch, capsys):
+    def noisy(**kw):
+        print("  (local parser: LLM call failed: timed out)")
+        return {"days": kw["days"], "edges": []}
+    monkeypatch.setattr(graphrag_extract, "run_stored_items", noisy)
+    assert graphrag_extract.main(["--days", "3"]) == 0
+    out, err = capsys.readouterr()
+    assert json.loads(out) == {"days": 3, "edges": []}
+    assert "timed out" in err

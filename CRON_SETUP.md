@@ -348,7 +348,7 @@ dry-run below passes; turn on by setting it `true` in the Mini PC's config.** Wh
 also runs `src.knowledge_graph.graphrag_extract` (daily cap `event_engine.graphrag_daily_cap` = 100) and 3-hop
 `spreading_activation` after `detect.in_universe` + `classify`, stamping a read-only `second_order_read` /
 `second_order_nodes` block onto emitted event cards (context only, zero execution authority). Manual 7-day dry-run on
-the Mini PC: `venv/bin/python -m src.knowledge_graph.graphrag_extract --days 7` (`--apply` to persist).
+the Mini PC: `venv/bin/python -m src.knowledge_graph.graphrag_extract --days 7 --rss > /tmp/graphrag_dryrun.json` (`--apply` to persist; stdout is JSON only, logs on stderr).
 
 ## Mini PC: sector bars (added 2026-10-28, decision #160)
 

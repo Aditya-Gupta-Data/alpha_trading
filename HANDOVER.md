@@ -42,6 +42,13 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-29 (Thu, evening) — Local-LLM benchmark on the owner's HP laptop (docs + manual scripts only; nothing live changed)
+
+- **What happened:** 15 Ollama models were tested on the HP laptop (i5-8265U, 16 GB, CPU-only) for the `news_parser` headline→five-key-frame job, across 3 rounds that ran (synthetic basics, 25 synthetic capability checks, 25 live RSS headlines graded by hand). Full write-up: `docs/local_llm_benchmark_2026-10-29.md`. Scripts: `scripts/llm_bench/` (MANUAL OFFLINE TOOL).
+- **Result:** `qwen2.5:14b` top in every round (real headlines 19/22), `qwen2.5:14b`/`qwen3:8b` the consistent pair, `qwen3:8b` the faster backup (18/22). The finance-tuned community model was worst (invented answers, gave buy/sell calls). **Every model failed prompt injection**, and most read "US inflation heats up" as bullish.
+- **Not changed:** the VM state block below still stands. No model is wired to anything; the laptop is not an execution path; the production LLM door is still FreeLLMAPI (#148).
+- **Next, if pursued:** prompt-rules rerun on the top three; hand-label 150–300 real headlines; run the never-run `bench3_heavy.ps1`; verify whether `news_parser` drops entities that are not NSE symbols (unverified).
+
 ## 2026-10-29 (Thu, ~17:15 IST) — VM DEPLOYED to 89b47cf; M1 5-bucket migration APPLIED on the live DB; recon divergence-halt (#172) on main, NOT on the VM
 
 - **Live now (VM `alpha-trading-vm`):** fast-forwarded 0ee0492 → 89b47cf at 16:58 IST (post-close). Ships everything since 10-28: GraphRAG (#162–#169, runs only on the Mini PC), Antigravity's #163–#167 (incl. the 440-line `live_bridge` S4/S5 earnings watch + shadow logger — shadow/advisory only, zero OMS exits), close-only ceilings (#170), migration reset epoch (#171). Imports + 90 scoped tests green on the VM; `alpha-trading` + `alpha-discord-bot` restarted, both active (API answers 401 without the key, i.e. up). `master_scheduler` picks the code up at its 09:10 cron.

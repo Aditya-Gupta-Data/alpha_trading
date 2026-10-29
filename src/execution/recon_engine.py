@@ -1,9 +1,11 @@
 # ON CRON since 2026-09-28 (decision #118): weekdays 15:42 IST on the VM
 # (scripts/setup_cron.sh #34), after the session and before the 15:45 mirror
-# push, so the desk's Compliance tab is never older than a day. Still
-# read-only (decision #94). Also fine by hand:
-#   python3 -m src.execution.recon_engine            # live, read-only
+# push, so the desk's Compliance tab is never older than a day. Broker
+# side read-only (decision #94); from #172 a CRITICAL mismatch trips the
+# desk-wide halt latches (the /halt `all` set). Also fine by hand:
+#   python3 -m src.execution.recon_engine            # live (latches on mismatch)
 #   python3 -m src.execution.recon_engine --dry-run  # book side only, no broker call
+#   python3 -m src.execution.recon_engine --no-halt  # report only, never latch
 """
 src/execution/recon_engine.py — THE READ-ONLY RECON ENGINE (decision #94, built
 2026-09-23 under decision #104's M2 pre-requisite sprint).
@@ -53,9 +55,11 @@ LOG_PATH = ROOT / "logs" / "recon.jsonl"
 BASE_URL = "https://api.dhan.co/v2"
 TIMEOUT_SECONDS = 15
 
-# The three READ endpoints and nothing else. (The test asserts this tuple is
-# the module's whole endpoint surface.)
-ENDPOINTS = ("/positions", "/holdings", "/fundlimit")
+# The four READ endpoints and nothing else — `/orders` is the GET order book
+# (#172). (The test asserts this tuple is the module's whole endpoint surface.)
+ENDPOINTS = ("/positions", "/holdings", "/fundlimit", "/orders")
+# Dhan order states that mean nothing reached the exchange; any other order is live or filled.
+INERT_ORDER_STATES = ("REJECTED", "CANCELLED", "EXPIRED")
 
 MISMATCH_TAG = "🔴 RECON MISMATCH"
 
@@ -106,7 +110,7 @@ def fetch_broker_book(headers: dict = None, read_fn=None) -> dict:
     "errors": [...]} — `read_fn(endpoint) -> (payload, error)` is the seam
     tests use; live it is `_read` with the live headers."""
     out = {"reachable": False, "positions": [], "holdings": [], "funds": {},
-           "errors": []}
+           "orders": [], "errors": []}
     if read_fn is None:
         if _muzzled():
             out["errors"].append("muzzled under pytest — broker not dialled")
@@ -131,6 +135,7 @@ def fetch_broker_book(headers: dict = None, read_fn=None) -> dict:
     out["holdings"] = [_norm_holding(h) for h in _rows(raw.get("/holdings", []))
                        if _to_int(h.get("totalQty") or h.get("availableQty")) != 0]
     out["funds"] = _norm_funds(raw.get("/fundlimit") or {})
+    out["orders"] = [_norm_order(o) for o in _rows(raw.get("/orders", []))]
     return out
 
 
@@ -180,6 +185,16 @@ def _norm_holding(h: dict) -> dict:
             "segment": str(h.get("exchange") or "NSE_EQ"),
             "qty": _to_int(h.get("totalQty") or h.get("availableQty")),
             "avg_price": _to_float(h.get("avgCostPrice"))}
+
+
+def _norm_order(o: dict) -> dict:
+    return {"order_id": str(o.get("orderId") or ""),
+            "symbol": str(o.get("tradingSymbol") or ""),
+            "segment": str(o.get("exchangeSegment") or ""),
+            "side": str(o.get("transactionType") or ""),
+            "status": str(o.get("orderStatus") or "").upper(),
+            "qty": _to_int(o.get("quantity")),
+            "filled_qty": _to_int(o.get("filledQty"))}
 
 
 def _norm_funds(f: dict) -> dict:
@@ -343,6 +358,7 @@ def compare(broker: dict, book: list, now: str = None) -> dict:
     result = {"ts": now, "broker_reachable": bool(broker.get("reachable")),
               "broker_positions": len(broker.get("positions") or []),
               "broker_holdings": len(broker.get("holdings") or []),
+              "broker_orders": len(broker.get("orders") or []),
               "book_rows": len(book), "funds": broker.get("funds") or {},
               "errors": list(broker.get("errors") or []),
               "mismatches": [], "paper_only": []}
@@ -377,6 +393,17 @@ def compare(broker: dict, book: list, now: str = None) -> dict:
             "segment": h["segment"], "net_qty": h["qty"],
             "detail": (f"{MISMATCH_TAG}: demat holds {h['qty']} {h['symbol']} "
                        f"— the paper book never buys delivery")})
+    for o in broker.get("orders") or []:
+        inert = o["status"] in INERT_ORDER_STATES
+        (result["paper_only"] if inert else result["mismatches"]).append({
+            "kind": "broker_order_inert" if inert else "broker_order_unknown_to_book",
+            "severity": "INFO" if inert else "CRITICAL", "symbol": o["symbol"],
+            "order_id": o["order_id"], "segment": o["segment"], "status": o["status"],
+            "net_qty": o["filled_qty"],
+            "detail": (f"broker order {o['order_id']} {o['side']} {o['qty']} {o['symbol']} "
+                       f"{o['status']} — never sent by paper, nothing reached the exchange" if inert else
+                       f"{MISMATCH_TAG}: broker order {o['order_id']} {o['side']} {o['qty']} "
+                       f"{o['symbol']} is {o['status']} ({o['filled_qty']} filled) — paper never sends orders")})
     for r in book:
         result["paper_only"].append({
             "kind": "paper_only", "severity": "INFO", "ref": r["ref"],
@@ -391,6 +418,41 @@ def compare(broker: dict, book: list, now: str = None) -> dict:
 
 def _canon(name) -> str:
     return str(name or "").upper().replace(".NS", "").replace(" ", "").replace("-", "")
+
+
+# -------------------------------------------------------------------- halt
+def halt_on_divergence(result: dict, conn=None) -> dict:
+    """A CRITICAL mismatch arms every latch `/halt all` arms (#165): firm, equity desk, each paper account
+    except the latch-less learner (#140), each latched bucket. Never on parity or an unread broker."""
+    out = {"tripped": False, "targets": {}}
+    if result.get("verdict") != "mismatch":
+        return out
+    from src import brain_map, buckets, equity_desk, portfolio_manager as pm
+    own = conn is None
+    conn = brain_map.connect() if own else conn
+    why = (f"recon divergence {result['ts']}: {len(result['mismatches'])} broker row(s) the paper book "
+           f"cannot explain — {result['mismatches'][0]['detail']}")[:500]
+    try:
+        pm.ensure_accounts_schema(conn)
+        t = out["targets"]
+        t["firm_PAPER_10L"] = pm.latch_halt(conn, why=why)
+        t["equity_desk_DARLINGS"] = equity_desk.latch_desk_halt(conn, why=why)
+        for acct in pm.PAPER_ACCOUNTS:
+            if acct != pm.ACCOUNT_PAPER_SHADOW_LEARNER:
+                t[acct] = pm.paper_latch_halt(conn, acct, why=why)
+        for b in buckets.summary(conn):
+            if b.get("max_drawdown_pct") is not None:
+                t[f"bucket:{b['portfolio_id']}"] = buckets.latch_bucket_halt(conn, b["portfolio_id"], why=why,
+                                                                            commit=False)
+        conn.commit()
+        out["tripped"] = True
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        print(f"  (recon: halt trip failed: {exc})")
+    finally:
+        if own:
+            conn.close()
+    return out
 
 
 # ------------------------------------------------------------------- doors
@@ -413,6 +475,11 @@ def _announce(result: dict) -> None:
         lines = [m["detail"] for m in result["mismatches"][:10]]
         if len(result["mismatches"]) > 10:
             lines.append(f"…and {len(result['mismatches']) - 10} more")
+        halt = result.get("halt") or {}
+        if halt.get("tripped"):
+            lines.append("⛔ desk-wide halt LATCHED — clear with `/halt clear` and a why once explained")
+        elif halt.get("error"):
+            lines.append(f"⚠️ halt trip FAILED ({halt['error']}) — trip `/halt` by hand")
         fire_broadcast({"event": "recon_mismatch", "ticker": "🔴 RECON",
                         "date": result["ts"][:10],
                         "description": (f"{MISMATCH_TAG} — {len(result['mismatches'])} "
@@ -424,13 +491,15 @@ def _announce(result: dict) -> None:
 
 
 def run(conn=None, db_path=None, read_fn=None, log_path=None,
-        announce: bool = True, dry_run: bool = False) -> dict:
-    """One reconciliation pass. Read-only on both sides."""
+        announce: bool = True, dry_run: bool = False, halt: bool = True) -> dict:
+    """One reconciliation pass. Read-only at the broker; a CRITICAL mismatch latches the desk halt (#172)."""
     book = read_paper_book(conn=conn, db_path=db_path)
     broker = ({"reachable": False, "positions": [], "holdings": [], "funds": {},
                "errors": ["dry run — broker not dialled"]}
               if dry_run else fetch_broker_book(read_fn=read_fn))
     result = compare(broker, book)
+    if halt and not dry_run:
+        result["halt"] = halt_on_divergence(result, conn=conn)
     _log(result, log_path)
     if announce:
         _announce(result)
@@ -441,7 +510,8 @@ def render(result: dict) -> str:
     head = (f"RECON {result['ts']} — verdict {result['verdict'].upper()} · broker "
             f"{'reachable' if result['broker_reachable'] else 'NOT READ'} · "
             f"broker positions {result['broker_positions']} · holdings "
-            f"{result['broker_holdings']} · paper rows {result['book_rows']}")
+            f"{result['broker_holdings']} · orders {result.get('broker_orders', 0)} · paper rows "
+            f"{result['book_rows']}")
     lines = [head]
     f = result.get("funds") or {}
     if f:
@@ -449,6 +519,8 @@ def render(result: dict) -> str:
                      f"{f.get('utilised')} · collateral {f.get('collateral')}")
     for e in result.get("errors") or []:
         lines.append(f"  ! {e}")
+    if (result.get("halt") or {}).get("tripped"):
+        lines.append("  ⛔ desk-wide halt LATCHED by this recon")
     for m in result.get("mismatches") or []:
         lines.append(f"  {m['detail']}")
     for r in result.get("paper_only") or []:
@@ -458,7 +530,7 @@ def render(result: dict) -> str:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    result = run(dry_run="--dry-run" in argv, announce="--quiet" not in argv)
+    result = run(dry_run="--dry-run" in argv, announce="--quiet" not in argv, halt="--no-halt" not in argv)
     print(render(result))
     return 2 if result["verdict"] == "mismatch" else 0
 

@@ -42,6 +42,15 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-10-29 (Thu, ~17:15 IST) — VM DEPLOYED to 89b47cf; M1 5-bucket migration APPLIED on the live DB; recon divergence-halt (#172) on main, NOT on the VM
+
+- **Live now (VM `alpha-trading-vm`):** fast-forwarded 0ee0492 → 89b47cf at 16:58 IST (post-close). Ships everything since 10-28: GraphRAG (#162–#169, runs only on the Mini PC), Antigravity's #163–#167 (incl. the 440-line `live_bridge` S4/S5 earnings watch + shadow logger — shadow/advisory only, zero OMS exits), close-only ceilings (#170), migration reset epoch (#171). Imports + 90 scoped tests green on the VM; `alpha-trading` + `alpha-discord-bot` restarted, both active (API answers 401 without the key, i.e. up). `master_scheduler` picks the code up at its 09:10 cron.
+- **DB backup before the apply:** `data/backups/brain_map_pre_m1_apply_20261029_165827.db` on the VM.
+- **M1 migration APPLIED** (`scripts/migrate_m1_buckets.py --apply`, 16:59 IST): all 8 PARITY checks exact; 10 buckets, 184 bucket locks, 862 rows stamped; zero unstamped `margin_locks` / `paper_margin_locks`; one `m1_bucket_migration` account event. PAPER_10L = IDX_SPREADS ₹10,26,598.91 (8L + 2,26,598.91) + DARLINGS ₹1,64,151.01 (2L − 35,848.99) + three ₹0 buckets = ₹11,90,749.92 = the account. 11 pre-07-21 locks (₹26,982.14) excluded by #171.
+- **NOT switched on:** `multi_bucket_ledger` is still **false** — entries still run on the flat ledger; bucket rows settle alongside (`buckets.release` runs whenever a bucket lock exists). Turning the switch on makes IDX_SPREADS **close-only** at once (₹8.28L deployed vs a 25% ≈ ₹2.98L ceiling) — options entries would stop until it drains. That is an owner decision, not a deploy step.
+- **On main, NOT deployed:** recon divergence-halt (#172) — `recon_engine` now also GETs `/v2/orders`, and a CRITICAL mismatch (ghost position/holding, a live or filled broker order) latches firm + desk + paper accounts + buckets. The VM's 15:42 recon still runs the report-only version. Every recon since 10-20 read 0 positions / 0 holdings / ₹0 funds, so the halt would not have fired on any of them. To deploy: VM `git fetch && git merge --ff-only origin/main && venv/bin/python -m pytest -q tests/test_recon_engine.py tests/test_recon_halt.py` (no restart needed — cron job).
+- **Open / watch:** `AUTHORIZED_DISCORD_USER_ID` is NOT in the VM `.env`, so `/halt clear` from Discord fails closed — a recon-tripped halt must be cleared on the VM (`pm.clear_halt`, `equity_desk.clear_desk_halt`, `buckets.clear_bucket_halt`) until the owner adds it. Friday is the first session on the 5,200 lines of 10-28 code; watch the 09:10 scheduler log and the first `live_bridge` minute.
+
 ## 2026-10-28 (Wed, ~23:05 IST) — Earnings Awareness Seams S4 & S5 (`morning_brief`, `live_bridge`, `plan_tracker`) BUILT on branch `phase1-graphrag` (#167; `docs/earnings_awareness_spec.md` S1–S5 complete)
 
 - **Built on `phase1-graphrag` (stacking on #162–#166):**

@@ -25,14 +25,14 @@ def test_zero_write_or_order_endpoints_exist_in_the_module():
     assert verbs == {"get"}
     # 2. no write verb, order path or placement SDK method anywhere in the source
     forbidden = [r"requests\.(post|put|delete|patch)", r"\.post\(", r"\.put\(",
-                 r"\.delete\(", r"\.patch\(", r"/orders", r"/super", r"/slicing",
+                 r"\.delete\(", r"\.patch\(", r"/orders/", r"/super", r"/slicing",
                  r"place_order", r"placeOrder", r"modify_order", r"cancel_order",
                  r"place_slice", r"super_order", r"convert_position", r"dhanhq",
                  r"forever_order", r"httpx", r"urllib\.request"]
     for pat in forbidden:
         assert not re.search(pat, SRC), f"forbidden pattern in recon_engine: {pat}"
-    # 3. the endpoint surface is exactly the three portfolio reads
-    assert re_.ENDPOINTS == ("/positions", "/holdings", "/fundlimit")
+    # 3. the endpoint surface is exactly the four reads (#172 adds the GET order book, never an order path)
+    assert re_.ENDPOINTS == ("/positions", "/holdings", "/fundlimit", "/orders")
     # 4. no write to brain_map: the only SQL verbs are SELECT / PRAGMA
     sql = re.findall(r'"(SELECT|PRAGMA|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b', SRC)
     assert set(sql) <= {"SELECT", "PRAGMA"}
@@ -81,13 +81,14 @@ def test_paper_book_is_active_locks_plus_open_filled_entries_only():
     # released lock, exited ticket and pending ticket are all excluded
 
 
-def _read_fn(positions=None, holdings=None, funds=None, fail=()):
+def _read_fn(positions=None, holdings=None, funds=None, fail=(), orders=None):
     def fn(ep):
         if ep in fail:
             return None, f"{ep}: HTTP 500"
         return {"/positions": {"data": positions or []},
                 "/holdings": holdings if holdings is not None else [],
-                "/fundlimit": funds or {"availabelBalance": 1411.18, "utilizedAmount": 0}}[ep], None
+                "/fundlimit": funds or {"availabelBalance": 1411.18, "utilizedAmount": 0},
+                "/orders": orders if orders is not None else []}[ep], None
     return fn
 
 

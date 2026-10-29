@@ -5,6 +5,8 @@ transaction, only when PARITY holds, and logs one `m1_bucket_migration` account 
 
 Bucket P&L is summed from the settled lock ledger by strategy type (`eqd:` = DARLINGS, else IDX_SPREADS);
 PARITY fails unless those sums equal the account's booked realized P&L to the paisa (decision #170).
+Only PAPER_10L locks released at or after the latest `clean_sheet` event count: the #84 reset zeroed the
+booked P&L and kept the older lock rows, so their P&L belongs to no bucket (decision #171).
 
 Rulings (Architect 2026-10-09, Roadmap M4):
   PAPER_10L 5-Bucket Allocation:
@@ -57,10 +59,15 @@ def plan(conn, five_buckets: bool = True) -> dict:
     darl_start = _one(conn, "SELECT equity_budget_rs FROM treasury_state WHERE id = 1") \
         if "treasury_state" in t else 0.0
     idx_start = start_cap - darl_start
-    darl_realized = _one(conn, "SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks "
-                               "WHERE journal_ref LIKE 'eqd:%' AND released_at IS NOT NULL")
-    idx_realized = _one(conn, "SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks "
-                              "WHERE journal_ref NOT LIKE 'eqd:%' AND released_at IS NOT NULL")
+    reset_at = _last_clean_sheet(conn, t)
+    era = "released_at IS NOT NULL AND released_at >= ?"
+    darl_realized = _one(conn, f"SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks "
+                               f"WHERE journal_ref LIKE 'eqd:%' AND {era}", (reset_at,))
+    idx_realized = _one(conn, f"SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks "
+                              f"WHERE journal_ref NOT LIKE 'eqd:%' AND {era}", (reset_at,))
+    pre = conn.execute("SELECT COUNT(*), COALESCE(SUM(pnl_net), 0) FROM margin_locks "
+                       "WHERE released_at IS NOT NULL AND released_at < ?", (reset_at,)).fetchone()
+    out["pre_reset"] = {"reset_at": reset_at or None, "locks": int(pre[0]), "pnl_excluded": round(float(pre[1]), 2)}
 
     if five_buckets:
         # M4: All 5 buckets for PAPER_10L.
@@ -162,6 +169,14 @@ def _parity(name, buckets, account):
     }
 
 
+def _last_clean_sheet(conn, t) -> str:
+    """The latest #84-style reset stamp ('' = none: every settled lock counts)."""
+    if "account_events" not in t:
+        return ""
+    r = conn.execute("SELECT MAX(ts) FROM account_events WHERE event_type = 'clean_sheet'").fetchone()
+    return r[0] or ""
+
+
 def _tables(conn):
     return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
@@ -244,6 +259,7 @@ def main(argv=None) -> int:
     for b in p["buckets"]:
         print(json.dumps(b))
     print("backfill:", json.dumps(p["backfill"]))
+    print("pre-reset (excluded):", json.dumps(p["pre_reset"]))
     for c in p["parity"]:
         print(("PARITY ok  " if c["ok"] else "PARITY FAIL") + f" {c['check']}: buckets {c['buckets']} vs account {c['account']}")
     if not p["ok"]:

@@ -174,3 +174,41 @@ def test_cli_apply_writes_only_when_parity_holds(tmp_path, capsys):
     c = sqlite3.connect(db)
     assert c.execute("SELECT realized_pnl FROM portfolios WHERE portfolio_id = ?", (IDX,)).fetchone()[0] == 52_000.25
     assert c.execute("SELECT COUNT(*) FROM account_events WHERE event_type = 'm1_bucket_migration'").fetchone()[0] == 1
+
+
+def _with_reset(c, pnl_before=26_982.14):
+    """A #84 reset: older settled locks keep their P&L rows, the booked P&L restarted at zero."""
+    c.execute("INSERT INTO margin_locks (journal_ref, margin_rs, locked_at, released_at, pnl_net) VALUES "
+              "('old1', 50000, '2026-07-01T10:00:00', '2026-07-10T15:00:00', ?), "
+              "('eqd:old', 40000, '2026-07-02T10:00:00', '2026-07-15T15:00:00', -1000.0)", (pnl_before,))
+    c.execute("INSERT INTO account_events (ts, event_type, detail) VALUES "
+              "('2026-07-21T14:32:30', 'clean_sheet', 'decision #84: pool reset')")
+    c.execute("UPDATE margin_locks SET released_at = '2026-08-01T15:00:00' WHERE released_at = 'later'")
+    c.commit()
+    return c
+
+
+def test_reset_excludes_pre_clean_sheet_pnl_and_parity_holds():
+    p = m1.plan(_with_reset(_ledger()))
+    by = {b["portfolio_id"]: b for b in p["buckets"]}
+    assert by[IDX]["realized_pnl"] == 52_000.25 and by[DARL]["realized_pnl"] == -2000.25
+    assert p["pre_reset"] == {"reset_at": "2026-07-21T14:32:30", "locks": 2, "pnl_excluded": 25_982.14}
+    assert _check(p, "PAPER_10L equity")["ok"] is True and p["ok"] is True
+
+
+def test_without_the_reset_event_the_old_pnl_breaks_parity():
+    c = _with_reset(_ledger())
+    c.execute("DELETE FROM account_events WHERE event_type = 'clean_sheet'")
+    p = m1.plan(c)
+    eq = _check(p, "PAPER_10L equity")
+    assert eq["ok"] is False and round(eq["buckets"] - eq["account"], 2) == 25_982.14
+    assert p["pre_reset"]["locks"] == 0
+
+
+def test_latest_reset_wins_and_a_post_reset_paisa_gap_still_fails():
+    c = _with_reset(_ledger())
+    c.execute("INSERT INTO account_events (ts, event_type, detail) VALUES ('2026-07-30T09:00:00', 'clean_sheet', 'x')")
+    p = m1.plan(c)
+    assert p["pre_reset"]["reset_at"] == "2026-07-30T09:00:00" and p["ok"] is True
+    c.execute("UPDATE account_state SET realized_pnl = realized_pnl + 0.01 WHERE id = 1")
+    assert m1.plan(c)["ok"] is False

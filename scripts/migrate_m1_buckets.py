@@ -1,7 +1,10 @@
 # MANUAL OFFLINE TOOL — M1/M4 multi-bucket ledger migration (blueprint docs/m1_multi_bucket_ledger_blueprint.md).
 """Seed the 5 buckets from the flat ledger and backfill portfolio_id. DRY-RUN by default: prints the
-plan and the PARITY check and writes nothing. `--apply` writes inside one transaction, only when
-PARITY holds, and logs one `m1_bucket_migration` account event. Idempotent (INSERT OR IGNORE).
+plan and the PARITY check and writes nothing (the DB is opened read-only). `--apply` writes inside one
+transaction, only when PARITY holds, and logs one `m1_bucket_migration` account event. Idempotent.
+
+Bucket P&L is summed from the settled lock ledger by strategy type (`eqd:` = DARLINGS, else IDX_SPREADS);
+PARITY fails unless those sums equal the account's booked realized P&L to the paisa (decision #170).
 
 Rulings (Architect 2026-10-09, Roadmap M4):
   PAPER_10L 5-Bucket Allocation:
@@ -22,7 +25,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-TOL = 0.01
 FAMILY = {
     "IDX": "index_options",
     "EQ_SWING": "equity_swing",
@@ -45,19 +47,20 @@ def plan(conn, five_buckets: bool = True) -> dict:
     """The seeds, the backfill counts and the PARITY check — read-only."""
     from src import portfolio_manager as pm
     conn.row_factory = sqlite3.Row
-    pm.ensure_accounts_schema(conn)
     out = {"buckets": [], "backfill": {}, "parity": [], "active_positions": {}, "ok": True}
     now = datetime.now().replace(microsecond=0).isoformat()
-    # --- PAPER_10L: DARLINGS (treasury budget) + IDX_SPREADS (the rest)
-    acct = pm.get_account(conn)
-    equity = float(acct["starting_capital"]) + float(acct["realized_pnl"])
-    budget = _one(conn, "SELECT equity_budget_rs FROM treasury_state WHERE id = 1") \
-        if "treasury_state" in _tables(conn) else 0.0
+    t = _tables(conn)
+    # --- PAPER_10L: capital split by ruling (treasury budget → DARLINGS), P&L summed from the ledger
+    acct = conn.execute("SELECT starting_capital, realized_pnl FROM account_state WHERE id = 1").fetchone()
+    start_cap, booked = float(acct["starting_capital"]), float(acct["realized_pnl"])
+    equity = start_cap + booked
+    darl_start = _one(conn, "SELECT equity_budget_rs FROM treasury_state WHERE id = 1") \
+        if "treasury_state" in t else 0.0
+    idx_start = start_cap - darl_start
     darl_realized = _one(conn, "SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks "
                                "WHERE journal_ref LIKE 'eqd:%' AND released_at IS NOT NULL")
-    idx_realized = float(acct["realized_pnl"]) - darl_realized
-    darl_start = float(budget)
-    idx_start = equity - darl_start - darl_realized - idx_realized
+    idx_realized = _one(conn, "SELECT COALESCE(SUM(pnl_net), 0) FROM margin_locks "
+                              "WHERE journal_ref NOT LIKE 'eqd:%' AND released_at IS NOT NULL")
 
     if five_buckets:
         # M4: All 5 buckets for PAPER_10L.
@@ -109,7 +112,9 @@ def plan(conn, five_buckets: bool = True) -> dict:
             "account_id": a["account_id"],
             "strategy_family": FAMILY["IDX"],
             "starting_capital": float(a["starting_capital"]),
-            "realized_pnl": float(a["realized_pnl"]),
+            "realized_pnl": round(_one(conn, "SELECT COALESCE(SUM(pnl_net), 0) FROM paper_margin_locks "
+                                             "WHERE account_id = ? AND released_at IS NOT NULL",
+                                       (a["account_id"],)), 2),
             "risk_per_trade_pct": pm.ACCOUNT_RISK_PER_TRADE_PCT,
             "max_drawdown_pct": None if learner else pm.MAX_DRAWDOWN_PCT,
             "daily_loss_pct": None if learner else pm.MAX_DAILY_LOSS_PCT,
@@ -117,7 +122,6 @@ def plan(conn, five_buckets: bool = True) -> dict:
         })
 
     # --- backfill map (what each existing row already says)
-    t = _tables(conn)
     bf = out["backfill"]
     bf["margin_locks→DARLINGS"] = _one(conn, "SELECT COUNT(*) FROM margin_locks WHERE journal_ref LIKE 'eqd:%'")
     bf["margin_locks→IDX"] = _one(conn, "SELECT COUNT(*) FROM margin_locks WHERE journal_ref NOT LIKE 'eqd:%'")
@@ -131,35 +135,19 @@ def plan(conn, five_buckets: bool = True) -> dict:
     if "shadow_trades" in t:
         bf["shadow_trades→PAPER_10L/IDX"] = _one(conn, "SELECT COUNT(*) FROM shadow_trades")
 
-    # --- PARITY: Σ bucket equity == account equity; Σ open bucket locks == open account locks
+    # --- PARITY: Σ bucket equity (ledger-summed P&L) == booked account equity, exactly
     by_acct = {}
     for b in out["buckets"]:
         by_acct[b["account_id"]] = by_acct.get(b["account_id"], 0.0) + b["starting_capital"] + b["realized_pnl"]
-
-    # 1. Total equity across all 5 buckets == legacy flat account equity
-    paper_10l_equity = by_acct.get("PAPER_10L", 0.0)
-    out["parity"].append(_parity("PAPER_10L equity", paper_10l_equity, equity))
-
-    # 2. Paper accounts equity parity
-    for a in _q(conn, "SELECT account_id, starting_capital, realized_pnl FROM paper_accounts"):
+    out["parity"].append(_parity("PAPER_10L equity", by_acct.get("PAPER_10L", 0.0), equity))
+    for a in _q(conn, "SELECT account_id, starting_capital, realized_pnl FROM paper_accounts ORDER BY account_id"):
         out["parity"].append(_parity(f"{a['account_id']} equity", by_acct.get(a["account_id"], 0.0),
                                      float(a["starting_capital"]) + float(a["realized_pnl"])))
-
-    # 3. Open margin locks parity
-    open_primary = _one(conn, "SELECT COALESCE(SUM(margin_rs), 0) FROM margin_locks WHERE released_at IS NULL")
-    open_darl = _one(conn, "SELECT COALESCE(SUM(margin_rs), 0) FROM margin_locks WHERE released_at IS NULL "
-                           "AND journal_ref LIKE 'eqd:%'")
-    open_idx = open_primary - open_darl
-    out["parity"].append(_parity("PAPER_10L open locks", open_darl + open_idx, open_primary))
-
-    for a in _q(conn, "SELECT account_id FROM paper_accounts"):
-        o = _one(conn, "SELECT COALESCE(SUM(margin_rs), 0) FROM paper_margin_locks WHERE account_id = ? "
-                       "AND released_at IS NULL", (a["account_id"],))
-        out["parity"].append(_parity(f"{a['account_id']} open locks", o, o))
-
-    # 4. Strict capital + deployed margin parity: (Available Cash across all 5 buckets) + Deployed Margin == Total Equity
-    available_cash = paper_10l_equity - open_primary
-    out["parity"].append(_parity("PAPER_10L capital + deployed margin", available_cash + open_primary, equity))
+    # a released lock with no P&L is a ledger hole the sums cannot see; a budget above capital has no split
+    holes = _one(conn, "SELECT COUNT(*) FROM margin_locks WHERE released_at IS NOT NULL AND pnl_net IS NULL") \
+        + _one(conn, "SELECT COUNT(*) FROM paper_margin_locks WHERE released_at IS NOT NULL AND pnl_net IS NULL")
+    out["parity"].append(_parity("released locks without P&L", holes, 0))
+    out["parity"].append(_parity("PAPER_10L capital split (IDX start >= 0)", min(0.0, idx_start), 0))
 
     out["ok"] = all(p["ok"] for p in out["parity"])
     return out
@@ -170,7 +158,7 @@ def _parity(name, buckets, account):
         "check": name,
         "buckets": round(float(buckets), 2),
         "account": round(float(account), 2),
-        "ok": abs(float(buckets) - float(account)) <= TOL,
+        "ok": round(float(buckets), 2) == round(float(account), 2),
     }
 
 
@@ -246,7 +234,12 @@ def main(argv=None) -> int:
     ap.add_argument("--apply", action="store_true", help="Apply migration to database (default: dry-run)")
     ap.add_argument("--legacy-m1", action="store_true", help="Seed only the 2 legacy M1 buckets instead of all 5")
     a = ap.parse_args(argv)
-    conn = sqlite3.connect(a.db)
+    if a.apply:
+        from src import portfolio_manager as pm
+        conn = sqlite3.connect(a.db)
+        pm.ensure_accounts_schema(conn)
+    else:
+        conn = sqlite3.connect(f"file:{Path(a.db).resolve()}?mode=ro", uri=True)
     p = plan(conn, five_buckets=not a.legacy_m1)
     for b in p["buckets"]:
         print(json.dumps(b))

@@ -3,7 +3,7 @@
 Proves:
 1. All existing options capital and open positions are mapped to Bucket B1 (Options Spreads).
 2. Buckets B2 (Equity Swing), B3 (Darlings), B4 (Wealth Lock), and B5 (Cross-Asset) are initialized with 0 active positions.
-3. Strict PARITY holds: sum(5 buckets' capital) + deployed margin == legacy flat account's total equity.
+3. Strict PARITY holds: sum(5 buckets' ledger-summed equity) == legacy flat account's booked equity.
 4. Dry-run mode is strictly read-only by default, and `--apply` is transactional and idempotent.
 """
 import sqlite3
@@ -30,7 +30,7 @@ def _build_legacy_flat_ledger(starting_capital: float = 1_000_000.0, realized_pn
         "INSERT INTO margin_locks (journal_ref, margin_rs, locked_at, released_at, pnl_net) VALUES "
         "('opt_spread_1', 60000.0, '2026-10-20T10:00:00', NULL, NULL), "
         "('opt_spread_2', 45000.0, '2026-10-21T11:00:00', NULL, NULL), "
-        "('opt_spread_3', 50000.0, '2026-10-15T09:30:00', '2026-10-18T15:20:00', 32000.0)"
+        "('opt_spread_3', 50000.0, '2026-10-15T09:30:00', '2026-10-18T15:20:00', ?)", (realized_pnl,)
     )
 
     # Associated outcomes in flat ledger
@@ -97,13 +97,6 @@ def test_5_bucket_migration_maps_all_options_to_b1_and_initializes_b2_to_b5():
     assert parity_by_name["PAPER_10L equity"]["buckets"] == total_equity
     assert parity_by_name["PAPER_10L equity"]["account"] == total_equity
 
-    assert parity_by_name["PAPER_10L open locks"]["ok"] is True
-    assert parity_by_name["PAPER_10L open locks"]["buckets"] == deployed_margin
-    assert parity_by_name["PAPER_10L open locks"]["account"] == deployed_margin
-
-    assert parity_by_name["PAPER_10L capital + deployed margin"]["ok"] is True
-    assert parity_by_name["PAPER_10L capital + deployed margin"]["buckets"] == total_equity
-    assert parity_by_name["PAPER_10L capital + deployed margin"]["account"] == total_equity
     conn.close()
 
 
@@ -169,6 +162,8 @@ def test_5_bucket_migration_cli_dry_run_and_apply(tmp_path: Path, capsys):
     pm.ensure_accounts_schema(conn)
     pm.get_account(conn)
     conn.execute("UPDATE account_state SET starting_capital = 1000000.0, realized_pnl = 40000.0 WHERE id = 1")
+    conn.execute("INSERT INTO margin_locks (journal_ref, margin_rs, locked_at, released_at, pnl_net) "
+                 "VALUES ('opt_cli', 30000.0, 'now', 'later', 40000.0)")
     conn.commit()
     conn.close()
 

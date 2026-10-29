@@ -105,6 +105,32 @@ def drawdown_pct(b: dict) -> float:
     return round(max(0.0, (peak - equity(b)) / peak * 100), 4)
 
 
+def ceiling_state(conn, portfolio_id: str):
+    """Deployed margin vs the bucket's share of PAPER_10L equity. None = no ceiling applies (shadow account,
+    unknown family, no bucket row). `close_only` = a legacy overweight bucket: exits settle, entries wait."""
+    b = bucket(conn, portfolio_id)
+    if b is None or b["account_id"] != PRIMARY_ACCOUNT:
+        return None
+    fam = str(portfolio_id).split("/", 1)[-1]
+    pct = BUCKET_CEILINGS_PCT.get(fam)
+    if pct is None:
+        return None
+    firm = round(sum(equity(r) for r in summary(conn, PRIMARY_ACCOUNT)), 2)
+    ceiling_rs = round(max(0.0, firm) * pct / 100.0, 2)
+    deployed = open_locks(conn, portfolio_id)
+    return {"portfolio_id": portfolio_id, "ceiling_pct": pct, "ceiling_rs": ceiling_rs, "firm_equity_rs": firm,
+            "deployed_rs": deployed, "deployed_pct": round(deployed / firm * 100.0, 4) if firm > 0 else 0.0,
+            "close_only": deployed > ceiling_rs}
+
+
+def can_allocate_new_trade(conn, portfolio_id: str, margin_rs: float = 0.0) -> bool:
+    """False while the bucket's deployed margin plus this entry would exceed its ceiling; never forces an exit."""
+    st = ceiling_state(conn, portfolio_id)
+    if st is None:
+        return True
+    return round(st["deployed_rs"] + max(0.0, float(margin_rs or 0.0)), 2) <= st["ceiling_rs"]
+
+
 def _event(conn, portfolio_id: str, event_type: str, journal_ref: str, detail: str) -> None:
     conn.execute("INSERT INTO portfolio_events (portfolio_id, ts, event_type, journal_ref, detail) "
                  "VALUES (?, ?, ?, ?, ?)", (portfolio_id, _now_iso(), event_type, journal_ref, detail))
@@ -209,6 +235,14 @@ def gate(conn, account: str, journal_ref: str, margin: float, lots: int = 1, dry
                   f"(Rs.{open_locks(conn, pid):,.2f} already locked)")
         _event(conn, pid, "margin_exhaustion", journal_ref, f"entry rejected ({reason})")
         return dict(verdict, approved=False, reason=reason)
+    if not can_allocate_new_trade(conn, pid, margin):
+        st = ceiling_state(conn, pid)
+        state = "close-only" if st["close_only"] else "ceiling"
+        reason = (f"{state}: bucket {pid} has Rs.{st['deployed_rs']:,.2f} deployed ({st['deployed_pct']:.2f}% of "
+                  f"Rs.{st['firm_equity_rs']:,.2f}); +Rs.{margin:,.2f} would pass its {st['ceiling_pct']:g}% "
+                  f"ceiling Rs.{st['ceiling_rs']:,.2f} — exits still settle")
+        _event(conn, pid, "ceiling_refused", journal_ref, f"entry rejected ({reason})")
+        return dict(verdict, approved=False, reason=reason, close_only=st["close_only"])
     if dry_run:
         return dict(verdict, approved=True, reason="bucket margin available (dry run — nothing locked)")
     conn.execute("INSERT INTO portfolio_margin_locks (portfolio_id, journal_ref, margin_rs, lots, locked_at, "

@@ -235,6 +235,13 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-11-01 · 3 commits · 11 files touched
+
+- `5e6483c` fix(preflight): ${leaked} before an em dash — macOS bash read it as part of the name (test_mininode red)
+- `a86cfe4` docs: handover 11-01 (GraphRAG news shadow #174/#175 live on Mini PC) + ledger Issue 54
+- `400cf7e` feat(graphrag): shadow graph learns all 2,590 NSE companies, not only the option universe (#175)
+
+
 ### 2026-10-28 · 11 commits · 37 files touched
 
 - `b8c0410` docs: HANDOVER — Issue 53 fix deployed (0ee0492)

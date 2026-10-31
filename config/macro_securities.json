@@ -1,20 +1,25 @@
 {
- "_note": "Verified Dhan instrument ids for the Phase 7 macro tracker's live path. Fill each entry ONLY with ids verified against Dhan's api-scrip-master-detailed.csv (project rule: a wrong id silently prices the wrong instrument — never guess). Shape per metric: {\"id\": \"...\", \"seg\": \"MCX_COMM\" | \"NSE_CURRENCY\", \"inst\": \"FUTCOM\" | \"FUTCUR\"}. A metric left out simply skips the live path and falls open to data/macro_snapshot.json.",
+ "_note": "Verified Dhan instrument ids for the Phase 7 macro tracker's live path and MCX commodity ingestion. Fill each entry ONLY with ids verified against Dhan's api-scrip-master.csv (project rule: a wrong id silently prices the wrong instrument — never guess). Shape per metric: {\"id\": \"...\", \"seg\": \"MCX_COMM\" | \"NSE_CURRENCY\", \"inst\": \"FUTCOM\" | \"FUTCUR\"}. Automated front-month contract rolling is handled by src/ingestion/scrip_master.py (roll_mcx_contracts / resolve_front_month) using the live scrip master with fallback to the verified _next contract ladder.",
  "_verified": "2026-08-13 against api-scrip-master-detailed.csv (207,932 rows). GOLD_INDIA ROLLED: the old id 466583 (GOLD AUG FUT, exp 2026-08-05) is GONE from the master entirely — not renamed, not repointed, absent, which is why the tap logged CA-410/CA-404 rather than erroring. Replaced with 483079 = GOLD OCT FUT, exp 2026-10-05, MCX/M/FUTCOM, lot 1.0, verified row-by-row. NOTE MCX GOLD IS BI-MONTHLY (Feb/Apr/Jun/Aug/Oct/Dec) — there is no SEP contract, so OCT is the front month and the 08-05→08-13 gap in the lake is real and unrecoverable. CRUDE (560977, CRUDEOIL AUG FUT) re-verified present and unexpired, exp 2026-08-19 — THE NEXT ROLL IS DUE THEN; the next contract is 565899 (CRUDEOIL SEP FUT, exp 2026-09-21). Earlier: 2026-07-10 first verification; re-checked 2026-07-16. USDINR STILL absent — the 2026-07-16 scrip master again holds no unexpired USDINR futures (all FUTCUR rows expired 2024-2026-06), so the metric stays snapshot-only; re-check on the next contract listing. FUTURES IDS EXPIRE WITH THEIR CONTRACT (see _expiry per entry) — after expiry the tracker fails open to the snapshot; re-verify a fresh contract id from the scrip master then. GOLD_WORLD has no Dhan instrument by nature — snapshot-only.",
  "CRUDE": {
-  "id": "569900",
+  "id": "573422",
   "seg": "MCX_COMM",
   "inst": "FUTCOM",
-  "_symbol": "CRUDEOIL OCT FUT",
-  "_expiry": "2026-10-19",
+  "_mcx_symbol": "CRUDEOIL",
+  "_auto_roll": true,
+  "_symbol": "CRUDEOIL NOV FUT",
+  "_expiry": "2026-11-19",
+  "_previous": {
+   "id": "569900",
+   "symbol": "CRUDEOIL OCT FUT",
+   "expiry": "2026-10-19",
+   "rolled_on": "2026-11-01"
+  },
   "_next": [
    {
-    "id": "573422",
-    "expiry": "2026-11-19"
-   },
-   {
     "id": "576264",
-    "expiry": "2026-12-18"
+    "expiry": "2026-12-18",
+    "symbol": "CRUDEOIL DEC FUT"
    }
   ]
  },
@@ -22,67 +27,86 @@
   "id": "495213",
   "seg": "MCX_COMM",
   "inst": "FUTCOM",
+  "_mcx_symbol": "GOLD",
+  "_auto_roll": true,
   "_symbol": "GOLD DEC FUT",
   "_expiry": "2026-12-04",
   "_next": [
    {
     "id": "559933",
-    "expiry": "2027-02-05"
+    "expiry": "2027-02-05",
+    "symbol": "GOLD FEB FUT"
    },
    {
     "id": "569424",
-    "expiry": "2027-04-05"
+    "expiry": "2027-04-05",
+    "symbol": "GOLD APR FUT"
    }
   ]
  },
  "COPPER": {
-  "id": "574829",
+  "id": "578634",
   "seg": "MCX_COMM",
   "inst": "FUTCOM",
-  "_symbol": "COPPER OCT FUT",
-  "_expiry": "2026-10-30",
+  "_mcx_symbol": "COPPER",
+  "_auto_roll": true,
+  "_symbol": "COPPER NOV FUT",
+  "_expiry": "2026-11-30",
+  "_previous": {
+   "id": "574829",
+   "symbol": "COPPER OCT FUT",
+   "expiry": "2026-10-30",
+   "rolled_on": "2026-11-01"
+  },
   "_next": [
    {
-    "id": "578634",
-    "expiry": "2026-11-30"
-   },
-   {
     "id": "581714",
-    "expiry": "2026-12-31"
+    "expiry": "2026-12-31",
+    "symbol": "COPPER DEC FUT"
    }
   ]
  },
  "ALUMINIUM": {
-  "id": "574828",
+  "id": "578633",
   "seg": "MCX_COMM",
   "inst": "FUTCOM",
-  "_symbol": "ALUMINIUM OCT FUT",
-  "_expiry": "2026-10-30",
+  "_mcx_symbol": "ALUMINIUM",
+  "_auto_roll": true,
+  "_symbol": "ALUMINIUM NOV FUT",
+  "_expiry": "2026-11-30",
+  "_previous": {
+   "id": "574828",
+   "symbol": "ALUMINIUM OCT FUT",
+   "expiry": "2026-10-30",
+   "rolled_on": "2026-11-01"
+  },
   "_next": [
    {
-    "id": "578633",
-    "expiry": "2026-11-30"
-   },
-   {
     "id": "581712",
-    "expiry": "2026-12-31"
+    "expiry": "2026-12-31",
+    "symbol": "ALUMINIUM DEC FUT"
    }
   ]
  },
  "ZINC": {
-  "id": "574834",
+  "id": "578638",
   "seg": "MCX_COMM",
   "inst": "FUTCOM",
-  "_symbol": "ZINC OCT FUT",
-  "_expiry": "2026-10-30",
+  "_mcx_symbol": "ZINC",
+  "_auto_roll": true,
+  "_symbol": "ZINC NOV FUT",
+  "_expiry": "2026-11-30",
+  "_previous": {
+   "id": "574834",
+   "symbol": "ZINC OCT FUT",
+   "expiry": "2026-10-30",
+   "rolled_on": "2026-11-01"
+  },
   "_next": [
    {
-    "id": "578638",
-    "expiry": "2026-11-30"
-   },
-   {
     "id": "581719",
-    "expiry": "2026-12-31"
+    "expiry": "2026-12-31",
+    "symbol": "ZINC DEC FUT"
    }
   ]
  },
@@ -91,20 +115,25 @@
   "id": "495214",
   "seg": "MCX_COMM",
   "inst": "FUTCOM",
+  "_mcx_symbol": "SILVER",
+  "_auto_roll": true,
   "_symbol": "SILVER DEC FUT",
   "_expiry": "2026-12-04",
   "_next": [
    {
     "id": "564619",
-    "expiry": "2027-03-05"
+    "expiry": "2027-03-05",
+    "symbol": "SILVER MAR FUT"
    },
    {
     "id": "572772",
-    "expiry": "2027-05-05"
+    "expiry": "2027-05-05",
+    "symbol": "SILVER MAY FUT"
    }
   ]
  },
  "_verified_v13": "2026-09-23 against api-scrip-master.csv (V1.3, decision #106): CRUDE ROLLED 560977 (AUG, expired 2026-08-19 — the tap had been blind on crude for five weeks) -> 569900 CRUDEOIL OCT FUT; SILVER added 495214 SILVER DEC FUT (front month); GOLD_INDIA 483079 still live to 2026-10-05, successor 495213. `_next` = the following contracts so a roll is a lookup. `scrip_master.build_darling_ids` now resolves the same three names into darling_ids.json['commodities'] automatically.",
  "_verified_metals_roll_0923": "2026-09-23 rolled by the macro expiry guard's first live run (decision #107): COPPER 568831->571298 (COPPER SEP FUT, exp 2026-09-30); ALUMINIUM 568830->571297 (ALUMINIUM SEP FUT, exp 2026-09-30); ZINC 568836->571303 (ZINC SEP FUT, exp 2026-09-30). All three had expired 2026-08-31 (23 blind days on the metals tap). Verified against api-scrip-master.csv the same day.",
- "_verified_roll_1004": "2026-10-04 rolled (owner directive; ledger Issue 41 triage) and verified row-by-row against api-scrip-master.csv fetched the same day (202,243 rows; MCX FUTCOM = 164 live contracts): GOLD_INDIA 483079->495213 (GOLD DEC FUT, exp 2026-12-04; the OCT contract 483079 was still listed but expires 2026-10-05, and MCX GOLD is bi-monthly so DEC is the next contract); COPPER 571298->574829 (COPPER OCT FUT, exp 2026-10-30); ALUMINIUM 571297->574828 (ALUMINIUM OCT FUT, exp 2026-10-30); ZINC 571303->574834 (ZINC OCT FUT, exp 2026-10-30). The three SEP metals contracts expired 2026-09-30 and are gone from the master (the tap was blind on them for the 10-01 session and the weekend runs). Each new id was already the first `_next` rung recorded on 09-23/08-16; `_next` now carries the following two contracts from today's master. CRUDE 569900 (exp 2026-10-19) and SILVER 495214 (exp 2026-12-04) re-verified live and unchanged. NEXT ROLLS DUE: CRUDE 2026-10-19 -> 573422; the three metals 2026-10-30 -> 578634 / 578633 / 578638."
+ "_verified_roll_1004": "2026-10-04 rolled (owner directive; ledger Issue 41 triage) and verified row-by-row against api-scrip-master.csv fetched the same day (202,243 rows; MCX FUTCOM = 164 live contracts): GOLD_INDIA 483079->495213 (GOLD DEC FUT, exp 2026-12-04; the OCT contract 483079 was still listed but expires 2026-10-05, and MCX GOLD is bi-monthly so DEC is the next contract); COPPER 571298->574829 (COPPER OCT FUT, exp 2026-10-30); ALUMINIUM 571297->574828 (ALUMINIUM OCT FUT, exp 2026-10-30); ZINC 571303->574834 (ZINC OCT FUT, exp 2026-10-30). The three SEP metals contracts expired 2026-09-30 and are gone from the master (the tap was blind on them for the 10-01 session and the weekend runs). Each new id was already the first `_next` rung recorded on 09-23/08-16; `_next` now carries the following two contracts from today's master. CRUDE 569900 (exp 2026-10-19) and SILVER 495214 (exp 2026-12-04) re-verified live and unchanged. NEXT ROLLS DUE: CRUDE 2026-10-19 -> 573422; the three metals 2026-10-30 -> 578634 / 578633 / 578638.",
+ "_verified_roll_1101": "2026-11-01 automated MCX contract roller: CRUDE rolled 569900 (OCT, exp 2026-10-19) -> 573422 (CRUDEOIL NOV FUT, exp 2026-11-19; next 576264 DEC); COPPER 574829 -> 578634 (NOV, exp 2026-11-30; next 581714 DEC); ALUMINIUM 574828 -> 578633 (NOV, exp 2026-11-30; next 581712 DEC); ZINC 574834 -> 578638 (NOV, exp 2026-11-30; next 581719 DEC). GOLD_INDIA (495213, exp 2026-12-04) and SILVER (495214, exp 2026-12-04) verified active front-month contracts."
 }

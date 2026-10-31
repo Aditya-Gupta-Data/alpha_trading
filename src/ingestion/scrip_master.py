@@ -59,12 +59,14 @@ CLI:  python3 -m src.ingestion.scrip_master [--json] [--quiet]
 import csv
 import io
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 REPORT_PATH = ROOT / "data" / "scrip_reconciliation.json"
 WANTED_PATH = ROOT / "config" / "scrip_wanted.json"
+MACRO_SECURITIES_PATH = ROOT / "config" / "macro_securities.json"
 ALERTS_LEDGER = ROOT / "logs" / "scrip_alerts.jsonl"
 OUTAGE_LOG = ROOT / "logs" / "scrip_master.jsonl"
 
@@ -82,6 +84,18 @@ SEGMENTS = {"NSE_EQ": ("NSE", "E"), "IDX_I": ("NSE", "I"),
 # NO trading path opens on them; that is a separate numbered decision).
 # Resolved by exact SM_SYMBOL_NAME on MCX FUTCOM rows, front-month contract.
 COMMODITY_SYMBOLS = ("GOLD", "SILVER", "CRUDEOIL")
+
+# Mapping between config/macro_securities.json keys and MCX SM_SYMBOL_NAME
+MCX_COMMODITY_MAP = {
+    "GOLD_INDIA": "GOLD",
+    "SILVER": "SILVER",
+    "CRUDE": "CRUDEOIL",
+    "COPPER": "COPPER",
+    "ALUMINIUM": "ALUMINIUM",
+    "ZINC": "ZINC",
+}
+MCX_SYMBOL_TO_MACRO_KEY = {v: k for k, v in MCX_COMMODITY_MAP.items()}
+MCX_FRONT_MONTH_KEYS = ("GOLD_INDIA", "SILVER", "CRUDE")
 
 # the master's own name columns, most specific first
 NAME_COLS = ("SEM_TRADING_SYMBOL", "SEM_CUSTOM_SYMBOL", "SM_SYMBOL_NAME")
@@ -143,15 +157,18 @@ def _names_of(row: dict) -> set:
     return {_norm(row.get(c)) for c in NAME_COLS if row.get(c)}
 
 
-def check_one(ticker: str, instr: dict, master: dict) -> dict:
+def check_one(ticker: str, instr: dict, master: dict, today=None) -> dict:
     """One mapped instrument -> its verdict row. Pure."""
-    base = _norm(ticker.replace(".NS", ""))
-    seg_pair = SEGMENTS.get(instr.get("seg"))
+    mapped_ticker = MCX_COMMODITY_MAP.get(ticker, ticker)
+    base = _norm(mapped_ticker.replace(".NS", ""))
+    seg = instr.get("seg") or instr.get("segment")
+    inst = instr.get("inst") or instr.get("instrument")
+    seg_pair = SEGMENTS.get(seg)
     entry = {"ticker": ticker, "id": instr.get("id"),
-             "seg": instr.get("seg"), "inst": instr.get("inst")}
+             "seg": seg, "inst": inst}
     if seg_pair is None:
         return {**entry, "verdict": "id_not_found",
-                "detail": f"unknown segment {instr.get('seg')}"}
+                "detail": f"unknown segment {seg}"}
     row = master.get((seg_pair[0], seg_pair[1], str(instr.get("id"))))
     if row is None:
         return {**entry, "verdict": "id_not_found",
@@ -160,7 +177,14 @@ def check_one(ticker: str, instr: dict, master: dict) -> dict:
     names = _names_of(row)
     series = (row.get("SEM_SERIES") or "").strip()
     found = (row.get("SEM_TRADING_SYMBOL") or "").strip()
-    if base in names:
+    if base in names or _norm(ticker.replace(".NS", "")) in names:
+        if today is not None and inst == "FUTCOM":
+            today_iso = (today.isoformat() if hasattr(today, "isoformat") else str(today))[:10]
+            exp = _expiry_iso(row)
+            if exp and exp < today_iso:
+                return {**entry, "verdict": "expired_contract",
+                        "master_symbol": found, "series": series, "expiry": exp,
+                        "detail": f"id {instr.get('id')} ({found}) expired on {exp}"}
         return {**entry, "verdict": "ok", "master_symbol": found,
                 "series": series}
     return {**entry, "verdict": "symbol_mismatch", "master_symbol": found,
@@ -196,20 +220,50 @@ def _expiry_iso(row: dict) -> str:
     return (row.get("SEM_EXPIRY_DATE") or "").strip()[:10]
 
 
-def lookup_commodities(symbols: list, master: dict, today=None) -> dict:
+def _today_iso(today=None) -> str:
+    from datetime import date as _date
+    if today is None:
+        return _date.today().isoformat()
+    if hasattr(today, "isoformat"):
+        return today.isoformat()[:10]
+    return str(today)[:10]
+
+
+_MONTH_ABBR = ("", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+               "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def _infer_mcx_display_symbol(mcx_symbol: str, expiry_iso: str,
+                              fallback: str = "") -> str:
+    """Human-readable '<SYMBOL> <MON> FUT' label for macro_securities.json."""
+    if fallback and " " in fallback and fallback.upper().endswith("FUT"):
+        return fallback.strip()
+    try:
+        m = int(str(expiry_iso)[5:7])
+        if 1 <= m <= 12:
+            return f"{mcx_symbol.upper()} {_MONTH_ABBR[m]} FUT"
+    except (ValueError, IndexError):
+        pass
+    return fallback.strip() or f"{mcx_symbol.upper()} FUT"
+
+
+def lookup_commodities(symbols: list, master: dict, today=None,
+                       roll_on_expiry: bool = True) -> dict:
     """{symbol: {id, seg, inst, expiry, master_symbol, lot_units, next: [...],
     option_expiries: [...]}} for MCX commodity underlyings (V1.3). The id is
-    the FRONT-MONTH futures contract (`FUTCOM`, earliest expiry on or after
-    today) — that is the instrument Dhan quotes bars and option chains
-    against. `next` carries the following contracts so a roll is a lookup,
-    not a re-derivation (the CA-410 expired-id trap in cross_asset).
+    the FRONT-MONTH futures contract (`FUTCOM`, earliest active expiry) —
+    that is the instrument Dhan quotes bars and option chains against.
+    When `roll_on_expiry=True` (default) and the nearest contract expires
+    on `today`, it seamlessly rolls to the next month's contract (if one is
+    listed in the master) so callers never hit a dying contract on expiry day.
+    `next` carries the following contracts so a roll is a lookup, not a
+    re-derivation (the CA-410 expired-id trap in cross_asset).
     `option_expiries` lists the OPTFUT expiries the master holds, so the
     archiver knows there is a chain to ask for. Exact name match on
     SM_SYMBOL_NAME only — a guessed id silently prices the wrong metal (#78).
     A symbol with no live contract is absent from the result, never
     invented."""
-    from datetime import date as _date
-    today = (today or _date.today()).isoformat()
+    today_s = _today_iso(today)
     want = {_norm(s): s for s in symbols or []}
     futs, opts = {s: [] for s in want.values()}, {s: set() for s in want.values()}
     for (exch, seg, sid), row in master.items():
@@ -220,32 +274,292 @@ def lookup_commodities(symbols: list, master: dict, today=None) -> dict:
             continue
         inst = (row.get("SEM_INSTRUMENT_NAME") or "").strip()
         exp = _expiry_iso(row)
-        if inst == "FUTCOM" and exp >= today:
-            futs[hit].append({"id": sid, "expiry": exp,
+        if inst == "FUTCOM" and exp >= today_s:
+            futs[hit].append({"id": str(sid), "expiry": exp,
                               "master_symbol": (row.get("SEM_TRADING_SYMBOL") or "").strip(),
                               "custom_symbol": (row.get("SEM_CUSTOM_SYMBOL") or "").strip(),
                               "lot_units": (row.get("SEM_LOT_UNITS") or "").strip()})
-        elif inst == "OPTFUT" and exp >= today:
+        elif inst == "OPTFUT" and exp >= today_s:
             opts[hit].add(exp)
     out = {}
     for sym, rows in futs.items():
         if not rows:
             continue
-        rows.sort(key=lambda r: r["expiry"])
-        front = rows[0]
-        out[sym] = {"id": front["id"], "seg": "MCX_COMM", "inst": "FUTCOM",
-                    "expiry": front["expiry"], "master_symbol": front["master_symbol"],
-                    "custom_symbol": front["custom_symbol"],
-                    "lot_units": front["lot_units"],
-                    "next": [{"id": r["id"], "expiry": r["expiry"],
-                              "master_symbol": r["master_symbol"]} for r in rows[1:3]],
-                    "option_expiries": sorted(opts[sym])[:4]}
+        rows.sort(key=lambda r: (r["expiry"], r["id"]))
+        rolled_from = None
+        if roll_on_expiry and len(rows) > 1 and rows[0]["expiry"] <= today_s:
+            later_idx = next((i for i, r in enumerate(rows) if r["expiry"] > today_s), None)
+            if later_idx is not None and later_idx > 0:
+                rolled_from = {"id": rows[0]["id"], "expiry": rows[0]["expiry"],
+                               "master_symbol": rows[0]["master_symbol"]}
+                front = rows[later_idx]
+                next_rows = rows[later_idx + 1 : later_idx + 3]
+            else:
+                front = rows[0]
+                next_rows = rows[1:3]
+        else:
+            front = rows[0]
+            next_rows = rows[1:3]
+        entry = {"id": front["id"], "seg": "MCX_COMM", "inst": "FUTCOM",
+                 "expiry": front["expiry"], "master_symbol": front["master_symbol"],
+                 "custom_symbol": front["custom_symbol"],
+                 "lot_units": front["lot_units"],
+                 "next": [{"id": r["id"], "expiry": r["expiry"],
+                           "master_symbol": r["master_symbol"]} for r in next_rows],
+                 "option_expiries": sorted(opts[sym])[:4]}
+        if rolled_from is not None:
+            entry["rolled_from"] = rolled_from
+        out[sym] = entry
     return out
 
 
-def reconcile(id_map: dict, master: dict, wanted: list = None) -> dict:
+def _normalize_mcx_key_and_symbol(symbol_or_key: str) -> tuple:
+    """Return (macro_key, mcx_symbol) for any MCX commodity alias."""
+    raw = str(symbol_or_key or "").strip().upper()
+    if raw in MCX_COMMODITY_MAP:
+        return raw, MCX_COMMODITY_MAP[raw]
+    if raw in MCX_SYMBOL_TO_MACRO_KEY:
+        return MCX_SYMBOL_TO_MACRO_KEY[raw], raw
+    return raw, raw
+
+
+def _load_macro_securities(path=None) -> dict:
+    p = Path(path) if path is not None else MACRO_SECURITIES_PATH
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def resolve_front_month(symbol_or_key: str, master: dict = None,
+                        securities: dict = None, securities_path=None,
+                        today=None, roll_on_expiry: bool = True) -> dict | None:
+    """Resolve the active front-month MCX futures contract for a commodity
+    (`GOLD` / `GOLD_INDIA`, `SILVER`, `CRUDEOIL` / `CRUDE`, etc.).
+
+    1. When `master` is supplied and contains live FUTCOM rows for the
+       symbol, resolves from the master (rolling automatically onto the next
+       month if the front contract expires on or before `today`).
+    2. Otherwise falls back to `securities` (`config/macro_securities.json`):
+       if the current `_expiry` is still active, returns the current contract;
+       if expired (or expiring today with `roll_on_expiry=True`), rolls onto
+       the first unexpired contract in `_next`.
+    3. Never guesses or returns an expired contract (#78): returns `None` if
+       no unexpired contract is available in either `master` or `_next`.
+    """
+    today_s = _today_iso(today)
+    macro_key, mcx_sym = _normalize_mcx_key_and_symbol(symbol_or_key)
+    sec_doc = (securities if securities is not None
+               else _load_macro_securities(securities_path))
+    cur = sec_doc.get(macro_key) if isinstance(sec_doc, dict) else None
+    cur = cur if isinstance(cur, dict) else {}
+    cur_id = str(cur.get("id") or "")
+    cur_exp = str(cur.get("_expiry") or "")[:10]
+    cur_sym = str(cur.get("_symbol") or "")
+
+    if master:
+        resolved = lookup_commodities([mcx_sym], master, today=today_s,
+                                      roll_on_expiry=roll_on_expiry).get(mcx_sym)
+        if resolved:
+            new_id = str(resolved["id"])
+            new_exp = str(resolved["expiry"])[:10]
+            disp_sym = _infer_mcx_display_symbol(
+                mcx_sym, new_exp,
+                resolved.get("custom_symbol") or resolved.get("master_symbol") or "")
+            next_ladder = [
+                {"id": str(n["id"]), "expiry": str(n["expiry"])[:10],
+                 "symbol": _infer_mcx_display_symbol(mcx_sym, n["expiry"], n.get("master_symbol", ""))}
+                for n in (resolved.get("next") or [])
+            ]
+            rolled = bool((cur_id and cur_id != new_id) or resolved.get("rolled_from"))
+            rolled_from = None
+            if cur_id and cur_id != new_id:
+                rolled_from = {"id": cur_id, "expiry": cur_exp, "symbol": cur_sym}
+            elif resolved.get("rolled_from"):
+                rf = resolved["rolled_from"]
+                rolled_from = {"id": rf["id"], "expiry": rf["expiry"],
+                               "symbol": rf.get("master_symbol", "")}
+            return {
+                "key": macro_key, "macro_key": macro_key, "mcx_symbol": mcx_sym,
+                "id": new_id, "seg": "MCX_COMM", "inst": "FUTCOM",
+                "expiry": new_exp, "_expiry": new_exp,
+                "_symbol": disp_sym, "master_symbol": resolved.get("master_symbol", disp_sym),
+                "_next": next_ladder, "next": resolved.get("next", []),
+                "rolled": rolled, "rolled_from": rolled_from,
+                "source": "master",
+            }
+
+    if not cur or not cur_id or not cur_exp:
+        return None
+
+    next_rungs = [
+        r for r in (cur.get("_next") or [])
+        if isinstance(r, dict) and r.get("id") and r.get("expiry")
+    ]
+    next_rungs.sort(key=lambda r: (str(r["expiry"])[:10], str(r["id"])))
+    valid_next = [
+        r for r in next_rungs
+        if (str(r["expiry"])[:10] > today_s if roll_on_expiry
+            else str(r["expiry"])[:10] >= today_s)
+    ]
+
+    is_expired = (cur_exp < today_s) or (roll_on_expiry and cur_exp <= today_s and bool(valid_next))
+    if not is_expired and cur_exp >= today_s:
+        return {
+            "key": macro_key, "macro_key": macro_key, "mcx_symbol": mcx_sym,
+            "id": cur_id, "seg": str(cur.get("seg") or "MCX_COMM"),
+            "inst": str(cur.get("inst") or "FUTCOM"),
+            "expiry": cur_exp, "_expiry": cur_exp,
+            "_symbol": cur_sym or _infer_mcx_display_symbol(mcx_sym, cur_exp),
+            "_next": valid_next, "next": valid_next,
+            "rolled": False, "rolled_from": None,
+            "source": "current",
+        }
+
+    if not valid_next:
+        return None
+
+    chosen = valid_next[0]
+    remaining = valid_next[1:]
+    new_id = str(chosen["id"])
+    new_exp = str(chosen["expiry"])[:10]
+    new_sym = (str(chosen.get("symbol") or chosen.get("custom_symbol") or "").strip()
+               or _infer_mcx_display_symbol(mcx_sym, new_exp, str(chosen.get("master_symbol") or "")))
+    return {
+        "key": macro_key, "macro_key": macro_key, "mcx_symbol": mcx_sym,
+        "id": new_id, "seg": str(cur.get("seg") or "MCX_COMM"),
+        "inst": str(cur.get("inst") or "FUTCOM"),
+        "expiry": new_exp, "_expiry": new_exp,
+        "_symbol": new_sym,
+        "_next": remaining, "next": remaining,
+        "rolled": True,
+        "rolled_from": {"id": cur_id, "expiry": cur_exp, "symbol": cur_sym},
+        "source": "next_ladder",
+    }
+
+
+def roll_mcx_contracts(securities: dict = None, master: dict = None,
+                       today=None, keys=None, securities_path=None,
+                       write: bool = False, roll_on_expiry: bool = True) -> dict:
+    """Identify the active front-month contracts for MCX commodities (Gold,
+    Silver, Crude Oil, and industrial metals) and roll any expired contract
+    onto the next month's contract (via the scrip master when available, or
+    the verified `_next` ladder in `config/macro_securities.json`).
+
+    Prevents stale-contract refusals (`CA-410` / `stale_instruments`) without
+    ever guessing an unverified security ID (#78).
+    """
+    import copy
+    today_s = _today_iso(today)
+    raw_doc = (copy.deepcopy(securities) if securities is not None
+               else _load_macro_securities(securities_path))
+    if not isinstance(raw_doc, dict):
+        raw_doc = {}
+
+    if keys is not None:
+        target_keys = [_normalize_mcx_key_and_symbol(k)[0] for k in keys]
+    else:
+        target_keys = [
+            k for k, v in raw_doc.items()
+            if not str(k).startswith("_") and isinstance(v, dict)
+            and (v.get("seg") == "MCX_COMM" or k in MCX_COMMODITY_MAP)
+        ]
+        if master:
+            for mk in MCX_FRONT_MONTH_KEYS:
+                if mk not in target_keys:
+                    target_keys.append(mk)
+
+    rolled, active, unrollable = {}, {}, {}
+    for macro_key in target_keys:
+        _, mcx_sym = _normalize_mcx_key_and_symbol(macro_key)
+        cur = raw_doc.get(macro_key)
+        cur = cur if isinstance(cur, dict) else {}
+        old_id = str(cur.get("id") or "")
+        old_exp = str(cur.get("_expiry") or "")[:10]
+        old_sym = str(cur.get("_symbol") or "")
+
+        res = resolve_front_month(
+            macro_key, master=master, securities=raw_doc,
+            today=today_s, roll_on_expiry=roll_on_expiry,
+        )
+        if res is None:
+            if old_id or macro_key in raw_doc:
+                unrollable[macro_key] = (
+                    f"expired on {old_exp or 'unknown'} and no unexpired "
+                    "contract in master or _next ladder"
+                )
+            continue
+
+        updated = dict(cur)
+        updated["id"] = res["id"]
+        updated["seg"] = res["seg"]
+        updated["inst"] = res["inst"]
+        updated["_mcx_symbol"] = mcx_sym
+        updated["_auto_roll"] = True
+        updated["_symbol"] = res["_symbol"]
+        updated["_expiry"] = res["_expiry"]
+        updated["_next"] = [
+            {
+                "id": str(n["id"]),
+                "expiry": str(n["expiry"])[:10],
+                "symbol": (str(n.get("symbol") or "").strip()
+                           or _infer_mcx_display_symbol(mcx_sym, n["expiry"], str(n.get("master_symbol") or ""))),
+            }
+            for n in (res.get("_next") or [])
+        ]
+
+        if res["rolled"]:
+            rf = res.get("rolled_from") or {"id": old_id, "expiry": old_exp, "symbol": old_sym}
+            updated["_previous"] = {
+                "id": str(rf.get("id") or old_id),
+                "symbol": str(rf.get("symbol") or old_sym),
+                "expiry": str(rf.get("expiry") or old_exp),
+                "rolled_on": today_s,
+            }
+            rolled[macro_key] = {
+                "from_id": str(rf.get("id") or old_id),
+                "from_expiry": str(rf.get("expiry") or old_exp),
+                "from_symbol": str(rf.get("symbol") or old_sym),
+                "to_id": res["id"],
+                "to_expiry": res["_expiry"],
+                "to_symbol": res["_symbol"],
+                "source": res["source"],
+            }
+        raw_doc[macro_key] = updated
+        active[macro_key] = {
+            "id": res["id"],
+            "expiry": res["_expiry"],
+            "symbol": res["_symbol"],
+            "mcx_symbol": mcx_sym,
+            "source": res["source"],
+        }
+
+    if write:
+        out_p = Path(securities_path) if securities_path is not None else MACRO_SECURITIES_PATH
+        try:
+            out_p.parent.mkdir(parents=True, exist_ok=True)
+            tmp_p = out_p.with_suffix(".json.tmp")
+            tmp_p.write_text(json.dumps(raw_doc, indent=1) + "\n")
+            tmp_p.replace(out_p)
+        except OSError as exc:
+            print(f"  (scrip master: macro_securities write skipped [{exc}])")
+
+    return {
+        "as_of": today_s,
+        "rolled": rolled,
+        "active": active,
+        "unrollable": unrollable,
+        "securities": raw_doc,
+    }
+
+
+roll_macro_securities = roll_mcx_contracts
+
+
+def reconcile(id_map: dict, master: dict, wanted: list = None,
+              today=None) -> dict:
     """Every mapped instrument judged, plus the wanted-list lookups."""
-    rows = [check_one(t, i, master) for t, i in sorted(id_map.items())]
+    rows = [check_one(t, i, master, today=today) for t, i in sorted(id_map.items())]
     problems = [r for r in rows if r["verdict"] != "ok"]
     return {
         "as_of": _now_iso(), "status": "verified",
@@ -318,8 +632,9 @@ def notify_problems(report: dict, ledger_path=None, notify_fn=None) -> int:
 
 def run(fetch_fn=None, id_map=None, wanted=None, write: bool = True,
         notify: bool = True, notify_fn=None, report_path=None,
-        ledger_path=None, wanted_path=None) -> dict:
-    """The cron seam: fetch -> index -> reconcile -> card -> report.
+        ledger_path=None, wanted_path=None, securities_path=None,
+        today=None, roll_commodities: bool = True) -> dict:
+    """The cron seam: fetch -> index -> reconcile -> roll MCX -> card -> report.
     A fetch/parse failure returns status='unavailable' — NEVER a pass."""
     if id_map is None:
         from src.dhan_client import SECURITY_ID_MAP
@@ -344,7 +659,18 @@ def run(fetch_fn=None, id_map=None, wanted=None, write: bool = True,
             _write(report, report_path)
         return report
 
-    report = reconcile(id_map, master, wanted)
+    report = reconcile(id_map, master, wanted, today=today)
+    if roll_commodities:
+        write_sec = bool(
+            write and (securities_path is not None
+                       or not os.environ.get("PYTEST_CURRENT_TEST"))
+        )
+        report["mcx_roll"] = roll_mcx_contracts(
+            master=master,
+            today=today,
+            securities_path=securities_path,
+            write=write_sec,
+        )
     if notify:
         report["announced"] = notify_problems(report, ledger_path, notify_fn)
     if write:
@@ -473,7 +799,9 @@ def _tier1_fo_symbols(fo_path=None) -> set:
 
 def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
                       tiers_path=None, journal_path=None,
-                      commodity_symbols=None, today=None) -> dict:
+                      commodity_symbols=None, today=None,
+                      securities_path=None,
+                      roll_commodities: bool = True) -> dict:
     """The VM desk's quote ids (decision #83): darlings are non-F&O names
     outside SECURITY_ID_MAP, so their ids come from Dhan's PUBLIC scrip
     master — exact name match only, EQ series preferred, anything
@@ -504,10 +832,24 @@ def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
     commodity_unresolved = {s: "no live MCX FUTCOM contract in the master"
                             for s in (commodity_symbols if commodity_symbols is not None
                                       else COMMODITY_SYMBOLS) if s not in commodities}
+    mcx_roll = None
+    if roll_commodities:
+        write_sec = bool(
+            securities_path is not None
+            or not os.environ.get("PYTEST_CURRENT_TEST")
+        )
+        mcx_roll = roll_mcx_contracts(
+            master=master,
+            today=today,
+            securities_path=securities_path,
+            write=write_sec,
+        )
     out = {"built_at": _now_iso(), "count": len(ids),
            "ids": ids, "unresolved": unresolved,
            "commodities": commodities,
            "commodity_unresolved": commodity_unresolved}
+    if mcx_roll is not None:
+        out["mcx_roll"] = mcx_roll
     p = Path(out_path) if out_path else DARLING_IDS_PATH
     try:
         p.parent.mkdir(parents=True, exist_ok=True)

@@ -171,10 +171,13 @@ def test_roll_mcx_contracts_with_master_and_offline_next_ladder(tmp_path):
     }
     sec_path = tmp_path / "macro_securities.json"
     sec_path.write_text(json.dumps(stale_cfg, indent=2))
+    static_text = sec_path.read_text()
+    state_path = tmp_path / "state" / "active_mcx_contracts.json"
 
     # 1. Roll offline (no master) using _next ladder as of 2026-11-01
     res_offline = sm.roll_mcx_contracts(
         securities_path=sec_path,
+        state_path=state_path,
         master=None,
         today=date(2026, 11, 1),
         write=True,
@@ -182,7 +185,9 @@ def test_roll_mcx_contracts_with_master_and_offline_next_ladder(tmp_path):
     assert set(res_offline["rolled"].keys()) == {"GOLD_INDIA", "SILVER", "CRUDE"}
     assert res_offline["unrollable"] == {}
 
-    disk_cfg = json.loads(sec_path.read_text())
+    assert sec_path.read_text() == static_text  # the tracked config is never written
+    disk_cfg = sm.load_effective_securities(sec_path, state_path)
+    assert json.loads(state_path.read_text())["contracts"]["CRUDE"]["id"] == "573422"
     assert disk_cfg["GOLD_INDIA"]["id"] == "495213"
     assert disk_cfg["GOLD_INDIA"]["_expiry"] == "2026-12-04"
     assert disk_cfg["GOLD_INDIA"]["_previous"]["id"] == "477176"
@@ -196,12 +201,14 @@ def test_roll_mcx_contracts_with_master_and_offline_next_ladder(tmp_path):
     # Using synthetic scrip master
     res_dec = sm.roll_mcx_contracts(
         securities_path=sec_path,
+        state_path=state_path,
         master=_master(),
         today=date(2026, 12, 4),
         write=True,
     )
     assert set(res_dec["rolled"].keys()) == {"GOLD_INDIA", "SILVER", "CRUDE"}
-    disk_dec = json.loads(sec_path.read_text())
+    assert sec_path.read_text() == static_text
+    disk_dec = sm.load_effective_securities(sec_path, state_path)
     assert disk_dec["GOLD_INDIA"]["id"] == "559933"
     assert disk_dec["GOLD_INDIA"]["_expiry"] == "2027-02-05"
     assert disk_dec["GOLD_INDIA"]["_previous"]["id"] == "495213"
@@ -303,6 +310,65 @@ def test_build_darling_ids_auto_rolls_macro_securities(tmp_path):
     assert out["commodities"]["SILVER"]["id"] == "495214"
     assert "CRUDE" in out["mcx_roll"]["rolled"]
 
-    updated_sec = json.loads(sec_path.read_text())
-    assert updated_sec["CRUDE"]["id"] == "573422"
-    assert updated_sec["CRUDE"]["_expiry"] == "2026-11-19"
+    assert json.loads(sec_path.read_text())["CRUDE"]["id"] == "569900"
+    state = json.loads(sm.ACTIVE_MCX_STATE_PATH.read_text())["contracts"]
+    assert state["CRUDE"]["id"] == "573422"
+    assert state["CRUDE"]["_expiry"] == "2026-11-19"
+    assert cross_asset.load_instruments(sec_path)["CRUDE"]["id"] == "573422"
+
+
+def _write_state(path, contracts):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"as_of": "2026-11-01", "contracts": contracts}))
+
+
+def test_state_file_is_read_first_and_static_config_is_the_fallback(tmp_path):
+    sec_path = tmp_path / "macro_securities.json"
+    sec_path.write_text(json.dumps({
+        "CRUDE": {"id": "569900", "seg": "MCX_COMM", "inst": "FUTCOM",
+                  "_expiry": "2026-10-19", "_next": []},
+        "GOLD_INDIA": {"id": "495213", "seg": "MCX_COMM", "inst": "FUTCOM",
+                       "_expiry": "2026-12-04", "_next": []}}))
+    state_path = tmp_path / "state" / "active_mcx_contracts.json"
+    # No state file yet: the static config is the answer.
+    assert sm.load_effective_securities(sec_path, state_path)["CRUDE"]["id"] == "569900"
+    _write_state(state_path, {"CRUDE": {"id": "573422", "seg": "MCX_COMM", "inst": "FUTCOM",
+                                        "_expiry": "2026-11-19", "_next": []}})
+    eff = sm.load_effective_securities(sec_path, state_path)
+    assert eff["CRUDE"]["id"] == "573422"
+    assert eff["GOLD_INDIA"]["id"] == "495213"
+    got = sm.resolve_front_month("CRUDE", securities_path=sec_path, state_path=state_path,
+                                 today=date(2026, 11, 1))
+    assert got["id"] == "573422" and got["rolled"] is False
+
+
+def test_state_older_than_a_hand_rolled_config_is_ignored(tmp_path):
+    sec_path = tmp_path / "macro_securities.json"
+    sec_path.write_text(json.dumps({"CRUDE": {"id": "576264", "seg": "MCX_COMM",
+                                              "inst": "FUTCOM", "_expiry": "2026-12-18"}}))
+    state_path = tmp_path / "state" / "active_mcx_contracts.json"
+    _write_state(state_path, {"CRUDE": {"id": "573422", "seg": "MCX_COMM", "inst": "FUTCOM",
+                                        "_expiry": "2026-11-19"}})
+    assert sm.load_effective_securities(sec_path, state_path)["CRUDE"]["id"] == "576264"
+
+
+def test_run_writes_state_not_the_tracked_config(tmp_path):
+    sec_path = tmp_path / "macro_securities.json"
+    sec_path.write_text(json.dumps({"CRUDE": {"id": "569900", "seg": "MCX_COMM",
+                                              "inst": "FUTCOM", "_expiry": "2026-10-19",
+                                              "_next": []}}))
+    before = sec_path.read_text()
+    report = sm.run(fetch_fn=lambda _url: _synthetic_mcx_csv(), id_map={}, wanted=[],
+                    notify=False, report_path=tmp_path / "report.json",
+                    securities_path=sec_path, today=date(2026, 11, 1))
+    assert sec_path.read_text() == before
+    assert report["mcx_roll"]["rolled"]["CRUDE"]["to_id"] == "573422"
+    state = json.loads(sm.ACTIVE_MCX_STATE_PATH.read_text())
+    assert state["contracts"]["CRUDE"]["id"] == "573422"
+
+
+def test_state_file_is_gitignored():
+    import subprocess
+    rel = sm.ROOT.joinpath("data", "state", "active_mcx_contracts.json").relative_to(ROOT)
+    r = subprocess.run(["git", "check-ignore", "-q", str(rel)], cwd=ROOT)
+    assert r.returncode == 0

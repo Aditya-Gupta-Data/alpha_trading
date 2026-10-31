@@ -204,6 +204,15 @@ def _isolated_dashboard_reads(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_mcx_state(monkeypatch, tmp_path):
+    """The rolled-contract state (data/state/active_mcx_contracts.json) is
+    host runtime; every test reads and writes its own, absent by default."""
+    from src.ingestion import scrip_master
+    monkeypatch.setattr(scrip_master, "ACTIVE_MCX_STATE_PATH",
+                        tmp_path / "state" / "active_mcx_contracts.json")
+
+
+@pytest.fixture(autouse=True)
 def _isolated_shared_runtime_files(monkeypatch, tmp_path):
     """Host-wide state files any test can reach through a real code path
     (Issue 37): the Discord daily budget (an unmuzzled dispatch in a test

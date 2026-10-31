@@ -145,16 +145,10 @@ def classify_trend(closes: list, window: int, flat_band_pct: float) -> str:
 def _load_securities(path=None) -> dict:
     """Verified Dhan instrument overrides for the macro metrics, or {} —
     a missing/broken file just means the live path is skipped (Option B
-    takes over). Only entries with all of id/seg/inst are usable."""
-    path = Path(path) if path is not None else SECURITIES_PATH
-    if not path.exists():
-        return {}
-    try:
-        raw = json.loads(path.read_text())
-    except (ValueError, OSError):
-        print(f"  (macro tracker: unreadable securities file {path} — "
-              "skipping the Dhan live path)")
-        return {}
+    takes over). Only entries with all of id/seg/inst are usable. MCX entries
+    read the rolled state in data/state/active_mcx_contracts.json first."""
+    from src.ingestion.scrip_master import load_effective_securities
+    raw = load_effective_securities(path if path is not None else SECURITIES_PATH)
     out = {}
     for name in MACRO_METRICS:
         entry = raw.get(name) if isinstance(raw, dict) else None

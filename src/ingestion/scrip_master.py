@@ -59,7 +59,6 @@ CLI:  python3 -m src.ingestion.scrip_master [--json] [--quiet]
 import csv
 import io
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -67,6 +66,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 REPORT_PATH = ROOT / "data" / "scrip_reconciliation.json"
 WANTED_PATH = ROOT / "config" / "scrip_wanted.json"
 MACRO_SECURITIES_PATH = ROOT / "config" / "macro_securities.json"
+# Rolled front-month contracts live here (untracked, under data/) so cron never dirties config/.
+ACTIVE_MCX_STATE_PATH = ROOT / "data" / "state" / "active_mcx_contracts.json"
 ALERTS_LEDGER = ROOT / "logs" / "scrip_alerts.jsonl"
 OUTAGE_LOG = ROOT / "logs" / "scrip_master.jsonl"
 
@@ -331,16 +332,58 @@ def _load_macro_securities(path=None) -> dict:
         return {}
 
 
+def _load_mcx_state(state_path=None) -> dict:
+    """{macro_key: entry} from the untracked rolled-contract state, or {}."""
+    p = Path(state_path) if state_path is not None else ACTIVE_MCX_STATE_PATH
+    try:
+        doc = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    contracts = doc.get("contracts") if isinstance(doc, dict) else None
+    return contracts if isinstance(contracts, dict) else {}
+
+
+def load_effective_securities(securities_path=None, state_path=None) -> dict:
+    """Static config with the rolled state laid over each MCX entry. A state entry
+    older than the config's own expiry is ignored, so a hand-rolled config still wins."""
+    doc = _load_macro_securities(securities_path)
+    if not isinstance(doc, dict):
+        doc = {}
+    for key, ov in _load_mcx_state(state_path).items():
+        if not (isinstance(ov, dict) and ov.get("id") and ov.get("_expiry")):
+            continue
+        base = doc.get(key) if isinstance(doc.get(key), dict) else {}
+        if str(ov["_expiry"])[:10] >= str(base.get("_expiry") or "")[:10]:
+            doc[key] = {**base, **ov}
+    return doc
+
+
+def _write_mcx_state(entries: dict, as_of: str, state_path=None) -> None:
+    p = Path(state_path) if state_path is not None else ACTIVE_MCX_STATE_PATH
+    doc = {"_note": "Runtime state written by scrip_master.roll_mcx_contracts; "
+                    "overrides config/macro_securities.json per MCX key. Not tracked by git.",
+           "as_of": as_of, "contracts": entries}
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc, indent=1) + "\n")
+        tmp.replace(p)
+    except OSError as exc:
+        print(f"  (scrip master: MCX state write skipped [{exc}])")
+
+
 def resolve_front_month(symbol_or_key: str, master: dict = None,
                         securities: dict = None, securities_path=None,
-                        today=None, roll_on_expiry: bool = True) -> dict | None:
+                        today=None, roll_on_expiry: bool = True,
+                        state_path=None) -> dict | None:
     """Resolve the active front-month MCX futures contract for a commodity
     (`GOLD` / `GOLD_INDIA`, `SILVER`, `CRUDEOIL` / `CRUDE`, etc.).
 
     1. When `master` is supplied and contains live FUTCOM rows for the
        symbol, resolves from the master (rolling automatically onto the next
        month if the front contract expires on or before `today`).
-    2. Otherwise falls back to `securities` (`config/macro_securities.json`):
+    2. Otherwise falls back to `securities` (default: the rolled state in
+       `data/state/active_mcx_contracts.json` over `config/macro_securities.json`):
        if the current `_expiry` is still active, returns the current contract;
        if expired (or expiring today with `roll_on_expiry=True`), rolls onto
        the first unexpired contract in `_next`.
@@ -350,7 +393,7 @@ def resolve_front_month(symbol_or_key: str, master: dict = None,
     today_s = _today_iso(today)
     macro_key, mcx_sym = _normalize_mcx_key_and_symbol(symbol_or_key)
     sec_doc = (securities if securities is not None
-               else _load_macro_securities(securities_path))
+               else load_effective_securities(securities_path, state_path))
     cur = sec_doc.get(macro_key) if isinstance(sec_doc, dict) else None
     cur = cur if isinstance(cur, dict) else {}
     cur_id = str(cur.get("id") or "")
@@ -440,19 +483,21 @@ def resolve_front_month(symbol_or_key: str, master: dict = None,
 
 def roll_mcx_contracts(securities: dict = None, master: dict = None,
                        today=None, keys=None, securities_path=None,
-                       write: bool = False, roll_on_expiry: bool = True) -> dict:
+                       write: bool = False, roll_on_expiry: bool = True,
+                       state_path=None) -> dict:
     """Identify the active front-month contracts for MCX commodities (Gold,
     Silver, Crude Oil, and industrial metals) and roll any expired contract
     onto the next month's contract (via the scrip master when available, or
     the verified `_next` ladder in `config/macro_securities.json`).
 
     Prevents stale-contract refusals (`CA-410` / `stale_instruments`) without
-    ever guessing an unverified security ID (#78).
+    ever guessing an unverified security ID (#78). `write=True` writes ONLY the
+    untracked state file; the git-tracked config is never written.
     """
     import copy
     today_s = _today_iso(today)
     raw_doc = (copy.deepcopy(securities) if securities is not None
-               else _load_macro_securities(securities_path))
+               else load_effective_securities(securities_path, state_path))
     if not isinstance(raw_doc, dict):
         raw_doc = {}
 
@@ -535,14 +580,7 @@ def roll_mcx_contracts(securities: dict = None, master: dict = None,
         }
 
     if write:
-        out_p = Path(securities_path) if securities_path is not None else MACRO_SECURITIES_PATH
-        try:
-            out_p.parent.mkdir(parents=True, exist_ok=True)
-            tmp_p = out_p.with_suffix(".json.tmp")
-            tmp_p.write_text(json.dumps(raw_doc, indent=1) + "\n")
-            tmp_p.replace(out_p)
-        except OSError as exc:
-            print(f"  (scrip master: macro_securities write skipped [{exc}])")
+        _write_mcx_state({k: raw_doc[k] for k in active}, today_s, state_path)
 
     return {
         "as_of": today_s,
@@ -633,7 +671,7 @@ def notify_problems(report: dict, ledger_path=None, notify_fn=None) -> int:
 def run(fetch_fn=None, id_map=None, wanted=None, write: bool = True,
         notify: bool = True, notify_fn=None, report_path=None,
         ledger_path=None, wanted_path=None, securities_path=None,
-        today=None, roll_commodities: bool = True) -> dict:
+        today=None, roll_commodities: bool = True, state_path=None) -> dict:
     """The cron seam: fetch -> index -> reconcile -> roll MCX -> card -> report.
     A fetch/parse failure returns status='unavailable' — NEVER a pass."""
     if id_map is None:
@@ -661,15 +699,12 @@ def run(fetch_fn=None, id_map=None, wanted=None, write: bool = True,
 
     report = reconcile(id_map, master, wanted, today=today)
     if roll_commodities:
-        write_sec = bool(
-            write and (securities_path is not None
-                       or not os.environ.get("PYTEST_CURRENT_TEST"))
-        )
         report["mcx_roll"] = roll_mcx_contracts(
             master=master,
             today=today,
             securities_path=securities_path,
-            write=write_sec,
+            state_path=state_path,
+            write=write,
         )
     if notify:
         report["announced"] = notify_problems(report, ledger_path, notify_fn)
@@ -801,7 +836,7 @@ def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
                       tiers_path=None, journal_path=None,
                       commodity_symbols=None, today=None,
                       securities_path=None,
-                      roll_commodities: bool = True) -> dict:
+                      roll_commodities: bool = True, state_path=None) -> dict:
     """The VM desk's quote ids (decision #83): darlings are non-F&O names
     outside SECURITY_ID_MAP, so their ids come from Dhan's PUBLIC scrip
     master — exact name match only, EQ series preferred, anything
@@ -834,15 +869,12 @@ def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,
                                       else COMMODITY_SYMBOLS) if s not in commodities}
     mcx_roll = None
     if roll_commodities:
-        write_sec = bool(
-            securities_path is not None
-            or not os.environ.get("PYTEST_CURRENT_TEST")
-        )
         mcx_roll = roll_mcx_contracts(
             master=master,
             today=today,
             securities_path=securities_path,
-            write=write_sec,
+            state_path=state_path,
+            write=True,
         )
     out = {"built_at": _now_iso(), "count": len(ids),
            "ids": ids, "unresolved": unresolved,

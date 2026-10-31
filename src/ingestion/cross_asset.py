@@ -115,9 +115,11 @@ def load_instruments(securities_path=None, global_path=None) -> dict:
     `macro_tracker.load_securities` applies, for the same reason: a
     half-filled entry is a guess, and a guessed id silently prices the
     WRONG instrument. Underscore-prefixed keys (`_note`, `_verified`) are
-    documentation, not instruments."""
+    documentation, not instruments. MCX entries read the rolled state in
+    data/state/active_mcx_contracts.json first (scrip_master)."""
     out = {}
-    for name, e in (_load_json(securities_path or SECURITIES_PATH)).items():
+    from src.ingestion.scrip_master import load_effective_securities
+    for name, e in load_effective_securities(securities_path or SECURITIES_PATH).items():
         if name.startswith("_") or not isinstance(e, dict):
             continue
         if name in COMMODITY_KEYS and all(e.get(k) for k in ("id", "seg", "inst")):

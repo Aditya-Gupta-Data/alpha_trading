@@ -2495,3 +2495,10 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Verified on the VM: the 52 outcomes dated 10-26 included 47 REJECTED journal rows (46 `learner-only: exposure gate`, 38 of them written on 10-19), scored together in the pre-expiry window before the 10-27 expiry (49 wins, +66.56R). `_learner_path` journaled a REJECTED row on EVERY attempt, including the ones the learner skipped.
 - Fix: a skipped attempt writes no journal row; the proposal ledger still records the evaluation. `adaptive_sizing` was never affected (it skips hypothetical outcomes and collapses duplicates); the `outcomes` table and anything counting it were.
 - Left as recorded: 264 unresolved skipped rows already in the journal (107 expiring 2026-11-23, 134 on 2026-12-29, 14 on 2027-03-30, 6 on 2027-01-25) will still be scored at those expiries.
+
+
+## Issue 54 — Moneycontrol RSS feeds return HTTP 403 on the Mini PC (found 2026-11-01; NOT investigated)
+
+- Verified: the 11-01 03:08 IST manual run of `graphrag_news_shadow` on the Mini PC logged `HTTP Error 403: Forbidden` for all three Moneycontrol feeds (`marketreports.xml`, `business.xml`, `economy.xml`); ET and Zerodha Pulse fetched (11 new items).
+- The 10-31 16:15 IST run on the same host fetched 101 new items; whether Moneycontrol was among them was not checked. The same feeds fetched from the Mac via curl on 10-30 (mc_markets 4, mc_business 13, mc_economy 3).
+- Cause unknown (rate limit after more fetches per day, or an IP block). `event_engine.emit` uses the same feeds and would be affected too — not checked.

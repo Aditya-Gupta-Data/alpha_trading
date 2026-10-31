@@ -42,6 +42,23 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-01 (Sun, early hours IST) — GraphRAG news shadow LIVE on the Mini PC (#174) + 2,590-company learning list (#175); router beats the laptop; VM untouched
+
+- **Live now (Mini PC, `main` `400cf7e`):** `src/knowledge_graph/graphrag_news_shadow.py`, node cron `15 7-23/2 * * *` → `logs/graphrag_shadow.log`, switch `event_engine.graphrag_shadow_enabled: true` in `config.json`. Every new RSS headline (no policy-event gate) goes through the unchanged extractor/validator into a SEPARATE `data/graphrag_shadow.db`; nothing reads it (no card, no spreading activation, no Discord). Own cap 300/day and ledgers `logs/graphrag_shadow_*`; the live `graphrag_daily_cap` 100 and `data/brain_map.db` are untouched (live call ledger showed 0 calls for 10-31 after the first shadow run). Crontab backup before the reinstall: `/tmp/crontab_before_174.txt` on the Mini PC; the reinstall added only the shadow lines.
+- **#175:** each shadow run seeds `config/nse_companies.json` (2,590 NSE EQ/BE names from Dhan's public scrip master; 47 generic-word tickers + ETFs excluded) as `in_universe=0` nodes, shadow DB only. Re-validating the 10-30 40-item router dump: accepted 15/43 → 25/43.
+- **First runs:** 10-31 16:15 IST — 99 extracted, 22 edges written, 50 rejected (40 `unresolved_endpoint`), before #175. 11-01 03:08 IST — 11 new items, 3 written, 2,453 companies added. Some written edges have doubtful polarity ("industrial demand hurts silver") — do not promote shadow edges into the live graph without reading `--report` and samples.
+- **Why (verified):** live extraction ran only 2 calls on 10-29 and 5 on 10-30 — it sees only policy/trade events in `event_engine.emit`, twice a day, so the 100 cap never binds.
+- **Local LLM verdict:** 40 real RSS items, production validator: router 15/43 edges accepted, 11/40 items, 4.7 s/item; `qwen3:8b` on the laptop 24/69, 11/40 items, 42.9 s/item; zero overlap between their accepted edges. Same quality, 9× slower → keep the router. #173 (laptop as GraphRAG backend) is recorded but NOT wired; it can be marked dropped. Router capacity (`bench8`, 180 calls): sequential 60/60 at 43/min; 4 and 8 parallel callers were slower with 2–3 HTTP 502 each; no quota failure. The owner added keys: router now holds 2 Google (separate accounts), groq, nvidia, simplellm; dashboard shows 231M tokens/month; daily request limits are the binding ones and their reset times are mostly unknown to the router.
+- **Broken / open:**
+  - Moneycontrol's three RSS feeds returned **HTTP 403** on the 11-01 03:08 Mini PC shadow run (ledger Issue 54); ET + Zerodha still fetched. Cause not checked.
+  - Pre-existing failing tests (not from this work): `tests/test_mininode.py::test_preflight_is_read_only_and_names_every_fix` on the Mac (UnicodeDecodeError in a subprocess); `tests/test_phase1_graphrag.py::test_extractor_fail_open_and_node_role_refusal` fails ON the Mini PC because its `.env` makes it the analytics node (test reads the real `.env`).
+  - Mini PC `~/alpha_trading/.env` line 9 has a stray `wuet` (prints "command not found" when sourced).
+  - Laptop Ollama models now: qwen3:14b, phi4-mini, qwen2.5-coder:7b, hermes3:8b, granite3.1-dense:8b, llama3.1:8b, qwen2.5:14b, qwen3:8b, llama3.2:3b (owner removed the rest).
+- **Next:**
+  1. Check Moneycontrol 403 (rate or IP block from the Mini PC).
+  2. After a few days: `venv/bin/python -m src.knowledge_graph.graphrag_news_shadow --report` on the Mini PC, sample edges, then the owner decides on promotion.
+  3. Owner plan: wipe Windows on the HP laptop and install Ubuntu Server (owner does the USB install; F9 boot menu, F10 BIOS — set a battery charge limit if offered). It would be a second analytics node: needs a new DECISIONS entry + CLAUDE.md Rule 5 line before any job goes there; never the live loop (#146); one miner (#149).
+
 ## 2026-10-29 (Thu, evening) — Local-LLM benchmark on the owner's HP laptop (docs + manual scripts only; nothing live changed)
 
 - **What happened:** 15 Ollama models were tested on the HP laptop (i5-8265U, 16 GB, CPU-only) for the `news_parser` headline→five-key-frame job, across 3 rounds that ran (synthetic basics, 25 synthetic capability checks, 25 live RSS headlines graded by hand). Full write-up: `docs/local_llm_benchmark_2026-10-29.md`. Scripts: `scripts/llm_bench/` (MANUAL OFFLINE TOOL).

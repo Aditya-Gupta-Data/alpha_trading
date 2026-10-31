@@ -4,7 +4,7 @@ src/strategies/cross_asset_gold_crude.py — Gold/Crude cross-asset recipe (B5 C
 
 A PLACEHOLDER, pre-registered thesis: when the Macro Regime Engine declares a
 regime whose best analog is a pre-registered inflationary episode, the recipe
-would lean long MCX GOLD (both phases) and long MCX CRUDEOIL (build-up / peak
+would lean long MCX GOLD (`GOLD_INDIA`) and long MCX CRUDEOIL (`CRUDE`; build-up / peak
 only, flat in the unwind). It reads the declared state in data/macro_regime.json
 (DTW fingerprint match per horizon) and nothing else.
 
@@ -14,6 +14,7 @@ no order path, no sizing. Promotion past TRIAL is a Department-5 decision on
 forward out-of-sample evidence, never a code change.
 """
 from src.buckets import CROSS_ASSET_FAMILY
+from src.ingestion import scrip_master
 from src.validation import registry
 
 KIND = "cross_asset_recipe"
@@ -35,15 +36,21 @@ RECIPE = {
     "name": "gold_crude_inflation_tilt",
     "version": 1,
     "bucket": CROSS_ASSET_FAMILY,
-    "instruments": ["MCX:GOLD", "MCX:CRUDEOIL"],
+    "instruments": ["GOLD_INDIA", "CRUDE"],
     "regime_source": "macro_regime.declare",
     "horizons": ["slow_burn", "shock"],
     "inflation_episodes": sorted(INFLATION_EPISODES),
     "stance": {
-        "GOLD": {"default": "long"},
-        "CRUDEOIL": {"default": "long", "flat_in_phases": ["S3_unwind", "P3_resolution"]},
+        "GOLD_INDIA": {"default": "long"},
+        "CRUDE": {"default": "long", "flat_in_phases": ["S3_unwind", "P3_resolution"]},
     },
 }
+
+
+def contracts(securities: dict = None, today=None) -> dict:
+    """Front-month MCX contract per instrument via the roller; None when nothing unexpired."""
+    return {key: scrip_master.resolve_front_month(key, securities=securities, today=today)
+            for key in RECIPE["instruments"]}
 
 
 def inflation_read(state: dict) -> dict | None:

@@ -42,6 +42,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-01 (Sun, later) — NotebookLM Drive sync tool on branch `feature/notebookllm-sync` (not merged, not installed)
+
+- **Added:** `scripts/sync_to_drive.py` (builds the 289-file, ~4.9 MB `Architecture_Codex.md`, uploads/updates it in a Drive folder) and `scripts/install_post_commit_hook.sh`. Off every cron; no `src/` change. Offline parts tested (3 tests + dry-run); **the real Drive upload has NOT been run** — needs the owner's OAuth client file and a folder id.
+- **Owner steps:** `pip3 install google-api-python-client google-auth-oauthlib`; put the OAuth desktop-client JSON at `~/.config/alpha_trading/drive_credentials.json`; run `DRIVE_FOLDER_ID=<id> python3 scripts/sync_to_drive.py` once by hand (browser consent); then `DRIVE_FOLDER_ID=<id> bash scripts/install_post_commit_hook.sh`.
+- **Note:** the codex contains all of `config/` and `docs/` verbatim; a grep found no keys, but re-check before sharing the Drive folder.
+
 ## 2026-11-01 (Sun) — MCX contract roller + B5 Gold/Crude TRIAL recipe merged to `main` (e986038); NOT deployed to the VM
 
 - **On `main`, not on the VM or Mini PC:**

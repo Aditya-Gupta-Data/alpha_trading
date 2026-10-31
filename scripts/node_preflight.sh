@@ -166,7 +166,7 @@ if [ -f .env ]; then
     if [ -z "$leaked" ]; then
         ok "no Dhan account-control keys in .env (decision #46)"
     else
-        bad "Dhan account-control keys present: $leaked— the node needs none of them. Run: sed -i '/^DHAN_PIN=/d;/^DHAN_TOTP_SECRET=/d;/^DHAN_API_KEY=/d;/^DHAN_API_SECRET=/d' .env"
+        bad "Dhan account-control keys present: ${leaked}— the node needs none of them. Run: sed -i '/^DHAN_PIN=/d;/^DHAN_TOTP_SECRET=/d;/^DHAN_API_KEY=/d;/^DHAN_API_SECRET=/d' .env"
     fi
     grep -qE '^DISCORD_WEBHOOK_URL=.+' .env && ok "DISCORD_WEBHOOK_URL set (Saturday scrip card; silent in shadow)" \
         || warn "DISCORD_WEBHOOK_URL not set — the Saturday scrip card cannot post after promotion"

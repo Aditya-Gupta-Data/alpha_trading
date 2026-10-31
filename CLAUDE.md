@@ -88,6 +88,7 @@ server in `.mcp.json`. **If a module is not reachable from one of those, it is
 not running** — whatever its docstring claims.
 
 - The home node's two crontab blocks (`scripts/setup_mininode_cron.sh`, and from 2026-10-10 `scripts/setup_node_replica_cron.sh`) are also live execution paths for the jobs they name. The replica block runs the VM's schedule MINUS the live session lane and the book jobs (#147), plus the node-only edge miner and weekly evolution (#149 — they refuse to start anywhere else; the Mac's agents for them are retired), with `ALPHA_NODE_LABEL=minipc1` and `ALPHA_NODE_ROLE=analytics`, on its OWN database; it has no authority over the VM's book (decisions #143, #144). **The GCP VM is the only execution node (#146):** `master_scheduler` and `live_bridge` refuse to start on the Mini PC, and `setup_cron.sh` refuses to install there. Never add a live-loop line to a node block.
+- The owner's HP laptop is NOT an execution node (#173): at most an Ollama inference backend for the Mini PC's GraphRAG extraction, router as fallback, no book, no cron, no order path. Not wired as of 2026-10-31. Never add a live-loop or cron line to it.
 - `research_archive/` is on NO execution path. Never import it from `src/`.
 - Files starting with `# MANUAL OFFLINE TOOL` or `# TEST INFRA` are
   intentionally off-cron. Do not "clean them up" as dead code.

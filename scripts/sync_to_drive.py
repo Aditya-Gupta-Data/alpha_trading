@@ -17,6 +17,13 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 CONFIG_DIR = Path(os.environ.get("DRIVE_SYNC_DIR", Path.home() / ".config" / "alpha_trading"))
 CREDENTIALS_FILE = Path(os.environ.get("DRIVE_CREDENTIALS_FILE", CONFIG_DIR / "drive_credentials.json"))
 TOKEN_FILE = Path(os.environ.get("DRIVE_TOKEN_FILE", CONFIG_DIR / "drive_token.json"))
+FOLDER_ID_FILE = CONFIG_DIR / "drive_folder_id"
+
+
+def default_folder_id():
+    if os.environ.get("DRIVE_FOLDER_ID"):
+        return os.environ["DRIVE_FOLDER_ID"]
+    return FOLDER_ID_FILE.read_text().strip() if FOLDER_ID_FILE.exists() else None
 
 
 def collect_files(root=ROOT):
@@ -101,7 +108,7 @@ def upload(service, folder_id, content):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--folder-id", default=os.environ.get("DRIVE_FOLDER_ID"), help="target Drive folder id (or DRIVE_FOLDER_ID)")
+    ap.add_argument("--folder-id", default=default_folder_id(), help="target Drive folder id (or DRIVE_FOLDER_ID, or the drive_folder_id file)")
     ap.add_argument("--dry-run", action="store_true", help="build the codex, print stats, no upload")
     ap.add_argument("--output", help="also write the codex to this local path")
     args = ap.parse_args(argv)

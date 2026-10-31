@@ -42,6 +42,15 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-01 (Sun) — MCX contract roller + B5 Gold/Crude TRIAL recipe merged to `main` (e986038); NOT deployed to the VM
+
+- **On `main`, not on the VM or Mini PC:**
+  - `src/ingestion/scrip_master.py` MCX roller (Antigravity, `5d4d0d6`): `resolve_front_month` / `roll_mcx_contracts`; `config/macro_securities.json` rolled CRUDE 569900→573422 (NOV, exp 11-19), COPPER/ALUMINIUM/ZINC OCT→NOV (exp 11-30), each new id the previously verified `_next` rung. GOLD_INDIA 495213 and SILVER 495214 (exp 12-04) unchanged.
+  - `src/strategies/cross_asset_gold_crude.py`: placeholder B5 `CROSS_ASSET` recipe, instruments `GOLD_INDIA` + `CRUDE` resolved through the roller. Shadow stance only, `authority: NONE`, no cron. `register_trial(conn)` parks it at TRIAL in `validation/registry` — **not yet run against any live `brain_map.db`** (owner decision).
+- **Watch before deploying:** the roller makes `scrip_master.run()` and `build_darling_ids()` WRITE the git-tracked `config/macro_securities.json` whenever they run outside pytest (Mac `mac_auto_sync` → `ensure_darling_ids`; Mini PC Sat 09:30 `scrip_master`). A rewritten tracked file can leave the checkout dirty and make the next `git merge --ff-only` deploy refuse. Unverified in production; check `git status` on each node after the first run.
+- **Not changed:** the VM state blocks below still stand; `multi_bucket_ledger` still false; there is no commodity order path.
+- **Next:** decide whether the roller may write the tracked config from cron (or move the rolled ids to an untracked `data/` file); owner decides whether to register the recipe at TRIAL on the VM.
+
 ## 2026-11-01 (Sun, early hours IST) — GraphRAG news shadow LIVE on the Mini PC (#174) + 2,590-company learning list (#175); router beats the laptop; VM untouched
 
 - **Live now (Mini PC, `main` `400cf7e`):** `src/knowledge_graph/graphrag_news_shadow.py`, node cron `15 7-23/2 * * *` → `logs/graphrag_shadow.log`, switch `event_engine.graphrag_shadow_enabled: true` in `config.json`. Every new RSS headline (no policy-event gate) goes through the unchanged extractor/validator into a SEPARATE `data/graphrag_shadow.db`; nothing reads it (no card, no spreading activation, no Discord). Own cap 300/day and ledgers `logs/graphrag_shadow_*`; the live `graphrag_daily_cap` 100 and `data/brain_map.db` are untouched (live call ledger showed 0 calls for 10-31 after the first shadow run). Crontab backup before the reinstall: `/tmp/crontab_before_174.txt` on the Mini PC; the reinstall added only the shadow lines.

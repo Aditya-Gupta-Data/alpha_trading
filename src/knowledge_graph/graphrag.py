@@ -33,6 +33,7 @@ from src import graph_engine
 ROOT = Path(__file__).resolve().parent.parent.parent
 SECTOR_UNIVERSE_PATH = ROOT / "config" / "sector_universe.json"
 ENTITY_GROUPS_PATH = ROOT / "config" / "entity_groups.json"
+NSE_COMPANIES_PATH = ROOT / "config" / "nse_companies.json"
 
 NODE_TYPES: tuple[str, ...] = (
     "company",
@@ -634,6 +635,35 @@ def seed_nodes(
         "structural_edges": structural,
         "backfilled_from_edges": backfilled,
     }
+
+
+def seed_learning_companies(conn, path: Path | str | None = None, now: str | None = None) -> int:
+    """Add `config/nse_companies.json` names as `in_universe=0` company nodes (#175); an existing company only gains aliases."""
+    p = Path(path) if path is not None else NSE_COMPANIES_PATH
+    try:
+        companies = json.loads(p.read_text(encoding="utf-8")).get("companies") or {}
+    except (OSError, ValueError):
+        return 0
+    ensure_schema(conn)
+    have = {r["node_id"]: (r["node_type"], set(json.loads(r["aliases_json"] or "[]")))
+            for r in conn.execute("SELECT node_id, node_type, aliases_json FROM graph_nodes")}
+    ts = _now_iso(now)
+    added = 0
+    for sym, aliases in companies.items():
+        base = str(sym).strip().upper()
+        aliases = list(aliases or [])
+        if not base:
+            continue
+        if base in have:
+            ntype, known = have[base]
+            if ntype != "company" or {_normalize_alias(a) for a in aliases} <= known:
+                continue
+        else:
+            added += 1
+        upsert_node(conn, node_id=base, node_type="company", display_name=(aliases or [base])[0],
+                    aliases=aliases, in_universe=0, now=ts)
+    conn.commit()
+    return added
 
 
 def resolve_node(conn, raw_name: str, declared_type: str | None = None) -> dict | None:

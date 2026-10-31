@@ -5,7 +5,8 @@ GraphRAG news shadow (decision #174): every RSS headline through the GraphRAG ex
 
 Analytics node only. The live path extracts only from policy/trade events inside `event_engine.emit`; this job
 feeds all RSS items, without that gate, into `data/graphrag_shadow.db`. Nothing reads that file: no card, no
-spreading activation, no Discord. It exists to measure whether ungated news makes a useful graph.
+spreading activation, no Discord. It exists to measure whether ungated news makes a useful graph. Each run also
+seeds the learning list `config/nse_companies.json` (#175) so any NSE company named in the news can resolve.
 """
 from __future__ import annotations
 
@@ -45,7 +46,7 @@ def _add_seen(path: Path, chash: str) -> None:
 
 
 def run(items=None, db_path=None, seen_path=None, call_ledger_path=None, rejected_path=None, review_path=None,
-        extractor=None, cfg=None, env=None, hostname=None, fetch_fn=None) -> dict:
+        extractor=None, cfg=None, env=None, hostname=None, fetch_fn=None, companies_path=None) -> dict:
     """One pass over the current RSS items; an item is marked seen only once the extractor finished with it."""
     from src.event_engine import detect, settings
     cfg = cfg if cfg is not None else settings()
@@ -64,6 +65,9 @@ def run(items=None, db_path=None, seen_path=None, call_ledger_path=None, rejecte
     conn = brain_map.connect(db_path or SHADOW_DB_PATH)
     try:
         graphrag.ensure_schema(conn)
+        if conn.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()[0] == 0:
+            graphrag.seed_nodes(conn)
+        out["companies_added"] = graphrag.seed_learning_companies(conn, path=companies_path)
         for item in items:
             chash = gx.content_hash_for(gx.compose_input_text(item))
             if chash in seen:

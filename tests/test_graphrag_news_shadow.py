@@ -66,3 +66,23 @@ def test_report(tmp_path):
     shadow.run(items=[ITEM], extractor=lambda s, t: {"edges": [EDGE]}, cfg=CFG, env=ENV, **_paths(tmp_path))
     r = shadow.report(tmp_path / "shadow.db")
     assert r["llm_edges"] == 1 and r["edges_touching_universe"] == 1 and sum(r["evidence_per_day"].values()) == 1
+
+
+def test_learning_list_lets_an_unlisted_company_resolve(tmp_path):
+    comp = tmp_path / "companies.json"
+    comp.write_text('{"companies": {"EMAMIPAP": ["Emami Paper Mills", "Emami Paper Mills Ltd"], '
+                    '"RELIANCE": ["Reliance Industries Ltd"]}}')
+    item = {"title": "Emami Paper Mills raises paper prices on pulp costs", "text": "", "url": "u9", "source": "rss:t"}
+    edge = {"subject": "Emami Paper Mills Ltd", "subject_type": "company", "predicate": "makes", "object": "Paper",
+            "object_type": "commodity", "polarity": 1, "strength": 0.6, "quote": "Emami Paper Mills raises paper prices"}
+    without = shadow.run(items=[item], extractor=lambda s, t: {"edges": [edge]}, cfg=CFG, env=ENV,
+                         companies_path=tmp_path / "missing.json", **_paths(tmp_path))
+    assert without["written"] == 0 and without["rejected_reasons"] == {"unresolved_endpoint": 1}
+    paths = dict(_paths(tmp_path), db_path=tmp_path / "s2.db", seen_path=tmp_path / "seen2.txt")
+    out = shadow.run(items=[item], extractor=lambda s, t: {"edges": [edge]}, cfg=CFG, env=ENV,
+                     companies_path=comp, **paths)
+    assert out["companies_added"] == 1 and out["written"] == 1
+    conn = brain_map.connect(tmp_path / "s2.db")
+    rel = conn.execute("SELECT in_universe, aliases_json FROM graph_nodes WHERE node_id='RELIANCE'").fetchone()
+    assert rel["in_universe"] == 1 and "reliance industries ltd" in rel["aliases_json"]
+    assert conn.execute("SELECT in_universe FROM graph_nodes WHERE node_id='EMAMIPAP'").fetchone()[0] == 0

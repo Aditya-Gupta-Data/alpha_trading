@@ -358,7 +358,8 @@ the Mini PC: `venv/bin/python -m src.knowledge_graph.graphrag_extract --days 7 -
 extractor into a SEPARATE graph, `data/graphrag_shadow.db`; no card, no spreading activation and no Discord read it.
 Code default OFF: it runs only with `config.json` `event_engine.graphrag_shadow_enabled: true` on the Mini PC; daily cap
 `graphrag_shadow_daily_cap` = 300, its own call ledger `logs/graphrag_shadow_calls.jsonl` (the live 100/day cap is
-untouched). What it holds: `venv/bin/python -m src.knowledge_graph.graphrag_news_shadow --report`.
+untouched). Since 2026-11-01 (#175) every run first seeds `config/nse_companies.json` (2,590 NSE companies, in_universe=0)
+into the shadow graph only. What it holds: `venv/bin/python -m src.knowledge_graph.graphrag_news_shadow --report`.
 
 ## Mini PC: sector bars (added 2026-10-28, decision #160)
 

@@ -351,6 +351,15 @@ also runs `src.knowledge_graph.graphrag_extract` (daily cap `event_engine.graphr
 `second_order_nodes` block onto emitted event cards (context only, zero execution authority). Manual 7-day dry-run on
 the Mini PC: `venv/bin/python -m src.knowledge_graph.graphrag_extract --days 7 --rss > /tmp/graphrag_dryrun.json` (`--apply` to persist; stdout is JSON only, logs on stderr).
 
+## Mini PC: GraphRAG news shadow (added 2026-10-31, decision #174)
+
+`15 7-23/2 * * *` (node replica block, node-only line) → `python -m src.knowledge_graph.graphrag_news_shadow`, log
+`logs/graphrag_shadow.log` (one JSON line a run). Sends every NEW RSS headline (no policy-event gate) through the GraphRAG
+extractor into a SEPARATE graph, `data/graphrag_shadow.db`; no card, no spreading activation and no Discord read it.
+Code default OFF: it runs only with `config.json` `event_engine.graphrag_shadow_enabled: true` on the Mini PC; daily cap
+`graphrag_shadow_daily_cap` = 300, its own call ledger `logs/graphrag_shadow_calls.jsonl` (the live 100/day cap is
+untouched). What it holds: `venv/bin/python -m src.knowledge_graph.graphrag_news_shadow --report`.
+
 ## Mini PC: sector bars (added 2026-10-28, decision #160)
 
 `10 16 * * 1-5` and `30 8 * * 1-5` (node replica block, node-only lines) → `scripts/node_sector_bars.sh`:

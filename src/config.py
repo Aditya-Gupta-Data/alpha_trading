@@ -156,6 +156,7 @@ EVENT_ENGINE_DEFAULTS = {
     "horizon_days_default": 30, "card_max_age_days": 5, "fees_per_order_rs": 20.0,
     "llm_daily_call_cap": 300, "llm_run_call_cap": 150, "move_per_revenue_pct": 1.0, "priced_in_tolerance_pct": 1.0,
     "graphrag_enabled": False, "graphrag_daily_cap": 100,
+    "graphrag_shadow_enabled": False, "graphrag_shadow_daily_cap": 300,
 }
 EVENT_ENGINE = dict(EVENT_ENGINE_DEFAULTS, **(_CONFIG.get("event_engine") or {}))
 # M1 multi-bucket ledger (blueprint docs/m1_multi_bucket_ledger_blueprint.md): schema is additive and always

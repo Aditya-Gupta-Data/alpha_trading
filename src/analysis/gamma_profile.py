@@ -21,6 +21,8 @@ PCT = 0.01
 CRORE = 1e7
 NAIVE_WEIGHTS = {"call": 1.0, "put": -1.0}
 RISK_FREE = 0.065                                    # assumption; gamma barely moves with r
+T_FLOOR = 1.0 / (365.0 * 24.0)                       # 1-hour floor in years for expiry-day / near-close chains
+MIN_T_YEARS = T_FLOOR
 IV_BOUNDS = (1.0, 200.0)                             # per cent; outside = no usable IV
 GRID_PCT = {"index": 6.0, "stock": 12.0}             # shifted spots for the zero-gamma search
 GRID_STEPS = 49
@@ -84,14 +86,24 @@ def merge_rows(*row_sets) -> list:
     for rows in row_sets:
         for r in rows or []:
             m = out.setdefault(r["strike"], {"strike": r["strike"], "call_gex": 0.0, "put_gex": 0.0,
-                                             "call_doi_gex": 0.0, "put_doi_gex": 0.0, "complete": True})
-            for k in ("call_gex", "put_gex", "call_doi_gex", "put_doi_gex"):
+                                             "call_doi_gex": 0.0, "put_doi_gex": 0.0,
+                                             "call_vex": 0.0, "put_vex": 0.0,
+                                             "call_cex": 0.0, "put_cex": 0.0,
+                                             "complete": True})
+            for k in ("call_gex", "put_gex", "call_doi_gex", "put_doi_gex",
+                      "call_vex", "put_vex", "call_cex", "put_cex"):
                 m[k] = None if m[k] is None or r.get(k) is None else m[k] + r[k]
             m["complete"] = m["complete"] and bool(r.get("complete"))
     for m in out.values():
         ok = m["complete"] and m["call_gex"] is not None and m["put_gex"] is not None
         m["net_gex"] = m["call_gex"] + m["put_gex"] if ok else None
         m["abs_gex"] = abs(m["call_gex"]) + abs(m["put_gex"]) if ok else None
+        ok_vex = ok and m["call_vex"] is not None and m["put_vex"] is not None
+        m["net_vex"] = m["call_vex"] + m["put_vex"] if ok_vex else None
+        m["abs_vex"] = abs(m["call_vex"]) + abs(m["put_vex"]) if ok_vex else None
+        ok_cex = ok and m["call_cex"] is not None and m["put_cex"] is not None
+        m["net_cex"] = m["call_cex"] + m["put_cex"] if ok_cex else None
+        m["abs_cex"] = abs(m["call_cex"]) + abs(m["put_cex"]) if ok_cex else None
         m["complete"] = ok
     return sorted(out.values(), key=lambda r: r["strike"])
 
@@ -126,6 +138,17 @@ def to_crore(gex_1pct, lot_size=None, oi_unit: str = "quantity"):
     return base * lot if oi_unit == "contracts" and lot else None
 
 
+def rupees_to_crore(val_rs, lot_size=None, oi_unit: str = "quantity"):
+    """Convert a rupee exposure (such as VEX per 1% IV move or CEX per day) to INR crore (10^7)."""
+    if val_rs is None:
+        return None
+    base = val_rs / CRORE
+    if oi_unit == "quantity":
+        return base
+    lot = _num(lot_size)
+    return base * lot if oi_unit == "contracts" and lot else None
+
+
 def oi_lot_multiple(rows: list, lot_size) -> float | None:
     """Share of nonzero OI values that are whole multiples of `lot_size` (~1.0 = OI is quantity, not contracts)."""
     lot = _num(lot_size)
@@ -136,13 +159,16 @@ def oi_lot_multiple(rows: list, lot_size) -> float | None:
 
 
 def profile(rows: list, spot, band_pct: float, lot_size=None, oi_unit: str = "quantity") -> dict:
-    """One profile over the strikes within `band_pct` of spot: regime, walls, flip, totals (rupees per 1% move
-    and the #155 INR-crore figure), concentration. Abstains (regime None + reason) when fewer than
+    """One profile over the strikes within `band_pct` of spot: regime, walls, flip, totals (GEX, VEX, CEX in
+    rupees and INR crore), concentration. Abstains (regime None + reason) when fewer than
     MIN_COVERAGE of in-band strikes are complete."""
     spot = _num(spot)
     out = {"spot": spot, "band_pct": band_pct, "strikes_in_band": 0, "coverage": None,
            "regime": None, "net_gex": None, "abs_gex": None, "net_share": None,
-           "net_gex_cr": None, "abs_gex_cr": None, "oi_unit": oi_unit, "lot_size": lot_size,
+           "net_gex_cr": None, "abs_gex_cr": None,
+           "net_vex": None, "abs_vex": None, "net_vex_cr": None, "abs_vex_cr": None, "vex_regime": None,
+           "net_cex": None, "abs_cex": None, "net_cex_cr": None, "abs_cex_cr": None, "cex_regime": None,
+           "oi_unit": oi_unit, "lot_size": lot_size,
            "net_doi_gex": None, "call_wall": None, "put_wall": None, "flip": None,
            "spot_vs_flip_pct": None, "concentration": None, "reason": None}
     if not spot or spot <= 0:
@@ -164,6 +190,12 @@ def profile(rows: list, spot, band_pct: float, lot_size=None, oi_unit: str = "qu
     gross = sum(r["abs_gex"] for r in full)
     doi = [r["call_doi_gex"] + r["put_doi_gex"] for r in full
            if r.get("call_doi_gex") is not None and r.get("put_doi_gex") is not None]
+    vex_rows = [r for r in full if r.get("net_vex") is not None and r.get("abs_vex") is not None]
+    cex_rows = [r for r in full if r.get("net_cex") is not None and r.get("abs_cex") is not None]
+    net_vex = sum(r["net_vex"] for r in vex_rows) if len(vex_rows) == len(full) else None
+    abs_vex = sum(r["abs_vex"] for r in vex_rows) if len(vex_rows) == len(full) else None
+    net_cex = sum(r["net_cex"] for r in cex_rows) if len(cex_rows) == len(full) else None
+    abs_cex = sum(r["abs_cex"] for r in cex_rows) if len(cex_rows) == len(full) else None
     call_wall = max(full, key=lambda r: abs(r["call_gex"]))          # largest exposure, whatever the sign
     put_wall = max(full, key=lambda r: abs(r["put_gex"]))
     flip = _flip(full)
@@ -172,6 +204,14 @@ def profile(rows: list, spot, band_pct: float, lot_size=None, oi_unit: str = "qu
         net_gex=round(net, 2), abs_gex=round(gross, 2),
         net_gex_cr=_round(to_crore(net, lot_size, oi_unit), 4),
         abs_gex_cr=_round(to_crore(gross, lot_size, oi_unit), 4),
+        net_vex=_round(net_vex, 2), abs_vex=_round(abs_vex, 2),
+        net_vex_cr=_round(rupees_to_crore(net_vex, lot_size, oi_unit), 4),
+        abs_vex_cr=_round(rupees_to_crore(abs_vex, lot_size, oi_unit), 4),
+        vex_regime=(None if net_vex is None else "positive" if net_vex > 0 else "negative"),
+        net_cex=_round(net_cex, 2), abs_cex=_round(abs_cex, 2),
+        net_cex_cr=_round(rupees_to_crore(net_cex, lot_size, oi_unit), 4),
+        abs_cex_cr=_round(rupees_to_crore(abs_cex, lot_size, oi_unit), 4),
+        cex_regime=(None if net_cex is None else "positive" if net_cex > 0 else "negative"),
         net_share=round(net / gross, 4) if gross else None,
         net_doi_gex=round(sum(doi), 2) if doi else None,
         call_wall=call_wall["strike"], put_wall=put_wall["strike"], flip=flip,
@@ -180,29 +220,74 @@ def profile(rows: list, spot, band_pct: float, lot_size=None, oi_unit: str = "qu
     return out
 
 
-# ------------------------------------------------------------- seam 2: re-priced gamma (#153)
+# ------------------------------------------------------------- seam 2: re-priced gamma (#153) + VEX/CEX
 
-def years_to_expiry(expiry, as_of):
-    """Calendar years from `as_of` (ISO; naive = IST) to expiry day 15:30 IST, or None when past/unreadable."""
+def years_to_expiry(expiry, as_of, t_floor: float = T_FLOOR):
+    """Calendar years from `as_of` (ISO; naive = IST) to expiry day 15:30 IST.
+    On expiry day (`expiry_date == as_of_date`) or near the close, applies `t_floor` (`T_FLOOR`, 1 hour)
+    so 0DTE EOD captures (~15:40 IST) and expiry-day Gamma/Vanna/Charm do not divide by zero or drop out.
+    Returns None when `expiry` is on a strictly past date (`expiry_date < as_of_date`) or unreadable."""
     try:
         exp = datetime.fromisoformat(str(expiry)[:10]).replace(hour=15, minute=30, tzinfo=_IST)
         now = datetime.fromisoformat(str(as_of))
     except (TypeError, ValueError):
         return None
-    now = now if now.tzinfo else now.replace(tzinfo=_IST)
+    now = now.astimezone(_IST) if now.tzinfo else now.replace(tzinfo=_IST)
+    if exp.date() < now.date():
+        return None
     t = (exp - now).total_seconds() / (365.0 * 86400)
-    return t if t > 0 else None
+    floor = _num(t_floor) if t_floor is not None else 0.0
+    if exp.date() == now.date():
+        if floor and floor > 0:
+            return max(t, floor)
+        return t if t > 0 else None
+    if t <= 0:
+        return None
+    return max(t, floor) if (floor and floor > 0) else t
+
+
+def _bs_terms(spot, strike, iv_pct, t_years, r: float = RISK_FREE):
+    """Shared Black-Scholes terms (S, K, sigma, t, sq, root, d1, d2, pdf) with T_FLOOR protection."""
+    S, K, iv, t = _num(spot), _num(strike), _num(iv_pct), _num(t_years)
+    if not S or not K or S <= 0 or K <= 0 or not iv or iv <= 0 or not t or t <= 0:
+        return None
+    t = max(t, T_FLOOR)
+    sigma = iv / 100.0
+    sq = math.sqrt(t)
+    root = sigma * sq
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / root
+    d2 = d1 - root
+    pdf = math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi)
+    return S, K, sigma, t, sq, root, d1, d2, pdf
 
 
 def bs_gamma(spot, strike, iv_pct, t_years, r: float = RISK_FREE):
     """Black-Scholes gamma per share (identical for call and put), or None on any unusable input."""
-    S, K, iv, t = _num(spot), _num(strike), _num(iv_pct), _num(t_years)
-    if not S or not K or S <= 0 or K <= 0 or not iv or not t or t <= 0:
+    terms = _bs_terms(spot, strike, iv_pct, t_years, r)
+    if terms is None:
         return None
-    sigma = iv / 100.0
-    root = sigma * math.sqrt(t)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / root
-    return math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) / (S * root)
+    S, _, _, _, _, root, _, _, pdf = terms
+    return pdf / (S * root)
+
+
+def bs_vanna(spot, strike, iv_pct, t_years, r: float = RISK_FREE):
+    """Black-Scholes Vanna dDelta/dSigma per share (identical for call and put under q=0),
+    or None on any unusable input."""
+    terms = _bs_terms(spot, strike, iv_pct, t_years, r)
+    if terms is None:
+        return None
+    _, _, sigma, _, _, _, _, d2, pdf = terms
+    return -pdf * d2 / sigma
+
+
+def bs_charm(spot, strike, iv_pct, t_years, r: float = RISK_FREE, option_type: str = None):
+    """Black-Scholes Charm (-dDelta/dT = dDelta/dt per year, identical for call and put under q=0),
+    or None on any unusable input."""
+    terms = _bs_terms(spot, strike, iv_pct, t_years, r)
+    if terms is None:
+        return None
+    _, _, _, t, _, root, _, d2, pdf = terms
+    return -pdf * (2.0 * r * t - d2 * root) / (2.0 * t * root)
 
 
 def _iv(node: dict):
@@ -235,21 +320,41 @@ def strike_inputs(oc: dict, spot) -> list:
 
 
 def model_strike_gex(inputs: list, spot, t_years, weights: dict = None) -> list:
-    """strike_gex-shaped rows with Black-Scholes gamma at `spot` from each strike's IV."""
+    """strike_gex-shaped rows with Black-Scholes Gamma, Vanna, and Charm exposures (GEX, VEX, CEX)
+    at `spot` from each strike's OTM IV."""
     S, w = _num(spot), weights or NAIVE_WEIGHTS
     rows = []
     for r in inputs or []:
         g = bs_gamma(S, r["strike"], r["iv"], t_years)
+        vanna = bs_vanna(S, r["strike"], r["iv"], t_years)
+        charm = bs_charm(S, r["strike"], r["iv"], t_years)
         ok = g is not None and r["call_oi"] is not None and r["put_oi"] is not None
-        scale = S * S * PCT if S else 0.0
-        cg = w["call"] * g * r["call_oi"] * scale if ok else None
-        pg = w["put"] * g * r["put_oi"] * scale if ok else None
-        rows.append({"strike": r["strike"], "call_gex": cg, "put_gex": pg,
+        gex_scale = S * S * PCT if S else 0.0
+        vex_scale = S * PCT if S else 0.0
+        cex_scale = (S / 365.0) if S else 0.0
+        cg = w["call"] * g * r["call_oi"] * gex_scale if ok else None
+        pg = w["put"] * g * r["put_oi"] * gex_scale if ok else None
+        cv = w["call"] * vanna * r["call_oi"] * vex_scale if (ok and vanna is not None) else None
+        pv = w["put"] * vanna * r["put_oi"] * vex_scale if (ok and vanna is not None) else None
+        cc = w["call"] * charm * r["call_oi"] * cex_scale if (ok and charm is not None) else None
+        pc = w["put"] * charm * r["put_oi"] * cex_scale if (ok and charm is not None) else None
+        rows.append({"strike": r["strike"], "iv": r.get("iv"), "iv_source": r.get("iv_source"),
+                     "gamma": g, "vanna": vanna, "charm": charm,
+                     "call_gex": cg, "put_gex": pg,
                      "net_gex": cg + pg if ok else None,
                      "abs_gex": abs(cg) + abs(pg) if ok else None,
+                     "call_vex": cv, "put_vex": pv,
+                     "net_vex": cv + pv if (cv is not None and pv is not None) else None,
+                     "abs_vex": abs(cv) + abs(pv) if (cv is not None and pv is not None) else None,
+                     "call_cex": cc, "put_cex": pc,
+                     "net_cex": cc + pc if (cc is not None and pc is not None) else None,
+                     "abs_cex": abs(cc) + abs(pc) if (cc is not None and pc is not None) else None,
                      "call_doi_gex": None, "put_doi_gex": None,
                      "call_oi": r["call_oi"], "put_oi": r["put_oi"], "complete": ok})
     return rows
+
+
+model_strike_exposures = model_strike_gex
 
 
 def gamma_curve(inputs: list, spot, t_years, weights: dict = None, grid_pct: float = 6.0,

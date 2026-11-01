@@ -74,12 +74,12 @@ def test_missing_api_key_is_a_named_ml401_not_a_crash(tmp_path, monkeypatch):
                         log_path=tmp_path / "o.jsonl")
     assert out["ok"] == []
     assert sorted(f["series"] for f in out["failed"]) == \
-        ["BRENT", "DXY", "US10Y", "USDINR"]
+        ["BRENT", "DXY", "US10Y", "US10Y_BE", "USCPI", "USDINR"]
     assert all(f["code"] == "ML-401" for f in out["failed"])
     assert all(f["reason"] == "no_api_key" for f in out["failed"])
     assert all("no_api_key" in f["detail"] for f in out["failed"])
     assert out["rows_added"] == {"BRENT": 0, "DXY": 0, "USDINR": 0,
-                                 "US10Y": 0}
+                                 "US10Y": 0, "USCPI": 0, "US10Y_BE": 0}
     assert list(tmp_path.glob("*.csv")) == []
     assert "ML-401" in (tmp_path / "o.jsonl").read_text()
 
@@ -136,14 +136,14 @@ def test_one_dead_series_still_ingests_the_others_and_is_named(tmp_path):
     out = ML.ingest_all(api_key=KEY, fetch_bytes_fn=flaky,
                         sleep_fn=slept.append, lake_dir=tmp_path,
                         log_path=tmp_path / "o.jsonl")
-    assert sorted(out["ok"]) == ["BRENT", "DXY", "US10Y"]
+    assert sorted(out["ok"]) == ["BRENT", "DXY", "US10Y", "US10Y_BE", "USCPI"]
     assert [f["series"] for f in out["failed"]] == ["USDINR"]
     assert "503" in out["failed"][0]["detail"]    # named, not just counted
     assert out["failed"][0]["reason"] == "fetch_failed"
     assert out["rows_added"] == {"BRENT": 3, "DXY": 3, "USDINR": 0,
-                                 "US10Y": 3}
+                                 "US10Y": 3, "USCPI": 3, "US10Y_BE": 3}
     assert not (tmp_path / "USDINR.csv").exists()
-    assert len(slept) == 3 and all(2.0 <= s <= 4.0 for s in slept)
+    assert len(slept) == 5 and all(2.0 <= s <= 4.0 for s in slept)
 
 
 def test_dry_run_writes_nothing(tmp_path):
@@ -151,5 +151,24 @@ def test_dry_run_writes_nothing(tmp_path):
                         sleep_fn=lambda s: None, lake_dir=tmp_path,
                         dry_run=True)
     assert out["rows_added"] == {"BRENT": 3, "DXY": 3, "USDINR": 3,
-                                 "US10Y": 3}
+                                 "US10Y": 3, "USCPI": 3, "US10Y_BE": 3}
     assert list(tmp_path.iterdir()) == []         # would-append, wrote none
+
+
+def test_uscpi_and_10y_breakeven_fred_series_and_dxy_ice_yfinance(tmp_path):
+    assert ML.SERIES["USCPI"] == "CPIAUCSL"
+    assert ML.SERIES["US10Y_BE"] == "T10YIE"
+    assert ML.YFINANCE_SERIES["DXY_ICE"] == "DX-Y.NYB"
+
+    cpi = ML.ingest("USCPI", api_key=KEY, fetch_bytes_fn=_canned(), lake_dir=tmp_path)
+    be = ML.ingest("US10Y_BE", api_key=KEY, fetch_bytes_fn=_canned(), lake_dir=tmp_path)
+    assert cpi["fred_id"] == "CPIAUCSL" and cpi["rows_added"] == 3
+    assert be["fred_id"] == "T10YIE" and be["rows_added"] == 3
+
+    yf_rows = [("2026-07-14", 104.25), ("2026-07-15", float("nan")), ("2026-07-16", 104.80)]
+    dxy_ice = ML.ingest("DX-Y.NYB", yf_fetch_fn=lambda t: yf_rows, lake_dir=tmp_path)
+    assert dxy_ice["series"] == "DXY_ICE"
+    assert dxy_ice["ticker"] == "DX-Y.NYB"
+    assert dxy_ice["rows_added"] == 3 and dxy_ice["holes_added"] == 1
+    stored = ML.read_series("DXY_ICE", lake_dir=tmp_path)
+    assert stored == [("2026-07-14", 104.25), ("2026-07-15", None), ("2026-07-16", 104.8)]

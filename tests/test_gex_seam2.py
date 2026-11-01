@@ -32,7 +32,8 @@ def test_bs_gamma_matches_the_textbook_and_refuses_bad_inputs():
 def test_years_to_expiry_runs_to_the_1530_close():
     t = gp.years_to_expiry("2026-10-19", "2026-10-16T15:40:00+05:30")
     assert t * 365 == pytest.approx(3 - 10 / 1440, abs=1e-6)
-    assert gp.years_to_expiry("2026-10-16", "2026-10-16T15:40:00+05:30") is None
+    assert gp.years_to_expiry("2026-10-16", "2026-10-16T15:40:00+05:30") == pytest.approx(gp.T_FLOOR)
+    assert gp.years_to_expiry("2026-10-15", "2026-10-16T15:40:00+05:30") is None
     assert gp.years_to_expiry("2026-10-19", "2026-10-16T15:40:00") == pytest.approx(t)   # naive = IST
 
 

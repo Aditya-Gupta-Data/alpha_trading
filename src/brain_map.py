@@ -94,6 +94,40 @@ CREATE TABLE IF NOT EXISTS event_outcome_link (
     outcome_id  INTEGER NOT NULL REFERENCES outcomes (id),
     PRIMARY KEY (event_id, outcome_id)
 );
+
+CREATE TABLE IF NOT EXISTS dealer_exposure_daily (
+    date             TEXT NOT NULL,
+    slug             TEXT NOT NULL,
+    underlying       TEXT NOT NULL,
+    dealer           TEXT NOT NULL DEFAULT 'non_client',
+    spot             REAL,
+    vix              REAL,
+    regime           TEXT,
+    regime_at_spot   TEXT,
+    zero_gamma       REAL,
+    spot_vs_zero_pct REAL,
+    call_wall        REAL,
+    put_wall         REAL,
+    flip             REAL,
+    net_gex          REAL,
+    abs_gex          REAL,
+    net_gex_cr       REAL,
+    abs_gex_cr       REAL,
+    net_vex          REAL,
+    abs_vex          REAL,
+    net_vex_cr       REAL,
+    abs_vex_cr       REAL,
+    net_cex          REAL,
+    abs_cex          REAL,
+    net_cex_cr       REAL,
+    abs_cex_cr       REAL,
+    t_years          REAL,
+    iv_coverage      REAL,
+    expiries         INTEGER,
+    PRIMARY KEY (date, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_dealer_exposure_underlying_date
+    ON dealer_exposure_daily (underlying, date);
 """
 
 
@@ -212,6 +246,120 @@ def link_event_outcome(conn, event_id, outcome_id) -> None:
         (event_id, outcome_id),
     )
     conn.commit()
+
+
+def record_dealer_exposure(conn, row: dict, dealer: str = "non_client") -> bool:
+    """Upsert one daily dealer exposure row (GEX, VEX, CEX, walls, zero_gamma) into
+    `dealer_exposure_daily`. Accepts either a `backfill_gex_profiles.day_row` dict
+    (reading `combined.calibrated[dealer]` when available, else `combined.repriced`,
+    else `combined.profile`) or a flat exposure dict. Idempotent on `(date, slug)`."""
+    if not isinstance(row, dict):
+        return False
+    day = str(row.get("date") or "")[:10]
+    slug = str(row.get("slug") or "").strip().lower()
+    underlying = str(row.get("underlying") or slug).strip()
+    if not day or not slug:
+        return False
+
+    combined = row.get("combined") if isinstance(row.get("combined"), dict) else {}
+    cal_map = combined.get("calibrated") if isinstance(combined.get("calibrated"), dict) else {}
+    chosen_dealer = dealer
+    prof = cal_map.get(dealer) if isinstance(cal_map.get(dealer), dict) else None
+    if not prof:
+        if isinstance(combined.get("repriced"), dict):
+            prof = combined["repriced"]
+            chosen_dealer = "naive"
+        elif isinstance(combined.get("profile"), dict):
+            prof = combined["profile"]
+            chosen_dealer = "dhan"
+        else:
+            prof = row
+            chosen_dealer = str(row.get("dealer") or dealer)
+
+    expiries_cnt = combined.get("expiries") if "expiries" in combined else row.get("expiries")
+    if isinstance(expiries_cnt, list):
+        expiries_cnt = len(expiries_cnt)
+
+    conn.execute(
+        """
+        INSERT INTO dealer_exposure_daily (
+            date, slug, underlying, dealer, spot, vix,
+            regime, regime_at_spot, zero_gamma, spot_vs_zero_pct,
+            call_wall, put_wall, flip,
+            net_gex, abs_gex, net_gex_cr, abs_gex_cr,
+            net_vex, abs_vex, net_vex_cr, abs_vex_cr,
+            net_cex, abs_cex, net_cex_cr, abs_cex_cr,
+            t_years, iv_coverage, expiries
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?
+        )
+        ON CONFLICT(date, slug) DO UPDATE SET
+            underlying       = excluded.underlying,
+            dealer           = excluded.dealer,
+            spot             = excluded.spot,
+            vix              = excluded.vix,
+            regime           = excluded.regime,
+            regime_at_spot   = excluded.regime_at_spot,
+            zero_gamma       = excluded.zero_gamma,
+            spot_vs_zero_pct = excluded.spot_vs_zero_pct,
+            call_wall        = excluded.call_wall,
+            put_wall         = excluded.put_wall,
+            flip             = excluded.flip,
+            net_gex          = excluded.net_gex,
+            abs_gex          = excluded.abs_gex,
+            net_gex_cr       = excluded.net_gex_cr,
+            abs_gex_cr       = excluded.abs_gex_cr,
+            net_vex          = excluded.net_vex,
+            abs_vex          = excluded.abs_vex,
+            net_vex_cr       = excluded.net_vex_cr,
+            abs_vex_cr       = excluded.abs_vex_cr,
+            net_cex          = excluded.net_cex,
+            abs_cex          = excluded.abs_cex,
+            net_cex_cr       = excluded.net_cex_cr,
+            abs_cex_cr       = excluded.abs_cex_cr,
+            t_years          = excluded.t_years,
+            iv_coverage      = excluded.iv_coverage,
+            expiries         = excluded.expiries
+        """,
+        (
+            day,
+            slug,
+            underlying,
+            chosen_dealer,
+            row.get("spot", prof.get("spot")),
+            row.get("vix"),
+            prof.get("regime"),
+            prof.get("regime_at_spot") or prof.get("regime"),
+            prof.get("zero_gamma"),
+            prof.get("spot_vs_zero_pct"),
+            prof.get("call_wall"),
+            prof.get("put_wall"),
+            prof.get("flip"),
+            prof.get("net_gex"),
+            prof.get("abs_gex"),
+            prof.get("net_gex_cr"),
+            prof.get("abs_gex_cr"),
+            prof.get("net_vex"),
+            prof.get("abs_vex"),
+            prof.get("net_vex_cr"),
+            prof.get("abs_vex_cr"),
+            prof.get("net_cex"),
+            prof.get("abs_cex"),
+            prof.get("net_cex_cr"),
+            prof.get("abs_cex_cr"),
+            prof.get("t_years"),
+            prof.get("iv_coverage"),
+            expiries_cnt if isinstance(expiries_cnt, int) else None,
+        ),
+    )
+    conn.commit()
+    return True
 
 
 def query_similar_events(conn, tags, regime=None) -> dict:

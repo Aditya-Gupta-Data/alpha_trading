@@ -169,10 +169,15 @@ def recent_risk_events(symbol: str, today: date = None,
     Reads the `events` lake that `ingestion/corporate_events` writes —
     demerger / scheme of arrangement / slump sale (STRUCTURAL_RISK) and
     SEBI order / fraud / insolvency / NCLT / auditor resignation
-    (LEGAL_RISK). Point-in-time: an announcement is only visible from its
+    (LEGAL_RISK). Each filing's NSE label is triaged first
+    (`announcement_labels`): a HARD_BLOCK label counts whatever its flags,
+    an ALLOW_ROUTINE label drops its LEGAL_RISK flag, anything else keeps
+    its keyword flags. Hits carry `triage` and `risk_flags`.
+    Point-in-time: an announcement is only visible from its
     own `as_of` day forward, so a backtest can never see tomorrow's filing.
     Never raises — an unreadable lake returns []."""
     from src import lake
+    from src.analysis import announcement_labels as labels
     today = today or date.today()
     start = (today - timedelta(days=lookback_days)).isoformat()
     end = today.isoformat()
@@ -187,8 +192,11 @@ def recent_risk_events(symbol: str, today: date = None,
                 continue
             if (row.get("symbol") or "").upper() != sym:
                 continue
-            if any(f in RISK_FLAGS for f in (row.get("flags") or [])):
-                hits.append(row)
+            risk = labels.effective_flags(row.get("subject"), row.get("flags"),
+                                          RISK_FLAGS)
+            if risk:
+                hits.append({**row, "triage": labels.tier(row.get("subject")),
+                             "risk_flags": risk})
     except Exception:
         return []
     return sorted(hits, key=lambda r: str(r.get("as_of") or ""), reverse=True)
@@ -262,9 +270,9 @@ def corporate_risk_halt(proposal: dict, today: date = None,
     hits = recent_risk_events(symbol, today=today, lake_root=lake_root)
     if hits:
         top = hits[0]
-        flags = "/".join(f for f in (top.get("flags") or [])
-                         if f in RISK_FLAGS)
-        return (False, f"{flags} filed {top.get('as_of')}: "
+        flags = "/".join(top.get("risk_flags") or [])
+        tag = " (HARD_BLOCK label)" if top.get("triage") == "HARD_BLOCK" else ""
+        return (False, f"{flags}{tag} filed {top.get('as_of')}: "
                        f"{str(top.get('subject'))[:120]}")
     return (True, None)
 

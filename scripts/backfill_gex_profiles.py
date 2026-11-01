@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src import lake                                   # noqa: E402
+from src import brain_map, lake                        # noqa: E402
 from src.analysis import gamma_profile as gp          # noqa: E402
 from src.ingestion import participant_oi as poi       # noqa: E402
 
@@ -101,23 +101,35 @@ def slugs(root=None) -> list:
     return sorted(p.name for p in chains.iterdir() if p.is_dir()) if chains.is_dir() else []
 
 
-def run(root=None, only=None, since=None, dry_run=False, participant_root=None) -> dict:
-    """Backfill every (slug, day). Returns {slug: [day rows]}; writes nothing on dry_run."""
+def run(root=None, only=None, since=None, dry_run=False, participant_root=None,
+        db_path=None, conn=None) -> dict:
+    """Backfill every (slug, day) into data/lake/gex/<slug>/ and idempotently upsert
+    `dealer_exposure_daily` in SQLite. Returns {slug: [day rows]}; writes nothing on dry_run."""
     out, cache = {}, {}
-    for slug in slugs(root):
-        if only and slug != only:
-            continue
-        for day in lake.list_days(f"chains/{slug}", root):
-            if since and day < since:
+    owned_conn = None
+    active_conn = conn
+    try:
+        for slug in slugs(root):
+            if only and slug != only:
                 continue
-            if day not in cache:
-                cache[day] = poi.load(day, participant_root)
-            row = day_row(slug, day, lake.read_day(f"chains/{slug}", day, root=root), cache[day])
-            if row is None:
-                continue
-            out.setdefault(slug, []).append(row)
-            if not dry_run:
-                lake.write_partition(f"gex/{slug}", day, [row], root=root)
+            for day in lake.list_days(f"chains/{slug}", root):
+                if since and day < since:
+                    continue
+                if day not in cache:
+                    cache[day] = poi.load(day, participant_root)
+                row = day_row(slug, day, lake.read_day(f"chains/{slug}", day, root=root), cache[day])
+                if row is None:
+                    continue
+                out.setdefault(slug, []).append(row)
+                if not dry_run:
+                    lake.write_partition(f"gex/{slug}", day, [row], root=root)
+                    if active_conn is None:
+                        owned_conn = brain_map.connect(db_path)
+                        active_conn = owned_conn
+                    brain_map.record_dealer_exposure(active_conn, row, dealer=poi.DEFAULT_DEALER)
+    finally:
+        if owned_conn is not None:
+            owned_conn.close()
     return out
 
 

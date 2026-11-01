@@ -67,11 +67,28 @@ HTTP_TIMEOUT = 30
 THROTTLE_RANGE = (2.0, 4.0)       # small json payloads; polite anyway
 HEADER = "date,value"
 
-# our key -> FRED series id (spec §1)
+# our key -> FRED series id (spec §1 + US CPI and 10-Year Breakeven)
 SERIES = {"BRENT": "DCOILBRENTEU",
           "DXY": "DTWEXBGS",
           "USDINR": "DEXINUS",
-          "US10Y": "DGS10"}
+          "US10Y": "DGS10",
+          "USCPI": "CPIAUCSL",
+          "US10Y_BE": "T10YIE"}
+
+# True ICE US Dollar Index via yfinance (Mac/Analytics node lane)
+ICE_DXY_TICKER = "DX-Y.NYB"
+YFINANCE_SERIES = {"DXY_ICE": ICE_DXY_TICKER}
+
+SERIES_ALIASES = {
+    "CPI": "USCPI",
+    "US_CPI": "USCPI",
+    "CPIAUCSL": "USCPI",
+    "T10YIE": "US10Y_BE",
+    "BREAKEVEN_10Y": "US10Y_BE",
+    "US10Y_BREAKEVEN": "US10Y_BE",
+    "DX-Y.NYB": "DXY_ICE",
+    "ICE_DXY": "DXY_ICE",
+}
 
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -241,17 +258,100 @@ def _append_atomically(path: Path, existing_text: str, new_rows: list) -> None:
     tmp.replace(path)
 
 
+def _default_yf_fetch(ticker: str = ICE_DXY_TICKER, period: str = "max"):
+    """Lazy yfinance import (Mac/Analytics node lane) so `src/` stays VM-safe on import."""
+    import yfinance as yf
+    return yf.Ticker(ticker).history(period=period, auto_adjust=False)
+
+
+def fetch_yfinance_observations(ticker: str = ICE_DXY_TICKER,
+                                yf_fetch_fn=None,
+                                period: str = "max") -> list:
+    """Fetch daily Close observations for a Yahoo Finance ticker (default `DX-Y.NYB`, ICE DXY)
+    and return `[(iso_date, float|None)]` in chronological order. NULL-honest: NaN/missing
+    closes stay `None` rather than `0.0`."""
+    import math
+    fn = yf_fetch_fn or (lambda t: _default_yf_fetch(t, period=period))
+    raw = fn(ticker)
+    if raw is None:
+        return []
+    rows = []
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, (list, tuple)):
+        items = raw
+    elif hasattr(raw, "get") or hasattr(raw, "__getitem__"):
+        try:
+            close_col = raw["Close"]
+            items = close_col.items() if hasattr(close_col, "items") else []
+        except Exception:
+            items = []
+    else:
+        items = []
+
+    for d_raw, v_raw in items:
+        d_str = d_raw.strftime("%Y-%m-%d") if hasattr(d_raw, "strftime") else str(d_raw)[:10]
+        day = _iso_day(d_str)
+        if day is None:
+            continue
+        if v_raw is None:
+            val = None
+        elif isinstance(v_raw, (int, float)):
+            val = None if math.isnan(float(v_raw)) else float(v_raw)
+        else:
+            val = _value(str(v_raw))
+        rows.append((day, val))
+    rows.sort(key=lambda r: r[0])
+    return rows
+
+
+def ingest_yfinance(key: str = "DXY_ICE", ticker: str = None,
+                    yf_fetch_fn=None, lake_dir=None,
+                    dry_run: bool = False, log_path=None,
+                    period: str = "max") -> dict:
+    """Ingest a `yfinance`-backed macro series (default `DXY_ICE` -> `DX-Y.NYB`) into
+    `data/lake/macro/<KEY>.csv` append-only and idempotently."""
+    norm_key = SERIES_ALIASES.get(str(key).upper(), str(key).upper())
+    yf_ticker = ticker or YFINANCE_SERIES.get(norm_key) or ICE_DXY_TICKER
+    root = Path(lake_dir) if lake_dir else MACRO_LAKE
+    path = root / f"{norm_key}.csv"
+    existing_text = path.read_text() if path.is_file() else ""
+    have = parse_lake_csv(existing_text) if existing_text else []
+    last = _last_stored_day(have)
+
+    fetched = fetch_yfinance_observations(yf_ticker, yf_fetch_fn=yf_fetch_fn, period=period)
+    if not fetched:
+        _log_outage(norm_key, "ML-404", f"yfinance ({yf_ticker}) parsed to zero dated rows",
+                    log_path)
+        raise ValueError(f"{norm_key} ({yf_ticker}): payload parsed to zero dated rows")
+
+    fresh = [(d, v) for d, v in fetched if last is None or d > last]
+    if fresh and not dry_run:
+        _append_atomically(path, existing_text, fresh)
+    return {"series": norm_key, "ticker": yf_ticker, "source": "yfinance",
+            "rows_added": len(fresh), "rows_fetched": len(fetched),
+            "holes_added": sum(1 for _, v in fresh if v is None),
+            "last_before": last,
+            "last_after": _last_stored_day(fresh) or last,
+            "dry_run": bool(dry_run), "as_of": _now_iso()}
+
+
 def ingest(key: str, api_key=None, fetch_bytes_fn=None, lake_dir=None,
-           dry_run: bool = False, log_path=None) -> dict:
+           dry_run: bool = False, log_path=None, yf_fetch_fn=None) -> dict:
     """One series -> data/lake/macro/<KEY>.csv. Append-only, idempotent:
     only dates strictly newer than the last stored row are written, so a
     second run adds zero rows and nothing already on disk is rewritten.
 
     Raises on a dead fetch — `ingest_all` is the fail-open layer."""
-    key = key.upper()
+    raw_key = str(key).upper()
+    key = SERIES_ALIASES.get(raw_key, raw_key)
+    if key in YFINANCE_SERIES:
+        return ingest_yfinance(key, ticker=YFINANCE_SERIES[key],
+                               yf_fetch_fn=yf_fetch_fn, lake_dir=lake_dir,
+                               dry_run=dry_run, log_path=log_path)
     if key not in SERIES:
-        raise ValueError(f"unknown macro series {key!r}; "
-                         f"known: {sorted(SERIES)}")
+        raise ValueError(f"unknown macro series {raw_key!r}; "
+                         f"known: {sorted(list(SERIES) + list(YFINANCE_SERIES))}")
     root = Path(lake_dir) if lake_dir else MACRO_LAKE
     path = root / f"{key}.csv"
     existing_text = path.read_text() if path.is_file() else ""
@@ -279,14 +379,17 @@ def ingest(key: str, api_key=None, fetch_bytes_fn=None, lake_dir=None,
 
 def ingest_all(api_key=None, fetch_bytes_fn=None, sleep_fn=None, lake_dir=None,
                dry_run: bool = False, log_path=None,
-               throttle=THROTTLE_RANGE) -> dict:
-    """All four series, fail-open: one dead series never aborts the
+               throttle=THROTTLE_RANGE, yf_fetch_fn=None,
+               include_yfinance: bool = False) -> dict:
+    """All configured series, fail-open: one dead series never aborts the
     sweep, and the summary NAMES what failed with a reason (a count
     alone is how a silently-empty lake goes unnoticed for a month).
     NOTHING raises out of here — a cron line gets a dict, always."""
     sleep = sleep_fn or time.sleep
     ok, failed, rows_added, details = [], [], {}, {}
     keys = sorted(SERIES)
+    if include_yfinance or yf_fetch_fn is not None:
+        keys = sorted(list(SERIES) + list(YFINANCE_SERIES))
     key_value = api_key or _api_key()
 
     def _fail(series, code, reason, detail):
@@ -294,10 +397,10 @@ def ingest_all(api_key=None, fetch_bytes_fn=None, sleep_fn=None, lake_dir=None,
                        "detail": detail[:200]})
         rows_added[series] = 0
 
-    if not key_value and fetch_bytes_fn is None:
-        # No key on the REAL network path = four certain failures; say so
-        # instantly instead of sleeping 9 seconds to prove it four times
-        # over. An injected fetch needs no auth, so tests never trip this.
+    if not key_value and fetch_bytes_fn is None and not (include_yfinance or yf_fetch_fn is not None):
+        # No key on the REAL network path = certain FRED failures; say so
+        # instantly instead of sleeping to prove it repeatedly.
+        # An injected fetch needs no auth, so tests never trip this.
         for key in keys:
             _log_outage(key, "ML-401", f"no {API_KEY_ENV}", log_path)
             _fail(key, "ML-401", "no_api_key",
@@ -310,7 +413,8 @@ def ingest_all(api_key=None, fetch_bytes_fn=None, sleep_fn=None, lake_dir=None,
     for i, key in enumerate(keys):
         try:
             r = ingest(key, api_key=key_value, fetch_bytes_fn=fetch_bytes_fn,
-                       lake_dir=lake_dir, dry_run=dry_run, log_path=log_path)
+                       lake_dir=lake_dir, dry_run=dry_run, log_path=log_path,
+                       yf_fetch_fn=yf_fetch_fn)
             ok.append(key)
             rows_added[key] = r["rows_added"]
             details[key] = r

@@ -76,9 +76,8 @@ def test_bs_vanna_and_charm_match_finite_difference_delta_derivatives():
 
 
 def test_expiry_day_t_floor_prevents_zero_or_none_on_0dte_and_rejects_past_dates():
-    # On expiry day after 15:30 IST close (EOD capture at 15:40 IST): floored at T_FLOOR
-    t_eod = gp.years_to_expiry("2026-10-29", "2026-10-29T15:40:00+05:30")
-    assert t_eod == pytest.approx(gp.T_FLOOR)
+    # On expiry day after the 15:30 IST settlement (EOD capture at 15:40 IST): the series is dead -> None
+    assert gp.years_to_expiry("2026-10-29", "2026-10-29T15:40:00+05:30") is None
 
     # On expiry day 5 minutes before 15:30 close (< 1 hour T_FLOOR): floored at T_FLOOR
     t_near_close = gp.years_to_expiry("2026-10-29", "2026-10-29T15:25:00+05:30")
@@ -91,12 +90,16 @@ def test_expiry_day_t_floor_prevents_zero_or_none_on_0dte_and_rejects_past_dates
     # Strictly past expiry date returns None
     assert gp.years_to_expiry("2026-10-28", "2026-10-29T09:30:00+05:30") is None
 
-    # 0DTE repriced_profile succeeds on expiry day at 15:40 IST thanks to T_FLOOR
+    # 0DTE repriced_profile succeeds on expiry day before the close thanks to T_FLOOR
     oc = _oc_with_otm_iv()
-    prof = gp.repriced_profile([(oc, "2026-10-29")], 23_000.0, "2026-10-29T15:40:00+05:30", 5.0, lot_size=65)
+    prof = gp.repriced_profile([(oc, "2026-10-29")], 23_000.0, "2026-10-29T15:25:00+05:30", 5.0, lot_size=65)
     assert prof["regime"] is not None
     assert prof["t_years"] == round(gp.T_FLOOR, 5)
     assert prof["net_vex"] is not None and prof["net_cex"] is not None
+
+    # ...and the 15:40 EOD capture leaves the settled expiry out entirely
+    eod = gp.repriced_profile([(oc, "2026-10-29")], 23_000.0, "2026-10-29T15:40:00+05:30", 5.0, lot_size=65)
+    assert eod["regime"] is None and eod["zero_gamma"] is None
 
 
 def test_otm_iv_selection_and_vex_cex_in_repriced_profile():

@@ -223,26 +223,20 @@ def profile(rows: list, spot, band_pct: float, lot_size=None, oi_unit: str = "qu
 # ------------------------------------------------------------- seam 2: re-priced gamma (#153) + VEX/CEX
 
 def years_to_expiry(expiry, as_of, t_floor: float = T_FLOOR):
-    """Calendar years from `as_of` (ISO; naive = IST) to expiry day 15:30 IST.
-    On expiry day (`expiry_date == as_of_date`) or near the close, applies `t_floor` (`T_FLOOR`, 1 hour)
-    so 0DTE EOD captures (~15:40 IST) and expiry-day Gamma/Vanna/Charm do not divide by zero or drop out.
-    Returns None when `expiry` is on a strictly past date (`expiry_date < as_of_date`) or unreadable."""
+    """Calendar years from `as_of` (ISO; naive = IST) to expiry day 15:30 IST, floored at `t_floor`
+    (`T_FLOOR`, 1 hour) while the contract is still live so expiry-day Gamma/Vanna/Charm stay finite.
+    None once the contract has settled (at or after 15:30 on expiry day, so the 15:40 EOD capture never
+    prices a dead series into the next session's steering read) or when unreadable."""
     try:
         exp = datetime.fromisoformat(str(expiry)[:10]).replace(hour=15, minute=30, tzinfo=_IST)
         now = datetime.fromisoformat(str(as_of))
     except (TypeError, ValueError):
         return None
     now = now.astimezone(_IST) if now.tzinfo else now.replace(tzinfo=_IST)
-    if exp.date() < now.date():
-        return None
     t = (exp - now).total_seconds() / (365.0 * 86400)
-    floor = _num(t_floor) if t_floor is not None else 0.0
-    if exp.date() == now.date():
-        if floor and floor > 0:
-            return max(t, floor)
-        return t if t > 0 else None
     if t <= 0:
         return None
+    floor = _num(t_floor) if t_floor is not None else 0.0
     return max(t, floor) if (floor and floor > 0) else t
 
 

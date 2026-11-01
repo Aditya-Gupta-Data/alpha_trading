@@ -42,6 +42,13 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-01 (Sun, midday) — VEX/CEX + `dealer_exposure_daily` + CPI/breakeven series merged to `main`; NOT deployed
+
+- **On `main` (Antigravity `d23ed77` + review fix `762ebc4`), not on the VM or Mini PC:** Black-Scholes Vanna/Charm exposures (VEX/CEX) beside GEX in `gamma_profile`; additive `brain_map.dealer_exposure_daily`, upserted by cron #38's `backfill_gex_profiles.py` once deployed; FRED `USCPI` + `US10Y_BE` in the macro lake (the DTW featurizer does not read them yet); ICE DXY via yfinance is opt-in and not on any cron.
+- **Review fix:** the branch made `years_to_expiry` price an expiry-day contract at T = 1 hour in the 15:40 EOD capture, after it had settled at 15:30. On NIFTY expiry days that would dominate the combined calibrated profile `gex_steering` reads the next morning (PAPER_2L, PAPER_2L_LIVE_GEX). Restored: a settled series returns None; the 1-hour floor applies only while the contract is live.
+- **Not merged:** `feature/notebookllm-sync` (`scripts/sync_to_drive.py` + a post-commit hook installer, on origin, checked out at `~/Documents/Claude/alpha_trading_sync`). Not built in this session and not reviewed; it would upload repo content to Google Drive on every commit, so it needs an owner go-ahead and a review before merging.
+- **On deploy:** cron #38 recomputes the last 7 days of `data/lake/gex` and fills `dealer_exposure_daily`; GEX/zero-gamma values for non-expiry days are unchanged by this merge.
+
 ## 2026-11-01 (Sun) — MCX contract roller + B5 Gold/Crude TRIAL recipe merged to `main` (e986038); NOT deployed to the VM
 
 - **On `main`, not on the VM or Mini PC:**

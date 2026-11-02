@@ -235,6 +235,19 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-11-02 · 9 commits · 19 files touched
+
+- `3b5a82e` docs: handover 11-02 session wrap — merged state, owner deploy steps, Tuesday checks
+- `792a4d7` docs: handover 11-02 — market-vs-skill results from VM data
+- `9c354b2` feat(tools): market-vs-skill study — did we time the market or just ride it?
+- `b4aabe3` fix(journal): carry regime_read onto journal entries; handover — study results from VM data
+- `b34628c` docs: handover 11-02 — correct the deploy steps (scheduler cron, dashboard box)
+- `a9c0c09` docs: handover 11-02 — performance review, darling pricing + two read-only studies on branch
+- `a85f561` feat(tools): direction bias study — has the bearish lean paid, and where does it come from
+- `a91bc53` feat(tools): ratchet near-miss study — what an earlier breakeven rung would have saved/cost
+- `496b8f1` feat(dashboard): price the darling book from the desk's own quotes
+
+
 ### 2026-11-01 · 3 commits · 11 files touched
 
 - `5e6483c` fix(preflight): ${leaked} before an em dash — macOS bash read it as part of the name (test_mininode red)

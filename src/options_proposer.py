@@ -940,6 +940,11 @@ def to_journal_entry(proposal: dict, decision: str, why: str) -> dict:
     entry["portfolio_family"] = "IDX_SPREADS"                 # M1: every options row names its bucket family
     entry["portfolio_id"] = "PAPER_10L/IDX_SPREADS"
     entry["regime"] = regime_for(proposal.get("view"), proposal.get("vix"))
+    # 2026-11-02: the G3 regime_read (graded trend, SMA distances, RSI, flat
+    # band) was built on every proposal since 09-23 but never copied here, so
+    # the journal could not answer "mild or strong bearish?". Observational only.
+    if isinstance(proposal.get("regime_read"), dict):
+        entry["regime_read"] = proposal["regime_read"]
     from src.confluence.evidence import stamp_earnings
     stamp_earnings(entry)                                      # #150: results-window annotation, gates nothing
     return entry

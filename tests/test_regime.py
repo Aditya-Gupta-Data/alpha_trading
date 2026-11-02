@@ -67,6 +67,17 @@ def test_to_journal_entry_carries_the_regime():
                                "vix": 16.2}
 
 
+def test_to_journal_entry_carries_the_regime_read():
+    """2026-11-02: regime_read rode on the proposal but never reached the
+    journal (the direction-bias study found 0 rows carrying it)."""
+    from src.options_proposer import to_journal_entry
+    rr = {"view": "bearish", "grade": "bearish", "sma_fast_pct": -0.8, "sma_slow_pct": -1.9}
+    entry = to_journal_entry(dict(_proposal(view="bearish", vix=14.0), regime_read=rr),
+                             "pending_approval", "why")
+    assert entry["regime_read"] == rr
+    assert "regime_read" not in to_journal_entry(_proposal(), "pending_approval", "why")
+
+
 def test_simulator_entry_carries_the_regime():
     from src.simulator import _entry_for
     entry = _entry_for(_proposal(view="neutral", vix=12.1), "2026-06-01",

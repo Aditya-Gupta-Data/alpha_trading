@@ -42,6 +42,19 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-02 (Mon, afternoon) — PR #16 MERGED (a7965a3); #176 stock-option 33% sub-cap BUILT on branch `ccr-205cd70d-ntl0gx` (new PR, not merged, not deployed)
+
+- **PR #16** is merged to `main` (owner-authorised). The VM pull and dashboard restart are the owner's steps; the commands are in the wrap block below. This cloud session cannot reach the VM.
+- **#176 (owner rule):** single-stock options may hold at most 33% of the active options budget. A new stock-option entry that would pass that line is refused at proposal and at approval.
+  - Index options are untouched.
+  - The Shadow Learner still takes the refused setup (the existing `_learner_path`).
+  - The ₹2L clone books follow the primary, as they do for every primary refusal.
+  - Module `src/equity_option_cap.py`; switch `equity_option_cap_pct` in `config.json` (0 = off). Suite 3,391 green.
+- **What the owner should know before deploying #176:**
+  - The budget depends on the M1 switch. Ledger OFF (today): IDX_SPREADS bucket equity (~₹10.27L at the 10-29 migration), so the ceiling is ≈ ₹3.4L of stock-option margin. Ledger ON: 25% of firm equity (~₹2.98L) is the options budget, so the ceiling is ≈ ₹98k.
+  - Locks taken before #176 count toward the cap but are never closed by it (no forced exit). If stock options already hold more than the ceiling, only NEW stock-option entries stop until they settle.
+  - Check the current reading on the VM after deploy (read-only): `venv/bin/python -m src.equity_option_cap`.
+
 ## 2026-11-02 (Mon, session wrap) — performance review; darling pricing + regime_read fix + four read-only studies MERGED to `main` (PR #16); VM / dashboard deploy is the OWNER's step (this cloud session cannot reach the VM)
 
 - **State at wrap:** PR #16 merged to `main` with owner authorisation. Nothing is deployed until the owner runs the deploy below; until then the VM still runs the pre-#16 code. No trading rule changed today.

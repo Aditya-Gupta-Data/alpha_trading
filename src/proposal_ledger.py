@@ -36,6 +36,8 @@ THE FATE CODES (`fate`):
   REJECTED_RISK_CAP    — max loss/lot over the hard per-trade cap
   REJECTED_RISK_BUDGET — over the % options risk budget, or SPAN > cash
   REJECTED_MARGIN      — margin exhaustion: not enough liquid capital
+  REJECTED_EQUITY_CAP  — the stock-option sub-cap (33% of the options
+                         budget, src/equity_option_cap, owner 2026-11-02)
   REJECTED_EXPOSURE    — the one-open-position-per-underlying+direction
                          gate (#68)
   REJECTED_NO_QUOTE    — no tradeable quotes at the chosen strikes
@@ -67,6 +69,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # reworded, its rows land in REJECTED_OTHER with the text attached, which is
 # the visible failure this table is meant to have.
 FATE_PATTERNS = (
+    ("REJECTED_EQUITY_CAP", "stock-option sub-cap"),      # owner rule 2026-11-02 (equity_option_cap)
     ("REJECTED_EVENT_GATE", "earnings proximity gate"),   # #151 structural gates lead (2026-10-23)
     ("REJECTED_EVENT_GATE", "glassbreaking:"),
     ("REJECTED_POOR_RR", "r:r below"),                 # decision #98 guardrail (needles are lower-case)

@@ -97,6 +97,11 @@ TUNER_WEIGHT_BOUNDS = tuple(_CONFIG["tuner_weight_bounds"])
 # Rs.1,00,000 paper book or no options trade could ever size above 0 lots.
 # Optional key so older config.json copies (e.g. on the VM) keep working.
 OPTIONS_RISK_PER_TRADE_PCT = float(_CONFIG.get("options_risk_per_trade_pct", 10.0))
+# Owner rule 2026-11-02 (src/equity_option_cap.py): single-stock options may
+# hold at most this % of the active options budget; a new stock-option entry
+# that would pass it is refused (index options and the Shadow Learner are
+# untouched). 0 or below switches the rule off.
+EQUITY_OPTION_CAP_PCT = float(_CONFIG.get("equity_option_cap_pct", 33.0))
 
 # Equity desk (owner ruling 2026-07-20): the darling shadow book's paper
 # capital slice, carved from the firm's 10L pool. Optional keys so older

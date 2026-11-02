@@ -23,6 +23,7 @@
   "rsi_oversold": 30,
   "moving_average_fast": 50,
   "moving_average_slow": 200,
+  "equity_option_cap_pct": 33.0,
   "default_stop_loss_pct": 3.0,
   "default_investment_size": 10000,
   "risk_level": "moderate",

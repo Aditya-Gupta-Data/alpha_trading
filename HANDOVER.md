@@ -42,7 +42,20 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-11-02 (Mon) — performance review + three follow-ups on branch `ccr-205cd70d-ntl0gx` (NOT merged, NOT deployed)
+## 2026-11-02 (Mon, session wrap) — performance review; darling pricing + regime_read fix + four read-only studies MERGED to `main` (PR #16); VM / dashboard deploy is the OWNER's step (this cloud session cannot reach the VM)
+
+- **State at wrap:** PR #16 merged to `main` with owner authorisation. Nothing is deployed until the owner runs the deploy below; until then the VM still runs the pre-#16 code. No trading rule changed today.
+- **Deploy (owner, via the Google Cloud app SSH):**
+  - VM: `cd ~/alpha_trading && git status --short && git fetch -q && git merge --ff-only origin/main && venv/bin/python -m pytest -q tests/test_equity_desk.py tests/test_dashboard_data.py tests/test_regime.py`. No restart needed: the darling cycle and the proposer live in `master_scheduler` (09:10 cron). The new `equity_desk_marks.json` appears after the desk's first in-session quote (Tue 11-03).
+  - Dashboard box: `git pull` + restart the bridge and Streamlit (as on 10-16). The darling rows price after the first cron #33 push that carries the new file.
+- **Verify Tue 11-03:** `ls -l data/equity_desk_marks.json` on the VM after 09:20; the dashboard shows "priced on N of N" for PAPER_10L; `net_equity_history` gets PAPER_10L rows again; a new journal entry carries `regime_read`.
+- **Open / known:**
+  - The two TCS bear puts (24/25 Sep, expiry 11-23) are near max loss and will be the first 20–39% near-miss in the record.
+  - 4 armed trades still lost (model lock vs crossed fill — not investigated).
+  - 34 settled directional rows have no ratchet peak (probably pre-#110; not checked).
+  - NIFTY MID SELECT has no lake series.
+
+### Detail — performance review + follow-ups (written during the session)
 
 - **Owner's dashboard at 10:28 IST (screenshots, not re-verified from the DB):** PAPER_10L true net ₹11,36,830 (realized +₹1,90,750, unrealized −₹53,920 on 12 of 15 priced, realized drawdown 2.26%). PAPER_2L ₹1,98,972 (realized +₹759, drawdown 10.04% from its ~+11.5% 10-20 peak). ROT ₹1,97,744. LIVE ₹1,95,899 (realized +₹5,589, at peak). LIVE_GEX ₹1,98,110. Recon OK 10-30 15:42. Live Book: 49 open rows, the learner 28 of them (21 bearish).
 - **On the branch (suite 3,374 green, 84 s):**
@@ -60,7 +73,7 @@ the agent's job under the Session Wrap rule above.
     - Bullish: 4 trades, 0 right (n too small).
     - **Read:** about 62% of the hit rate is the market falling, and roughly 15 points may be timing. The current rally is the forward test of the timing part.
   - **Bug found + fixed on this branch:** `regime_read` was never copied into journal entries (0 rows), so "mild vs strong bearish" was unanswerable. `to_journal_entry` now copies it, going forward only.
-- **Next:**
+- **Next (as written mid-session; superseded by the wrap block above):**
   1. Owner: merge the branch, then deploy. VM: `git fetch && git merge --ff-only origin/main` (the darling cycle lives in `master_scheduler`, so it picks the change up at the next 09:10 cron; no restart needed). Dashboard box: `git pull` + restart the bridge and Streamlit (as on 10-16). The new file reaches the box at the next cron #33 push after the desk has quoted once. Then on the VM:
      `venv/bin/python scripts/ratchet_near_miss_study.py --db data/brain_map.db --out /tmp/ratchet.md`
      `venv/bin/python scripts/direction_bias_study.py --db data/brain_map.db --out /tmp/direction.md`

@@ -1263,6 +1263,18 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
                 return _learner_path(underlying, result, p, exp_reason)
             return {"proposed": False, "reason": exp_reason, "entry": None,
                     "rejected": _rejected_facts(underlying, result, p)}
+        # Owner rule 2026-11-02: the stock-option sub-cap (src/equity_option_cap).
+        # Index options return before any read; a refused stock option goes to
+        # the Shadow Learner exactly like an exposure refusal (it stays uncapped).
+        from src import equity_option_cap
+        from src import portfolio_manager as _pm
+        cap_ok, cap_reason = equity_option_cap.gate(p.get("ticker") or underlying,
+                                                    _pm.required_margin_for(p))
+        if not cap_ok:
+            if learner_on:
+                return _learner_path(underlying, result, p, cap_reason)
+            return {"proposed": False, "reason": cap_reason, "entry": None,
+                    "rejected": _rejected_facts(underlying, result, p)}
     # Book context (annotate-only, #63 stage 1): what the real book already
     # holds and why, so the newcomer is judged in context. Sandbox books are
     # exempt (their journal isn't their book); fail-open — a broken book
@@ -1841,6 +1853,15 @@ def _decide_pending_locked(trade_id: str, approve: bool, why: str,
             required = pm.required_margin_for(
                 {"spread": spread,
                  "vix": (target.get("receipt") or {}).get("vix")})
+            # Owner rule 2026-11-02: the stock-option sub-cap, re-judged at
+            # acceptance with this entry's own proposal-time lock excluded
+            # (so a held lock is not counted twice). Left pending like a
+            # margin block; index options pass before any read.
+            from src import equity_option_cap
+            cap_ok, cap_reason = equity_option_cap.gate(target.get("ticker"), required,
+                                                        journal_ref=trade_id)
+            if not cap_ok:
+                return {"status": MARGIN_BLOCKED, "entry": target, "reason": cap_reason}
             gate = pm.gate_headless_entry(trade_id, required)
             allowed, gate_reason = gate
             if not allowed:

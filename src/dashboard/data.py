@@ -29,6 +29,8 @@ DB_PATH = Path(os.environ.get("ALPHA_DB_PATH") or _DATA / "brain_map.db")
 JOURNAL_PATH = Path(os.environ.get("ALPHA_JOURNAL_PATH") or _DATA / "journal.jsonl")
 EQUITY_LEDGER_PATH = Path(os.environ.get("ALPHA_EQUITY_LEDGER") or _LOGS / "equity_shadow_journal.jsonl")
 SNAPSHOT_PATH = _DATA / "market_snapshot.json"
+# the equity desk's own published quotes (src/equity_desk.publish_desk_marks)
+DESK_MARKS_PATH = _DATA / "equity_desk_marks.json"
 BENCHMARKS_PATH = _DATA / "dashboard_benchmarks.json"
 RECON_PATH = _LOGS / "recon.jsonl"
 # THE ₹10L BASE (decisions #116/#117, owner 2026-09-25): the primary's
@@ -750,8 +752,30 @@ def _live_row(r: dict, settled: dict, max_age_s, ref) -> dict:
             "mark_stale": _live_mark_stale(r, ref, max_age_s) if max_age_s is not None else None}
 
 
+def _desk_marks(path=None) -> dict:
+    """{"as_of", "marks": {ticker: price}} from the equity desk's published
+    quotes, or {} when absent/corrupt — an unpriced row, never a guess."""
+    try:
+        d = json.loads(Path(path or DESK_MARKS_PATH).read_text())
+        return d if isinstance(d, dict) and isinstance(d.get("marks"), dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _equity_mtm(action: dict, qty, price):
+    """(price - entry) x qty — the Discord book card's own formula
+    (equity_desk.render_book_lines); None when any input is missing."""
+    try:
+        if price is None or action.get("entry_price") is None or not qty:
+            return None
+        return round((float(price) - float(action["entry_price"])) * int(qty), 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict = None,
-                db_path=None, live=None, now: datetime = None, captured_at: datetime = None) -> list:
+                db_path=None, live=None, now: datetime = None, captured_at: datetime = None,
+                desk_marks: dict = None) -> list:
     """One row per open position: symbol, strategy, account(s), lots/qty,
     entry, MTM (engine snapshot when present — never a fresh quote here),
     and the profit-ratchet state (peak / lock / armed) for directional
@@ -813,6 +837,8 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                                  "verdict, on the primary's figures"} if live_named else {})})
     rows += [_live_row(r, settled, max_age_s, ref) for r in live]
     entries = {}
+    desk = _desk_marks() if desk_marks is None else desk_marks
+    desk_px, desk_as_of = (desk.get("marks") or {}), desk.get("as_of")
     from src.knowledge_graph_logger import apply_corrections       # funding_revoked (#123)
     for x in apply_corrections(_jsonl(equity_ledger_path or EQUITY_LEDGER_PATH)):
         if x.get("event") == "entry" and (x.get("funding") or {}).get("funded"):
@@ -821,6 +847,8 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
             entries.pop(x.get("id"), None)
     for x in entries.values():
         a = x.get("kya_kara_action") or {}
+        px = desk_px.get(x.get("ticker"))
+        mtm = _equity_mtm(a, (x.get("funding") or {}).get("qty"), px)
         rows.append({"id": (x.get("funding") or {}).get("lock_ref") or f"eqd:{x.get('id')}",
                      "account": "PAPER_10L",
                      "symbol": x.get("ticker"), "strategy": "Equity Long", "direction": "bullish",
@@ -828,7 +856,10 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
                      "entered": x.get("as_of"), "expiry": None,
                      "max_loss_rs": (round((float(a["entry_price"]) - float(a["stop"])) * int((x.get("funding") or {}).get("qty") or 0), 2)
                                      if a.get("entry_price") is not None and a.get("stop") is not None else None),
-                     "mtm_rs": None, "mtm_basis": None, "capture_pct": None,
+                     "mtm_rs": mtm, "mtm_basis": "ltp" if mtm is not None else None,
+                     "mark_ts": desk_as_of if mtm is not None else None,
+                     "last_price": px if mtm is not None else None,
+                     "capture_pct": None,
                      "ratchet_peak_pct": None, "ratchet_lock_pct": None,
                      "ratchet": "ATR trail (3×ATR14)", "sizing": None})
     return rows

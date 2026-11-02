@@ -1,6 +1,6 @@
 #!/bin/bash
 # publish_dashboard_mirror.sh — runs ON THE TRADING VM (cron #33, decision #112):
-# push the five ledger files the showcase reads to the always-on dashboard box
+# push the six ledger files the showcase reads to the always-on dashboard box
 # over ssh/rsync (a dedicated key, ~/.ssh/dashboard_push, that can only log in
 # as the dashboard user). Read-only on the engine's files; the box never
 # connects back. Target set in ~/.dashboard_target (user@host:/path), one line.
@@ -31,7 +31,7 @@ trap 'rm -rf "$SNAP"' EXIT
 for f in brain_map.db journal.jsonl; do
   [ -f "$SNAP/$f" ] && files+=("$SNAP/$f") || echo "[publish] no consistent snapshot of $f — not pushed"
 done
-for f in logs/equity_shadow_journal.jsonl data/market_snapshot.json logs/recon.jsonl data/dashboard_benchmarks.json; do
+for f in logs/equity_shadow_journal.jsonl data/market_snapshot.json data/equity_desk_marks.json logs/recon.jsonl data/dashboard_benchmarks.json; do
   [ -f "$HERE/$f" ] && files+=("$HERE/$f") || echo "[publish] absent $f"
 done
 # --temp-dir + delay-updates: the box never reads a half-written file

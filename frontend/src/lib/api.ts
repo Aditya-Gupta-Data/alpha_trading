@@ -120,7 +120,7 @@ export interface OpenTrade {
   max_loss_rs: number;
   mtm_rs: number | null;
   /** "crossed" = every leg priced on real bid/ask; "modeled" = no real quote on that snapshot. */
-  mtm_basis?: "crossed" | "modeled" | null;
+  mtm_basis?: "crossed" | "modeled" | "ltp" | null;
   capture_pct: number | null;
   ratchet_peak_pct: number | null;
   ratchet_lock_pct: number | null;

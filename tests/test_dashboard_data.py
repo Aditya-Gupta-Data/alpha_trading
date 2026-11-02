@@ -79,6 +79,32 @@ def test_open_trades_carry_strategy_labels_ratchet_and_equity_rows(tmp_path):
     assert outs[0]["resolution"] == "profit_take" and outs[0]["ticket"] == "tkt:1"
 
 
+def test_equity_rows_priced_from_the_desk_marks_file(tmp_path):
+    """2026-11-02: darling rows were hard-coded unpriced; they now read the
+    desk's published quotes — (last - entry) x qty — and stay unpriced,
+    counted, when the name has no quote."""
+    eq = tmp_path / "eq.jsonl"
+    eq.write_text("\n".join(json.dumps(x) for x in [
+        {"event": "entry", "id": "e1", "ticker": "DABUR.NS", "as_of": "2026-09-18",
+         "funding": {"funded": True, "qty": 100, "lock_ref": "eqd:e1"}, "kya_kara_action": {"entry_price": 385.0, "stop": 374.0}},
+        {"event": "entry", "id": "e2", "ticker": "LT.NS", "as_of": "2026-09-21",
+         "funding": {"funded": True, "qty": 10, "lock_ref": "eqd:e2"}, "kya_kara_action": {"entry_price": 3000.0, "stop": 2900.0}},
+    ]) + "\n")
+    j = tmp_path / "j.jsonl"
+    j.write_text("")
+    desk = {"as_of": "2026-11-02T10:28:00+05:30", "marks": {"DABUR.NS": 380.5}}
+    rows = d.open_trades(j, eq, snapshot_marks={}, live=[], desk_marks=desk)
+    by = {r["id"]: r for r in rows}
+    assert by["eqd:e1"]["mtm_rs"] == round((380.5 - 385.0) * 100, 2)
+    assert by["eqd:e1"]["mtm_basis"] == "ltp" and by["eqd:e1"]["mark_ts"] == desk["as_of"]
+    assert by["eqd:e2"]["mtm_rs"] is None and by["eqd:e2"]["mtm_basis"] is None
+    # the file is the default source; absent/corrupt = unpriced, never zero
+    d.DESK_MARKS_PATH.write_text(json.dumps(desk))
+    assert {r["id"]: r for r in d.open_trades(j, eq, snapshot_marks={}, live=[])}["eqd:e1"]["mtm_rs"] == -450.0
+    d.DESK_MARKS_PATH.write_text("{not json")
+    assert all(r["mtm_rs"] is None for r in d.open_trades(j, eq, snapshot_marks={}, live=[]))
+
+
 def test_recon_latest_and_history_read_the_ledger(tmp_path):
     p = tmp_path / "recon.jsonl"
     assert d.latest_recon(p) is None

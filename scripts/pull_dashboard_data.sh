@@ -16,7 +16,7 @@ mkdir -p "$DEST"
 # CONSISTENT SNAPSHOT taken on the VM first (sqlite backup / under the
 # journal lock), never the live files mid-commit.
 SNAP=/tmp/pull_dashboard_snapshot
-REMOTE=('alpha_trading/logs/equity_shadow_journal.jsonl' 'alpha_trading/data/market_snapshot.json'
+REMOTE=('alpha_trading/logs/equity_shadow_journal.jsonl' 'alpha_trading/data/market_snapshot.json' 'alpha_trading/data/equity_desk_marks.json'
         'alpha_trading/logs/recon.jsonl' 'alpha_trading/data/dashboard_benchmarks.json')
 if gcloud compute ssh "${VM}" --project="${PROJECT}" --zone="${ZONE}" --quiet \
       --command "rm -rf ${SNAP} && cd ~/alpha_trading && venv/bin/python -m src.dashboard.mirror_snapshot ${SNAP}" >/dev/null 2>&1; then

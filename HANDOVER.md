@@ -42,6 +42,43 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-02 (Mon, session wrap) — performance review; darling pricing + regime_read fix + four read-only studies MERGED to `main` (PR #16); VM / dashboard deploy is the OWNER's step (this cloud session cannot reach the VM)
+
+- **State at wrap:** PR #16 merged to `main` with owner authorisation. Nothing is deployed until the owner runs the deploy below; until then the VM still runs the pre-#16 code. No trading rule changed today.
+- **Deploy (owner, via the Google Cloud app SSH):**
+  - VM: `cd ~/alpha_trading && git status --short && git fetch -q && git merge --ff-only origin/main && venv/bin/python -m pytest -q tests/test_equity_desk.py tests/test_dashboard_data.py tests/test_regime.py`. No restart needed: the darling cycle and the proposer live in `master_scheduler` (09:10 cron). The new `equity_desk_marks.json` appears after the desk's first in-session quote (Tue 11-03).
+  - Dashboard box: `git pull` + restart the bridge and Streamlit (as on 10-16). The darling rows price after the first cron #33 push that carries the new file.
+- **Verify Tue 11-03:** `ls -l data/equity_desk_marks.json` on the VM after 09:20; the dashboard shows "priced on N of N" for PAPER_10L; `net_equity_history` gets PAPER_10L rows again; a new journal entry carries `regime_read`.
+- **Open / known:**
+  - The two TCS bear puts (24/25 Sep, expiry 11-23) are near max loss and will be the first 20–39% near-miss in the record.
+  - 4 armed trades still lost (model lock vs crossed fill — not investigated).
+  - 34 settled directional rows have no ratchet peak (probably pre-#110; not checked).
+  - NIFTY MID SELECT has no lake series.
+
+### Detail — performance review + follow-ups (written during the session)
+
+- **Owner's dashboard at 10:28 IST (screenshots, not re-verified from the DB):** PAPER_10L true net ₹11,36,830 (realized +₹1,90,750, unrealized −₹53,920 on 12 of 15 priced, realized drawdown 2.26%). PAPER_2L ₹1,98,972 (realized +₹759, drawdown 10.04% from its ~+11.5% 10-20 peak). ROT ₹1,97,744. LIVE ₹1,95,899 (realized +₹5,589, at peak). LIVE_GEX ₹1,98,110. Recon OK 10-30 15:42. Live Book: 49 open rows, the learner 28 of them (21 bearish).
+- **On the branch (suite 3,374 green, 84 s):**
+  1. `496b8f1` — the darling book is now PRICED on the dashboard. Funded Equity Long rows were hard-coded `mtm_rs: None`, so "priced on 12 of 15" was always the 3 darlings and PAPER_10L's true net equity excluded the desk. The darling cycle now writes the quotes it already took to `data/equity_desk_marks.json` (no extra Dhan call). Cron #33 pushes that file; the dashboard computes (last − entry) × qty (the Discord book card's formula). **Side effect to watch:** `equity_history.record` skips an account whose open positions are not all priced, so PAPER_10L's net-equity history may only start recording once this is deployed (unverified; check `net_equity_history`).
+  2. `a91bc53` — `scripts/ratchet_near_miss_study.py` (MANUAL OFFLINE TOOL): how settled directional spreads that peaked in the 20–39% band ended (the 40% rung never armed for them), plus what-if ranges for a breakeven rung at 20/25/30/35%. **Not yet run on real data.**
+  3. `a85f561` — `scripts/direction_bias_study.py` (MANUAL OFFLINE TOOL): settled P&L by direction/month, the classifier's `regime_read` mix (mild vs strong bearish), proposal-ledger fates and the bullish-only veto count, and the crossed-quote books by direction. **Not yet run on real data.**
+- **Code reading (verified in source, effect NOT measured):** two asymmetries lean the book bearish. (a) `options_proposer.build_proposal` has a smart-money/sector veto on BULLISH index spreads (`regime_filters.py:158`) with no bearish counterpart. (b) `market_view` turns any read under both 50/200 SMAs bearish once it is outside the 1.5% flat band. A *mild* downtrend (less than 2% under the 200) trades bearish, and a mild uptrend trades bullish too, so (b) is symmetric on paper. In practice slow SMAs lag a rebound, which is a timing bias, not a coded one. One counter-asymmetry: an oversold RSI turns a mild bearish read bullish, and there is no overbought→bearish counterpart.
+- **Study results, VM data, run by the owner 11-02 ~11:05 IST (verified output, read-only scripts from `/tmp`):**
+  - **Ratchet:** PAPER_10L has 23 settled directional spreads with a recorded peak. 21 reached 40%+ (17 won, 4 lost, +₹1,22,000 total); 2 never passed 10% (−₹7,008, −₹8,627); **zero** sat in the 10–40% band. PAPER_2L_LIVE: 4, all won (+₹11,141; its one 30–40% trade was a winner). Learner: 3, all won (+₹12,909). 34 settled rows carry no ratchet peak (probably pre-#110 trades; not checked). **Verdict: no evidence for lowering the 40% rung**; the open TCS pair would be the first near-miss. 4 armed trades still lost; the likely cause is the model-lock vs crossed-fill gap (unverified).
+  - **Direction:** PAPER_10L has 70 settled spreads. Bearish: 53, 69.8% win rate, **+₹2,54,607**. Bullish: 4, 0 wins, −₹27,866. Neutral: 13, 61.5%, +₹26,840. Bearish paid in every month except August. The bullish-only advisory veto refused **0** setups in 7,638 ledger evaluations, so the coded asymmetry has not mattered. Bullish setups mostly die at the R:R floor (342 of ~503). Most bearish evaluations are exposure repeats (1,947). Open question: is the bearish edge skill or just a falling market from July to September? A benchmark comparison is needed before calling it an edge.
+  - **Market vs skill** (`scripts/market_vs_skill_study.py`, owner-run on the VM ~11:30 IST; 56 of 57 settled verticals read, NIFTY MID SELECT has no lake series):
+    - **Bearish (52):** the market moved our way 76.9% of the time, against 61.8% for a random same-direction bet over the same weeks and holding length. Rough z is 2.27, but trades overlap, so the effective z is lower. **Promising, not proven.**
+    - Overall: the market moved our way on 40 trades (37 won, +₹3,34,073) and against us on 16 (0 won, −₹1,03,734). The P&L is entirely the direction call.
+    - Index underlyings carry it: NIFTY 50 +₹74,846, NIFTY BANK +₹1,07,706, FIN SERVICE +₹18,012. Stock options are mixed: ICICIBANK 9 trades −₹2,827, INFY −₹8,627, HDFCBANK −₹2,432, RELIANCE +₹24,088, TCS +₹19,574.
+    - Bullish: 4 trades, 0 right (n too small).
+    - **Read:** about 62% of the hit rate is the market falling, and roughly 15 points may be timing. The current rally is the forward test of the timing part.
+  - **Bug found + fixed on this branch:** `regime_read` was never copied into journal entries (0 rows), so "mild vs strong bearish" was unanswerable. `to_journal_entry` now copies it, going forward only.
+- **Next (as written mid-session; superseded by the wrap block above):**
+  1. Owner: merge the branch, then deploy. VM: `git fetch && git merge --ff-only origin/main` (the darling cycle lives in `master_scheduler`, so it picks the change up at the next 09:10 cron; no restart needed). Dashboard box: `git pull` + restart the bridge and Streamlit (as on 10-16). The new file reaches the box at the next cron #33 push after the desk has quoted once. Then on the VM:
+     `venv/bin/python scripts/ratchet_near_miss_study.py --db data/brain_map.db --out /tmp/ratchet.md`
+     `venv/bin/python scripts/direction_bias_study.py --db data/brain_map.db --out /tmp/direction.md`
+  2. Read both reports before any rule change. Ladder or classifier changes are Dept 5 decisions, forward-tested from their own date.
+
 ## 2026-11-01 (Sun, afternoon) — NotebookLM Drive sync merged to `main` (owner-authorized); NOT installed on any machine
 
 - **On `main`:** `scripts/sync_to_drive.py` + `scripts/install_post_commit_hook.sh` (both MANUAL OFFLINE TOOL, no cron, no `src/` change). The owner authorized the outbound export of the codebase to the owner's own Drive for NotebookLM (2026-11-01).

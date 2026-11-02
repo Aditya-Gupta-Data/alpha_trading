@@ -63,6 +63,8 @@ CLI:
     python3 -m src.equity_desk --reset-halt --why "…" --yes   # clear the latched desk ruin halt
 """
 import json
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -92,6 +94,10 @@ DESK_HALT_LATCH_EVENT = "equity_desk_ruin_halt_latched"   # the state of the bra
 DESK_HALT_CLEAR_EVENT = "equity_desk_ruin_halt_cleared"   # (admin-only: clear_desk_halt)
 TIERS_MAX_AGE_DAYS = 3             # stale analysis = no NEW entries
 IDS_MAX_AGE_DAYS = 14              # stale id file = unmarked, never guessed
+# 2026-11-02: the darling cycle publishes the quotes it ALREADY took this
+# cycle (no extra Dhan call) so read-only viewers — the dashboard box, via
+# cron #33's mirror — can mark the open equity book. Single writer: this desk.
+DESK_MARKS_PATH = ROOT / "data" / "equity_desk_marks.json"
 
 
 def _connect(conn):
@@ -685,17 +691,62 @@ def _tiers_fresh(tiers_path=None, now=None) -> bool:
 
 # ------------------------------------------------------- the live cycle
 
+def publish_desk_marks(quotes: dict, now=None, path=None) -> bool:
+    """Atomically write {as_of, marks: {ticker: price}} — the prices this
+    cycle's quote seam returned. Never raises into the live loop: a disk
+    hiccup returns False and prints one line. An absent quote is simply
+    not in `marks` (the reader shows the name unpriced, never a guess).
+    The default path is skipped in test environments (no writes into the
+    real data/ from a test — CLAUDE.md Rule 6)."""
+    if path is None:
+        if market_data_muzzled():
+            return False
+        path = DESK_MARKS_PATH
+    path = Path(path)
+    now = now or datetime.now(IST)
+    clean = {}
+    for t, px in (quotes or {}).items():
+        try:
+            if px is not None and float(px) > 0:
+                clean[str(t)] = float(px)
+        except (TypeError, ValueError):
+            continue
+    tmp = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump({"as_of": now.isoformat(timespec="seconds"), "marks": clean}, f)
+        os.replace(tmp, path)
+        return True
+    except Exception as exc:
+        print(f"  (equity desk marks: publish failed: {exc})")
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return False
+
+
 def run_darling_live_cycle(tiers_path=None, levels_path=None, path=None,
                            conn=None, quote_fn=None, check_fn=None,
                            universe=None, now=None, vix_fn=None,
-                           broadcast_fn=None) -> dict:
+                           broadcast_fn=None, marks_path=None) -> dict:
     """One VM market-hours desk cycle (decision #83): live exits →
     Strong-Sell force-exits → settlements into firm cash → live entries
     (quote INSIDE the strict buy zone, tier table fresh). Runs beside the
     block-leg shadow in the market loop; every stage fail-opens."""
     from src import equity_shadow_proposer as sp
     from src import knowledge_graph_logger as kg
-    quote_fn = quote_fn or live_quote
+    raw_quote_fn = quote_fn or live_quote
+    seen = {}
+
+    def quote_fn(ticker):
+        px = raw_quote_fn(ticker)
+        if px is not None:
+            seen[ticker] = px
+        return px
     exits = sp.track_open_shadows(quote_fn=quote_fn, vix_fn=vix_fn,
                                   universe=universe or {},
                                   path=path, now=now)
@@ -756,6 +807,10 @@ def run_darling_live_cycle(tiers_path=None, levels_path=None, path=None,
             quote_fn=quote_fn, fill_basis="live")
     result = {"entries": entries, "exits": exits,
               "settlements": settlements, "tiers_fresh": fresh}
+    try:
+        publish_desk_marks(seen, now=now, path=marks_path)
+    except Exception as exc:                      # belt and braces: never kills the cycle
+        print(f"  (equity desk marks: {exc})")
     broadcast_activity(result, conn=conn, broadcast_fn=broadcast_fn)
     return result
 

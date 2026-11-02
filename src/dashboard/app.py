@@ -317,7 +317,7 @@ def _body():
                          "Accounts": r["accounts"], "Lots/Qty": r["lots"], "Entered": r["entered"],
                          "Expiry": r["expiry"] or "—", "Max loss ₹": r["max_loss_rs"],
                          "MTM ₹": r["mtm_rs"],
-                         "MTM basis": {"crossed": "real quote", "modeled": "MODEL"}.get(r.get("mtm_basis"), "—"),
+                         "MTM basis": {"crossed": "real quote", "modeled": "MODEL", "ltp": "last price"}.get(r.get("mtm_basis"), "—"),
                          "Capture %": r["capture_pct"],
                          "Ratchet peak %": r["ratchet_peak_pct"], "Ratchet lock %": r["ratchet_lock_pct"],
                          "Exit rule": r["ratchet"],

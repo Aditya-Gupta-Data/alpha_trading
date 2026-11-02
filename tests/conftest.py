@@ -199,6 +199,7 @@ def _isolated_dashboard_reads(monkeypatch, tmp_path):
     monkeypatch.setattr(dashboard_data, "JOURNAL_PATH", tmp_path / "journal.jsonl")
     monkeypatch.setattr(dashboard_data, "EQUITY_LEDGER_PATH", tmp_path / "equity_shadow_journal.jsonl")
     monkeypatch.setattr(dashboard_data, "SNAPSHOT_PATH", tmp_path / "market_snapshot.json")
+    monkeypatch.setattr(dashboard_data, "DESK_MARKS_PATH", tmp_path / "equity_desk_marks.json")
     monkeypatch.setattr(dashboard_data, "BENCHMARKS_PATH", tmp_path / "dashboard_benchmarks.json")
     monkeypatch.setattr(dashboard_data, "RECON_PATH", tmp_path / "recon.jsonl")
 

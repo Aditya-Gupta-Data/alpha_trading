@@ -510,3 +510,44 @@ def test_the_reset_halt_cli_needs_a_why_and_a_yes(monkeypatch, capsys):
 
 if __name__ == "__main__":
     print("Run via pytest: python -m pytest tests/test_equity_desk.py")
+
+
+def test_live_cycle_publishes_the_quotes_it_took_no_extra_call(tmp_path):
+    """2026-11-02: the cycle writes the quotes its own seam returned to
+    the desk-marks file (the dashboard's only source for darling MTM)."""
+    conn = _firm_conn()
+    journal = tmp_path / "shadow.jsonl"
+    marks = tmp_path / "equity_desk_marks.json"
+    tiers, levels = _write_artifacts(
+        tmp_path, {"strong_buy": [_tier_row("TCS")]}, [_level_row("TCS")])
+    calls = []
+
+    def quote(t):
+        calls.append(t)
+        return 2250.0
+    desk.run_darling_live_cycle(
+        tiers_path=tiers, levels_path=levels, path=journal, conn=conn,
+        quote_fn=quote, check_fn=_allow_all, universe={},
+        vix_fn=lambda: None, broadcast_fn=lambda c: None, marks_path=marks)
+    n = len(calls)
+    out = json.loads(marks.read_text())
+    assert set(out["marks"].values()) == {2250.0} and len(out["marks"]) == 1
+    assert out["as_of"]
+    # a cycle whose quote fails publishes no price for the name (never a stale guess)
+    desk.run_darling_live_cycle(
+        tiers_path=tiers, levels_path=levels, path=journal, conn=conn,
+        quote_fn=lambda t: None, check_fn=_allow_all, universe={},
+        vix_fn=lambda: None, broadcast_fn=lambda c: None, marks_path=marks)
+    assert json.loads(marks.read_text())["marks"] == {}
+    assert n >= 1                     # the published price came from the cycle's own call
+    conn.close()
+
+
+def test_publish_desk_marks_never_raises_and_skips_real_path_in_tests(tmp_path):
+    assert desk.publish_desk_marks({"X.NS": 1.0}) is False          # default path muzzled in tests
+    bad = tmp_path / "file"
+    bad.write_text("x")
+    assert desk.publish_desk_marks({"X.NS": 1.0}, path=bad / "sub" / "m.json") is False
+    ok = tmp_path / "m.json"
+    assert desk.publish_desk_marks({"A.NS": 10.5, "B.NS": None, "C.NS": "junk"}, path=ok) is True
+    assert json.loads(ok.read_text())["marks"] == {"A.NS": 10.5}

@@ -261,7 +261,9 @@ def test_f05_a_partly_filled_leg_still_working_counts_as_in_flight_and_is_withdr
         assert res["status"] == "exit_error", res
         (t1, st1), = _xt(c)
         legs = oms.ticket_view(c, t1)["legs"]
-        assert st1 == oms.PARTIAL and all(l["state"] == oms.PARTIAL for l in legs), legs
+        # wings first (#166): the BUY (cover) half-fills, the SELL waits for it
+        assert st1 == oms.PARTIAL and [(l["side"], l["state"]) for l in legs] == [
+            ("BUY", oms.PARTIAL), ("SELL", oms.PENDING)], legs
         ex = lp._exit_fills(c, _r(c))
         assert ex["in_flight"] == [t1] and ex["filled_any"] and not ex["complete"]
         res = lp._resume_exiting(c, _r(c), OPEN.replace(minute=2), 300)

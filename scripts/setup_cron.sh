@@ -488,6 +488,12 @@ CRON_TZ=Asia/Kolkata
 #     the desk's Compliance tab is fresh every trading day (it had sat stale
 #     for five days as a manual-only tool).
 42 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.execution.recon_engine >> "$REPO_ROOT/logs/recon_engine.log" 2>&1
+# 34b. Intraday recon (Mon-Fri every 5 min 09:00-15:30 IST, decision #179): the same
+#     read-only pass during the session, so broker money the book cannot explain
+#     latches the desk halt within 5 minutes, not at 15:42. A standing mismatch
+#     is announced once (repeats are logged, not re-carded).
+*/5 9-14 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.execution.recon_engine >> "$REPO_ROOT/logs/recon_engine.log" 2>&1
+0-30/5 15 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.execution.recon_engine >> "$REPO_ROOT/logs/recon_engine.log" 2>&1
 # 35. Log rotation (Daily 03:30 IST, audit Chunk 5 F6): logs/*.log over 20 MB
 #     keep their last 5 MB; *.drained archives older than 90 days go. Nothing
 #     else had ever bounded the logs on the e2-micro.

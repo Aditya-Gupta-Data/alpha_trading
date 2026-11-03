@@ -186,8 +186,9 @@ def sweep(conn=None, today: date = None, slippage_fn=None, fill_fraction_fn=None
           journal_mod=None, stamp: bool = True,
           enforce_wings_first: bool = False) -> dict:
     """One venue pass over every PENDING/PARTIAL leg — every account's
-    tickets, same slippage. When `enforce_wings_first=True`, protective BUY
-    legs are always worked before SELL legs per ticket, and if any BUY leg on
+    tickets, same slippage. BUY legs are always worked before SELL legs per
+    ticket (the OMS refuses a SELL fill before its BUYs fill). When
+    `enforce_wings_first=True`, additionally, if any BUY leg on
     a multi-leg ticket is rejected or unfilled, remaining SELL legs on that
     ticket are cancelled (`wings_first_guard: protective BUY leg not filled`)
     so the paper book never takes a naked short leg. Returns {legs, filled,
@@ -207,16 +208,16 @@ def sweep(conn=None, today: date = None, slippage_fn=None, fill_fraction_fn=None
     try:
         oms.ensure_schema(conn)
         touched = set()
+        # BUY legs first on every ticket: the OMS refuses a SELL fill until its ticket's BUYs are FILLED (#166)
         pending_legs = oms.open_legs(conn)
-        if enforce_wings_first:
-            pending_legs = sorted(
-                pending_legs,
-                key=lambda l: (
-                    l["ticket_id"],
-                    0 if str(l.get("side") or "").upper() == "BUY" else 1,
-                    int(l.get("leg_index") or 0),
-                ),
-            )
+        pending_legs = sorted(
+            pending_legs,
+            key=lambda l: (
+                l["ticket_id"],
+                0 if str(l.get("side") or "").upper() == "BUY" else 1,
+                int(l.get("leg_index") or 0),
+            ),
+        )
         failed_wing_tickets = set()
         for leg in pending_legs:
             ticket = conn.execute("SELECT * FROM trade_tickets WHERE ticket_id = ?",

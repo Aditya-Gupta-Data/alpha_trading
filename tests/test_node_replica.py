@@ -489,7 +489,7 @@ def test_the_replica_block_is_the_vm_schedule_minus_the_token_the_mirror_and_the
     from src import node_role
     mod = _load(SCRIPTS / "node_replica_block.py")
     kept, dropped = mod.render((SCRIPTS / "setup_cron.sh").read_text(), "/home/n/alpha_trading", "/home/n/alpha_trading/venv/bin/python")
-    assert len(kept) >= 15 and len(dropped) == 20        # 18 + the event engine's VM executor and settler (#156)
+    assert len(kept) >= 15 and len(dropped) == 22        # 18 + the event engine's VM executor and settler (#156) + the 2 intraday recon lines (#179)
     assert all(node_role.never_on_node(d) for d in dropped) and not any(node_role.never_on_node(k) for k in kept)
     joined = "\n".join(kept)
     for needed in ("src.ops_monitor", "src.sleep_phase", "src.analysis.macro_nightly", "src.discovery.nightly",

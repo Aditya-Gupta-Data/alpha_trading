@@ -79,9 +79,10 @@ def test_partial_fills_leave_the_ticket_partial_until_the_next_sweep():
     conn = _conn()
     tid = sr.issue(conn, _proposal(lots=2))["ticket_id"]
     s1 = pv.sweep(conn, slippage_fn=lambda u: 0.0, fill_fraction_fn=lambda leg: 0.5, stamp=False)
-    assert s1["partial"] == 2 and s1["filled"] == 0 and s1["tickets_filled"] == []
+    # wings first (#166): the BUY half-fills, the SELL is refused until the BUY is FILLED
+    assert s1["partial"] == 1 and s1["refused"] == 1 and s1["filled"] == 0 and s1["tickets_filled"] == []
     assert oms.ticket_status(conn, tid) == oms.PARTIAL
-    assert all(l["qty_filled"] == 65 for l in oms.ticket_view(conn, tid)["legs"])
+    assert {l["side"]: l["qty_filled"] for l in oms.ticket_view(conn, tid)["legs"]} == {"BUY": 65, "SELL": 0}
     s2 = pv.sweep(conn, slippage_fn=lambda u: 0.0, stamp=False)
     assert s2["filled"] == 2 and oms.ticket_status(conn, tid) == oms.FILLED
 

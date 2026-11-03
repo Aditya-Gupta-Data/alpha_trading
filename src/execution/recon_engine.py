@@ -1,6 +1,8 @@
 # ON CRON since 2026-09-28 (decision #118): weekdays 15:42 IST on the VM
 # (scripts/setup_cron.sh #34), after the session and before the 15:45 mirror
-# push, so the desk's Compliance tab is never older than a day. Broker
+# push, so the desk's Compliance tab is never older than a day. From #179 also
+# every 5 minutes 09:00-15:30; a mismatch identical to the last pass's is
+# logged but not re-announced. Broker
 # side read-only (decision #94); from #172 a CRITICAL mismatch trips the
 # desk-wide halt latches (the /halt `all` set). Also fine by hand:
 #   python3 -m src.execution.recon_engine            # live (latches on mismatch)
@@ -456,6 +458,24 @@ def halt_on_divergence(result: dict, conn=None) -> dict:
 
 
 # ------------------------------------------------------------------- doors
+def mismatch_signature(result: dict) -> list:
+    """The mismatch set as sorted detail lines: what makes two passes 'the same finding'."""
+    return sorted(str(m.get("detail")) for m in result.get("mismatches") or [])
+
+
+def _last_signature(path: Path = None):
+    """The previous pass's mismatch signature from the log's last line, or None."""
+    p = path or LOG_PATH
+    try:
+        with p.open("rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 65536))
+            last = f.read().decode("utf-8", "replace").strip().splitlines()[-1]
+        return mismatch_signature(json.loads(last))
+    except Exception:
+        return None
+
+
 def _log(result: dict, path: Path = None) -> None:
     p = path or LOG_PATH
     try:
@@ -500,8 +520,11 @@ def run(conn=None, db_path=None, read_fn=None, log_path=None,
     result = compare(broker, book)
     if halt and not dry_run:
         result["halt"] = halt_on_divergence(result, conn=conn)
+    # the 5-minute cadence (#179) re-finds a standing mismatch every pass: one card per new finding
+    result["repeat_of_last"] = bool(result.get("mismatches")) and (
+        _last_signature(log_path) == mismatch_signature(result))
     _log(result, log_path)
-    if announce:
+    if announce and not result["repeat_of_last"]:
         _announce(result)
     return result
 

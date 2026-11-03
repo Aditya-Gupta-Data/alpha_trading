@@ -50,6 +50,13 @@ ORDER STATES (per leg; the ticket rolls them up):
   REJECTED; CANCELLED when every leg ended CANCELLED/REJECTED with no fill;
   PARTIAL when any fill exists and the ticket is not complete; else PENDING.
 
+WINGS FIRST (#166, enforced here from 2026-11-03). On a ticket that has both
+sides, a SELL leg may take a fill only once EVERY BUY leg is FILLED. On entry
+the BUYs are the protective wings; on exit they buy back the shorts before the
+wings are sold. `apply_fill` refuses anything else, so no interleaving of
+fills can leave a short open without its long. `ticket_phase` names the gap
+as PARTIAL_WINGS_FILLED.
+
 IDEMPOTENCY. Every leg carries a `correlation_id` (≤ 30 chars, the field
 Dhan's order API echoes back, decision #94 notes no server-side idempotency)
 derived deterministically from (ticket_id, leg_index), so a restart that
@@ -78,6 +85,8 @@ LEGAL_TRANSITIONS = {
     REJECTED:  set(),
     CANCELLED: set(),
 }
+# A ticket PHASE (never a stored status): every protective BUY leg FILLED, a SELL leg still open.
+PARTIAL_WINGS_FILLED = "PARTIAL_WINGS_FILLED"
 CORRELATION_ID_MAX = 30
 ENTRY, EXIT = "ENTRY", "EXIT"       # trade_tickets.kind (decision #103)
 PRIMARY_ACCOUNT = "PAPER_10L"     # = the capital layer's ACCOUNT_PAPER_10L (kept as a literal: no Dept-3 import here)
@@ -243,6 +252,41 @@ def _moved(conn, leg_id: str, verb: str) -> dict:
                    state=now.get("state"))
 
 
+def _is_buy(leg) -> bool:
+    return str(leg.get("side") or "").upper() == "BUY"
+
+
+def wings_clear(legs: list, leg: dict) -> tuple:
+    """(ok, reason): may this leg take a fill? A SELL leg on a ticket with BUY legs waits for all of them."""
+    if _is_buy(leg):
+        return True, None
+    buys = [l for l in legs if _is_buy(l)]
+    open_buys = [l for l in buys if l.get("state") != FILLED]
+    if open_buys:
+        names = ", ".join(f"{l.get('leg_id')} {l.get('state')}" for l in open_buys)
+        return False, f"wings_first: SELL leg waits for every BUY leg FILLED ({names})"
+    return True, None
+
+
+def verify_wings_first_order(legs: list) -> bool:
+    """True iff no SELL leg holds a fill while any BUY leg on the same ticket is not FILLED."""
+    buys_done = all(l.get("state") == FILLED for l in legs or [] if _is_buy(l))
+    return buys_done or not any(int(l.get("qty_filled") or 0) > 0
+                                for l in legs or [] if not _is_buy(l))
+
+
+def ticket_phase(legs: list) -> str:
+    """The roll-up status, or PARTIAL_WINGS_FILLED while every BUY is FILLED and a SELL is still open."""
+    status = roll_up_status([l["state"] for l in legs], [l["qty_filled"] for l in legs])
+    buys = [l for l in legs if _is_buy(l)]
+    sells = [l for l in legs if not _is_buy(l)]
+    if (status in (PENDING, PARTIAL) and buys and sells
+            and all(l["state"] == FILLED for l in buys)
+            and any(l["state"] in (PENDING, PARTIAL) for l in sells)):
+        return PARTIAL_WINGS_FILLED
+    return status
+
+
 def apply_fill(conn, leg_id: str, qty: int, price: float,
                broker_order_id: str = None, basis: str = None) -> dict:
     """A fill report for one leg. Moves PENDING/PARTIAL -> PARTIAL or FILLED,
@@ -260,6 +304,10 @@ def apply_fill(conn, leg_id: str, qty: int, price: float,
         return _refuse("fill qty and price must be positive")
     if leg["state"] in TERMINAL:
         return _refuse(f"leg is terminal ({leg['state']})", state=leg["state"])
+    ok, why = wings_clear([dict(r) for r in conn.execute(
+        "SELECT leg_id, side, state FROM trade_legs WHERE ticket_id = ?", (leg["ticket_id"],))], leg)
+    if not ok:
+        return _refuse(why, state=leg["state"])
     remaining = leg["qty_target"] - leg["qty_filled"]
     if qty > remaining:
         return _refuse(f"over-fill: {qty} > remaining {remaining}", state=leg["state"])
@@ -427,7 +475,7 @@ def ticket_view(conn, ticket_id: str) -> dict | None:
     events = [dict(r) for r in conn.execute(
         "SELECT e.* FROM leg_events e JOIN trade_legs l ON l.leg_id = e.leg_id "
         "WHERE l.ticket_id = ? ORDER BY e.id", (ticket_id,))]
-    return {**dict(t), "legs": legs, "events": events}
+    return {**dict(t), "phase": ticket_phase(legs), "legs": legs, "events": events}
 
 
 def open_legs(conn, ticket_id: str = None) -> list:

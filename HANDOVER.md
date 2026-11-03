@@ -42,6 +42,30 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, ~16:05) — VM on `595a5d8`; open positions migrated into buckets; switch still OFF
+
+**Done on the VM (after market close):** `git pull` to `595a5d8` (32 commits; cron changes are
+comments only, `xlrd` is Mini-PC-only, so no reinstall). DB backed up to
+`data/brain_map.db.bak-20261103-m4`, then `migrate_m1_buckets.py --apply` re-run: 0 buckets
+changed, 20 locks added (the 3 PAPER_10L positions opened 10-30/11-02 while the switch was
+off — `80f98194`, `d0f949e4`, `eqd:0db78db6` — plus paper-account locks), all 8 PARITY checks
+exact. Every open position now has a bucket lock (0 missing). Services NOT restarted (the switch
+is off, so nothing changes; restarting `alpha-trading` would rotate the tunnel URL); the 09:10
+market loop loads the new code tomorrow.
+
+**Why the switch stays OFF — owner decision:** with `multi_bucket_ledger` on, PAPER_10L would
+open nothing tomorrow:
+- IDX_SPREADS holds Rs.9.90L of margin against a 25% ceiling of ~Rs.2.98L → close-only until it
+  drains (#170).
+- DARLINGS bucket equity is Rs.1.64L (Rs.2L start − Rs.35.8k) with Rs.1.99L locked → margin
+  exhaustion. Its starting capital is the 10-29 treasury budget (Rs.2L); the treasury now says
+  Rs.3L, and the migration never rewrites an existing bucket row, so that split is stale.
+- The paper accounts (2L, LIVE, ROT, GEX, learner) would keep trading in their own buckets.
+
+**Next:** owner decides (a) whether DARLINGS' starting capital moves to the current Rs.3L
+budget (from IDX), and (b) when to flip `multi_bucket_ledger` — dry-run the open book first.
+Until then the flat 10% firm latch still governs PAPER_10L (firm drawdown now 2.26%).
+
 ## 2026-11-03 (Tue, ~16:00) — M4 bucket firewall proven; one ceiling leak fixed (#178); still switched OFF
 
 **Built (branch `feature/m4-bucket-isolation`, not merged):** most of the firewall already

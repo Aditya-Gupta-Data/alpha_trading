@@ -42,6 +42,23 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, ~16:00) — M4 bucket firewall proven; one ceiling leak fixed (#178); still switched OFF
+
+**Built (branch `feature/m4-bucket-isolation`, not merged):** most of the firewall already
+existed (#142/#164/#170). Added `buckets.is_bucket_halted` and fixed the one leak a probe found:
+an IDX loss shrank firm equity, which shrank the DARLINGS 30% ceiling and froze darlings. A
+halted bucket now counts at its peak in the ceiling maths. `tests/test_bucket_firewall.py`
+(10) proves a 10% options drawdown leaves DARLINGS and EQ_SWING trading.
+
+**Not live:** `multi_bucket_ledger` is not set in `config.json`. Until it is (and
+`scripts/migrate_m1_buckets.py` is applied on the VM), the flat 10% firm latch still freezes
+every PAPER_10L entry, darlings included. Turning it on is an owner decision with an
+open-book dry-run first.
+
+**Known gaps with the switch on:** no per-bucket daily breaker (`daily_loss_pct` stored, not
+enforced) and the firm daily breaker is skipped for routed entries; the flat firm latch still
+fires its 🔴 'all entries blocked' card although routed buckets keep trading.
+
 ## 2026-11-03 (Tue, ~15:00) — alt-data proving court built (#177); promotion is a manual flag
 
 **Live:** nothing new runs on its own. `scripts/run_proving_court.py` grades each

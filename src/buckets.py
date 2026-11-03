@@ -105,8 +105,14 @@ def drawdown_pct(b: dict) -> float:
     return round(max(0.0, (peak - equity(b)) / peak * 100), 4)
 
 
+def _ceiling_base(b: dict) -> float:
+    """A bucket's weight in the ceiling denominator: a halted bucket counts at its peak, so its quarantined
+    loss never shrinks another bucket's ceiling (#178)."""
+    return float(b["peak_equity"]) if is_bucket_halted(None, None, b) else equity(b)
+
+
 def ceiling_state(conn, portfolio_id: str):
-    """Deployed margin vs the bucket's share of PAPER_10L equity. None = no ceiling applies (shadow account,
+    """Deployed margin vs the bucket's share of PAPER_10L equity (halted buckets at peak, #178). None = no ceiling applies (shadow account,
     unknown family, no bucket row). `close_only` = a legacy overweight bucket: exits settle, entries wait."""
     b = bucket(conn, portfolio_id)
     if b is None or b["account_id"] != PRIMARY_ACCOUNT:
@@ -115,7 +121,7 @@ def ceiling_state(conn, portfolio_id: str):
     pct = BUCKET_CEILINGS_PCT.get(fam)
     if pct is None:
         return None
-    firm = round(sum(equity(r) for r in summary(conn, PRIMARY_ACCOUNT)), 2)
+    firm = round(sum(_ceiling_base(r) for r in summary(conn, PRIMARY_ACCOUNT)), 2)
     ceiling_rs = round(max(0.0, firm) * pct / 100.0, 2)
     deployed = open_locks(conn, portfolio_id)
     return {"portfolio_id": portfolio_id, "ceiling_pct": pct, "ceiling_rs": ceiling_rs, "firm_equity_rs": firm,
@@ -134,6 +140,18 @@ def can_allocate_new_trade(conn, portfolio_id: str, margin_rs: float = 0.0) -> b
 def _event(conn, portfolio_id: str, event_type: str, journal_ref: str, detail: str) -> None:
     conn.execute("INSERT INTO portfolio_events (portfolio_id, ts, event_type, journal_ref, detail) "
                  "VALUES (?, ?, ?, ?, ?)", (portfolio_id, _now_iso(), event_type, journal_ref, detail))
+
+
+def is_bucket_halted(conn, portfolio_id: str, b: dict = None) -> bool:
+    """Read-only: this bucket's own latch is armed or its drawdown is at its limit. Never reads another bucket
+    or the firm latch, and never writes (the gate's `_halt` latches on the next entry)."""
+    b = b if b is not None else bucket(conn, portfolio_id)
+    if b is None:
+        return False
+    if b.get("halted_at"):
+        return True
+    mdd = b.get("max_drawdown_pct")
+    return mdd is not None and drawdown_pct(b) >= float(mdd)
 
 
 def _halt(conn, b: dict, journal_ref: str = None) -> dict | None:

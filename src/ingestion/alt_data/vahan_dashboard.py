@@ -1,44 +1,51 @@
 """
-src/ingestion/alt_data/vahan_dashboard.py — MoRTH Vahan Auto Registrations Scraper
-==================================================================================
+src/ingestion/alt_data/vahan_dashboard.py — MoRTH Vahan 4 registrations scraper (Maker x Fuel)
+===========================================================================================
 
-Targets the public Ministry of Road Transport & Highways (MoRTH) Vahan 4 Dashboard
-(`https://vahan.parivahan.gov.in/vahan4dashboard/vahan/view/reportview.xhtml`) to
-extract daily vehicle registrations grouped by Maker (Tata, M&M, Maruti, and peers)
-and Fuel Type (`EV` vs `ICE`).
+Source (verified live 2026-11-03): the public Vahan 4 dashboard report view, a PrimeFaces/JSF page.
+  1. `GET reportview.xhtml` — session cookie + `javax.faces.ViewState`.
+  2. AJAX refresh (`j_idt68`) with Y-axis = Maker, X-axis = Fuel, all states, calendar year = this year.
+  3. The table's own Excel export (`groupingTable:xls`) — every maker (about 2,070) in one `.xlsx`.
+Vahan publishes no daily series: the table is calendar-year-to-date. The scraper keeps one YTD snapshot
+per night and turns consecutive snapshots into a per-day count.
 
-Architecture:
-  * Inherits session persistence, rotating headers, exponential backoff, fail-open
-    error handling, and atomic idempotent CSV persistence from `BaseAltDataScraper`.
-  * Handles both PrimeFaces JSF `javax.faces.ViewState` HTML/XML partial-response
-    tables (`<table>...</table>` with Maker x Fuel columns or Maker rows) and JSON
-    summary payloads.
-  * Normalizes fragmented RTO legal entity names (e.g., "TATA MOTORS PASSENGER
-    VEHICLES LTD" + "TATA PASSENGER ELECTRIC MOBILITY LTD" -> Maker `Tata`,
-    `TATAMOTORS.NS`) and classifies raw fuel columns (`ELECTRIC(BOV)`, `PURE EV` ->
-    `EV`; `PETROL`, `DIESEL`, `CNG`, `LPG`, `HYBRID` -> `ICE`).
-  * Writes idempotently to `data/lake/alt_data/vahan_registrations.csv`.
+Makers are folded onto listed companies with `MAKER_PATTERNS` (several legal entities per company, e.g.
+Tata Motors + Tata Passenger Electric Mobility -> `Tata`); unmatched makers count only in `ALL`. Fuel
+columns fold into `EV` / `ICE` with `classify_fuel_type` (`NOT APPLICABLE` and unknown fuels are dropped).
+
+Outputs (`data/lake/alt_data/`):
+  * `vahan_registrations_ytd.csv` — `date, year, maker, ticker, fuel_type, registrations_ytd`
+  * `vahan_registrations.csv` — `date, maker, ticker, fuel_type, registrations, days_covered, prior_date`:
+    registrations since the previous snapshot. No row until a prior snapshot exists, and none when the
+    YTD figure went down (a Vahan correction), so a missing day is never written as zero.
 """
 from __future__ import annotations
 
-import html
+import datetime as _dt
+import io
 import json
 import re
-from datetime import date as _date
+import xml.etree.ElementTree as ET
+import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
 
-from src.ingestion.alt_data.base_scraper import BaseAltDataScraper
+from src.ingestion.alt_data.base_scraper import IST, BaseAltDataScraper
 
 VAHAN_BASE_URL = "https://vahan.parivahan.gov.in/vahan4dashboard/"
 VAHAN_REPORT_URL = (
     "https://vahan.parivahan.gov.in/vahan4dashboard/vahan/view/reportview.xhtml"
 )
+VAHAN_ORIGIN = "https://vahan.parivahan.gov.in"
+FORM_ID = "masterLayout_formlogin"
+REFRESH_BUTTON = "j_idt68"
+ALL_MAKERS = "ALL"
+_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 # Canonical Maker normalization: pattern -> (canonical_maker, nse_ticker)
 MAKER_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    (re.compile(r"\bTATA\b", re.I), "Tata", "TATAMOTORS.NS"),
+    (re.compile(r"\bTATA\b(?!.*\bHITACHI\b)", re.I), "Tata", "TATAMOTORS.NS"),
     (re.compile(r"\b(?:MAHINDRA|M\s*&\s*M)\b", re.I), "M&M", "M&M.NS"),
     (re.compile(r"\bMARUTI\b", re.I), "Maruti", "MARUTI.NS"),
     (re.compile(r"\bBAJAJ\b", re.I), "Bajaj", "BAJAJ-AUTO.NS"),
@@ -59,6 +66,7 @@ EV_FUEL_KEYWORDS: tuple[str, ...] = (
     "ELECTRIC",
     "BOV",
     "FUEL CELL",
+    "SOLAR",
     "EV",
 )
 
@@ -71,7 +79,6 @@ ICE_FUEL_KEYWORDS: tuple[str, ...] = (
     "ETHANOL",
     "LNG",
     "BIO",
-    "SOLAR",
     "ICE",
 )
 
@@ -175,303 +182,170 @@ def extract_viewstate(raw_html: str) -> str | None:
     return m.group(1) if m else None
 
 
+
+def xlsx_sheet_rows(data: bytes) -> list[list[str]]:
+    """First worksheet of an `.xlsx` as rows of strings (stdlib zip + XML; no openpyxl)."""
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            for si in ET.fromstring(z.read("xl/sharedStrings.xml")).iter(f"{_XLSX_NS}si"):
+                shared.append("".join(t.text or "" for t in si.iter(f"{_XLSX_NS}t")))
+        sheet = ET.fromstring(z.read("xl/worksheets/sheet1.xml"))
+    rows: list[list[str]] = []
+    for row in sheet.iter(f"{_XLSX_NS}row"):
+        cells: dict[int, str] = {}
+        for c in row.iter(f"{_XLSX_NS}c"):
+            col = re.match(r"[A-Z]+", c.get("r", "A")).group(0)
+            idx = 0
+            for ch in col:
+                idx = idx * 26 + ord(ch) - 64
+            v, kind = c.find(f"{_XLSX_NS}v"), c.get("t")
+            if kind == "inlineStr":
+                val = "".join(t.text or "" for t in c.iter(f"{_XLSX_NS}t"))
+            elif v is None or v.text is None:
+                val = ""
+            elif kind == "s":
+                val = shared[int(v.text)]
+            else:
+                val = v.text
+            cells[idx - 1] = val
+        rows.append([cells.get(i, "") for i in range(max(cells) + 1)] if cells else [])
+    return rows
+
+
+def _clean(cell: Any) -> str:
+    return re.sub(r"\s+", " ", str(cell or "").replace("\xa0", " ")).strip()
+
+
+def _count(cell: Any) -> int | None:
+    s = re.sub(r"[,\s]", "", _clean(cell))
+    return int(s) if s.isdigit() else None
+
+
+def parse_maker_fuel_rows(rows: list[list[Any]]) -> dict[tuple[str, str, str], int]:
+    """Maker x Fuel YTD sheet -> {(maker, ticker, EV|ICE): count} for listed makers plus `ALL`."""
+    fuel_row = next(
+        (r for r in rows if sum(1 for c in r if classify_fuel_type(_clean(c))) >= 5), None)
+    if fuel_row is None:
+        return {}
+    fuel_cols = {j: classify_fuel_type(_clean(c)) for j, c in enumerate(fuel_row)}
+    fuel_cols = {j: f for j, f in fuel_cols.items() if f}
+    out: dict[tuple[str, str, str], int] = {}
+    for row in rows:
+        if len(row) < 2 or not _clean(row[0]).isdigit():
+            continue
+        maker = normalize_maker(_clean(row[1]))
+        for j, fuel in fuel_cols.items():
+            n = _count(row[j]) if j < len(row) else None
+            if not n:
+                continue
+            keys = [(ALL_MAKERS, "", fuel)]
+            if maker:
+                keys.append((maker[0], maker[1], fuel))
+            for k in keys:
+                out[k] = out.get(k, 0) + n
+    return out
+
+
 class VahanDashboardScraper(BaseAltDataScraper):
-    """MoRTH Vahan 4 Dashboard scraper for daily Maker x Fuel Type (EV vs ICE) registrations."""
+    """Vahan 4 Maker x Fuel YTD snapshot -> per-day registrations for listed auto makers."""
 
     dataset_name = "vahan_registrations"
-    default_columns = ("date", "maker", "ticker", "fuel_type", "registrations")
+    default_columns = ("date", "maker", "ticker", "fuel_type", "registrations", "days_covered", "prior_date")
     primary_key_columns = ("date", "maker", "fuel_type")
+    snapshot_columns = ("date", "year", "maker", "ticker", "fuel_type", "registrations_ytd")
 
     def __init__(
         self,
         lake_dir: Path | str | None = None,
         log_path: Path | str | None = None,
-        only_core_makers: bool = False,
         fetch_fn: Callable[..., bytes | str] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
+        today_fn: Callable[[], _dt.date] | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(
-            lake_dir=lake_dir,
-            log_path=log_path,
-            fetch_fn=fetch_fn,
-            sleep_fn=sleep_fn,
-            **kwargs,
-        )
-        self.only_core_makers = bool(only_core_makers)
+        super().__init__(lake_dir=lake_dir, log_path=log_path, fetch_fn=fetch_fn, sleep_fn=sleep_fn, **kwargs)
+        self._today = today_fn or (lambda: _dt.datetime.now(IST).date())
 
-    def fetch_raw(self, report_date: str | None = None, **kwargs: Any) -> str:
-        """Fetch the Vahan report view (performing JSF ViewState handshake when present)."""
-        landing_bytes = self.request(
-            VAHAN_REPORT_URL,
-            method="GET",
-            headers={"Referer": VAHAN_BASE_URL},
-        )
-        landing_text = landing_bytes.decode("utf-8", errors="replace")
-        viewstate = extract_viewstate(landing_text)
+    @property
+    def snapshot_path(self) -> Path:
+        return self.lake_dir / f"{self.dataset_name}_ytd.csv"
+
+    def _form(self, year: int) -> dict[str, str]:
+        return {FORM_ID: FORM_ID, "j_idt29_input": "A", "j_idt38_input": "-1", "selectedRto_input": "-1",
+                "yaxisVar_input": "Maker", "xaxisVar_input": "Fuel", "selectedYearType_input": "C",
+                "selectedYear_input": str(year)}
+
+    def fetch_raw(self, **kwargs: Any) -> dict[str, Any]:
+        """Landing -> refresh -> export; returns the snapshot day and the export workbook bytes."""
+        today = self._today()
+        landing = self.request(VAHAN_REPORT_URL, headers={"Referer": VAHAN_BASE_URL}).decode("utf-8", errors="replace")
+        viewstate = extract_viewstate(landing)
         if not viewstate:
-            return landing_text
+            raise ValueError("Vahan report view carried no javax.faces.ViewState")
+        refresh = dict(self._form(today.year), **{
+            "javax.faces.partial.ajax": "true", "javax.faces.source": REFRESH_BUTTON,
+            "javax.faces.partial.execute": "@all", "javax.faces.partial.render": "combTablePnl",
+            REFRESH_BUTTON: REFRESH_BUTTON, "javax.faces.ViewState": viewstate})
+        partial = self.request(VAHAN_REPORT_URL, method="POST", data=refresh, headers={
+            "Faces-Request": "partial/ajax", "X-Requested-With": "XMLHttpRequest",
+            "Referer": VAHAN_REPORT_URL, "Origin": VAHAN_ORIGIN}).decode("utf-8", errors="replace")
+        if "groupingTable" not in partial:
+            raise ValueError("Vahan refresh returned no report table")
+        m = re.search(r"ViewState:0\"><!\[CDATA\[([^\]]+)\]\]>", partial)
+        export = dict(self._form(today.year), **{"groupingTable:xls": "groupingTable:xls",
+                                                 "javax.faces.ViewState": m.group(1) if m else viewstate})
+        data = self.request(VAHAN_REPORT_URL, method="POST", data=export,
+                            headers={"Referer": VAHAN_REPORT_URL, "Origin": VAHAN_ORIGIN})
+        if not data.startswith(b"PK"):
+            raise ValueError("Vahan export did not return an .xlsx workbook")
+        return {"date": today.isoformat(), "year": today.year, "xlsx": data}
 
-        form_payload = {
-            "javax.faces.partial.ajax": "true",
-            "javax.faces.source": "j_idt31",
-            "javax.faces.partial.execute": "@all",
-            "javax.faces.partial.render": "combTablePnl",
-            "j_idt31": "j_idt31",
-            "xaxisVar": "Maker",
-            "yaxisVar": "Fuel",
-            "javax.faces.ViewState": viewstate,
-        }
-        if report_date:
-            form_payload["selectedDate"] = str(report_date)[:10]
-
-        post_bytes = self.request(
-            VAHAN_REPORT_URL,
-            method="POST",
-            data=form_payload,
-            headers={
-                "Referer": VAHAN_REPORT_URL,
-                "Origin": "https://vahan.parivahan.gov.in",
-                "Faces-Request": "partial/ajax",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-        )
-        return post_bytes.decode("utf-8", errors="replace")
-
-    def parse(
-        self,
-        raw: Any,
-        report_date: str | None = None,
-        **kwargs: Any,
-    ) -> list[dict[str, Any]]:
-        """Parse Vahan JSON or HTML/PrimeFaces XML table into grouped `(date, maker, fuel_type)` rows."""
-        day = str(report_date or _date.today().isoformat())[:10]
-        if isinstance(raw, (bytes, bytearray)):
-            text = raw.decode("utf-8", errors="replace")
-        elif isinstance(raw, (dict, list)):
-            return self._aggregate_records(self._parse_json_obj(raw, day))
-        else:
-            text = str(raw or "")
-
-        stripped = text.strip()
-        if not stripped:
+    def parse(self, raw: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """Write tonight's YTD snapshot; return per-day rows diffed against the previous snapshot."""
+        dry_run = getattr(self, "_dry_run", False)
+        day, year = raw["date"], int(raw["year"])
+        counts = parse_maker_fuel_rows(xlsx_sheet_rows(raw["xlsx"]))
+        if not counts:
+            self.log_warning("VAHAN-LAYOUT", "export sheet had no Maker x Fuel table")
             return []
-
-        if stripped.startswith("{") or stripped.startswith("["):
-            try:
-                doc = json.loads(stripped)
-                return self._aggregate_records(self._parse_json_obj(doc, day))
-            except json.JSONDecodeError:
-                pass
-
-        # Unwrap PrimeFaces CDATA blocks if present
-        cdata_blocks = re.findall(r"<!\[CDATA\[(.*?)\]\]>", text, flags=re.S)
-        html_body = "\n".join(cdata_blocks) if cdata_blocks else text
-        html_body = html.unescape(html_body)
-
-        extractor = _HTMLTableExtractor()
-        extractor.feed(html_body)
-        records: list[dict[str, Any]] = []
-        for table in extractor.tables:
-            records.extend(self._parse_table(table, day))
-        return self._aggregate_records(records)
-
-    def _parse_json_obj(self, doc: Any, default_day: str) -> list[dict[str, Any]]:
-        items: list[Any]
-        if isinstance(doc, dict):
-            items = (
-                doc.get("records")
-                or doc.get("data")
-                or doc.get("registrations")
-                or []
-            )
-            default_day = str(doc.get("date") or default_day)[:10]
-        elif isinstance(doc, list):
-            items = doc
-        else:
+        prior_rows = [r for r in self.read_existing_rows(self.snapshot_path) if r.get("date", "") < day]
+        prior_day = max((r["date"] for r in prior_rows), default="")
+        prior = {(r["maker"], r["fuel_type"]): r for r in prior_rows if r["date"] == prior_day}
+        snapshot = [{"date": day, "year": year, "maker": mk, "ticker": tk, "fuel_type": fu,
+                     "registrations_ytd": n} for (mk, tk, fu), n in sorted(counts.items())]
+        self.write_csv_idempotent(snapshot, columns=self.snapshot_columns,
+                                  pk_columns=("date", "maker", "fuel_type"), path=self.snapshot_path,
+                                  dry_run=dry_run)
+        if not prior_day:
+            self.log_warning("VAHAN-FIRST-SNAPSHOT", f"{day}: no earlier snapshot, daily rows start tomorrow")
             return []
-
+        days = (_dt.date.fromisoformat(day) - _dt.date.fromisoformat(prior_day)).days
         out: list[dict[str, Any]] = []
-        for item in items:
-            if not isinstance(item, dict):
+        for (mk, tk, fu), n in sorted(counts.items()):
+            p = prior.get((mk, fu))
+            if p is None:
                 continue
-            maker_info = normalize_maker(item.get("maker") or item.get("maker_name") or "")
-            if not maker_info:
+            base = 0 if int(p.get("year") or 0) != year else int(p.get("registrations_ytd") or 0)
+            delta = n - base
+            if delta < 0:
+                self.log_warning("VAHAN-YTD-DOWN", f"{mk} {fu}: {base} -> {n}")
                 continue
-            maker, ticker = maker_info
-            if self.only_core_makers and maker not in CORE_MAKERS:
-                continue
-            row_day = str(item.get("date") or default_day)[:10]
-
-            # Case 1: explicit fuel_type + registrations fields
-            if "fuel_type" in item or "fuel" in item:
-                ft = classify_fuel_type(item.get("fuel_type") or item.get("fuel") or "")
-                if ft:
-                    out.append(
-                        {
-                            "date": row_day,
-                            "maker": maker,
-                            "ticker": ticker,
-                            "fuel_type": ft,
-                            "registrations": _parse_int(
-                                item.get("registrations") or item.get("count") or item.get("value")
-                            ),
-                        }
-                    )
-                continue
-
-            # Case 2: nested fuels dict or direct fuel columns on the item
-            fuel_map = item.get("fuels") if isinstance(item.get("fuels"), dict) else item
-            for k, v in fuel_map.items():
-                if k in {"date", "maker", "maker_name", "ticker", "total"}:
-                    continue
-                ft = classify_fuel_type(k)
-                if ft:
-                    out.append(
-                        {
-                            "date": row_day,
-                            "maker": maker,
-                            "ticker": ticker,
-                            "fuel_type": ft,
-                            "registrations": _parse_int(v),
-                        }
-                    )
+            out.append({"date": day, "maker": mk, "ticker": tk, "fuel_type": fu, "registrations": delta,
+                        "days_covered": days, "prior_date": prior_day})
         return out
 
-    def _parse_table(self, table: list[list[str]], day: str) -> list[dict[str, Any]]:
-        if len(table) < 2:
-            return []
-
-        # Locate the header row that names fuel types or Maker/Fuel columns
-        header_idx = 0
-        for idx, row in enumerate(table[:4]):
-            joined = " ".join(row).upper()
-            if "MAKER" in joined or any(classify_fuel_type(c) for c in row):
-                header_idx = idx
-                if any(classify_fuel_type(c) for c in row):
-                    break
-
-        headers = table[header_idx]
-        data_rows = table[header_idx + 1 :]
-
-        # Check if table is in long format: [Maker, Fuel, Registrations]
-        upper_headers = [h.upper() for h in headers]
-        if "FUEL" in upper_headers or "FUEL TYPE" in upper_headers:
-            maker_col = next(
-                (i for i, h in enumerate(upper_headers) if "MAKER" in h), 0
-            )
-            fuel_col = next(
-                (i for i, h in enumerate(upper_headers) if "FUEL" in h), 1
-            )
-            val_col = next(
-                (
-                    i
-                    for i, h in enumerate(upper_headers)
-                    if any(w in h for w in ("REG", "COUNT", "TOTAL", "VOLUME", "UNITS"))
-                ),
-                min(len(headers) - 1, 2),
-            )
-            out: list[dict[str, Any]] = []
-            for r in data_rows:
-                if max(maker_col, fuel_col, val_col) >= len(r):
-                    continue
-                maker_info = normalize_maker(r[maker_col])
-                ft = classify_fuel_type(r[fuel_col])
-                if not maker_info or not ft:
-                    continue
-                maker, ticker = maker_info
-                if self.only_core_makers and maker not in CORE_MAKERS:
-                    continue
-                out.append(
-                    {
-                        "date": day,
-                        "maker": maker,
-                        "ticker": ticker,
-                        "fuel_type": ft,
-                        "registrations": _parse_int(r[val_col]),
-                    }
-                )
-            if out:
-                return out
-
-        # Wide crosstab format (MoRTH Vahan default): [S.No, Maker, ELECTRIC(BOV), PETROL, DIESEL, CNG, ...]
-        maker_col = next(
-            (i for i, h in enumerate(upper_headers) if "MAKER" in h),
-            1 if len(headers) > 2 else 0,
-        )
-        col_fuel_map: dict[int, str] = {}
-        for col_idx, col_name in enumerate(headers):
-            if col_idx == maker_col:
-                continue
-            ft = classify_fuel_type(col_name)
-            if ft:
-                col_fuel_map[col_idx] = ft
-
-        if not col_fuel_map:
-            return []
-
-        out = []
-        for r in data_rows:
-            if maker_col >= len(r):
-                continue
-            maker_info = normalize_maker(r[maker_col])
-            if not maker_info:
-                continue
-            maker, ticker = maker_info
-            if self.only_core_makers and maker not in CORE_MAKERS:
-                continue
-            for col_idx, ft in col_fuel_map.items():
-                if col_idx < len(r):
-                    out.append(
-                        {
-                            "date": day,
-                            "maker": maker,
-                            "ticker": ticker,
-                            "fuel_type": ft,
-                            "registrations": _parse_int(r[col_idx]),
-                        }
-                    )
-        return out
-
-    def _aggregate_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Group and sum registrations by `(date, maker, fuel_type)`, always emitting
-        both `EV` and `ICE` rows for each observed `(date, maker)` pair."""
-        if not records:
-            return []
-        totals: dict[tuple[str, str, str, str], int] = {}
-        seen_makers: dict[tuple[str, str], str] = {}
-        for r in records:
-            day = str(r["date"])[:10]
-            maker = str(r["maker"])
-            ticker = str(r["ticker"])
-            ft = str(r["fuel_type"])
-            seen_makers[(day, maker)] = ticker
-            key = (day, maker, ticker, ft)
-            totals[key] = totals.get(key, 0) + int(r.get("registrations") or 0)
-
-        for (day, maker), ticker in seen_makers.items():
-            for ft in ("EV", "ICE"):
-                totals.setdefault((day, maker, ticker, ft), 0)
-
-        out = [
-            {
-                "date": day,
-                "maker": maker,
-                "ticker": ticker,
-                "fuel_type": ft,
-                "registrations": reg,
-            }
-            for (day, maker, ticker, ft), reg in sorted(totals.items())
-        ]
-        return out
+    def run(self, dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
+        """Same fail-open run; the dry-run flag also stops the snapshot write inside `parse`."""
+        self._dry_run = bool(dry_run)
+        return super().run(dry_run=dry_run, **kwargs)
 
 
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="MoRTH Vahan daily registrations scraper")
-    ap.add_argument("--date", default=None, help="Report date YYYY-MM-DD")
-    ap.add_argument("--dry-run", action="store_true", help="Parse only; do not write CSV")
+    ap = argparse.ArgumentParser(description="Vahan 4 Maker x Fuel registrations scraper")
+    ap.add_argument("--dry-run", action="store_true", help="Parse only; write neither CSV")
     args = ap.parse_args()
     scraper = VahanDashboardScraper()
-    print(json.dumps(scraper.run(dry_run=args.dry_run, report_date=args.date), indent=2))
+    print(json.dumps(scraper.run(dry_run=args.dry_run), indent=2, default=str))

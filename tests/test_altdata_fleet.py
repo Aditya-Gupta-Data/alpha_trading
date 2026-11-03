@@ -16,6 +16,7 @@ from src.ingestion.alt_data import (
     normalize_maker,
     parse_bid_value_inr,
 )
+from src.ingestion.alt_data.gem_tenders import match_listed_ticker
 
 VAHAN_LANDING_HTML = """
 <html>
@@ -101,57 +102,6 @@ VAHAN_PRIMEFACES_XML = """<?xml version='1.0' encoding='UTF-8'?>
   </changes>
 </partial-response>
 """
-
-GEM_HTML_TABLE = """
-<html>
-  <body>
-    <table class="table table-bordered">
-      <thead>
-        <tr>
-          <th>Bid Number</th>
-          <th>Award Date</th>
-          <th>Item Category</th>
-          <th>Winning Bidder</th>
-          <th>Bid Value</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>GEM/2026/B/9001122</td>
-          <td>2026-11-02</td>
-          <td>Electric Buses - 12 Meter AC</td>
-          <td>TATA MOTORS LIMITED</td>
-          <td>₹ 42.50 Crore</td>
-        </tr>
-        <tr>
-          <td>GEM/2026/B/9001188</td>
-          <td>2026-11-02</td>
-          <td>Radar Signal Processing Units</td>
-          <td>BHARAT ELECTRONICS LIMITED</td>
-          <td>₹ 1,85,00,000</td>
-        </tr>
-        <tr>
-          <td>GEM/2026/B/9001245</td>
-          <td>2026-11-02</td>
-          <td>Light Utility Vehicles 4x4</td>
-          <td>MAHINDRA &amp; MAHINDRA LTD</td>
-          <td>Rs. 95.4 Lakh</td>
-        </tr>
-      </tbody>
-    </table>
-  </body>
-</html>
-"""
-
-GEM_HTML_CARDS = """
-<div class="bid-card">
-  <span>Bid No: GEM/2026/B/7712300</span> |
-  <span>Item Category: Solar Power Conditioning Unit</span> |
-  <span>Winning Bidder: BHARAT HEAVY ELECTRICALS LIMITED</span> |
-  <span>Bid Value: ₹ 12.25 Crore</span>
-</div>
-"""
-
 
 def test_base_scraper_rotating_headers_and_exponential_backoff(tmp_path):
     seen_headers = []
@@ -283,59 +233,64 @@ def test_vahan_json_payload_and_helpers():
     ]
 
 
-def test_gem_tenders_scraper_parses_html_tables_cards_and_json_idempotently(tmp_path):
-    assert parse_bid_value_inr("₹ 42.50 Crore") == pytest.approx(425_000_000.0)
-    assert parse_bid_value_inr("₹ 1,85,00,000") == pytest.approx(18_500_000.0)
-    assert parse_bid_value_inr("Rs. 95.4 Lakh") == pytest.approx(9_540_000.0)
+GEM_LISTING_PAGE = "<script>var d = {'csrf_bd_gem_nk': 'abc123'};</script>"
 
-    scraper = GemTendersScraper(
-        lake_dir=tmp_path / "lake",
-        log_path=tmp_path / "alt_data.jsonl",
-        fetch_fn=lambda url, **kw: GEM_HTML_TABLE,
-    )
-    res = scraper.run(award_date="2026-11-02")
-    assert res["ok"] is True
-    assert res["rows_added"] == 3
+GEM_RESULT_HTML = """
+<h4>3. FINANCIAL EVALUATION</h4><p>List of Sellers Qualified Financially</p>
+<table><tr><th>S.No.</th><th>Seller Name</th><th>Offered Item</th><th>Total Price</th><th>Rank</th></tr>
+<tr><td>1</td><td>LARSEN &amp; TOUBRO LIMITED (MII) Under PMA</td><td>Item Categories : Radar</td><td>` 152000000.00</td><td>L1</td></tr>
+<tr><td>2</td><td>SHREE BEL TRADERS (MSE,MII) Under PMA</td><td>Item Categories : Radar</td><td>` 158000000.00 (Bid Price)</td><td>L2</td></tr>
+</table>
+"""
 
-    csv_file = tmp_path / "lake" / "gem_tenders.csv"
-    rows = list(csv.DictReader(io.StringIO(csv_file.read_text())))
-    assert len(rows) == 3
-    by_bid = {r["bid_number"]: r for r in rows}
 
-    assert by_bid["GEM/2026/B/9001122"]["winning_bidder"] == "TATA MOTORS LIMITED"
-    assert by_bid["GEM/2026/B/9001122"]["ticker"] == "TATAMOTORS.NS"
-    assert float(by_bid["GEM/2026/B/9001122"]["bid_value"]) == pytest.approx(425_000_000.0)
-    assert by_bid["GEM/2026/B/9001122"]["item_category"] == "Electric Buses - 12 Meter AC"
+def _gem_doc(bid_no, b_id, end="2026-10-30T17:00:00Z"):
+    return {"b_bid_number": [bid_no], "b_id": [b_id], "final_end_date_sort": [end],
+            "b_category_name": ["Coastal Surveillance Radar"], "ba_official_details_minName": ["Ministry of Defence"],
+            "ba_official_details_deptName": ["Department of Defence Production"]}
 
-    assert by_bid["GEM/2026/B/9001188"]["ticker"] == "BEL.NS"
-    assert float(by_bid["GEM/2026/B/9001188"]["bid_value"]) == pytest.approx(18_500_000.0)
 
-    # Re-run is idempotent
-    repeat = scraper.run(award_date="2026-11-02")
-    assert repeat["rows_added"] == 0
-    assert repeat["rows_total"] == 3
+def test_gem_scraper_reads_awarded_high_value_bids_and_their_l1(tmp_path):
+    assert match_listed_ticker("SHREE BEL TRADERS") == ""
+    assert match_listed_ticker("BEL") == "BEL.NS"
+    assert match_listed_ticker("Bharat Electronics Limited") == "BEL.NS"
+    assert parse_bid_value_inr("` 152000000.00") == pytest.approx(152_000_000.0)
+    calls, sleeps = [], []
+    listing = {1: [_gem_doc("GEM/2026/B/1", 11), _gem_doc("GEM/2026/R/2", 22)], 2: []}
 
-    # Card-layout HTML and JSON also parse cleanly
-    card_rows = scraper.parse(GEM_HTML_CARDS, award_date="2026-11-02")
-    assert len(card_rows) == 1
-    assert card_rows[0]["winning_bidder"] == "BHARAT HEAVY ELECTRICALS LIMITED"
-    assert card_rows[0]["ticker"] == "BHEL.NS"
-    assert float(card_rows[0]["bid_value"]) == pytest.approx(122_500_000.0)
-    assert card_rows[0]["item_category"] == "Solar Power Conditioning Unit"
+    def fetch(url, method="GET", data=None, headers=None):
+        calls.append((method, url, data))
+        if url.endswith("/all-bids"):
+            return GEM_LISTING_PAGE
+        if url.endswith("/all-bids-data"):
+            payload = json.loads(data["payload"])
+            assert data["csrf_bd_gem_nk"] == "abc123"
+            assert payload["filter"]["byStatus"] == "bid_awarded" and payload["filter"]["highBidValue"] == "highValue"
+            return json.dumps({"code": 200, "response": {"response": {"docs": listing[payload["page"]]}}})
+        if url.endswith("/22"):
+            return "<html>no ranking yet</html>"
+        return GEM_RESULT_HTML
 
-    json_rows = scraper.parse(
-        {
-            "bids": [
-                {
-                    "bid_number": "GEM/2026/B/9990001",
-                    "award_date": "2026-11-02",
-                    "winning_bidder": "LARSEN & TOUBRO LIMITED",
-                    "bid_value": "15.2 Crore",
-                    "item_category": "GIS Substation Package",
-                }
-            ]
-        }
-    )
-    assert len(json_rows) == 1
-    assert json_rows[0]["ticker"] == "LT.NS"
-    assert float(json_rows[0]["bid_value"]) == pytest.approx(152_000_000.0)
+    scraper = GemTendersScraper(lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl",
+                                fetch_fn=fetch, sleep_fn=sleeps.append)
+    res = scraper.run()
+    assert res["ok"] is True and res["rows_added"] == 1
+    assert sleeps == [1.0]
+    (row,) = list(csv.DictReader(io.StringIO((tmp_path / "lake" / "gem_tenders.csv").read_text())))
+    assert row["bid_number"] == "GEM/2026/B/1" and row["date"] == "2026-10-30"
+    assert row["winning_bidder"] == "LARSEN & TOUBRO LIMITED" and row["ticker"] == "LT.NS"
+    assert float(row["bid_value"]) == pytest.approx(152_000_000.0)
+    assert row["ministry"] == "Ministry of Defence" and row["sellers"] == "2"
+    codes = [json.loads(ln)["code"] for ln in (tmp_path / "alt_data.jsonl").read_text().splitlines()]
+    assert codes == ["NO-L1"]
+
+    calls.clear()
+    scraper.run()
+    assert not any("/getBidResultView/11" in c[1] for c in calls)  # known bid is not re-fetched
+
+
+def test_gem_scraper_degrades_without_a_csrf_token(tmp_path):
+    scraper = GemTendersScraper(lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl",
+                                fetch_fn=lambda url, **kw: "<html></html>")
+    res = scraper.run()
+    assert res["status"] == "degraded" and "csrf" in res["reason"]

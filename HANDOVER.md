@@ -42,6 +42,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, ~13:00) — graph velocity patched; RBI payment statistics replace NPCI
+
+- `altdata_graph.compute_7d_velocity` now abstains (None → no edge, no modifier) without a base observation 7–14 days old. Consequence: **no Agmarknet or Vahan edges for the first 7 nights** of collection (Agmarknet from 11-08ish once 7 days of CSV exist; Vahan daily rows start 11-04, so edges ~11-11). GeM edges are unaffected (no velocity).
+- `src/ingestion/alt_data/rbi_statistics.py` reads RBI's monthly Payment System Indicators HTML pages (UPI, IMPS, NEFT, cards, totals); in the fleet in place of NPCI. rbidocs.rbi.org.in files are bot-challenged and never fetched. Monthly data: most nights it re-reads the same two releases (idempotent, ~2 page loads).
+- Mini PC: `git pull --ff-only` picks this up; no new dependency.
+
 ## 2026-11-03 (Tue, ~12:30) — alt-data scrapers rebuilt against the live sites (4 of 5); Mini PC crontab lines installed
 
 - **Why:** a live dry run on the Mini PC showed all five scrapers returning nothing (ledger Issue 55). Rebuilt against what each site really serves: Grid-India (file API → NLDC daily PSP `.xls`), Agmarknet (2.0 public state-wise dashboard API), GeM (awarded high-value bids + public L1 result pages), Vahan (report view Excel export; YTD snapshot diffing). Full live run of the four on the Mini PC (sandbox copy): GeM 47 rows, Agmarknet 160, Grid-India 18, Vahan first snapshot; 2 m 37 s.

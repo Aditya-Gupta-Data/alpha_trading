@@ -88,9 +88,8 @@
 #                             running it here empties the valuation file and
 #                             greys out every darling. Details at the entry.
 #
-#  39. scripts/run_altdata_fleet.py: Daily 23:00 IST (2026-11-03). Vahan +
-#                             GeM public-portal scrapes into data/lake/alt_data/.
-#                             Capture-only, fail-open. Details at the entry.
+#  39. AltData Fleet (#39) is intentionally excluded from the VM and must be
+#      scheduled manually via local crontab on the Mini PC (Residential IP).
 #
 #  29. src.ingestion.cross_asset: Daily 19:40 IST (wired 2026-08-07). MCX
 #                             commodities + global-index EOD bars into the
@@ -510,10 +509,8 @@ CRON_TZ=Asia/Kolkata
 #     folds it into yesterday's profile before the 09:15 session playbook reads it (master_scheduler).
 45 18 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
 50 8 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
-# 39. Alt-data fleet (Daily 23:00 IST, 2026-11-03): MoRTH Vahan registrations + GeM tender awards
-#     into data/lake/alt_data/*.csv (idempotent, keyed rows). Capture-only: nothing on the trade path
-#     reads it. Fail-open per portal; outages -> logs/alt_data.jsonl. 23:00 is clear of every other job.
-0 23 * * * cd "$REPO_ROOT" && "$PYTHON_BIN" scripts/run_altdata_fleet.py >> "$REPO_ROOT/logs/altdata_fleet.log" 2>&1
+# 39. AltData Fleet (#39) is intentionally excluded from the VM and must be scheduled manually via
+#     local crontab on the Mini PC (Residential IP). Not here, so node_replica_block.py cannot copy it.
 $CRON_BLOCK_END
 EOF
 )

@@ -42,6 +42,16 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, later) — alt-data fleet isolated to the Mini PC; Quick-Commerce disabled (ToS)
+
+- **Supersedes the block below on scheduling.** Job #39 is REMOVED from `scripts/setup_cron.sh`: the alt-data fleet does not run on the VM, and because the replica block is rendered from that file, it no longer reaches the Mini PC that way either. It runs only from a manual crontab line on the Mini PC (residential IP).
+- **Quick-Commerce disabled:** `QuickCommerceScraper` (undocumented Blinkit/Zepto endpoints) breaks playbook ground rule 5. It is out of `FLEET_SCRAPERS`; the module stays for research. The nightly fleet is five scrapers: Vahan, GeM, Agmarknet, Grid-India, NPCI UPI. Also merged today: `feature/altdata-expansion` (`0a3e948`, merge `047c199`).
+- **Owner steps:**
+  - Mini PC (`ssh mini_pc1@100.72.160.38`): `cd ~/alpha_trading && git pull --ff-only`, then `crontab -e` and add **outside** the replica block (a re-install rewrites only the lines inside it):
+    `0 23 * * * cd "$HOME/alpha_trading" && venv/bin/python scripts/run_altdata_fleet.py >> logs/altdata_fleet.log 2>&1`
+  - VM: the 23:00 line was never installed there (11-03 was never deployed), so nothing to remove. After the next `git merge --ff-only origin/main`, `bash scripts/setup_cron.sh` stays clean.
+- **Open:** a manual crontab line is not reproducible from the repo; moving it into a node-only block (like #149's edge miner) is the durable fix if wanted. None of the five scrapers has run against a live portal yet; read `logs/altdata_fleet.log` after the first 23:00 run.
+
 ## 2026-11-03 (Tue) — alt-data fleet (Vahan + GeM) MERGED to `main` (ca3fdb7) and scheduled as cron #39 (23:00 IST); NOT deployed to the VM yet
 
 - **What landed:** Antigravity's `src/ingestion/alt_data/` (`e4eeb08`): `BaseAltDataScraper` + `VahanDashboardScraper` (→ `data/lake/alt_data/vahan_registrations.csv`) + `GemTendersScraper` (→ `data/lake/alt_data/gem_tenders.csv`). Wrapper `scripts/run_altdata_fleet.py` runs both; cron #39 `0 23 * * *` in `scripts/setup_cron.sh`, log `logs/altdata_fleet.log`. Capture-only: nothing on the trade path imports it. Fail-open; portal outages → `logs/alt_data.jsonl`. Suite 3,393 green (49.8 s).

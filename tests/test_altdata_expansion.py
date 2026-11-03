@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -451,12 +452,18 @@ def test_npci_upi_scraper_extracts_p2m_volumes_and_avg_ticket_sizes(tmp_path):
     assert float(json_rows[0]["p2m_share_pct"]) == pytest.approx(62.5)
 
 
-def test_run_altdata_fleet_integrates_all_six_scrapers():
+def test_run_altdata_fleet_runs_five_scrapers_without_quick_commerce():
     assert fleet_runner.FLEET_SCRAPERS == (
         VahanDashboardScraper,
         GemTendersScraper,
-        QuickCommerceScraper,
         AgmarknetMandiScraper,
         GridIndiaScraper,
         NpciUpiScraper,
     )
+    assert QuickCommerceScraper not in fleet_runner.FLEET_SCRAPERS
+
+
+def test_setup_cron_does_not_schedule_the_altdata_fleet():
+    text = (Path(__file__).resolve().parents[1] / "scripts" / "setup_cron.sh").read_text()
+    cron_lines = [ln for ln in text.splitlines() if ln and not ln.lstrip().startswith("#")]
+    assert not any("run_altdata_fleet" in ln for ln in cron_lines)

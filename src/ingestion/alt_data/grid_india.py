@@ -1,33 +1,37 @@
 """
-src/ingestion/alt_data/grid_india.py — Grid-India / POSOCO / NPP Power Demand Scraper
-=====================================================================================
+src/ingestion/alt_data/grid_india.py — Grid-India daily Power Supply Position (PSP) scraper
+=========================================================================================
 
-Targets the POSOCO (Grid Controller of India) and National Power Portal (NPP)
-daily power supply position dashboards (`https://npp.gov.in/public-dashboards` and
-`https://grid-india.in/daily-psp-report/`) to extract:
-  * Daily **National Peak Power Demand** in Gigawatts (`peak_demand_gw`), automatically
-    converting Megawatt (`MW`) figures (`>= 1000` or tagged `MW`) to `GW`.
-  * Regional demand & **Regional Load Drops** (`load_drop_pct` and `load_drop_flag`)
-    across `National` and the 5 regional grids (`NR`, `WR`, `SR`, `ER`, `NER`).
+Source (verified live 2026-11-03): the grid-india.in site is a JS app; its file API
+`POST https://webapi.grid-india.in/api/v1/file` with `{"_source": "GRDW", "_type": "DAILY_PSP_REPORT"}`
+lists the NLDC daily PSP workbooks (`Title_` = `DD.MM.YY_NLDC_PSP`, the day the data covers),
+downloadable from `https://webcdn.grid-india.in/<FilePath>` as legacy `.xls` (read with `xlrd`).
 
-Output (`data/lake/alt_data/grid_india_power.csv`):
-  Columns: `date, region, peak_demand_gw, demand_met_gw, shortage_gw,
-            load_drop_pct, load_drop_flag`
+Section A of the first sheet ("Power Supply Position at All India and Regional level") gives,
+per region (NR, WR, SR, ER, NER, TOTAL → National): evening-peak demand met and shortage (MW),
+energy met / hydro / wind / solar / energy shortage (MU), and the day's maximum demand met (MW).
+
+Output (`data/lake/alt_data/grid_india_power.csv`, key date + region):
+  `date, region, peak_demand_gw, demand_met_gw, shortage_gw, load_drop_pct, load_drop_flag,
+   max_demand_met_gw, energy_met_mu, hydro_mu, wind_mu, solar_mu, energy_shortage_mu, source_file`
+  peak_demand_gw = evening-peak demand met + shortage (the requirement at 19:00).
+  load_drop_pct = day-on-day change in energy met; blank when the prior day is not on file.
 """
 from __future__ import annotations
 
 import datetime as _dt
-import html
 import json
 import re
 from pathlib import Path
 from typing import Any, Callable
 
 from src.ingestion.alt_data.base_scraper import BaseAltDataScraper
-from src.ingestion.alt_data.vahan_dashboard import _HTMLTableExtractor
 
-NPP_DASHBOARD_URL = "https://npp.gov.in/public-dashboards/merit-india"
+FILE_API_URL = "https://webapi.grid-india.in/api/v1/file"
+FILE_CDN_URL = "https://webcdn.grid-india.in/"
 GRID_INDIA_PSP_URL = "https://grid-india.in/daily-psp-report/"
+PSP_FILE_TYPE = "DAILY_PSP_REPORT"
+DEFAULT_FILES_PER_RUN = 3
 
 REGION_ALIASES: dict[str, str] = {
     "ALL INDIA": "National",
@@ -52,7 +56,22 @@ REGION_ALIASES: dict[str, str] = {
     "NER": "NER",
 }
 
-LOAD_DROP_THRESHOLD_PCT = -2.0  # <= -2.0% drop vs baseline/prior or shortage > 2% flags a load drop
+LOAD_DROP_THRESHOLD_PCT = -2.0
+
+# Section A row label (lowercased prefix) -> field
+_SECTION_A_ROWS: tuple[tuple[str, str], ...] = (
+    ("demand met (mw) during evening peak", "demand_met_mw"),
+    ("shoratge (mw) during evening peak", "shortage_mw"),
+    ("shortage (mw) during evening peak", "shortage_mw"),
+    ("energy met", "energy_met_mu"),
+    ("hydro gen", "hydro_mu"),
+    ("wind gen", "wind_mu"),
+    ("solar gen", "solar_mu"),
+    ("energy shortage", "energy_shortage_mu"),
+    ("maximum demand met during the day", "max_demand_met_mw"),
+)
+
+_TITLE_DATE_RE = re.compile(r"^(\d{2})\.(\d{2})\.(\d{2})_NLDC_PSP", re.I)
 
 
 def normalize_grid_region(raw_region: Any) -> str | None:
@@ -61,7 +80,6 @@ def normalize_grid_region(raw_region: Any) -> str | None:
         return None
     if cleaned in REGION_ALIASES:
         return REGION_ALIASES[cleaned]
-    # Check longest aliases first so "NORTH EASTERN" matches before "EASTERN" or "NORTHERN"
     for alias, canon in sorted(REGION_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True):
         if alias in cleaned:
             return canon
@@ -69,9 +87,7 @@ def normalize_grid_region(raw_region: Any) -> str | None:
 
 
 def parse_power_gw(raw_val: Any, unit_hint: str = "") -> float | None:
-    """Parse a power demand reading into Gigawatts (`GW`).
-    Values in `MW` (either via `unit_hint='MW'`, `'MW'` in string, or numeric `>= 500.0`)
-    are converted to `GW` via `/ 1000.0`."""
+    """Parse a power reading into GW; `MW`-tagged (or numeric >= 500) values are divided by 1000."""
     if raw_val is None:
         return None
     s = str(raw_val).strip()
@@ -94,10 +110,10 @@ def parse_power_gw(raw_val: Any, unit_hint: str = "") -> float | None:
     return round(val, 3)
 
 
-def _parse_float(raw_val: Any) -> float | None:
-    if raw_val is None:
-        return None
-    s = re.sub(r"[^\d.\-]", "", str(raw_val))
+def _num(raw: Any) -> float | None:
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    s = re.sub(r"[^\d.\-]", "", str(raw or ""))
     if not s or s in {"-", "."}:
         return None
     try:
@@ -106,8 +122,59 @@ def _parse_float(raw_val: Any) -> float | None:
         return None
 
 
+def title_to_date(title: str) -> str | None:
+    """`02.11.26_NLDC_PSP` -> `2026-11-02`; None when the title is not a PSP file name."""
+    m = _TITLE_DATE_RE.match(str(title or "").strip())
+    if not m:
+        return None
+    try:
+        return _dt.date(2000 + int(m[3]), int(m[2]), int(m[1])).isoformat()
+    except ValueError:
+        return None
+
+
+def xls_sheet_rows(data: bytes) -> list[list[Any]]:
+    """First sheet of a legacy `.xls` workbook as a list of row value lists."""
+    import xlrd  # noqa: PLC0415 — optional dependency, only the Mini PC needs it
+
+    book = xlrd.open_workbook(file_contents=data)
+    sheet = book.sheet_by_index(0)
+    return [sheet.row_values(r) for r in range(sheet.nrows)]
+
+
+def parse_psp_section_a(rows: list[list[Any]]) -> dict[str, dict[str, float | None]]:
+    """Section A -> {region: {field: value}} for NR/WR/SR/ER/NER/National; {} when not found."""
+    header_idx = None
+    regions: list[tuple[int, str]] = []
+    for i, row in enumerate(rows):
+        cells = [str(c).strip() for c in row]
+        found = [(j, normalize_grid_region(c)) for j, c in enumerate(cells) if c.upper() in REGION_ALIASES]
+        canon = [r for _, r in found]
+        if {"NR", "WR", "SR", "ER", "NER"}.issubset(canon):
+            header_idx, regions = i, [(j, r) for j, r in found if r]
+            break
+    if header_idx is None:
+        return {}
+    out: dict[str, dict[str, float | None]] = {r: {} for _, r in regions}
+    for row in rows[header_idx + 1: header_idx + 20]:
+        label = str(row[0] if row else "").strip().lower()
+        if label.startswith("b. ") or label.startswith("b."):
+            break
+        field = next((f for prefix, f in _SECTION_A_ROWS if label.startswith(prefix)), None)
+        if field is None:
+            continue
+        for j, region in regions:
+            if field not in out[region]:
+                out[region][field] = _num(row[j]) if j < len(row) else None
+    return out
+
+
+def _fmt(v: float | None, nd: int = 3) -> str:
+    return "" if v is None else f"{v:.{nd}f}"
+
+
 class GridIndiaScraper(BaseAltDataScraper):
-    """POSOCO / Grid-India / NPP daily National Peak Power Demand & Regional Load Drop scraper."""
+    """Grid-India NLDC daily PSP: national and regional demand, shortage and generation mix."""
 
     dataset_name = "grid_india_power"
     default_columns = (
@@ -118,6 +185,13 @@ class GridIndiaScraper(BaseAltDataScraper):
         "shortage_gw",
         "load_drop_pct",
         "load_drop_flag",
+        "max_demand_met_gw",
+        "energy_met_mu",
+        "hydro_mu",
+        "wind_mu",
+        "solar_mu",
+        "energy_shortage_mu",
+        "source_file",
     )
     primary_key_columns = ("date", "region")
 
@@ -125,258 +199,106 @@ class GridIndiaScraper(BaseAltDataScraper):
         self,
         lake_dir: Path | str | None = None,
         log_path: Path | str | None = None,
-        endpoint_url: str = NPP_DASHBOARD_URL,
+        files_per_run: int = DEFAULT_FILES_PER_RUN,
         fetch_fn: Callable[..., bytes | str] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
+        xls_reader: Callable[[bytes], list[list[Any]]] | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(
-            lake_dir=lake_dir,
-            log_path=log_path,
-            fetch_fn=fetch_fn,
-            sleep_fn=sleep_fn,
-            **kwargs,
-        )
-        self.endpoint_url = endpoint_url
+        super().__init__(lake_dir=lake_dir, log_path=log_path, fetch_fn=fetch_fn, sleep_fn=sleep_fn, **kwargs)
+        self.files_per_run = max(1, int(files_per_run))
+        self._xls_reader = xls_reader or xls_sheet_rows
 
-    def fetch_raw(self, report_date: str | None = None, **kwargs: Any) -> str:
-        url = self.endpoint_url
+    def list_psp_files(self) -> list[dict[str, Any]]:
+        """Newest-first PSP file entries `{date, title, path}` from the file API."""
+        raw = self.request(
+            FILE_API_URL,
+            method="POST",
+            data=json.dumps({"_source": "GRDW", "_type": PSP_FILE_TYPE}),
+            headers={"Content-Type": "application/json", "Origin": "https://grid-india.in",
+                     "Referer": GRID_INDIA_PSP_URL},
+        )
+        doc = json.loads(raw.decode("utf-8", errors="replace"))
+        entries = []
+        for item in doc.get("retData") or []:
+            day = title_to_date(item.get("Title_", ""))
+            path = str(item.get("FilePath") or "")
+            if day and path.lower().endswith((".xls", ".xlsx")):
+                entries.append({"date": day, "title": item.get("Title_"), "path": path})
+        entries.sort(key=lambda e: e["date"], reverse=True)
+        seen, unique = set(), []
+        for e in entries:
+            if e["date"] not in seen:
+                seen.add(e["date"])
+                unique.append(e)
+        return unique
+
+    def fetch_raw(self, report_date: str | None = None, **kwargs: Any) -> list[dict[str, Any]]:
+        files = self.list_psp_files()
         if report_date:
-            sep = "&" if "?" in url else "?"
-            url = f"{url}{sep}date={str(report_date)[:10]}"
-        raw_bytes = self.request(
-            url,
-            method="GET",
-            headers={"Referer": GRID_INDIA_PSP_URL},
-        )
-        return raw_bytes.decode("utf-8", errors="replace")
-
-    def parse(
-        self,
-        raw: Any,
-        report_date: str | None = None,
-        **kwargs: Any,
-    ) -> list[dict[str, Any]]:
-        """Parse POSOCO/NPP JSON or HTML table into National & Regional GW demand rows."""
-        default_day = str(report_date or _dt.date.today().isoformat())[:10]
-        if isinstance(raw, (bytes, bytearray)):
-            text = raw.decode("utf-8", errors="replace")
-        elif isinstance(raw, (dict, list)):
-            return self._parse_json_obj(raw, default_day)
+            files = [f for f in files if f["date"] == str(report_date)[:10]]
         else:
-            text = str(raw or "")
+            files = files[: self.files_per_run]
+        out = []
+        for f in files:
+            data = self.request(FILE_CDN_URL + f["path"].lstrip("/"), headers={"Referer": GRID_INDIA_PSP_URL})
+            out.append({**f, "rows": self._xls_reader(data)})
+        return out
 
-        stripped = text.strip()
-        if not stripped:
-            return []
+    def parse(self, raw: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """Workbook rows -> one CSV row per region per day; load drop vs the prior day on file."""
+        prior: dict[tuple[str, str], float] = {}
+        for r in self.read_existing_rows():
+            v = _num(r.get("energy_met_mu"))
+            if v is not None:
+                prior[(r.get("date", ""), r.get("region", ""))] = v
 
-        if stripped.startswith("{") or stripped.startswith("["):
-            try:
-                return self._parse_json_obj(json.loads(stripped), default_day)
-            except json.JSONDecodeError:
-                pass
-
-        extractor = _HTMLTableExtractor()
-        extractor.feed(html.unescape(text))
-        rows: list[dict[str, Any]] = []
-        for table in extractor.tables:
-            rows.extend(self._parse_html_table(table, default_day))
-        return rows
-
-    def _build_record(
-        self,
-        region_raw: Any,
-        peak_raw: Any = None,
-        met_raw: Any = None,
-        shortage_raw: Any = None,
-        baseline_raw: Any = None,
-        load_drop_pct_raw: Any = None,
-        day: str = "",
-        unit_hint: str = "",
-    ) -> dict[str, Any] | None:
-        region = normalize_grid_region(region_raw)
-        if not region:
-            return None
-
-        met_gw = parse_power_gw(met_raw, unit_hint)
-        peak_gw = parse_power_gw(peak_raw, unit_hint)
-        shortage_gw = parse_power_gw(shortage_raw, unit_hint)
-
-        if peak_gw is None and met_gw is not None:
-            peak_gw = round(met_gw + (shortage_gw or 0.0), 3)
-        if peak_gw is None:
-            return None
-        if met_gw is None:
-            met_gw = round(max(0.0, peak_gw - (shortage_gw or 0.0)), 3)
-        if shortage_gw is None:
-            shortage_gw = round(max(0.0, peak_gw - met_gw), 3)
-
-        drop_pct = _parse_float(load_drop_pct_raw)
-        if drop_pct is None:
-            base_gw = parse_power_gw(baseline_raw, unit_hint)
-            if base_gw and base_gw > 0:
-                drop_pct = round(((met_gw - base_gw) / base_gw) * 100.0, 2)
-            elif peak_gw > 0:
-                drop_pct = round((-shortage_gw / peak_gw) * 100.0, 2)
-            else:
-                drop_pct = 0.0
-
-        drop_flag = bool(drop_pct <= LOAD_DROP_THRESHOLD_PCT)
-        return {
-            "date": day,
-            "region": region,
-            "peak_demand_gw": f"{peak_gw:.3f}",
-            "demand_met_gw": f"{met_gw:.3f}",
-            "shortage_gw": f"{shortage_gw:.3f}",
-            "load_drop_pct": f"{drop_pct:.2f}",
-            "load_drop_flag": "true" if drop_flag else "false",
-        }
-
-    def _parse_json_obj(self, doc: Any, default_day: str) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        if isinstance(doc, dict):
-            day = str(doc.get("date") or doc.get("report_date") or default_day)[:10]
-            unit_hint = str(doc.get("unit") or "")
-
-            # Top-level national summary if present
-            nat_peak = (
-                doc.get("national_peak_gw")
-                or doc.get("national_peak_mw")
-                or doc.get("peak_demand_gw")
-                or doc.get("peak_demand_mw")
-            )
-            nat_met = (
-                doc.get("national_demand_met_gw")
-                or doc.get("national_demand_met_mw")
-                or doc.get("demand_met_gw")
-                or doc.get("demand_met_mw")
-            )
-            if nat_peak is not None or nat_met is not None:
-                rec = self._build_record(
-                    region_raw="National",
-                    peak_raw=nat_peak,
-                    met_raw=nat_met,
-                    shortage_raw=doc.get("shortage_gw") or doc.get("shortage_mw"),
-                    baseline_raw=doc.get("baseline_gw") or doc.get("prior_day_gw"),
-                    load_drop_pct_raw=doc.get("load_drop_pct"),
-                    day=day,
-                    unit_hint="MW" if ("_mw" in " ".join(doc.keys()).lower()) else unit_hint,
-                )
-                if rec:
-                    out.append(rec)
-
-            regions = doc.get("regions") or doc.get("regional_load") or doc.get("data") or []
-            if isinstance(regions, dict):
-                for reg_key, reg_val in regions.items():
-                    if isinstance(reg_val, dict):
-                        rec = self._build_record(
-                            region_raw=reg_key,
-                            peak_raw=reg_val.get("peak_demand_gw") or reg_val.get("peak_demand_mw") or reg_val.get("peak"),
-                            met_raw=reg_val.get("demand_met_gw") or reg_val.get("demand_met_mw") or reg_val.get("met"),
-                            shortage_raw=reg_val.get("shortage_gw") or reg_val.get("shortage_mw") or reg_val.get("shortage"),
-                            baseline_raw=reg_val.get("baseline_gw") or reg_val.get("baseline_mw") or reg_val.get("prior_gw"),
-                            load_drop_pct_raw=reg_val.get("load_drop_pct") or reg_val.get("drop_pct"),
-                            day=day,
-                            unit_hint=str(reg_val.get("unit") or unit_hint),
-                        )
-                        if rec:
-                            out.append(rec)
-            elif isinstance(regions, list):
-                for item in regions:
-                    if not isinstance(item, dict):
-                        continue
-                    rec = self._build_record(
-                        region_raw=item.get("region") or item.get("name"),
-                        peak_raw=item.get("peak_demand_gw") or item.get("peak_demand_mw") or item.get("peak_demand"),
-                        met_raw=item.get("demand_met_gw") or item.get("demand_met_mw") or item.get("demand_met"),
-                        shortage_raw=item.get("shortage_gw") or item.get("shortage_mw") or item.get("shortage"),
-                        baseline_raw=item.get("baseline_gw") or item.get("baseline_mw") or item.get("prior_demand"),
-                        load_drop_pct_raw=item.get("load_drop_pct") or item.get("drop_pct"),
-                        day=str(item.get("date") or day)[:10],
-                        unit_hint=str(item.get("unit") or unit_hint),
-                    )
-                    if rec:
-                        out.append(rec)
-        elif isinstance(doc, list):
-            for item in doc:
-                out.extend(self._parse_json_obj(item, default_day))
-
-        return self._SynthesizeNationalIfNeeded(out, default_day)
-
-    def _parse_html_table(
-        self, table: list[list[str]], default_day: str
-    ) -> list[dict[str, Any]]:
-        if len(table) < 2:
-            return []
-        headers = [h.upper() for h in table[0]]
-        unit_hint = "MW" if any("MW" in h for h in headers) else ""
-
-        def _col(keywords: tuple[str, ...]) -> int | None:
-            for idx, h in enumerate(headers):
-                if any(k in h for k in keywords):
-                    return idx
-            return None
-
-        reg_col = _col(("REGION", "STATE/REGION", "GRID", "PARTICULARS"))
-        peak_col = _col(("PEAK DEMAND", "MAX DEMAND", "DEMAND (MW)", "DEMAND (GW)", "REQUIREMENT"))
-        met_col = _col(("DEMAND MET", "PEAK MET", "MET", "AVAILABILITY", "SUPPLIED"))
-        short_col = _col(("SHORTAGE", "DEFICIT", "UNMET"))
-        drop_col = _col(("LOAD DROP", "DROP %", "CHANGE %", "VARIATION"))
-        base_col = _col(("PREVIOUS", "BASELINE", "PRIOR"))
-
-        if reg_col is None or (peak_col is None and met_col is None):
-            return []
-
-        out: list[dict[str, Any]] = []
-        for r in table[1:]:
-            if reg_col >= len(r):
+        parsed: list[tuple[str, str, dict[str, float | None], str]] = []
+        for doc in raw or []:
+            section = parse_psp_section_a(doc.get("rows") or [])
+            if not section:
+                self.log_warning("PSP-LAYOUT", f"{doc.get('title')}: Section A not found")
                 continue
-            rec = self._build_record(
-                region_raw=r[reg_col],
-                peak_raw=r[peak_col] if (peak_col is not None and peak_col < len(r)) else None,
-                met_raw=r[met_col] if (met_col is not None and met_col < len(r)) else None,
-                shortage_raw=r[short_col] if (short_col is not None and short_col < len(r)) else None,
-                baseline_raw=r[base_col] if (base_col is not None and base_col < len(r)) else None,
-                load_drop_pct_raw=r[drop_col] if (drop_col is not None and drop_col < len(r)) else None,
-                day=default_day,
-                unit_hint=unit_hint,
-            )
-            if rec:
-                out.append(rec)
-        return self._SynthesizeNationalIfNeeded(out, default_day)
+            for region, vals in section.items():
+                parsed.append((doc["date"], region, vals, Path(doc.get("path", "")).name))
+                if vals.get("energy_met_mu") is not None:
+                    prior[(doc["date"], region)] = vals["energy_met_mu"]
 
-    def _SynthesizeNationalIfNeeded(
-        self, rows: list[dict[str, Any]], day: str
-    ) -> list[dict[str, Any]]:
-        """If regional rows (NR, WR, SR, ER, NER) are present without an explicit `National`
-        summary row, compute the summed `National` peak demand row automatically."""
-        if not rows:
-            return []
-        has_national = any(r["region"] == "National" for r in rows)
-        if not has_national:
-            reg_rows = [r for r in rows if r["region"] in {"NR", "WR", "SR", "ER", "NER"}]
-            if reg_rows:
-                tot_peak = sum(float(r["peak_demand_gw"]) for r in reg_rows)
-                tot_met = sum(float(r["demand_met_gw"]) for r in reg_rows)
-                tot_short = sum(float(r["shortage_gw"]) for r in reg_rows)
-                nat = self._build_record(
-                    region_raw="National",
-                    peak_raw=tot_peak,
-                    met_raw=tot_met,
-                    shortage_raw=tot_short,
-                    day=reg_rows[0]["date"] or day,
-                    unit_hint="GW",
-                )
-                if nat:
-                    rows = [nat] + rows
-        return rows
+        out: list[dict[str, Any]] = []
+        for day, region, v, source in parsed:
+            met_gw = None if v.get("demand_met_mw") is None else v["demand_met_mw"] / 1000.0
+            short_gw = None if v.get("shortage_mw") is None else v["shortage_mw"] / 1000.0
+            if met_gw is None:
+                continue
+            peak_gw = met_gw + (short_gw or 0.0)
+            prev_day = (_dt.date.fromisoformat(day) - _dt.timedelta(days=1)).isoformat()
+            prev, today = prior.get((prev_day, region)), v.get("energy_met_mu")
+            drop = None if not prev or today is None else round((today - prev) / prev * 100.0, 2)
+            max_mw = v.get("max_demand_met_mw")
+            out.append({
+                "date": day,
+                "region": region,
+                "peak_demand_gw": _fmt(peak_gw),
+                "demand_met_gw": _fmt(met_gw),
+                "shortage_gw": _fmt(short_gw),
+                "load_drop_pct": _fmt(drop, 2),
+                "load_drop_flag": "" if drop is None else ("true" if drop <= LOAD_DROP_THRESHOLD_PCT else "false"),
+                "max_demand_met_gw": _fmt(None if max_mw is None else max_mw / 1000.0),
+                "energy_met_mu": _fmt(v.get("energy_met_mu"), 2),
+                "hydro_mu": _fmt(v.get("hydro_mu"), 2),
+                "wind_mu": _fmt(v.get("wind_mu"), 2),
+                "solar_mu": _fmt(v.get("solar_mu"), 2),
+                "energy_shortage_mu": _fmt(v.get("energy_shortage_mu"), 2),
+                "source_file": source,
+            })
+        return out
 
 
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="Grid-India / POSOCO daily power demand scraper")
-    ap.add_argument("--date", default=None, help="Report date YYYY-MM-DD")
+    ap = argparse.ArgumentParser(description="Grid-India NLDC daily PSP scraper")
+    ap.add_argument("--date", default=None, help="Data date YYYY-MM-DD (default: newest files)")
     ap.add_argument("--dry-run", action="store_true", help="Parse only; do not write CSV")
     args = ap.parse_args()
     scraper = GridIndiaScraper()

@@ -87,130 +87,6 @@ ZEPTO_MOCK_PAYLOADS = {
     },
 }
 
-AGMARKNET_GRIDVIEW_HTML = """
-<html>
-  <body>
-    <table id="cphBody_GridPriceData">
-      <tr>
-        <th>Sl no.</th>
-        <th>District Name</th>
-        <th>Market Name</th>
-        <th>Commodity</th>
-        <th>Variety</th>
-        <th>Grade</th>
-        <th>Min Price (Rs./Quintal)</th>
-        <th>Max Price (Rs./Quintal)</th>
-        <th>Modal Price (Rs./Quintal)</th>
-        <th>Price Date</th>
-      </tr>
-      <tr>
-        <td>1</td>
-        <td>Indore</td>
-        <td>Indore Mandi</td>
-        <td>Wheat</td>
-        <td>Lokwan</td>
-        <td>FAQ</td>
-        <td>2,420</td>
-        <td>2,680</td>
-        <td>2,550</td>
-        <td>02-Nov-2026</td>
-      </tr>
-      <tr>
-        <td>2</td>
-        <td>Kolhapur</td>
-        <td>Kolhapur APMC</td>
-        <td>Sugar</td>
-        <td>Medium</td>
-        <td>FAQ</td>
-        <td>3,780</td>
-        <td>3,920</td>
-        <td>3,850</td>
-        <td>02-Nov-2026</td>
-      </tr>
-      <tr>
-        <td>3</td>
-        <td>Kolar</td>
-        <td>Kolar Market</td>
-        <td>Tomato</td>
-        <td>Hybrid</td>
-        <td>FAQ</td>
-        <td>1,800</td>
-        <td>2,400</td>
-        <td>2,100</td>
-        <td>02-Nov-2026</td>
-      </tr>
-      <tr>
-        <td>4</td>
-        <td>Nashik</td>
-        <td>Lasalgaon</td>
-        <td>Onion</td>
-        <td>Red</td>
-        <td>FAQ</td>
-        <td>2,900</td>
-        <td>3,500</td>
-        <td>3,200</td>
-        <td>02-Nov-2026</td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
-
-GRID_INDIA_POSOCO_HTML = """
-<html>
-  <body>
-    <table class="psp-table">
-      <thead>
-        <tr>
-          <th>Region</th>
-          <th>Peak Demand (MW)</th>
-          <th>Demand Met (MW)</th>
-          <th>Shortage (MW)</th>
-          <th>Previous Day Met (MW)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Northern Region</td>
-          <td>74,500</td>
-          <td>72,000</td>
-          <td>2,500</td>
-          <td>75,000</td>
-        </tr>
-        <tr>
-          <td>Western Region</td>
-          <td>71,000</td>
-          <td>70,800</td>
-          <td>200</td>
-          <td>71,000</td>
-        </tr>
-        <tr>
-          <td>Southern Region</td>
-          <td>62,000</td>
-          <td>61,900</td>
-          <td>100</td>
-          <td>62,000</td>
-        </tr>
-        <tr>
-          <td>Eastern Region</td>
-          <td>28,000</td>
-          <td>27,200</td>
-          <td>800</td>
-          <td>28,000</td>
-        </tr>
-        <tr>
-          <td>North-Eastern Region</td>
-          <td>3,800</td>
-          <td>3,750</td>
-          <td>50</td>
-          <td>3,800</td>
-        </tr>
-      </tbody>
-    </table>
-  </body>
-</html>
-"""
-
 NPCI_UPI_ECOSYSTEM_HTML = """
 <html>
   <body>
@@ -305,103 +181,139 @@ def test_quick_commerce_scraper_computes_basket_indices_and_custom_cpi(tmp_path)
     assert float(z_oil["inflation_pct"]) == pytest.approx(5.25)
 
 
-def test_agmarknet_mandi_scraper_parses_html_and_json_for_four_staples(tmp_path):
-    assert normalize_agri_commodity("Wheat") == "Wheat"
-    assert normalize_agri_commodity("Sugar") == "Sugar"
-    assert normalize_agri_commodity("Tomato") == "Tomatoes"
+def _agm_page(records, next_page=None):
+    """One `dashboard-data/` page as the live API returns it (shape verified 2026-11-03)."""
+    return json.dumps({"status": "success", "message": "Data fetched successfully.",
+                       "pagination": {"next_page": next_page}, "data": {"columns": [], "records": records}})
+
+
+def _agm_rec(cmdt, state, as_on, one_yr=None):
+    return {"cmdt_name": cmdt, "state_name": state, "as_on": as_on, "one_yr_ago": one_yr,
+            "unit_name_price": "Rs./Quintal"}
+
+
+def test_agmarknet_scraper_reads_the_statewise_dashboard_one_day_per_call(tmp_path):
     assert normalize_agri_commodity("Onion") == "Onions"
+    assert normalize_agri_commodity("Onion Green") is None
+    assert normalize_agri_commodity("Wheat Atta") is None
+    bodies = []
+
+    def fetch(url, method="GET", data=None, headers=None):
+        body = json.loads(data)
+        bodies.append(body)
+        if body["from_date"] == "2026-11-02" and body["page"] == 1:
+            return _agm_page([_agm_rec("Onion", "Maharashtra", "2150.00", "3100.00"),
+                              _agm_rec("Onion Green", "Maharashtra", "900.00"),
+                              _agm_rec("Tomato", "Karnataka", None)], next_page="p2")
+        if body["from_date"] == "2026-11-02":
+            return _agm_page([_agm_rec("Wheat", "Gujarat", "3,110.04")])
+        return json.dumps({"status": False, "message": "No data found", "data": []})
 
     scraper = AgmarknetMandiScraper(
-        lake_dir=tmp_path / "lake",
-        log_path=tmp_path / "alt_data.jsonl",
-        fetch_fn=lambda url, **kw: AGMARKNET_GRIDVIEW_HTML,
+        lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl", fetch_fn=fetch,
+        days_per_run=2, today_fn=lambda: __import__("datetime").date(2026, 11, 3),
     )
-    res = scraper.run(report_date="2026-11-02")
-    assert res["ok"] is True
-    assert res["rows_added"] == 4
+    res = scraper.run()
+    assert res["ok"] is True and res["rows_added"] == 2
+    first = bodies[0]
+    assert first["dashboard"] == "statewise_price_arrival_sp" and "captcha" not in first
+    assert sorted(first["commodity"]) == [1, 23, 44, 65]
+    assert first["from_date"] == first["to_date"] == "2026-11-03"
 
-    csv_path = tmp_path / "lake" / "agmarknet_mandi.csv"
-    rows = list(csv.DictReader(io.StringIO(csv_path.read_text())))
-    by_comm = {r["commodity"]: r for r in rows}
+    rows = list(csv.DictReader(io.StringIO((tmp_path / "lake" / "agmarknet_mandi.csv").read_text())))
+    by = {(r["commodity"], r["state"]): r for r in rows}
+    onion = by[("Onions", "Maharashtra")]
+    assert onion["date"] == "2026-11-02" and onion["mandi"] == "STATE_WEIGHTED_AVG"
+    assert float(onion["modal_price_quintal"]) == pytest.approx(2150.0)
+    assert float(onion["modal_price_kg"]) == pytest.approx(21.5)
+    assert float(onion["price_1y_ago_quintal"]) == pytest.approx(3100.0)
+    assert float(by[("Wheat", "Gujarat")]["modal_price_quintal"]) == pytest.approx(3110.04)
+    assert ("Tomatoes", "Karnataka") not in by  # no price that day: skipped, not filled
 
-    assert set(by_comm.keys()) == {"Wheat", "Sugar", "Tomatoes", "Onions"}
-    assert float(by_comm["Wheat"]["modal_price_quintal"]) == pytest.approx(2550.0)
-    assert float(by_comm["Wheat"]["modal_price_kg"]) == pytest.approx(25.50)
-    assert float(by_comm["Sugar"]["modal_price_quintal"]) == pytest.approx(3850.0)
-    assert float(by_comm["Tomatoes"]["modal_price_kg"]) == pytest.approx(21.00)
-    assert float(by_comm["Onions"]["modal_price_quintal"]) == pytest.approx(3200.0)
 
-    # Verify JSON payload parsing as well
-    json_rows = scraper.parse(
-        {
-            "date": "2026-11-02",
-            "records": [
-                {
-                    "commodity": "Onion",
-                    "state": "Maharashtra",
-                    "mandi": "Pimpalgaon",
-                    "min_price": 3000,
-                    "max_price": 3400,
-                    "modal_price": 3250,
-                }
-            ],
-        }
+def test_agmarknet_scraper_degrades_when_the_api_refuses(tmp_path):
+    scraper = AgmarknetMandiScraper(
+        lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl", days_per_run=1,
+        fetch_fn=lambda url, **kw: json.dumps({"detail": "x", "status": False, "message": "Invalid dashboard type"}),
     )
-    assert len(json_rows) == 1
-    assert json_rows[0]["commodity"] == "Onions"
-    assert float(json_rows[0]["modal_price_kg"]) == pytest.approx(32.50)
+    res = scraper.run()
+    assert res["status"] == "degraded" and "Invalid dashboard type" in res["reason"]
 
 
-def test_grid_india_scraper_extracts_national_gw_and_regional_load_drops(tmp_path):
+def _psp_rows(nr_energy, nr_met=61715.0):
+    """Section A of an NLDC daily PSP sheet, as xlrd returns it (layout verified 2026-11-03)."""
+    return [
+        ["", "", "Report for previous day", "", "Date of Reporting:", "03-Nov-2026"],
+        ["A. Power Supply Position at All India and Regional level"],
+        ["", "NR", "WR", "SR", "ER", "NER", "TOTAL"],
+        ["Demand Met (MW) during Evening Peak hr (19:00hrs)\u00b9", nr_met, 69808.0, 51258.0, 26568.0, 3459.0, 212808.0],
+        ["Shoratge (MW) during Evening Peak hr (19:00hrs)\u00b9", 0.0, 0.0, 0.0, 0.0, 36.0, 36.0],
+        ["Energy Met (MU)", nr_energy, 1645.2, 1292.04, 558.11, 63.96, 4775.31],
+        ["Hydro Gen (MU)", 135.85, 49.23, 62.03, 47.41, 27.79, 322.31],
+        ["Wind Gen (MU)", 4.72, 77.39, 44.75, "-", "-", 126.86],
+        ["Solar Gen (MU)*", 243.47, 234.72, 144.72, 3.46, 1.46, 627.83],
+        ["Energy Shortage (MU)", 0.62, 0.0, 0.0, 0.1, 0.05, 0.77],
+        ["Maximum Demand Met During the Day (MW)\n(From NLDC SCADA)", 62942.0, 82933.0, 63571.0, 27356.0, 3579.0, 226478.0],
+        ["B. Frequency Profile (%)"],
+        ["Region", "FVI", "< 49.7"],
+    ]
+
+
+def test_grid_india_scraper_reads_psp_files_from_the_file_api(tmp_path):
     assert normalize_grid_region("Northern Region") == "NR"
     assert normalize_grid_region("All India") == "National"
     assert parse_power_gw("239,300 MW") == pytest.approx(239.3)
-    assert parse_power_gw("241.5 GW") == pytest.approx(241.5)
+    listing = {"retData": [
+        {"Title_": "02.11.26_NLDC_PSP", "FilePath": "files/grdw/2026/11/02.11.26_NLDC_PSP_993.xls"},
+        {"Title_": "01.11.26_NLDC_PSP", "FilePath": "files/grdw/2026/11/01.11.26_NLDC_PSP_491.xls"},
+        {"Title_": "not a psp", "FilePath": "files/x.pdf"},
+    ]}
+    calls = []
 
+    def fetch(url, method="GET", data=None, headers=None):
+        calls.append((method, url, data))
+        if url.endswith("/api/v1/file"):
+            return json.dumps(listing)
+        return url.encode()
+
+    sheets = {
+        "https://webcdn.grid-india.in/files/grdw/2026/11/02.11.26_NLDC_PSP_993.xls": _psp_rows(1216.0),
+        "https://webcdn.grid-india.in/files/grdw/2026/11/01.11.26_NLDC_PSP_491.xls": _psp_rows(1280.0),
+    }
     scraper = GridIndiaScraper(
-        lake_dir=tmp_path / "lake",
-        log_path=tmp_path / "alt_data.jsonl",
-        fetch_fn=lambda url, **kw: GRID_INDIA_POSOCO_HTML,
+        lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl",
+        fetch_fn=fetch, xls_reader=lambda data: sheets[data.decode()],
     )
-    res = scraper.run(report_date="2026-11-02")
-    assert res["ok"] is True
-    assert res["rows_added"] == 6  # Synthesized National + 5 regional grids (NR, WR, SR, ER, NER)
+    res = scraper.run()
+    assert res["ok"] is True and res["rows_added"] == 12
+    assert calls[0][0] == "POST" and json.loads(calls[0][2])["_type"] == "DAILY_PSP_REPORT"
 
-    csv_path = tmp_path / "lake" / "grid_india_power.csv"
-    rows = list(csv.DictReader(io.StringIO(csv_path.read_text())))
-    by_region = {r["region"]: r for r in rows}
+    rows = list(csv.DictReader(io.StringIO((tmp_path / "lake" / "grid_india_power.csv").read_text())))
+    by = {(r["date"], r["region"]): r for r in rows}
+    nat = by[("2026-11-02", "National")]
+    assert float(nat["demand_met_gw"]) == pytest.approx(212.808)
+    assert float(nat["peak_demand_gw"]) == pytest.approx(212.844)
+    assert float(nat["max_demand_met_gw"]) == pytest.approx(226.478)
+    assert float(nat["solar_mu"]) == pytest.approx(627.83)
+    assert by[("2026-11-02", "ER")]["wind_mu"] == ""
+    nr = by[("2026-11-02", "NR")]
+    assert float(nr["load_drop_pct"]) == pytest.approx((1216.0 - 1280.0) / 1280.0 * 100, abs=0.01)
+    assert nr["load_drop_flag"] == "true"
+    assert by[("2026-11-01", "NR")]["load_drop_pct"] == ""  # no prior day on file: abstain
+    assert by[("2026-11-01", "NR")]["source_file"] == "01.11.26_NLDC_PSP_491.xls"
 
-    # National Peak Power Demand = (74.5 + 71.0 + 62.0 + 28.0 + 3.8) = 239.300 GW
-    assert float(by_region["National"]["peak_demand_gw"]) == pytest.approx(239.3)
-    assert float(by_region["National"]["demand_met_gw"]) == pytest.approx(235.65)
-    assert float(by_region["National"]["shortage_gw"]) == pytest.approx(3.65)
 
-    # Northern Region dropped from 75.0 GW to 72.0 GW (-4.00%) -> load_drop_flag = true
-    assert float(by_region["NR"]["peak_demand_gw"]) == pytest.approx(74.5)
-    assert float(by_region["NR"]["load_drop_pct"]) == pytest.approx(-4.0)
-    assert by_region["NR"]["load_drop_flag"] == "true"
-
-    # Eastern Region dropped from 28.0 GW to 27.2 GW (-2.86%) -> load_drop_flag = true
-    assert float(by_region["ER"]["load_drop_pct"]) == pytest.approx(-2.86)
-    assert by_region["ER"]["load_drop_flag"] == "true"
-
-    # Western Region (-0.28%) -> load_drop_flag = false
-    assert by_region["WR"]["load_drop_flag"] == "false"
-
-    # Verify JSON payload parsing
-    json_rows = scraper.parse(
-        {
-            "date": "2026-11-02",
-            "national_peak_gw": 242.5,
-            "national_demand_met_gw": 241.0,
-            "regions": [
-                {"region": "WR", "peak_demand_gw": 72.0, "demand_met_gw": 69.0, "baseline_gw": 72.0}
-            ],
-        }
+def test_grid_india_scraper_degrades_when_the_sheet_layout_changes(tmp_path):
+    listing = {"retData": [{"Title_": "02.11.26_NLDC_PSP", "FilePath": "files/a.xls"}]}
+    scraper = GridIndiaScraper(
+        lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl",
+        fetch_fn=lambda url, **kw: json.dumps(listing) if "api" in url else b"x",
+        xls_reader=lambda data: [["Some other report"], ["Region", "Value"]],
     )
-    by_reg_json = {r["region"]: r for r in json_rows}
-    assert float(by_reg_json["National"]["peak_demand_gw"]) == pytest.approx(242.5)
-    assert by_reg_json["WR"]["load_drop_flag"] == "true"
+    res = scraper.run()
+    assert res["status"] == "degraded" and res["reason"] == "empty_parse"
+    codes = [json.loads(ln)["code"] for ln in (tmp_path / "alt_data.jsonl").read_text().splitlines()]
+    assert "PSP-LAYOUT" in codes
 
 
 def test_npci_upi_scraper_extracts_p2m_volumes_and_avg_ticket_sizes(tmp_path):
@@ -452,15 +364,15 @@ def test_npci_upi_scraper_extracts_p2m_volumes_and_avg_ticket_sizes(tmp_path):
     assert float(json_rows[0]["p2m_share_pct"]) == pytest.approx(62.5)
 
 
-def test_run_altdata_fleet_runs_five_scrapers_without_quick_commerce():
+def test_run_altdata_fleet_runs_four_scrapers_without_blocked_sources():
     assert fleet_runner.FLEET_SCRAPERS == (
         VahanDashboardScraper,
         GemTendersScraper,
         AgmarknetMandiScraper,
         GridIndiaScraper,
-        NpciUpiScraper,
     )
     assert QuickCommerceScraper not in fleet_runner.FLEET_SCRAPERS
+    assert NpciUpiScraper not in fleet_runner.FLEET_SCRAPERS
 
 
 def test_setup_cron_does_not_schedule_the_altdata_fleet():

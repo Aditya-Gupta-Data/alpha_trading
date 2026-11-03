@@ -13,3 +13,4 @@ pyotp
 pytest-mock
 yfinance
 pandas
+xlrd

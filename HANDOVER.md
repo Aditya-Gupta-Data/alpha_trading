@@ -42,6 +42,14 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, ~12:30) — alt-data scrapers rebuilt against the live sites (4 of 5); Mini PC crontab lines installed
+
+- **Why:** a live dry run on the Mini PC showed all five scrapers returning nothing (ledger Issue 55). Rebuilt against what each site really serves: Grid-India (file API → NLDC daily PSP `.xls`), Agmarknet (2.0 public state-wise dashboard API), GeM (awarded high-value bids + public L1 result pages), Vahan (report view Excel export; YTD snapshot diffing). Full live run of the four on the Mini PC (sandbox copy): GeM 47 rows, Agmarknet 160, Grid-India 18, Vahan first snapshot; 2 m 37 s.
+- **NPCI disabled:** npci.org.in returns an Akamai 403 to any non-browser client; out of the fleet (playbook rule 5). Candidate replacement: RBI monthly payment-system statistics — not built.
+- **Mini PC:** crontab lines installed outside the replica block (23:00 fleet, 00:00 graph update — the owner moved it from 23:15); backup `/tmp/crontab.bak.202611031134`. `xlrd` installed in its venv (now in `requirements.txt`).
+- **Watch tonight / tomorrow:** `logs/altdata_fleet.log` should show four `"status": "ok"` lines except Vahan, whose first night is `empty_parse` by design (snapshot only); from the 11-04 run Vahan writes daily rows.
+- **Open:** `altdata_graph.compute_7d_velocity` falls back to a shorter span under 7 days of data, so the first week of Agmarknet edges carry 1–6-day "7-day" velocities. Agmarknet's state average mixes a varying set of states day to day (not corrected). GeM: listed companies rarely win GeM high-value bids — 0 of 47 matched a ticker on 11-03.
+
 ## 2026-11-03 (Tue, evening) — alt-data GraphRAG injector + transcript friction counter MERGED to `main`; Mini PC crontab lines are the owner's step
 
 - **Merged:** `feature/graphrag-altdata-wiring` (`4fee8fd`: `src/analysis/altdata_graph.py` + `scripts/update_graph_altdata.py`) and `feature/semantic-transcript-router` (`d49b983`: `scripts/triage_transcripts.py`). Suite 3,413 green.

@@ -16,141 +16,18 @@ from src.ingestion.alt_data import (
     normalize_maker,
     parse_bid_value_inr,
 )
+from src.ingestion.alt_data.gem_tenders import match_listed_ticker
 
-VAHAN_LANDING_HTML = """
-<html>
-  <body>
-    <form id="vahanForm">
-      <input type="hidden" name="javax.faces.ViewState" value="-8472910384:192837465" />
-    </form>
-  </body>
-</html>
-"""
+class _EchoScraper(BaseAltDataScraper):
+    dataset_name = "echo"
+    default_columns = ("date", "value")
+    primary_key_columns = ("date",)
 
-VAHAN_PRIMEFACES_XML = """<?xml version='1.0' encoding='UTF-8'?>
-<partial-response>
-  <changes>
-    <update id="combTablePnl"><![CDATA[
-      <table id="combTable">
-        <thead>
-          <tr>
-            <th>S.No</th>
-            <th>Maker</th>
-            <th>ELECTRIC(BOV)</th>
-            <th>PETROL</th>
-            <th>DIESEL</th>
-            <th>CNG ONLY</th>
-            <th>PETROL/HYBRID</th>
-            <th>TOTAL</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>1</td>
-            <td>MARUTI SUZUKI INDIA LTD</td>
-            <td>0</td>
-            <td>3,200</td>
-            <td>0</td>
-            <td>1,150</td>
-            <td>450</td>
-            <td>4,800</td>
-          </tr>
-          <tr>
-            <td>2</td>
-            <td>TATA MOTORS PASSENGER VEHICLES LTD</td>
-            <td>120</td>
-            <td>980</td>
-            <td>320</td>
-            <td>400</td>
-            <td>0</td>
-            <td>1,820</td>
-          </tr>
-          <tr>
-            <td>3</td>
-            <td>TATA PASSENGER ELECTRIC MOBILITY LTD</td>
-            <td>530</td>
-            <td>0</td>
-            <td>0</td>
-            <td>0</td>
-            <td>0</td>
-            <td>530</td>
-          </tr>
-          <tr>
-            <td>4</td>
-            <td>MAHINDRA &amp; MAHINDRA LIMITED</td>
-            <td>85</td>
-            <td>410</td>
-            <td>1,490</td>
-            <td>0</td>
-            <td>0</td>
-            <td>1,985</td>
-          </tr>
-          <tr>
-            <td>5</td>
-            <td>MAHINDRA LAST MILE MOBILITY LTD</td>
-            <td>215</td>
-            <td>0</td>
-            <td>40</td>
-            <td>0</td>
-            <td>0</td>
-            <td>255</td>
-          </tr>
-        </tbody>
-      </table>
-    ]]></update>
-  </changes>
-</partial-response>
-"""
+    def fetch_raw(self, **kwargs):
+        return self.request("https://example.invalid/data").decode()
 
-GEM_HTML_TABLE = """
-<html>
-  <body>
-    <table class="table table-bordered">
-      <thead>
-        <tr>
-          <th>Bid Number</th>
-          <th>Award Date</th>
-          <th>Item Category</th>
-          <th>Winning Bidder</th>
-          <th>Bid Value</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>GEM/2026/B/9001122</td>
-          <td>2026-11-02</td>
-          <td>Electric Buses - 12 Meter AC</td>
-          <td>TATA MOTORS LIMITED</td>
-          <td>₹ 42.50 Crore</td>
-        </tr>
-        <tr>
-          <td>GEM/2026/B/9001188</td>
-          <td>2026-11-02</td>
-          <td>Radar Signal Processing Units</td>
-          <td>BHARAT ELECTRONICS LIMITED</td>
-          <td>₹ 1,85,00,000</td>
-        </tr>
-        <tr>
-          <td>GEM/2026/B/9001245</td>
-          <td>2026-11-02</td>
-          <td>Light Utility Vehicles 4x4</td>
-          <td>MAHINDRA &amp; MAHINDRA LTD</td>
-          <td>Rs. 95.4 Lakh</td>
-        </tr>
-      </tbody>
-    </table>
-  </body>
-</html>
-"""
-
-GEM_HTML_CARDS = """
-<div class="bid-card">
-  <span>Bid No: GEM/2026/B/7712300</span> |
-  <span>Item Category: Solar Power Conditioning Unit</span> |
-  <span>Winning Bidder: BHARAT HEAVY ELECTRICALS LIMITED</span> |
-  <span>Bid Value: ₹ 12.25 Crore</span>
-</div>
-"""
+    def parse(self, raw, **kwargs):
+        return [{"date": "2026-11-02", "value": raw}]
 
 
 def test_base_scraper_rotating_headers_and_exponential_backoff(tmp_path):
@@ -164,28 +41,18 @@ def test_base_scraper_rotating_headers_and_exponential_backoff(tmp_path):
         if attempts["count"] == 1:
             raise ConnectionError("remote portal reset connection")
         if attempts["count"] == 2:
-            raise urllib.error.HTTPError(
-                url, 503, "Service Unavailable", hdrs=None, fp=None
-            )
-        return VAHAN_PRIMEFACES_XML
+            raise urllib.error.HTTPError(url, 503, "Service Unavailable", hdrs=None, fp=None)
+        return "42"
 
-    scraper = VahanDashboardScraper(
-        lake_dir=tmp_path / "lake",
-        log_path=tmp_path / "alt_data.jsonl",
-        max_retries=3,
-        base_backoff=1.0,
-        jitter=0.0,
-        fetch_fn=flaky_fetch,
-        sleep_fn=sleeps.append,
+    scraper = _EchoScraper(
+        lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl",
+        max_retries=3, base_backoff=1.0, jitter=0.0, fetch_fn=flaky_fetch, sleep_fn=sleeps.append,
     )
-    res = scraper.run(report_date="2026-11-02")
-    assert res["ok"] is True
-    assert res["status"] == "ok"
+    res = scraper.run()
+    assert res["ok"] is True and res["status"] == "ok" and res["rows_added"] == 1
     assert attempts["count"] == 3
     assert sleeps == [1.0, 2.0]
-    # User-Agent rotated across attempts
-    uas = [h["User-Agent"] for h in seen_headers]
-    assert len(set(uas)) == 3
+    assert len({h["User-Agent"] for h in seen_headers}) == 3
 
 
 def test_base_scraper_exits_cleanly_when_portal_is_down(tmp_path):
@@ -215,127 +82,179 @@ def test_base_scraper_exits_cleanly_when_portal_is_down(tmp_path):
     assert any(entry["code"] == "PORTAL-DOWN" for entry in logged)
 
 
-def test_vahan_scraper_jsf_handshake_and_maker_fuel_grouping(tmp_path):
-    calls = []
+def _xlsx(rows):
+    """Minimal .xlsx (inline strings) shaped like Vahan's Maker x Fuel export."""
+    import zipfile
 
-    def mock_vahan_portal(url, method="GET", data=None, headers=None):
+    def col(i):
+        name = ""
+        i += 1
+        while i:
+            i, r = divmod(i - 1, 26)
+            name = chr(65 + r) + name
+        return name
+
+    xml_rows = []
+    for r, row in enumerate(rows, 1):
+        cells = "".join(f'<c r="{col(j)}{r}" t="inlineStr"><is><t>{v}</t></is></c>' for j, v in enumerate(row))
+        xml_rows.append(f'<row r="{r}">{cells}</row>')
+    sheet = ('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+             + "".join(xml_rows) + "</sheetData></worksheet>")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+    return buf.getvalue()
+
+
+VAHAN_FUELS = ["CNG ONLY", "DIESEL", "ELECTRIC(BOV)", "NOT APPLICABLE", "PETROL", "PURE EV", "STRONG HYBRID EV"]
+
+
+def _vahan_sheet(tata_ev, maruti_petrol):
+    return _xlsx([
+        ["Maker Wise Fuel Data For All State (2026)"],
+        ["S No", "\xa0 Maker \xa0", "Fuel ", "", "", "", "", "", "", "\xa0TOTAL\xa0"],
+        ["", "", *VAHAN_FUELS, ""],
+        ["1", "TATA MOTORS PASSENGER VEHICLES LTD", "100", "200", "0", "0", "900", "0", "0", "1,200"],
+        ["2", "TATA PASSENGER ELECTRIC MOBILITY LTD", "0", "0", str(tata_ev), "0", "0", "50", "0", "x"],
+        ["3", "TATA HITACHI CONSTRUCTION MACHINERY", "0", "70", "0", "0", "0", "0", "0", "70"],
+        ["4", "MARUTI SUZUKI INDIA LTD", "400", "0", "0", "0", f"{maruti_petrol:,}", "0", "30", "x"],
+        ["5", "SOME TRAILER WORKS", "0", "0", "0", "9", "0", "0", "0", "9"],
+    ])
+
+
+def _vahan_fetch(sheet, calls):
+    def fetch(url, method="GET", data=None, headers=None):
         calls.append((method, data))
         if method == "GET":
-            return VAHAN_LANDING_HTML
-        assert data["javax.faces.ViewState"] == "-8472910384:192837465"
-        assert data["xaxisVar"] == "Maker"
-        assert data["yaxisVar"] == "Fuel"
-        return VAHAN_PRIMEFACES_XML
+            return '<input type="hidden" name="javax.faces.ViewState" value="vs-1" />'
+        if data.get("javax.faces.partial.ajax") == "true":
+            assert data["yaxisVar_input"] == "Maker" and data["xaxisVar_input"] == "Fuel"
+            assert data["selectedYearType_input"] == "C" and data["selectedYear_input"] == "2026"
+            return ('<partial-response><changes><update id="combTablePnl"><![CDATA[<div id="groupingTable"></div>]]>'
+                    '</update><update id="j_id1:javax.faces.ViewState:0"><![CDATA[vs-2]]></update></changes></partial-response>')
+        assert data["groupingTable:xls"] == "groupingTable:xls" and data["javax.faces.ViewState"] == "vs-2"
+        return sheet
+    return fetch
 
-    scraper = VahanDashboardScraper(
-        lake_dir=tmp_path / "lake",
-        log_path=tmp_path / "alt_data.jsonl",
-        only_core_makers=True,
-        fetch_fn=mock_vahan_portal,
-    )
-    res = scraper.run(report_date="2026-11-02")
+
+def test_vahan_scraper_snapshots_ytd_then_writes_daily_deltas(tmp_path):
+    import datetime as dt
+
+    lake = tmp_path / "lake"
+    day = {"d": dt.date(2026, 11, 2)}
+
+    def make(sheet, calls):
+        return VahanDashboardScraper(lake_dir=lake, log_path=tmp_path / "alt_data.jsonl",
+                                     fetch_fn=_vahan_fetch(sheet, calls), today_fn=lambda: day["d"])
+
+    calls = []
+    first = make(_vahan_sheet(tata_ev=500, maruti_petrol=3000), calls).run()
+    assert first["reason"] == "empty_parse"  # first night: snapshot only, no zero rows
+    assert [c[0] for c in calls] == ["GET", "POST", "POST"]
+    snap = {(r["maker"], r["fuel_type"]): int(r["registrations_ytd"])
+            for r in csv.DictReader(io.StringIO((lake / "vahan_registrations_ytd.csv").read_text()))}
+    assert snap[("Tata", "EV")] == 550 and snap[("Tata", "ICE")] == 1200  # Hitachi excluded
+    assert snap[("Maruti", "ICE")] == 3430  # CNG + petrol + strong hybrid
+    assert snap[("ALL", "ICE")] == 100 + 200 + 70 + 900 + 400 + 3000 + 30
+    assert not (lake / "vahan_registrations.csv").exists()
+
+    day["d"] = dt.date(2026, 11, 3)
+    res = make(_vahan_sheet(tata_ev=530, maruti_petrol=3100), []).run()
     assert res["ok"] is True
-    assert res["rows_added"] == 6  # 3 makers (M&M, Maruti, Tata) x 2 fuel types (EV, ICE)
-    assert [c[0] for c in calls] == ["GET", "POST"]
-
-    csv_file = tmp_path / "lake" / "vahan_registrations.csv"
-    rows = list(csv.DictReader(io.StringIO(csv_file.read_text())))
-    by_maker_fuel = {(r["maker"], r["fuel_type"]): int(r["registrations"]) for r in rows}
-
-    # Maruti: EV = 0, ICE = 3200 (Petrol) + 1150 (CNG) + 450 (Hybrid) = 4800
-    assert by_maker_fuel[("Maruti", "EV")] == 0
-    assert by_maker_fuel[("Maruti", "ICE")] == 4800
-
-    # Tata: EV = 120 + 530 = 650, ICE = 980 + 320 + 400 = 1700
-    assert by_maker_fuel[("Tata", "EV")] == 650
-    assert by_maker_fuel[("Tata", "ICE")] == 1700
-
-    # M&M: EV = 85 + 215 = 300, ICE = 410 + 1490 + 40 = 1940
-    assert by_maker_fuel[("M&M", "EV")] == 300
-    assert by_maker_fuel[("M&M", "ICE")] == 1940
-
-    # Re-running the same day is 100% idempotent (0 rows added, no duplicates)
-    second = scraper.run(report_date="2026-11-02")
-    assert second["ok"] is True
-    assert second["rows_added"] == 0
-    assert second["rows_total"] == 6
+    daily = {(r["maker"], r["fuel_type"]): r
+             for r in csv.DictReader(io.StringIO((lake / "vahan_registrations.csv").read_text()))}
+    assert int(daily[("Tata", "EV")]["registrations"]) == 30
+    assert daily[("Tata", "EV")]["ticker"] == "TATAMOTORS.NS"
+    assert int(daily[("Maruti", "ICE")]["registrations"]) == 100
+    assert int(daily[("Tata", "ICE")]["registrations"]) == 0
+    assert daily[("Maruti", "ICE")]["prior_date"] == "2026-11-02" and daily[("Maruti", "ICE")]["days_covered"] == "1"
 
 
-def test_vahan_json_payload_and_helpers():
-    assert normalize_maker("TATA MOTORS LTD") == ("Tata", "TATAMOTORS.NS")
-    assert normalize_maker("MAHINDRA & MAHINDRA") == ("M&M", "M&M.NS")
-    assert normalize_maker("MARUTI SUZUKI INDIA") == ("Maruti", "MARUTI.NS")
+def test_vahan_scraper_skips_a_ytd_decrease_and_dry_run_writes_nothing(tmp_path):
+    import datetime as dt
+
+    lake = tmp_path / "lake"
+    for d, ev in ((dt.date(2026, 11, 2), 500), (dt.date(2026, 11, 3), 480)):
+        VahanDashboardScraper(lake_dir=lake, log_path=tmp_path / "alt_data.jsonl",
+                              fetch_fn=_vahan_fetch(_vahan_sheet(ev, 3000), []), today_fn=lambda d=d: d).run()
+    daily = {(r["maker"], r["fuel_type"]) for r in csv.DictReader(io.StringIO((lake / "vahan_registrations.csv").read_text()))}
+    assert ("Tata", "EV") not in daily and ("Maruti", "ICE") in daily
+    assert "VAHAN-YTD-DOWN" in (tmp_path / "alt_data.jsonl").read_text()
+
+    dry_lake = tmp_path / "dry"
+    VahanDashboardScraper(lake_dir=dry_lake, log_path=tmp_path / "dry.jsonl",
+                          fetch_fn=_vahan_fetch(_vahan_sheet(500, 3000), []),
+                          today_fn=lambda: dt.date(2026, 11, 2)).run(dry_run=True)
+    assert not dry_lake.exists()
+
+
+def test_vahan_helpers():
     assert classify_fuel_type("ELECTRIC(BOV)") == "EV"
+    assert classify_fuel_type("SOLAR") == "EV"
     assert classify_fuel_type("PETROL/CNG") == "ICE"
-
-    payload = {
-        "date": "2026-11-02",
-        "records": [
-            {"maker": "Tata Motors", "fuel": "PURE EV", "registrations": 610},
-            {"maker": "Tata Motors", "fuel": "DIESEL", "registrations": 1400},
-        ],
-    }
-    scraper = VahanDashboardScraper()
-    parsed = scraper.parse(payload)
-    assert parsed == [
-        {"date": "2026-11-02", "maker": "Tata", "ticker": "TATAMOTORS.NS", "fuel_type": "EV", "registrations": 610},
-        {"date": "2026-11-02", "maker": "Tata", "ticker": "TATAMOTORS.NS", "fuel_type": "ICE", "registrations": 1400},
-    ]
+    assert classify_fuel_type("NOT APPLICABLE") is None
+    assert normalize_maker("TATA HITACHI CONSTRUCTION MACHINERY") is None
+    assert normalize_maker("HERO MOTOCORP LTD") == ("Hero", "HEROMOTOCO.NS")
 
 
-def test_gem_tenders_scraper_parses_html_tables_cards_and_json_idempotently(tmp_path):
-    assert parse_bid_value_inr("₹ 42.50 Crore") == pytest.approx(425_000_000.0)
-    assert parse_bid_value_inr("₹ 1,85,00,000") == pytest.approx(18_500_000.0)
-    assert parse_bid_value_inr("Rs. 95.4 Lakh") == pytest.approx(9_540_000.0)
+GEM_LISTING_PAGE = "<script>var d = {'csrf_bd_gem_nk': 'abc123'};</script>"
 
-    scraper = GemTendersScraper(
-        lake_dir=tmp_path / "lake",
-        log_path=tmp_path / "alt_data.jsonl",
-        fetch_fn=lambda url, **kw: GEM_HTML_TABLE,
-    )
-    res = scraper.run(award_date="2026-11-02")
-    assert res["ok"] is True
-    assert res["rows_added"] == 3
+GEM_RESULT_HTML = """
+<h4>3. FINANCIAL EVALUATION</h4><p>List of Sellers Qualified Financially</p>
+<table><tr><th>S.No.</th><th>Seller Name</th><th>Offered Item</th><th>Total Price</th><th>Rank</th></tr>
+<tr><td>1</td><td>LARSEN &amp; TOUBRO LIMITED (MII) Under PMA</td><td>Item Categories : Radar</td><td>` 152000000.00</td><td>L1</td></tr>
+<tr><td>2</td><td>SHREE BEL TRADERS (MSE,MII) Under PMA</td><td>Item Categories : Radar</td><td>` 158000000.00 (Bid Price)</td><td>L2</td></tr>
+</table>
+"""
 
-    csv_file = tmp_path / "lake" / "gem_tenders.csv"
-    rows = list(csv.DictReader(io.StringIO(csv_file.read_text())))
-    assert len(rows) == 3
-    by_bid = {r["bid_number"]: r for r in rows}
 
-    assert by_bid["GEM/2026/B/9001122"]["winning_bidder"] == "TATA MOTORS LIMITED"
-    assert by_bid["GEM/2026/B/9001122"]["ticker"] == "TATAMOTORS.NS"
-    assert float(by_bid["GEM/2026/B/9001122"]["bid_value"]) == pytest.approx(425_000_000.0)
-    assert by_bid["GEM/2026/B/9001122"]["item_category"] == "Electric Buses - 12 Meter AC"
+def _gem_doc(bid_no, b_id, end="2026-10-30T17:00:00Z"):
+    return {"b_bid_number": [bid_no], "b_id": [b_id], "final_end_date_sort": [end],
+            "b_category_name": ["Coastal Surveillance Radar"], "ba_official_details_minName": ["Ministry of Defence"],
+            "ba_official_details_deptName": ["Department of Defence Production"]}
 
-    assert by_bid["GEM/2026/B/9001188"]["ticker"] == "BEL.NS"
-    assert float(by_bid["GEM/2026/B/9001188"]["bid_value"]) == pytest.approx(18_500_000.0)
 
-    # Re-run is idempotent
-    repeat = scraper.run(award_date="2026-11-02")
-    assert repeat["rows_added"] == 0
-    assert repeat["rows_total"] == 3
+def test_gem_scraper_reads_awarded_high_value_bids_and_their_l1(tmp_path):
+    assert match_listed_ticker("SHREE BEL TRADERS") == ""
+    assert match_listed_ticker("BEL") == "BEL.NS"
+    assert match_listed_ticker("Bharat Electronics Limited") == "BEL.NS"
+    assert parse_bid_value_inr("` 152000000.00") == pytest.approx(152_000_000.0)
+    calls, sleeps = [], []
+    listing = {1: [_gem_doc("GEM/2026/B/1", 11), _gem_doc("GEM/2026/R/2", 22)], 2: []}
 
-    # Card-layout HTML and JSON also parse cleanly
-    card_rows = scraper.parse(GEM_HTML_CARDS, award_date="2026-11-02")
-    assert len(card_rows) == 1
-    assert card_rows[0]["winning_bidder"] == "BHARAT HEAVY ELECTRICALS LIMITED"
-    assert card_rows[0]["ticker"] == "BHEL.NS"
-    assert float(card_rows[0]["bid_value"]) == pytest.approx(122_500_000.0)
-    assert card_rows[0]["item_category"] == "Solar Power Conditioning Unit"
+    def fetch(url, method="GET", data=None, headers=None):
+        calls.append((method, url, data))
+        if url.endswith("/all-bids"):
+            return GEM_LISTING_PAGE
+        if url.endswith("/all-bids-data"):
+            payload = json.loads(data["payload"])
+            assert data["csrf_bd_gem_nk"] == "abc123"
+            assert payload["filter"]["byStatus"] == "bid_awarded" and payload["filter"]["highBidValue"] == "highValue"
+            return json.dumps({"code": 200, "response": {"response": {"docs": listing[payload["page"]]}}})
+        if url.endswith("/22"):
+            return "<html>no ranking yet</html>"
+        return GEM_RESULT_HTML
 
-    json_rows = scraper.parse(
-        {
-            "bids": [
-                {
-                    "bid_number": "GEM/2026/B/9990001",
-                    "award_date": "2026-11-02",
-                    "winning_bidder": "LARSEN & TOUBRO LIMITED",
-                    "bid_value": "15.2 Crore",
-                    "item_category": "GIS Substation Package",
-                }
-            ]
-        }
-    )
-    assert len(json_rows) == 1
-    assert json_rows[0]["ticker"] == "LT.NS"
-    assert float(json_rows[0]["bid_value"]) == pytest.approx(152_000_000.0)
+    scraper = GemTendersScraper(lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl",
+                                fetch_fn=fetch, sleep_fn=sleeps.append)
+    res = scraper.run()
+    assert res["ok"] is True and res["rows_added"] == 1
+    assert sleeps == [1.0]
+    (row,) = list(csv.DictReader(io.StringIO((tmp_path / "lake" / "gem_tenders.csv").read_text())))
+    assert row["bid_number"] == "GEM/2026/B/1" and row["date"] == "2026-10-30"
+    assert row["winning_bidder"] == "LARSEN & TOUBRO LIMITED" and row["ticker"] == "LT.NS"
+    assert float(row["bid_value"]) == pytest.approx(152_000_000.0)
+    assert row["ministry"] == "Ministry of Defence" and row["sellers"] == "2"
+    codes = [json.loads(ln)["code"] for ln in (tmp_path / "alt_data.jsonl").read_text().splitlines()]
+    assert codes == ["NO-L1"]
+
+    calls.clear()
+    scraper.run()
+    assert not any("/getBidResultView/11" in c[1] for c in calls)  # known bid is not re-fetched
+
+
+def test_gem_scraper_degrades_without_a_csrf_token(tmp_path):
+    scraper = GemTendersScraper(lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl",
+                                fetch_fn=lambda url, **kw: "<html></html>")
+    res = scraper.run()
+    assert res["status"] == "degraded" and "csrf" in res["reason"]

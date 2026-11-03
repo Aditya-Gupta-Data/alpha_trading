@@ -87,75 +87,6 @@ ZEPTO_MOCK_PAYLOADS = {
     },
 }
 
-AGMARKNET_GRIDVIEW_HTML = """
-<html>
-  <body>
-    <table id="cphBody_GridPriceData">
-      <tr>
-        <th>Sl no.</th>
-        <th>District Name</th>
-        <th>Market Name</th>
-        <th>Commodity</th>
-        <th>Variety</th>
-        <th>Grade</th>
-        <th>Min Price (Rs./Quintal)</th>
-        <th>Max Price (Rs./Quintal)</th>
-        <th>Modal Price (Rs./Quintal)</th>
-        <th>Price Date</th>
-      </tr>
-      <tr>
-        <td>1</td>
-        <td>Indore</td>
-        <td>Indore Mandi</td>
-        <td>Wheat</td>
-        <td>Lokwan</td>
-        <td>FAQ</td>
-        <td>2,420</td>
-        <td>2,680</td>
-        <td>2,550</td>
-        <td>02-Nov-2026</td>
-      </tr>
-      <tr>
-        <td>2</td>
-        <td>Kolhapur</td>
-        <td>Kolhapur APMC</td>
-        <td>Sugar</td>
-        <td>Medium</td>
-        <td>FAQ</td>
-        <td>3,780</td>
-        <td>3,920</td>
-        <td>3,850</td>
-        <td>02-Nov-2026</td>
-      </tr>
-      <tr>
-        <td>3</td>
-        <td>Kolar</td>
-        <td>Kolar Market</td>
-        <td>Tomato</td>
-        <td>Hybrid</td>
-        <td>FAQ</td>
-        <td>1,800</td>
-        <td>2,400</td>
-        <td>2,100</td>
-        <td>02-Nov-2026</td>
-      </tr>
-      <tr>
-        <td>4</td>
-        <td>Nashik</td>
-        <td>Lasalgaon</td>
-        <td>Onion</td>
-        <td>Red</td>
-        <td>FAQ</td>
-        <td>2,900</td>
-        <td>3,500</td>
-        <td>3,200</td>
-        <td>02-Nov-2026</td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
-
 NPCI_UPI_ECOSYSTEM_HTML = """
 <html>
   <body>
@@ -250,51 +181,63 @@ def test_quick_commerce_scraper_computes_basket_indices_and_custom_cpi(tmp_path)
     assert float(z_oil["inflation_pct"]) == pytest.approx(5.25)
 
 
-def test_agmarknet_mandi_scraper_parses_html_and_json_for_four_staples(tmp_path):
-    assert normalize_agri_commodity("Wheat") == "Wheat"
-    assert normalize_agri_commodity("Sugar") == "Sugar"
-    assert normalize_agri_commodity("Tomato") == "Tomatoes"
+def _agm_page(records, next_page=None):
+    """One `dashboard-data/` page as the live API returns it (shape verified 2026-11-03)."""
+    return json.dumps({"status": "success", "message": "Data fetched successfully.",
+                       "pagination": {"next_page": next_page}, "data": {"columns": [], "records": records}})
+
+
+def _agm_rec(cmdt, state, as_on, one_yr=None):
+    return {"cmdt_name": cmdt, "state_name": state, "as_on": as_on, "one_yr_ago": one_yr,
+            "unit_name_price": "Rs./Quintal"}
+
+
+def test_agmarknet_scraper_reads_the_statewise_dashboard_one_day_per_call(tmp_path):
     assert normalize_agri_commodity("Onion") == "Onions"
+    assert normalize_agri_commodity("Onion Green") is None
+    assert normalize_agri_commodity("Wheat Atta") is None
+    bodies = []
+
+    def fetch(url, method="GET", data=None, headers=None):
+        body = json.loads(data)
+        bodies.append(body)
+        if body["from_date"] == "2026-11-02" and body["page"] == 1:
+            return _agm_page([_agm_rec("Onion", "Maharashtra", "2150.00", "3100.00"),
+                              _agm_rec("Onion Green", "Maharashtra", "900.00"),
+                              _agm_rec("Tomato", "Karnataka", None)], next_page="p2")
+        if body["from_date"] == "2026-11-02":
+            return _agm_page([_agm_rec("Wheat", "Gujarat", "3,110.04")])
+        return json.dumps({"status": False, "message": "No data found", "data": []})
 
     scraper = AgmarknetMandiScraper(
-        lake_dir=tmp_path / "lake",
-        log_path=tmp_path / "alt_data.jsonl",
-        fetch_fn=lambda url, **kw: AGMARKNET_GRIDVIEW_HTML,
+        lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl", fetch_fn=fetch,
+        days_per_run=2, today_fn=lambda: __import__("datetime").date(2026, 11, 3),
     )
-    res = scraper.run(report_date="2026-11-02")
-    assert res["ok"] is True
-    assert res["rows_added"] == 4
+    res = scraper.run()
+    assert res["ok"] is True and res["rows_added"] == 2
+    first = bodies[0]
+    assert first["dashboard"] == "statewise_price_arrival_sp" and "captcha" not in first
+    assert sorted(first["commodity"]) == [1, 23, 44, 65]
+    assert first["from_date"] == first["to_date"] == "2026-11-03"
 
-    csv_path = tmp_path / "lake" / "agmarknet_mandi.csv"
-    rows = list(csv.DictReader(io.StringIO(csv_path.read_text())))
-    by_comm = {r["commodity"]: r for r in rows}
+    rows = list(csv.DictReader(io.StringIO((tmp_path / "lake" / "agmarknet_mandi.csv").read_text())))
+    by = {(r["commodity"], r["state"]): r for r in rows}
+    onion = by[("Onions", "Maharashtra")]
+    assert onion["date"] == "2026-11-02" and onion["mandi"] == "STATE_WEIGHTED_AVG"
+    assert float(onion["modal_price_quintal"]) == pytest.approx(2150.0)
+    assert float(onion["modal_price_kg"]) == pytest.approx(21.5)
+    assert float(onion["price_1y_ago_quintal"]) == pytest.approx(3100.0)
+    assert float(by[("Wheat", "Gujarat")]["modal_price_quintal"]) == pytest.approx(3110.04)
+    assert ("Tomatoes", "Karnataka") not in by  # no price that day: skipped, not filled
 
-    assert set(by_comm.keys()) == {"Wheat", "Sugar", "Tomatoes", "Onions"}
-    assert float(by_comm["Wheat"]["modal_price_quintal"]) == pytest.approx(2550.0)
-    assert float(by_comm["Wheat"]["modal_price_kg"]) == pytest.approx(25.50)
-    assert float(by_comm["Sugar"]["modal_price_quintal"]) == pytest.approx(3850.0)
-    assert float(by_comm["Tomatoes"]["modal_price_kg"]) == pytest.approx(21.00)
-    assert float(by_comm["Onions"]["modal_price_quintal"]) == pytest.approx(3200.0)
 
-    # Verify JSON payload parsing as well
-    json_rows = scraper.parse(
-        {
-            "date": "2026-11-02",
-            "records": [
-                {
-                    "commodity": "Onion",
-                    "state": "Maharashtra",
-                    "mandi": "Pimpalgaon",
-                    "min_price": 3000,
-                    "max_price": 3400,
-                    "modal_price": 3250,
-                }
-            ],
-        }
+def test_agmarknet_scraper_degrades_when_the_api_refuses(tmp_path):
+    scraper = AgmarknetMandiScraper(
+        lake_dir=tmp_path / "lake", log_path=tmp_path / "alt_data.jsonl", days_per_run=1,
+        fetch_fn=lambda url, **kw: json.dumps({"detail": "x", "status": False, "message": "Invalid dashboard type"}),
     )
-    assert len(json_rows) == 1
-    assert json_rows[0]["commodity"] == "Onions"
-    assert float(json_rows[0]["modal_price_kg"]) == pytest.approx(32.50)
+    res = scraper.run()
+    assert res["status"] == "degraded" and "Invalid dashboard type" in res["reason"]
 
 
 def _psp_rows(nr_energy, nr_met=61715.0):

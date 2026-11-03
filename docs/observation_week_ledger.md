@@ -2502,3 +2502,12 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Verified: the 11-01 03:08 IST manual run of `graphrag_news_shadow` on the Mini PC logged `HTTP Error 403: Forbidden` for all three Moneycontrol feeds (`marketreports.xml`, `business.xml`, `economy.xml`); ET and Zerodha Pulse fetched (11 new items).
 - The 10-31 16:15 IST run on the same host fetched 101 new items; whether Moneycontrol was among them was not checked. The same feeds fetched from the Mac via curl on 10-30 (mc_markets 4, mc_business 13, mc_economy 3).
 - Cause unknown (rate limit after more fetches per day, or an IP block). `event_engine.emit` uses the same feeds and would be affected too — not checked.
+
+
+## Issue 55 — every alt-data scraper returned nothing against the live sites (found 2026-11-03; 4 of 5 FIXED in code, not yet deployed)
+
+- Verified 11-03 ~11:35 IST on the Mini PC (dry runs, nothing written): Vahan `empty_parse` (connection reset, then no table), GeM `empty_parse`, Agmarknet `empty_parse`, Grid-India `HTTP 404` (the NPP dashboard URL), NPCI `empty_parse`. The parsers had only been tested on invented fixtures.
+- Causes found: Agmarknet 2.0 and grid-india.in are now JS apps over JSON APIs; GeM `all-bids` lists open tenders, not awards; the Vahan JSF form ids were guesses; npci.org.in answers every non-browser client with an Akamai 403 (homepage included).
+- Fixed on `feature/altdata-live-fixes`: Grid-India (file API + NLDC PSP `.xls`), Agmarknet (public state-wise dashboard API; the captcha-gated market report is not used), GeM (awarded high-value bids + public result pages), Vahan (report view Excel export, YTD snapshot diffing). Full live run of the four on the Mini PC in a sandbox copy, 12:14–12:16 IST: GeM 47 rows, Agmarknet 160, Grid-India 18, Vahan first snapshot only (daily rows start the next night, by design).
+- NPCI: not fixed. Getting past the bot wall would break playbook rule 5; removed from the fleet. RBI payment-system statistics are the candidate replacement (not built).
+- Seen, not fixed: `altdata_graph.compute_7d_velocity` falls back to a shorter span when the series has under 7 days, so the first nights' "7-day" Agmarknet velocities span 1–2 days (Sugar +10.5% over 1 day on 11-03).

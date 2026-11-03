@@ -23,6 +23,10 @@ Implements the promotion readiness harness defined in
     (`n >= 60`, `wilson_lb > 0.50`, `p_shuffled < alpha`), the harness emits
     `status = "READY_FOR_DEPT5_DECISION"` — never self-promoting edges into
     `vol_bridge` or altering sizing/entry rules.
+  * **AltData edge-class court (bottom of file):** grades each alt-data
+    relation on its dated activations; `promote_edge_class` flips a GRADUATED
+    class to `outcome_derived` only when `scripts/run_proving_court.py
+    --promote` is run by a person.
 """
 
 from __future__ import annotations
@@ -388,3 +392,269 @@ def evaluate_promotion_readiness(
         "paired": paired,
         "placebo": placebo_res,
     }
+
+
+# ---------------------------------------------------------------------------
+# AltData edge-class court: each relation written by src/analysis/altdata_graph
+# (WON_CONTRACT, INPUT_COST_PRESSURE, VEHICLE_SALES_MOMENTUM) is graded as one
+# class on its dated activations (`altdata_momentum_modifiers`).
+# ---------------------------------------------------------------------------
+
+ALTDATA_SOURCE = "altdata_telemetry"
+ALTDATA_EXTRACTOR = "altdata_graph"
+PROMOTED_SOURCE = "outcome_derived"
+DEFAULT_PLACEBO_DRAWS = 1000
+MIN_PLACEBO_POOL = 5
+
+_PROMOTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS altdata_class_promotions (
+    relation        TEXT PRIMARY KEY,
+    promoted_at     TEXT NOT NULL,
+    edges_promoted  INTEGER NOT NULL,
+    verdict_json    TEXT NOT NULL
+);
+"""
+
+
+def _bare_symbol(ticker) -> str:
+    return str(ticker or "").upper().removesuffix(".NS").removesuffix(".BO").strip()
+
+
+def _bar_day(bar: dict) -> str:
+    return str(bar.get("session") or bar.get("date") or "")[:10]
+
+
+def load_altdata_activations(conn) -> list[dict]:
+    """Dated, signed alt-data activations: one per non-zero momentum modifier
+    whose (ticker, relation) still has an alt-data edge in `graph_edges`."""
+    try:
+        rows = conn.execute(
+            "SELECT m.date, m.ticker, m.signal_type, m.momentum_modifier "
+            "FROM altdata_momentum_modifiers m "
+            "WHERE EXISTS (SELECT 1 FROM graph_edges e "
+            "  WHERE e.relation = m.signal_type AND e.extractor = ? "
+            "  AND (e.source_node = m.ticker OR e.target_node = m.ticker)) "
+            "ORDER BY m.date, m.ticker, m.signal_type",
+            (ALTDATA_EXTRACTOR,),
+        ).fetchall()
+    except Exception:
+        return []
+    out = []
+    for d, ticker, relation, modifier in rows:
+        m = float(modifier or 0)
+        sign = (m > 0) - (m < 0)
+        if sign and _bare_symbol(ticker):
+            out.append({"date": str(d)[:10], "ticker": _bare_symbol(ticker),
+                        "relation": relation, "sign": sign})
+    return out
+
+
+def forward_entry(bars: list[dict], signal_day: str,
+                  horizon_sessions: int = DEFAULT_HORIZON_SESSIONS):
+    """(entry_index, return_pct) entering at the open of the first session
+    AFTER `signal_day` (the data lands overnight, decision #65) and exiting at
+    the close `horizon_sessions` sessions later counting the entry session.
+    None when the window is not complete or the open is missing."""
+    if not bars or horizon_sessions < 1:
+        return None
+    day = str(signal_day)[:10]
+    idx = next((i for i, b in enumerate(bars) if _bar_day(b) > day), None)
+    if idx is None or idx + horizon_sessions - 1 >= len(bars):
+        return None
+    entry = bars[idx].get("open")
+    exit_ = bars[idx + horizon_sessions - 1].get("close")
+    if not entry or exit_ is None or float(entry) <= 0:
+        return None
+    return idx, (float(exit_) - float(entry)) / float(entry) * 100.0
+
+
+def _class_stats(signed_returns: list[float], horizon_sessions: int) -> dict:
+    n = len(signed_returns)
+    wins = sum(1 for r in signed_returns if r > 0)
+    mean = sum(signed_returns) / n if n else None
+    sharpe = None
+    if n >= 2:
+        var = sum((r - mean) ** 2 for r in signed_returns) / (n - 1)
+        if var > 0:
+            sharpe = mean / math.sqrt(var) * math.sqrt(252.0 / horizon_sessions)
+    return {
+        "n": n,
+        "wins": wins,
+        "hit_rate": wins / n if n else None,
+        "wilson_lb": stat_gates.wilson_lower_bound(wins, n),
+        "mean_signed_return_pct": mean,
+        "sharpe_annualised": sharpe,
+    }
+
+
+def pair_altdata_activations_with_outcomes(
+    activations: list[dict],
+    bars_by_ticker: dict[str, list[dict]],
+    horizon_sessions: int = DEFAULT_HORIZON_SESSIONS,
+) -> dict[str, dict]:
+    """Per relation: signed forward returns (sign × return) for activations
+    whose windows do not overlap an earlier counted one on the same ticker,
+    so one persistent signal is never counted once per day."""
+    bars = {_bare_symbol(k): v for k, v in (bars_by_ticker or {}).items()}
+    out: dict[str, dict] = {}
+    next_free: dict[tuple, int] = {}
+    for act in sorted(activations, key=lambda a: (a["date"], a["ticker"])):
+        rel = act["relation"]
+        cls = out.setdefault(rel, {"pairs": [], "skipped_overlap": 0,
+                                   "skipped_no_bars": 0})
+        ticker = _bare_symbol(act["ticker"])
+        fwd = forward_entry(bars.get(ticker, []), act["date"], horizon_sessions)
+        if fwd is None:
+            cls["skipped_no_bars"] += 1
+            continue
+        idx, ret = fwd
+        key = (rel, ticker)
+        if idx < next_free.get(key, -1):
+            cls["skipped_overlap"] += 1
+            continue
+        next_free[key] = idx + horizon_sessions
+        cls["pairs"].append({"date": act["date"], "ticker": ticker,
+                             "sign": act["sign"], "return_pct": ret,
+                             "signed_return_pct": act["sign"] * ret})
+    for cls in out.values():
+        cls.update(_class_stats([p["signed_return_pct"] for p in cls["pairs"]],
+                                horizon_sessions))
+    return out
+
+
+def altdata_ticker_placebo(
+    pairs: list[dict],
+    bars_by_ticker: dict[str, list[dict]],
+    pool: list[str],
+    horizon_sessions: int = DEFAULT_HORIZON_SESSIONS,
+    n_shuffles: int = DEFAULT_PLACEBO_DRAWS,
+    seed: int = 0,
+) -> dict:
+    """Shuffled-ticker placebo: keep every activation's date and sign, give it
+    a random ticker from `pool`, and re-score. p = (1 + #placebo hit rate ≥
+    real) / (1 + draws). Market drift on those dates is in both, so only the
+    edge-to-ticker mapping is under test."""
+    bars = {_bare_symbol(k): v for k, v in (bars_by_ticker or {}).items()}
+    pool = sorted({_bare_symbol(t) for t in pool if bars.get(_bare_symbol(t))})
+    real_n = len(pairs)
+    real_hit = (sum(1 for p in pairs if p["signed_return_pct"] > 0) / real_n
+                if real_n else None)
+    if real_n == 0 or len(pool) < MIN_PLACEBO_POOL:
+        return {"p_value": None, "pool_size": len(pool), "draws": 0,
+                "real_hit_rate": real_hit, "placebo_mean_hit_rate": None,
+                "reason": "empty_class" if real_n == 0 else "placebo_pool_too_small"}
+    options = []
+    for p in pairs:
+        rets = [p["sign"] * fwd[1] for t in pool
+                if (fwd := forward_entry(bars[t], p["date"], horizon_sessions))]
+        options.append(rets)
+    rng = random.Random(seed)
+    at_least, hits = 0, []
+    for _ in range(n_shuffles):
+        drawn = [rng.choice(o) for o in options if o]
+        h = sum(1 for r in drawn if r > 0) / len(drawn) if drawn else 0.0
+        hits.append(h)
+        if h >= real_hit:
+            at_least += 1
+    return {"p_value": (1 + at_least) / (1 + n_shuffles), "pool_size": len(pool),
+            "draws": n_shuffles, "real_hit_rate": real_hit,
+            "placebo_mean_hit_rate": sum(hits) / len(hits), "reason": None}
+
+
+def evaluate_altdata_edge_classes(
+    activations: list[dict],
+    bars_by_ticker: dict[str, list[dict]],
+    horizon_sessions: int = DEFAULT_HORIZON_SESSIONS,
+    min_activations: int = MIN_FORWARD_ACTIVATIONS,
+    alpha: float = DEFAULT_ALPHA,
+    n_shuffles: int = DEFAULT_PLACEBO_DRAWS,
+    seed: int = 0,
+) -> dict[str, dict]:
+    """Verdict per relation: ACCUMULATING (n < min), GRADUATES (n ≥ min,
+    Wilson LB > 0.50, mean > 0, placebo p < alpha / classes tested), or
+    REJECTED. Alpha is Bonferroni-split across the classes that reached n."""
+    classes = pair_altdata_activations_with_outcomes(
+        activations, bars_by_ticker, horizon_sessions)
+    pool = sorted({_bare_symbol(a["ticker"]) for a in activations})
+    tested = [r for r, c in classes.items() if c["n"] >= min_activations]
+    alpha_eff = alpha / len(tested) if tested else alpha
+    verdicts = {}
+    for rel, cls in sorted(classes.items()):
+        v = {k: cls[k] for k in ("n", "wins", "hit_rate", "wilson_lb",
+                                 "mean_signed_return_pct", "sharpe_annualised",
+                                 "skipped_overlap", "skipped_no_bars")}
+        v.update(relation=rel, horizon_sessions=horizon_sessions,
+                 min_activations=min_activations, alpha=alpha,
+                 alpha_bonferroni=alpha_eff, placebo=None)
+        if cls["n"] < min_activations:
+            v.update(status="ACCUMULATING", graduates=False,
+                     reason=f"{cls['n']}/{min_activations} non-overlapping activations")
+        else:
+            plc = altdata_ticker_placebo(cls["pairs"], bars_by_ticker, pool,
+                                         horizon_sessions, n_shuffles, seed)
+            v["placebo"] = plc
+            p = plc["p_value"]
+            fails = []
+            if cls["wilson_lb"] <= 0.50:
+                fails.append(f"Wilson LB {cls['wilson_lb']:.3f} <= 0.50")
+            if (cls["mean_signed_return_pct"] or 0) <= 0:
+                fails.append("mean signed return <= 0")
+            if p is None:
+                fails.append(f"placebo not run ({plc['reason']})")
+            elif p >= alpha_eff:
+                fails.append(f"placebo p {p:.4f} >= {alpha_eff:.4f}")
+            v.update(status="REJECTED" if fails else "GRADUATES",
+                     graduates=not fails,
+                     reason="; ".join(fails) or "all gates passed")
+        verdicts[rel] = v
+    return verdicts
+
+
+def ensure_promotions_schema(conn) -> None:
+    conn.executescript(_PROMOTIONS_SCHEMA)
+
+
+def promoted_relations(conn) -> set[str]:
+    """Relations the court has promoted (empty when the table is absent)."""
+    try:
+        return {r[0] for r in conn.execute(
+            "SELECT relation FROM altdata_class_promotions")}
+    except Exception:
+        return set()
+
+
+def promote_edge_class(conn, verdict: dict, now_iso: str) -> int:
+    """Flip every alt-data edge of a GRADUATED relation to `outcome_derived`
+    and record the verdict. The `extractor` column keeps 'altdata_graph', so
+    the edge's origin stays visible. Returns edges changed."""
+    if not verdict.get("graduates"):
+        raise ValueError(f"{verdict.get('relation')} has not graduated")
+    ensure_promotions_schema(conn)
+    rel = verdict["relation"]
+    cur = conn.execute(
+        "UPDATE graph_edges SET source = ? "
+        "WHERE relation = ? AND extractor = ? AND source = ?",
+        (PROMOTED_SOURCE, rel, ALTDATA_EXTRACTOR, ALTDATA_SOURCE))
+    changed = cur.rowcount
+    conn.execute(
+        "INSERT INTO altdata_class_promotions (relation, promoted_at, "
+        "edges_promoted, verdict_json) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (relation) DO UPDATE SET promoted_at = excluded.promoted_at, "
+        "edges_promoted = excluded.edges_promoted, verdict_json = excluded.verdict_json",
+        (rel, now_iso, changed, json.dumps(verdict, sort_keys=True, default=str)))
+    conn.commit()
+    return changed
+
+
+def revoke_edge_class(conn, relation: str) -> int:
+    """Undo a promotion: the relation's alt-data edges go back to
+    `altdata_telemetry` and its promotion row is removed."""
+    ensure_promotions_schema(conn)
+    cur = conn.execute(
+        "UPDATE graph_edges SET source = ? "
+        "WHERE relation = ? AND extractor = ? AND source = ?",
+        (ALTDATA_SOURCE, relation, ALTDATA_EXTRACTOR, PROMOTED_SOURCE))
+    conn.execute("DELETE FROM altdata_class_promotions WHERE relation = ?",
+                 (relation,))
+    conn.commit()
+    return cur.rowcount

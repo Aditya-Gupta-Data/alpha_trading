@@ -26,8 +26,9 @@ Wiring Rules:
 
 Standing Constraints:
   * Provenance firewall preserved: all edges written by this module carry
-    `source = 'altdata_telemetry'` and `extractor = 'altdata_graph'` (never
-    `'outcome_derived'`).
+    `source = 'altdata_telemetry'` and `extractor = 'altdata_graph'`; only a
+    relation promoted by `scripts/run_proving_court.py --promote` (table
+    `altdata_class_promotions`) is written as `'outcome_derived'`.
   * 100% idempotent SQLite upserts (`ON CONFLICT DO UPDATE`).
 """
 
@@ -232,6 +233,17 @@ def _read_csv_rows(csv_path: Path) -> List[Dict[str, str]]:
         return []
 
 
+def _edge_source_for(conn: sqlite3.Connection, relation: str) -> str:
+    """`outcome_derived` for a relation the proving court promoted, else telemetry."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM altdata_class_promotions WHERE relation = ?", (relation,)
+        ).fetchone()
+    except sqlite3.Error:
+        row = None
+    return "outcome_derived" if row else ALTDATA_SOURCE_TAG
+
+
 def _upsert_graph_edge_and_nodes(
     conn: sqlite3.Connection,
     source_node: str,
@@ -267,6 +279,7 @@ def _upsert_graph_edge_and_nodes(
         increment_mention=True,
     )
 
+    edge_source = _edge_source_for(conn, relation)
     context_str = json.dumps(context_dict, sort_keys=True)
     conf_clamped = round(max(0.0, min(1.0, float(confidence_score))), 6)
     weight_rounded = round(float(weight), 6)
@@ -280,7 +293,7 @@ def _upsert_graph_edge_and_nodes(
         context=context_str,
         decay_lambda=decay_lambda,
         valid_from=valid_from,
-        source=ALTDATA_SOURCE_TAG,
+        source=edge_source,
     )
     conn.execute(
         """
@@ -298,7 +311,7 @@ def _upsert_graph_edge_and_nodes(
             int(polarity),
             weight_rounded,
             ALTDATA_EXTRACTOR_TAG,
-            ALTDATA_SOURCE_TAG,
+            edge_source,
             source_node,
             relation,
             target_node,

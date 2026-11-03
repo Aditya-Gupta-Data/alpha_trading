@@ -42,6 +42,25 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, ~15:00) — alt-data proving court built (#177); promotion is a manual flag
+
+**Live:** nothing new runs on its own. `scripts/run_proving_court.py` grades each
+alt-data relation (GeM WON_CONTRACT, Agmarknet INPUT_COST_PRESSURE, Vahan
+VEHICLE_SALES_MOMENTUM) against 5-session forward returns from the bhavcopy lake:
+n ≥ 60, Wilson LB > 0.50, mean > 0, shuffled-ticker placebo p < 0.05 (Bonferroni).
+Default prints verdicts; `--promote` flips a graduated class to `outcome_derived`.
+
+**Not done / known:**
+- No class can graduate for months: the Mini PC's alt-data lake had its first
+  real run tonight, and 60 non-overlapping activations per class is a long way off.
+- A promotion changes nothing in sizing today: `vol_bridge` reads keyword words
+  in node names (none in alt-data nodes) and runs on the VM, whose database never
+  sees the Mini PC's alt-data edges. Both are recorded in #177; closing them is a
+  separate decision.
+
+**Next:** run `venv/bin/python scripts/run_proving_court.py` on the Mini PC now and
+then (weekly is plenty) to watch n grow. Do not add `--promote` to cron.
+
 ## 2026-11-03 (Tue, ~13:00) — graph velocity patched; RBI payment statistics replace NPCI
 
 - `altdata_graph.compute_7d_velocity` now abstains (None → no edge, no modifier) without a base observation 7–14 days old. Consequence: **no Agmarknet or Vahan edges for the first 7 nights** of collection (Agmarknet from 11-08ish once 7 days of CSV exist; Vahan daily rows start 11-04, so edges ~11-11). GeM edges are unaffected (no velocity).

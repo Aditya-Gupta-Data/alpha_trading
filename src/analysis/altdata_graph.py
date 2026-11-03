@@ -172,9 +172,9 @@ def compute_7d_velocity(
 
     If multiple observations share the same date, they are averaged first (for prices)
     before calling this helper, or passed pre-aggregated.
-    Selects `base_date` as the latest observation on or before `latest_date - window_days`
-    (falling back to the earliest available date prior to `latest_date` if the series
-    spans fewer than `window_days` calendar days).
+    `base_date` is the latest observation on or before `latest_date - window_days`. Returns None
+    (abstain) when no observation is that old, or when the nearest one is more than
+    `2 * window_days` old: a shorter or much longer span is never reported as a 7-day velocity.
     """
     parsed: List[Tuple[dt.date, str, float]] = []
     for raw_d, raw_v in dated_values:
@@ -199,12 +199,14 @@ def compute_7d_velocity(
     if not prior:
         return None
 
-    target_dt = latest_dt - dt.timedelta(days=max(1, int(window_days)))
+    window = max(1, int(window_days))
+    target_dt = latest_dt - dt.timedelta(days=window)
     on_or_before_target = [p for p in prior if p[0] <= target_dt]
-    if on_or_before_target:
-        base_dt, base_str, base_val = on_or_before_target[-1]
-    else:
-        base_dt, base_str, base_val = prior[0]
+    if not on_or_before_target:
+        return None
+    base_dt, base_str, base_val = on_or_before_target[-1]
+    if (latest_dt - base_dt).days > 2 * window:
+        return None
 
     if base_val <= 0:
         return None

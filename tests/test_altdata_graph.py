@@ -233,4 +233,28 @@ def test_update_graph_altdata_wrapper_end_to_end_and_idempotent_upserts(tmp_path
 
     # Also test compute_7d_velocity helper edge cases
     assert compute_7d_velocity([("2026-11-02", 100.0)]) is None
+
+
+def test_compute_7d_velocity_abstains_without_a_full_window():
+    short = [("2026-11-01", 100.0), ("2026-11-02", 105.0), ("2026-11-03", 110.0)]
+    assert compute_7d_velocity(short) is None  # 2 days of history is not a 7-day velocity
+    six = [("2026-10-28", 100.0), ("2026-11-03", 120.0)]
+    assert compute_7d_velocity(six) is None
+    exact = [("2026-10-27", 100.0), ("2026-10-30", 90.0), ("2026-11-03", 120.0)]
+    v = compute_7d_velocity(exact)
+    assert v["base_date"] == "2026-10-27" and v["span_days"] == 7 and v["velocity_7d"] == pytest.approx(0.20)
+    gap = [("2026-10-27", 100.0), ("2026-10-29", 104.0), ("2026-11-04", 110.0)]
+    assert compute_7d_velocity(gap)["base_date"] == "2026-10-27"  # nearest base on or before t-7
+    stale = [("2026-10-01", 100.0), ("2026-11-03", 150.0)]
+    assert compute_7d_velocity(stale) is None  # a month-old base is not a 7-day velocity
+
+
+def test_agmarknet_injection_writes_no_edge_on_short_history():
+    conn = brain_map.connect(":memory:")
+    rows = [{"date": d, "commodity": "Sugar", "state": "UP", "mandi": "STATE_WEIGHTED_AVG", "modal_price_quintal": p}
+            for d, p in (("2026-11-02", "5612.5"), ("2026-11-03", "6200"))]
+    res = AltDataGraphInjector(conn=conn).inject_agmarknet_mandi(rows=rows)
+    assert res["edges_upserted"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM graph_edges").fetchone()[0] == 0
+    conn.close()
     conn.close()

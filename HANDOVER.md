@@ -42,6 +42,24 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, ~16:30) — #179 DEPLOYED: VM on `1bb1930`, 5-minute recon in cron, Darlings at Rs.3L; switch still OFF
+
+**Live on the VM (after the close):**
+- Code `1bb1930`. Open-book check first: 0 order legs in flight, so wings-first changes no
+  existing ticket — it applies from the next fill. No service restart (the 09:10 loop loads it).
+- Crontab re-installed from `setup_cron.sh` (backup `~/user_crontab.bak-20261103-recon`):
+  41 → 43 jobs, the only change the two intraday recon lines. First 5-minute pass Wed 11-04 09:00.
+- `reallocate_m4_capital.py --apply` (DB backup `data/brain_map.db.bak-20261103-realloc`):
+  IDX_SPREADS start Rs.8L → Rs.7L, DARLINGS Rs.2L → Rs.3L, firm equity unchanged at
+  Rs.11,90,749.92, one `capital_allocations` row; re-run reports nothing to move.
+
+**State if the switch went on now:** DARLINGS equity Rs.2.64L, Rs.1.99L locked (~Rs.65k free),
+under its Rs.3.57L ceiling → trades. IDX_SPREADS Rs.9.90L deployed vs Rs.2.98L ceiling →
+close-only until it drains. `multi_bucket_ledger` stays OFF — owner's call.
+
+**Watch tomorrow:** `logs/recon_engine.log` should gain ~75 passes; a broker mismatch cards once
+and latches the desk halt. Any `wings_first:` refusal in fills is the new guard working.
+
 ## 2026-11-03 (Tue, ~17:00) — wings-first enforced in the OMS, 5-minute recon, Darlings reallocation tool (#179) — branch only
 
 **Built on `feature/oms-recon-daemon` (not merged, not deployed):**

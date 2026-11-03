@@ -1,8 +1,8 @@
 """
 DISABLED 2026-11-03: www.npci.org.in answers every non-browser client with an Akamai 403
 ("Access Denied"), homepage included. Getting past that is bot-detection evasion (playbook rule 5),
-so this module is not in the nightly fleet; RBI's monthly payment-system statistics are the
-lawful replacement source. Code kept for reference only.
+so this module is not in the nightly fleet; `rbi_statistics.py` (RBI Payment System Indicators)
+replaces it. Code kept for reference only.
 
 src/ingestion/alt_data/npci_upi.py — NPCI UPI Retail Velocity Scraper
 =====================================================================

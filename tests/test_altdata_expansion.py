@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import scripts.run_altdata_fleet as fleet_runner
+from src.ingestion.alt_data import RbiPaymentSystemsScraper
 from src.ingestion.alt_data import (
     AgmarknetMandiScraper,
     GemTendersScraper,
@@ -364,12 +365,13 @@ def test_npci_upi_scraper_extracts_p2m_volumes_and_avg_ticket_sizes(tmp_path):
     assert float(json_rows[0]["p2m_share_pct"]) == pytest.approx(62.5)
 
 
-def test_run_altdata_fleet_runs_four_scrapers_without_blocked_sources():
+def test_run_altdata_fleet_runs_five_scrapers_without_blocked_sources():
     assert fleet_runner.FLEET_SCRAPERS == (
         VahanDashboardScraper,
         GemTendersScraper,
         AgmarknetMandiScraper,
         GridIndiaScraper,
+        RbiPaymentSystemsScraper,
     )
     assert QuickCommerceScraper not in fleet_runner.FLEET_SCRAPERS
     assert NpciUpiScraper not in fleet_runner.FLEET_SCRAPERS

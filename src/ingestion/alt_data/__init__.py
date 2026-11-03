@@ -15,6 +15,7 @@ from src.ingestion.alt_data.npci_upi import (
     NpciUpiScraper,
     compute_avg_ticket_size_inr,
 )
+from src.ingestion.alt_data.rbi_statistics import RbiPaymentSystemsScraper
 from src.ingestion.alt_data.quick_commerce import (
     STAPLE_BASKET,
     QuickCommerceScraper,
@@ -35,6 +36,7 @@ __all__ = [
     "GridIndiaScraper",
     "NpciUpiScraper",
     "QuickCommerceScraper",
+    "RbiPaymentSystemsScraper",
     "VahanDashboardScraper",
     "classify_fuel_type",
     "classify_staple_category",

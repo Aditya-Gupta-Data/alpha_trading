@@ -1,4 +1,4 @@
-"""Nightly alt-data fleet (#39, Mini PC only): runs 5 alt-data scrapers into data/lake/alt_data/."""
+"""Nightly alt-data fleet (#39, Mini PC only): runs 4 alt-data scrapers into data/lake/alt_data/."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,6 @@ from src.ingestion.alt_data import (  # noqa: E402
     BaseAltDataScraper,
     GemTendersScraper,
     GridIndiaScraper,
-    NpciUpiScraper,
     VahanDashboardScraper,
 )
 
@@ -23,12 +22,11 @@ FLEET_SCRAPERS: Sequence[Type[BaseAltDataScraper]] = (
     GemTendersScraper,
     AgmarknetMandiScraper,
     GridIndiaScraper,
-    NpciUpiScraper,
 )
 
 
 def run_fleet(lake_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Run every scraper in FLEET_SCRAPERS (Quick-Commerce excluded: playbook rule 5, ToS)."""
+    """Run every scraper in FLEET_SCRAPERS (Quick-Commerce: ToS; NPCI: Akamai bot wall — playbook rule 5)."""
     summaries: List[Dict[str, Any]] = []
     kwargs: Dict[str, Any] = {"lake_dir": lake_dir} if lake_dir is not None else {}
     for scraper_cls in FLEET_SCRAPERS:

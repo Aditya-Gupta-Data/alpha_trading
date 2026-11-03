@@ -364,15 +364,15 @@ def test_npci_upi_scraper_extracts_p2m_volumes_and_avg_ticket_sizes(tmp_path):
     assert float(json_rows[0]["p2m_share_pct"]) == pytest.approx(62.5)
 
 
-def test_run_altdata_fleet_runs_five_scrapers_without_quick_commerce():
+def test_run_altdata_fleet_runs_four_scrapers_without_blocked_sources():
     assert fleet_runner.FLEET_SCRAPERS == (
         VahanDashboardScraper,
         GemTendersScraper,
         AgmarknetMandiScraper,
         GridIndiaScraper,
-        NpciUpiScraper,
     )
     assert QuickCommerceScraper not in fleet_runner.FLEET_SCRAPERS
+    assert NpciUpiScraper not in fleet_runner.FLEET_SCRAPERS
 
 
 def test_setup_cron_does_not_schedule_the_altdata_fleet():

@@ -42,6 +42,16 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, evening) — alt-data GraphRAG injector + transcript friction counter MERGED to `main`; Mini PC crontab lines are the owner's step
+
+- **Merged:** `feature/graphrag-altdata-wiring` (`4fee8fd`: `src/analysis/altdata_graph.py` + `scripts/update_graph_altdata.py`) and `feature/semantic-transcript-router` (`d49b983`: `scripts/triage_transcripts.py`). Suite 3,413 green.
+- **Mini PC crontab (owner, `crontab -e`, OUTSIDE the replica block), after `git pull --ff-only`:**
+  `0 23 * * * cd "$HOME/alpha_trading" && venv/bin/python scripts/run_altdata_fleet.py >> logs/altdata_fleet.log 2>&1`
+  `15 23 * * * cd "$HOME/alpha_trading" && venv/bin/python scripts/update_graph_altdata.py >> logs/update_graph_altdata.log 2>&1`
+  `triage_transcripts.py` stays manual (no transcripts are dropped into `data/lake/transcripts/` yet).
+- **Firewall (verified in source):** injector edges carry `source='altdata_telemetry'`; `vol_bridge` sizes only on `outcome_derived`, so alt-data cannot move a size. Edges can still show as text in a proposal's `memory_context` on the node that holds them. `altdata_momentum_modifiers` has no reader.
+- **Open:** if the 23:00 fleet overruns 15 minutes (six portals with backoff), the 23:15 injector reads the previous night's CSVs — harmless (idempotent), but a day late. None of the scrapers, the injector or the router counter has run on real data.
+
 ## 2026-11-03 (Tue, later) — alt-data fleet isolated to the Mini PC; Quick-Commerce disabled (ToS)
 
 - **Supersedes the block below on scheduling.** Job #39 is REMOVED from `scripts/setup_cron.sh`: the alt-data fleet does not run on the VM, and because the replica block is rendered from that file, it no longer reaches the Mini PC that way either. It runs only from a manual crontab line on the Mini PC (residential IP).

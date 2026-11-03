@@ -90,6 +90,10 @@
 #
 #  39. AltData Fleet (#39) is intentionally excluded from the VM and must be
 #      scheduled manually via local crontab on the Mini PC (Residential IP).
+#  40. scripts/update_graph_altdata.py (alt-data -> GraphRAG edges) is likewise
+#      excluded from the VM and must be scheduled manually on the Mini PC at
+#      23:15 IST, after the 23:00 fleet. Mini PC only: it writes the node's own
+#      data/brain_map.db, never the VM's.
 #
 #  29. src.ingestion.cross_asset: Daily 19:40 IST (wired 2026-08-07). MCX
 #                             commodities + global-index EOD bars into the
@@ -511,6 +515,9 @@ CRON_TZ=Asia/Kolkata
 50 8 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
 # 39. AltData Fleet (#39) is intentionally excluded from the VM and must be scheduled manually via
 #     local crontab on the Mini PC (Residential IP). Not here, so node_replica_block.py cannot copy it.
+# 40. update_graph_altdata.py (GraphRAG injector) must also be scheduled manually on the Mini PC, at
+#     23:15 IST, after the 23:00 fleet has written data/lake/alt_data/. Never on the VM: it writes
+#     graph_edges in the local data/brain_map.db (source altdata_telemetry, so vol_bridge ignores it).
 $CRON_BLOCK_END
 EOF
 )

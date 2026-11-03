@@ -42,6 +42,20 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue, ~17:00) — wings-first enforced in the OMS, 5-minute recon, Darlings reallocation tool (#179) — branch only
+
+**Built on `feature/oms-recon-daemon` (not merged, not deployed):**
+- `oms.apply_fill` refuses a SELL-leg fill until every BUY leg on its ticket is FILLED; the paper
+  venue works BUYs first so normal fills still complete in one pass. This touches every paper
+  account's fills (entries and exits): **dry-run the open book on the VM before deploying.**
+- Recon: two new cron lines (every 5 min, 09:00–15:30 Mon–Fri) need `setup_cron.sh` re-run on the
+  VM; a standing mismatch is carded once.
+- `scripts/reallocate_m4_capital.py`: dry run on the VM, then `--apply`, moves Rs.1L
+  IDX_SPREADS → DARLINGS (DARLINGS → Rs.3L). After it, DARLINGS has ~Rs.65k free; IDX stays
+  close-only (Rs.9.9L locked vs ~Rs.2.98L ceiling) whenever the switch goes on.
+
+**Not done:** none of this is on the VM. The switch `multi_bucket_ledger` is still off.
+
 ## 2026-11-03 (Tue, ~16:05) — VM on `595a5d8`; open positions migrated into buckets; switch still OFF
 
 **Done on the VM (after market close):** `git pull` to `595a5d8` (32 commits; cron changes are

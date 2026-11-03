@@ -42,6 +42,16 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-03 (Tue) — alt-data fleet (Vahan + GeM) MERGED to `main` (ca3fdb7) and scheduled as cron #39 (23:00 IST); NOT deployed to the VM yet
+
+- **What landed:** Antigravity's `src/ingestion/alt_data/` (`e4eeb08`): `BaseAltDataScraper` + `VahanDashboardScraper` (→ `data/lake/alt_data/vahan_registrations.csv`) + `GemTendersScraper` (→ `data/lake/alt_data/gem_tenders.csv`). Wrapper `scripts/run_altdata_fleet.py` runs both; cron #39 `0 23 * * *` in `scripts/setup_cron.sh`, log `logs/altdata_fleet.log`. Capture-only: nothing on the trade path imports it. Fail-open; portal outages → `logs/alt_data.jsonl`. Suite 3,393 green (49.8 s).
+- **Deploy (owner, VM):** `cd ~/alpha_trading && git fetch -q && git merge --ff-only origin/main && bash scripts/setup_cron.sh`.
+- **Open / known:**
+  - The parsers are tested on fixtures only — never run against the live Vahan / GeM portals. After the first 23:00 run, read `logs/altdata_fleet.log`; `"status": "degraded"` means the portal was down or the markup did not parse.
+  - **Double execution:** `node_replica_block.py` renders #39 into the Mini PC's replica block too, so once the Mini PC re-installs its block both nodes scrape each portal nightly (IP-ban risk). Architect intent (11-03): move alt-data scraping to the Mini PC only — not done.
+  - Not in `ops_monitor.EXPECTED_JOBS` (no heartbeat check), same as cross_asset.
+- **Next:** Antigravity is building `feature/altdata-expansion` (4 more scrapers). Review it against the same boundary (writes only under `data/lake/alt_data/`), and decide the VM-vs-Mini-PC placement before or with that merge.
+
 ## 2026-11-02 (Mon, session wrap) — performance review; darling pricing + regime_read fix + four read-only studies MERGED to `main` (PR #16); VM / dashboard deploy is the OWNER's step (this cloud session cannot reach the VM)
 
 - **State at wrap:** PR #16 merged to `main` with owner authorisation. Nothing is deployed until the owner runs the deploy below; until then the VM still runs the pre-#16 code. No trading rule changed today.

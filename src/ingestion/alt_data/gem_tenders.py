@@ -16,13 +16,19 @@ pages are fetched with a pause between them.
 
 Output (`data/lake/alt_data/gem_tenders.csv`, key date + bid_number + winning_bidder + item_category):
   `date, bid_number, winning_bidder, ticker, bid_value, item_category, ministry, department, bid_id, sellers`
-  `ticker` is set only when the L1 seller matches a known listed company (`LISTED_BIDDER_PATTERNS`).
+  `ticker` is set only when the L1 seller matches a listed company: `LISTED_BIDDER_PATTERNS` first, then an
+  exact normalised-name hit in the NSE name index (`data/nse_equity_names.json`, built weekly from Dhan's
+  public scrip master by `refresh_name_index`). Never fuzzy; a 'private limited' seller is never listed.
 """
 from __future__ import annotations
 
+import csv
 import html
+import io
 import json
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -59,15 +65,90 @@ LISTED_BIDDER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 _SELLER_TAG_RE = re.compile(r"\s*\((?:MSE|MII|SC|ST|WOMEN|STARTUP|,|\s)+\)|\s+Under\s+PMA\b.*$", re.I)
 
 
-def match_listed_ticker(bidder_name: str) -> str:
-    """Return the NSE ticker if `bidder_name` matches a known listed corporation, else `''`."""
+NSE_NAME_INDEX_PATH = Path(__file__).resolve().parents[3] / "data" / "nse_equity_names.json"
+NAME_INDEX_MAX_AGE_S = 7 * 86400
+NAME_INDEX_SERIES = ("EQ", "BE")
+MIN_INDEX_NAME_LEN = 4
+_PRIVATE_RE = re.compile(r"\b(?:PRIVATE|PVT)\b", re.I)
+_GEM_TAG_RE = re.compile(r"\(\s*(?:MSE|MII|Startup)\b[^)]*\)", re.I)
+_NAME_WORD_MAP = {"COMPANY": "CO", "CORPORATION": "CORP", "CORPN": "CORP", "AND": "&"}
+_NAME_DROP = {"LIMITED", "LTD", "THE", "M", "S"}
+_name_index_cache: dict[str, dict[str, str]] = {}
+
+
+def normalize_company_name(name: str) -> str:
+    """Upper-case, tags and punctuation out, LIMITED/LTD/M/S dropped, COMPANY->CO: 'M/S Siemens Ltd.' -> 'SIEMENS'."""
+    s = _SELLER_TAG_RE.sub("", _GEM_TAG_RE.sub("", str(name or ""))).upper().replace("&", " & ")
+    words = [_NAME_WORD_MAP.get(w, w) for w in re.split(r"[^A-Z0-9&]+", s) if w]
+    return " ".join(w for w in words if w not in _NAME_DROP)
+
+
+def build_name_index(master_csv: str) -> dict[str, str]:
+    """{normalised company name: NSE symbol} from Dhan's scrip master, NSE EQ/BE equities only. A name that
+    normalises to two symbols is dropped (ambiguous), as is any name shorter than MIN_INDEX_NAME_LEN."""
+    seen: dict[str, set[str]] = {}
+    for row in csv.DictReader(io.StringIO(master_csv)):
+        if (row.get("SEM_EXM_EXCH_ID") != "NSE" or row.get("SEM_INSTRUMENT_NAME") != "EQUITY"
+                or row.get("SEM_SERIES") not in NAME_INDEX_SERIES):
+            continue
+        sym = (row.get("SEM_TRADING_SYMBOL") or "").strip().upper()
+        for col in ("SM_SYMBOL_NAME", "SEM_CUSTOM_SYMBOL"):
+            key = normalize_company_name(row.get(col) or "")
+            if sym and len(key) >= MIN_INDEX_NAME_LEN:
+                seen.setdefault(key, set()).add(sym)
+    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+
+def refresh_name_index(path: Path | str | None = None, fetch_fn=None,
+                       max_age_s: float = NAME_INDEX_MAX_AGE_S, now: float | None = None) -> dict[str, Any]:
+    """Rebuild the name index when missing or older than `max_age_s`. Fail-open: a failed fetch keeps the
+    old file. One public CDN GET (Dhan, not NSE) a week."""
+    p = Path(path) if path else NSE_NAME_INDEX_PATH
+    now = time.time() if now is None else now
+    if p.exists() and now - p.stat().st_mtime < max_age_s:
+        return {"refreshed": False, "reason": "fresh", "path": str(p)}
+    try:
+        from src.ingestion import scrip_master
+        index = build_name_index(scrip_master.fetch_master(fetch_fn))
+        if len(index) < 1000:
+            return {"refreshed": False, "reason": f"index too small ({len(index)} names) — kept the old file"}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"built_at": now, "names": index}, sort_keys=True))
+        tmp.replace(p)
+        _name_index_cache.pop(str(p), None)
+        return {"refreshed": True, "names": len(index), "path": str(p)}
+    except Exception as exc:
+        return {"refreshed": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def load_name_index(path: Path | str | None = None) -> dict[str, str]:
+    """The cached name index, {} when absent. The default path is never read under pytest (Rule 6)."""
+    if path is None and os.environ.get("PYTEST_CURRENT_TEST"):
+        return {}
+    p = Path(path) if path else NSE_NAME_INDEX_PATH
+    key = str(p)
+    if key not in _name_index_cache:
+        try:
+            _name_index_cache[key] = json.loads(p.read_text()).get("names") or {}
+        except (OSError, ValueError):
+            return {}
+    return _name_index_cache[key]
+
+
+def match_listed_ticker(bidder_name: str, name_index: dict[str, str] | None = None) -> str:
+    """Return the NSE ticker if `bidder_name` matches a listed corporation, else `''`."""
     cleaned = re.sub(r"\s+", " ", str(bidder_name or "")).strip()
     if not cleaned:
         return ""
     for pattern, ticker in LISTED_BIDDER_PATTERNS:
         if pattern.search(cleaned):
             return ticker
-    return ""
+    if _PRIVATE_RE.search(cleaned):
+        return ""
+    index = load_name_index() if name_index is None else name_index
+    sym = index.get(normalize_company_name(cleaned))
+    return f"{sym}.NS" if sym else ""
 
 
 def parse_bid_value_inr(raw_value: Any) -> float | None:

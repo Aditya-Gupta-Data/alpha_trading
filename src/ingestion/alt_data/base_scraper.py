@@ -313,7 +313,19 @@ class BaseAltDataScraper(abc.ABC):
         Never raises on network/portal failure; logs a warning and exits cleanly."""
         try:
             raw = self.fetch_raw(**kwargs)
+            self.baseline_note = None    # a parse that is empty BY DESIGN (e.g. a first snapshot) names it here
             rows = self.parse(raw, **kwargs)
+            if not rows and self.baseline_note:
+                return {
+                    "ok": True,
+                    "status": "baseline",
+                    "dataset": self.dataset_name,
+                    "reason": self.baseline_note,
+                    "rows_added": 0,
+                    "rows_total": len(self.read_existing_rows()),
+                    "dry_run": bool(dry_run),
+                    "as_of": now_ist_iso(),
+                }
             if not rows:
                 self.log_warning("EMPTY-PARSE", "portal returned zero extractable records")
                 return {

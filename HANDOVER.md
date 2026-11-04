@@ -42,6 +42,18 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-04 (Wed, evening) — Day-1 audit: VM clean; three fixes (#180)
+
+**Day 1 (verified):** VM — 80 recon passes, all parity, 0 alerts; 7 multi-leg tickets filled
+wings-first, 0 refusals. Mini PC — fleet wrote GeM 47 / Agmarknet 176 / Grid-India 18 / RBI 200
+rows + Vahan's first snapshot; graph got 0 edges; court has 0 activations (ledger Issue 56).
+
+**Fixed (#180):** GeM matches listed winners via an NSE name index (Siemens, 1 of 47 — awards
+mostly go to private firms); Vahan's first night reads `baseline`, not `degraded`; recon.jsonl
+writes the 59-row paper book only when it changes (~1.4 MB/day → ~0.2 MB/day).
+
+**Expect:** Agmarknet edges ~11-08, Vahan ~11-11; GeM edges only when a listed company wins.
+
 ## 2026-11-03 (Tue, ~16:30) — #179 DEPLOYED: VM on `1bb1930`, 5-minute recon in cron, Darlings at Rs.3L; switch still OFF
 
 **Live on the VM (after the close):**

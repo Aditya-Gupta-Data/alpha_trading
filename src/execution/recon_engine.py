@@ -45,6 +45,7 @@ call uses; never minted here (#48). Rate limit: routed through
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -463,25 +464,45 @@ def mismatch_signature(result: dict) -> list:
     return sorted(str(m.get("detail")) for m in result.get("mismatches") or [])
 
 
-def _last_signature(path: Path = None):
-    """The previous pass's mismatch signature from the log's last line, or None."""
+def _last_record(path: Path = None):
+    """The log's last line as a dict, or None."""
     p = path or LOG_PATH
     try:
         with p.open("rb") as f:
             f.seek(0, 2)
-            f.seek(max(0, f.tell() - 65536))
-            last = f.read().decode("utf-8", "replace").strip().splitlines()[-1]
-        return mismatch_signature(json.loads(last))
+            f.seek(max(0, f.tell() - 262144))
+            return json.loads(f.read().decode("utf-8", "replace").strip().splitlines()[-1])
     except Exception:
         return None
 
 
+def _last_signature(path: Path = None):
+    """The previous pass's mismatch signature from the log's last line, or None."""
+    last = _last_record(path)
+    return mismatch_signature(last) if last is not None else None
+
+
+def paper_only_signature(result: dict) -> str:
+    """A short hash of the paper-only rows: equal hashes mean the same book."""
+    rows = sorted(str(r.get("detail")) for r in result.get("paper_only") or [])
+    return hashlib.sha1("\n".join(rows).encode()).hexdigest()[:16]
+
+
 def _log(result: dict, path: Path = None) -> None:
+    """Append one pass. The paper-only rows are written in full only when they differ from the last pass;
+    otherwise the line carries `paper_only_ref` (the ts of the record that holds them) — #180, the
+    5-minute cadence wrote ~1.4 MB/day of identical rows."""
     p = path or LOG_PATH
+    row = dict(result, paper_only_count=len(result.get("paper_only") or []),
+               paper_only_sig=paper_only_signature(result))
+    last = _last_record(p)
+    if last and last.get("paper_only_sig") == row["paper_only_sig"] and row["paper_only_count"]:
+        row["paper_only_ref"] = last.get("paper_only_ref") or last.get("ts")
+        row["paper_only"] = []
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a") as f:
-            f.write(json.dumps(result, default=str) + "\n")
+            f.write(json.dumps(row, default=str) + "\n")
     except Exception as exc:
         print(f"  (recon: log write failed: {exc})")
 

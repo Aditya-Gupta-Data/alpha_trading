@@ -149,7 +149,8 @@ def test_vahan_scraper_snapshots_ytd_then_writes_daily_deltas(tmp_path):
 
     calls = []
     first = make(_vahan_sheet(tata_ev=500, maruti_petrol=3000), calls).run()
-    assert first["reason"] == "empty_parse"  # first night: snapshot only, no zero rows
+    # first night: snapshot only, no zero rows — a baseline, not a degraded run (Day-1 audit, #180)
+    assert first["ok"] and first["status"] == "baseline" and first["reason"].startswith("first_snapshot")
     assert [c[0] for c in calls] == ["GET", "POST", "POST"]
     snap = {(r["maker"], r["fuel_type"]): int(r["registrations_ytd"])
             for r in csv.DictReader(io.StringIO((lake / "vahan_registrations_ytd.csv").read_text()))}

@@ -1,6 +1,7 @@
 """Wings-first in the OMS (#166/#179), recon alert de-dup, and the M4 IDX -> DARLINGS reallocation."""
 import importlib.util
 import itertools
+import json
 import sqlite3
 from pathlib import Path
 
@@ -214,3 +215,76 @@ def test_reallocation_dry_run_writes_nothing(tmp_path, capsys):
     assert ra.main(["--db", str(db), "--apply"]) == 0
     assert chk.execute("SELECT starting_capital FROM portfolios WHERE portfolio_id = ?",
                        (ra.DARL,)).fetchone()[0] == 300000.0
+
+
+# ------------------------------------------------------------ Day-1 audit fixes (#180)
+
+def test_recon_log_writes_the_paper_book_once_until_it_changes(tmp_path):
+    from src.dashboard import data as dd
+    from tests.test_recon_engine import _db, _read_fn
+    log = tmp_path / "r.jsonl"
+    for _ in range(3):
+        re_.run(conn=_db(), read_fn=_read_fn(), log_path=log, announce=False, halt=False)
+    rows = [json.loads(x) for x in log.read_text().splitlines()]
+    assert rows[0]["paper_only"] and "paper_only_ref" not in rows[0]
+    assert rows[1]["paper_only"] == [] and rows[1]["paper_only_ref"] == rows[0]["ts"]
+    assert rows[2]["paper_only_ref"] == rows[0]["ts"]
+    assert rows[2]["paper_only_count"] == len(rows[0]["paper_only"])
+    assert len(log.read_text().splitlines()[2]) < len(log.read_text().splitlines()[0])
+    latest = dd.latest_recon(log)
+    assert latest["paper_only"] == rows[0]["paper_only"]
+
+
+def test_recon_log_rewrites_the_paper_book_when_it_changes(tmp_path):
+    from tests.test_recon_engine import _db, _read_fn
+    log = tmp_path / "r.jsonl"
+    re_.run(conn=_db(), read_fn=_read_fn(), log_path=log, announce=False, halt=False)
+    re_.run(conn=_db(with_2l=False), read_fn=_read_fn(), log_path=log, announce=False, halt=False)
+    rows = [json.loads(x) for x in log.read_text().splitlines()]
+    assert rows[1]["paper_only_sig"] != rows[0]["paper_only_sig"]
+    assert rows[1]["paper_only"] and "paper_only_ref" not in rows[1]
+
+
+def test_gem_name_index_matches_listed_names_exactly():
+    from src.ingestion.alt_data import gem_tenders as g
+    master = ("SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,SEM_TRADING_SYMBOL,"
+              "SEM_CUSTOM_SYMBOL,SEM_SERIES,SM_SYMBOL_NAME\n"
+              "NSE,E,3150,EQUITY,SIEMENS,Siemens,EQ,SIEMENS LTD\n"
+              "NSE,E,6364,EQUITY,NATIONALUM,NALCO,EQ,NATIONAL ALUMINIUM CO LTD\n"
+              "NSE,E,1,EQUITY,ACMESOLAR,Acme Solar Holdings,EQ,ACME SOLAR HOLDINGS LTD\n"
+              "NSE,E,2,EQUITY,TWINA,Twin Corp,EQ,TWIN CORP LTD\n"
+              "NSE,E,3,EQUITY,TWINB,Twin Corp,EQ,TWIN CORPORATION LIMITED\n"
+              "NSE,E,4,EQUITY,SMEX,Sme Co,SM,SME EXAMPLE LTD\n"
+              "BSE,E,5,EQUITY,BSEONLY,Bse Only,A,BSE ONLY LTD\n")
+    idx = g.build_name_index(master)
+    m = lambda n: g.match_listed_ticker(n, idx)
+    assert m("SIEMENS LIMITED") == "SIEMENS.NS"
+    assert m("M/S Siemens Ltd.( MSE Social Category:General )") == "SIEMENS.NS"
+    assert m("NATIONAL ALUMINIUM COMPANY LIMITED") == "NATIONALUM.NS"
+    assert m("SIEMENS HEALTHCARE PRIVATE LIMITED") == ""
+    assert m("ACME VENTURES") == ""
+    assert m("TWIN CORPORATION LIMITED") == ""          # two symbols share the name: ambiguous, dropped
+    assert m("SME EXAMPLE LTD") == "" and m("BSE ONLY LTD") == ""
+    assert m("BHARAT HEAVY ELECTRICALS LIMITED") == "BHEL.NS"   # the pattern list still runs first
+
+
+def test_gem_default_index_is_never_read_under_pytest():
+    from src.ingestion.alt_data import gem_tenders as g
+    assert g.load_name_index() == {}
+
+
+def test_name_index_refresh_is_weekly_and_keeps_the_old_file_on_failure(tmp_path):
+    from src.ingestion.alt_data import gem_tenders as g
+    path = tmp_path / "names.json"
+    rows = "\n".join(f"NSE,E,{i},EQUITY,SYM{i},Company Number {i},EQ,COMPANY NUMBER {i} LTD" for i in range(1200))
+    master = ("SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,SEM_TRADING_SYMBOL,"
+              "SEM_CUSTOM_SYMBOL,SEM_SERIES,SM_SYMBOL_NAME\n" + rows + "\n")
+    r = g.refresh_name_index(path, fetch_fn=lambda url: master, now=1_000_000.0)
+    assert r["refreshed"] and r["names"] == 1200
+    assert g.load_name_index(path)["CO NUMBER 7"] == "SYM7"
+    assert g.refresh_name_index(path, fetch_fn=lambda url: 1 / 0)["reason"] == "fresh"
+    import os
+    os.utime(path, (0, 0))
+    bad = g.refresh_name_index(path, fetch_fn=lambda url: (_ for _ in ()).throw(OSError("cdn down")))
+    assert not bad["refreshed"] and "cdn down" in bad["reason"]
+    assert json.loads(path.read_text())["names"]["CO NUMBER 7"] == "SYM7"

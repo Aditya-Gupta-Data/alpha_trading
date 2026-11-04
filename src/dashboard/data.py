@@ -867,8 +867,16 @@ def open_trades(journal_path=None, equity_ledger_path=None, snapshot_marks: dict
 
 # ------------------------------------------------------------- recon
 def latest_recon(path=None) -> dict | None:
+    """The last pass; its paper-only rows are taken from the record `paper_only_ref` points at (#180)."""
     rows = _jsonl(path or RECON_PATH)
-    return rows[-1] if rows else None
+    if not rows:
+        return None
+    last = dict(rows[-1])
+    ref = last.get("paper_only_ref")
+    if ref and not last.get("paper_only"):
+        full = next((r for r in reversed(rows) if r.get("ts") == ref and r.get("paper_only")), None)
+        last["paper_only"] = (full or {}).get("paper_only") or []
+    return last
 
 
 def recon_history(path=None, n: int = 30) -> list:

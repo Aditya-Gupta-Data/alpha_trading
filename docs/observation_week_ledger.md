@@ -2511,3 +2511,12 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Fixed on `feature/altdata-live-fixes`: Grid-India (file API + NLDC PSP `.xls`), Agmarknet (public state-wise dashboard API; the captcha-gated market report is not used), GeM (awarded high-value bids + public result pages), Vahan (report view Excel export, YTD snapshot diffing). Full live run of the four on the Mini PC in a sandbox copy, 12:14–12:16 IST: GeM 47 rows, Agmarknet 160, Grid-India 18, Vahan first snapshot only (daily rows start the next night, by design).
 - NPCI: not fixed. Getting past the bot wall would break playbook rule 5; removed from the fleet. RBI payment-system statistics are the candidate replacement (not built).
 - Seen, not fixed: `altdata_graph.compute_7d_velocity` falls back to a shorter span when the series has under 7 days, so the first nights' "7-day" Agmarknet velocities span 1–2 days (Sugar +10.5% over 1 day on 11-03).
+
+## Issue 56 — Day-1 audit: GeM blind to listed winners, Vahan's first night labelled degraded, recon log growth (found 2026-11-04; FIXED in code, decision #180)
+- Verified 11-04 ~19:55 IST on the Mini PC: the 11-03 23:00 fleet run wrote GeM 47, Agmarknet 176, Grid-India 18, RBI 200 rows and Vahan's 21-row YTD snapshot. The 00:00 graph update wrote 0 edges; the proving court read 0 activations.
+- GeM: 0 of 47 L1 winners carried a ticker. One was listed (SIEMENS LIMITED); the matcher was a 16-name regex list. Against Dhan's scrip master name index (exact normalised names, NSE EQ/BE, ambiguous names dropped, 'private limited' never listed) exactly 1 of 47 matches: Siemens. GeM stays sparse — most awards go to private firms — but is no longer blind.
+- Vahan: the first-night baseline returned `status: degraded, reason: empty_parse`. Expected behaviour, wrong label.
+- Agmarknet wrote no edge because it had 3 days of prices (the #11-03 velocity rule needs 7). Expected; first edges ~11-08.
+- Verified 11-04 on the VM: 80 recon passes 09:00–15:42, all parity, broker reachable every time, 0 mismatches. `logs/recon.jsonl` grew ~1.37 MB in the day (59 paper-only rows on every pass), unrotated (`rotate_logs.sh` trims only `*.log`).
+- Verified 11-04 on the VM: 7 tickets (26 legs) filled with every BUY before its ticket's SELLs; 0 `wings_first:` refusals (all fills whole, one pass).
+

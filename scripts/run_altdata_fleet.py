@@ -27,9 +27,11 @@ FLEET_SCRAPERS: Sequence[Type[BaseAltDataScraper]] = (
 )
 
 
-def run_fleet(lake_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Run every scraper in FLEET_SCRAPERS (Quick-Commerce: ToS; NPCI: Akamai bot wall, replaced by RBI — playbook rule 5)."""
-    summaries: List[Dict[str, Any]] = []
+def run_fleet(lake_dir: Optional[Path] = None, refresh_index=None) -> List[Dict[str, Any]]:
+    """Run every scraper in FLEET_SCRAPERS (Quick-Commerce: ToS; NPCI: Akamai bot wall, replaced by RBI — playbook rule 5).
+    First refreshes GeM's NSE name index when it is over a week old (fail-open)."""
+    from src.ingestion.alt_data.gem_tenders import refresh_name_index
+    summaries: List[Dict[str, Any]] = [{"dataset": "nse_name_index", **(refresh_index or refresh_name_index)()}]
     kwargs: Dict[str, Any] = {"lake_dir": lake_dir} if lake_dir is not None else {}
     for scraper_cls in FLEET_SCRAPERS:
         scraper = scraper_cls(**kwargs)

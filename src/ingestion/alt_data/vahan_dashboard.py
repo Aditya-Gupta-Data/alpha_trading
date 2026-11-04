@@ -319,6 +319,7 @@ class VahanDashboardScraper(BaseAltDataScraper):
                                   dry_run=dry_run)
         if not prior_day:
             self.log_warning("VAHAN-FIRST-SNAPSHOT", f"{day}: no earlier snapshot, daily rows start tomorrow")
+            self.baseline_note = f"first_snapshot: {len(snapshot)} YTD rows written, daily rows start next run"
             return []
         days = (_dt.date.fromisoformat(day) - _dt.date.fromisoformat(prior_day)).days
         out: list[dict[str, Any]] = []

@@ -54,6 +54,9 @@ writes the 59-row paper book only when it changes (~1.4 MB/day → ~0.2 MB/day).
 
 **Expect:** Agmarknet edges ~11-08, Vahan ~11-11; GeM edges only when a listed company wins.
 
+**Deployed 11-04 ~20:10:** Mini PC and VM both on `0297446`; Mini PC name index built (4,263
+names), graph dry run = 1 GeM edge (Siemens). VM recon's slim lines start with the 09:00 pass on 11-05.
+
 ## 2026-11-03 (Tue, ~16:30) — #179 DEPLOYED: VM on `1bb1930`, 5-minute recon in cron, Darlings at Rs.3L; switch still OFF
 
 **Live on the VM (after the close):**

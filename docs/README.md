@@ -83,16 +83,22 @@ Status lines inside them are from the day they were written; the fixes are in #1
 
 ## For NotebookLM
 
-`python3 scripts/sync_to_drive.py --dry-run --output-dir <folder>` writes the
-whole repository as six topic packs, each under NotebookLM's per-source limit:
+The owner's NotebookLM notebook reads this repository as **Google Docs** in a
+Drive folder. NotebookLM re-syncs Drive Docs on its own, so the notebook stays
+current with no re-uploading. The chain:
 
-| Pack | Contents |
-|---|---|
-| `alpha_01_guide.md` | README, CLAUDE, ARCHITECTURE, this index, ACCOUNTS, BRANCHES, MODULES, CRON_SETUP, DECISIONS and the other root docs |
-| `alpha_02_history.md` | HANDOVER, the handover archive, the incident ledger |
-| `alpha_03_specs.md` | Everything else in `docs/` |
-| `alpha_04_config.md` | `config/` |
-| `alpha_05_code_part1.md`, `_part2.md` | `src/` |
+1. A commit lands on `main` (GitHub).
+2. Within an hour of the Mac being awake, LaunchAgent `com.alphatrading.notebooklm-sync`
+   runs `scripts/notebooklm_autosync.sh`: it exports `origin/main` cleanly and runs
+   `scripts/sync_to_drive.py`, which rewrites each Google Doc in place (same Doc, same id).
+3. NotebookLM picks up the changed Docs.
 
-Without `--dry-run` (and with a Drive folder id set up) it uploads the packs to
-Drive, updating each by name.
+The packs (about 10 Docs): `alpha_01_guide_part1/2` (README, CLAUDE, ARCHITECTURE,
+this index, ACCOUNTS, BRANCHES, MODULES, CRON_SETUP, DECISIONS, other root docs),
+`alpha_02_history` (HANDOVER, archive, incident ledger), `alpha_03_specs` (the rest of
+`docs/`), `alpha_04_config`, `alpha_05_code_part1–5` (`src/`). A new part (when the
+repo grows) has to be added to the notebook once by hand; a part no longer needed is
+replaced by a short "no longer used" note.
+
+Force a sync now: `bash ~/.config/alpha_trading/notebooklm_autosync.sh --force`.
+Preview locally: `python3 scripts/sync_to_drive.py --dry-run --output-dir <folder>`.

@@ -69,7 +69,7 @@ python3 -m pytest -q          # ~60s, proves the whole checkout works
 
 ## Current state — 2026-11-06 (what changed since the chapters below were written)
 
-*Built from `DECISIONS.md` #100–#184 and HANDOVER.md. Each line names its
+*Built from `DECISIONS.md` #100–#186 and HANDOVER.md. Each line names its
 decision; read the decision for the mechanics. Everything here is on `main`;
 work on other branches is in `docs/BRANCHES.md`.*
 

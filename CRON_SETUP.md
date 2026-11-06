@@ -232,7 +232,7 @@ in the existing `retired-alphatrading` folder, so this is reversible):
 cd ~/Library/LaunchAgents && launchctl unload com.adityagupta.alpha-edge-miner.plist com.alphatrading.evolution.plist; mkdir -p retired-alphatrading && mv com.adityagupta.alpha-edge-miner.plist com.alphatrading.evolution.plist retired-alphatrading/ && launchctl list | grep -E 'alpha-edge-miner|alphatrading.evolution' || echo "both retired"
 ```
 
-The Mac keeps `com.aditrader.sync` (the artifact ship) and its crontab.
+The Mac keeps `com.aditrader.sync` (the artifact ship) and its crontab, plus (from 2026-11-06) `com.alphatrading.notebooklm-sync`: at login and hourly it rebuilds the owner's NotebookLM Google Docs from `origin/main` when main has moved (`scripts/install_notebooklm_autosync.sh`; log `~/Library/Logs/alpha_trading_notebooklm.log`). Not part of trading.
 
 ## The Mac (development + chat agent; the miner moved to the Mini PC, #149)
 

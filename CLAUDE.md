@@ -19,7 +19,7 @@ having to explain it.
 Then, depending on the task:
 - changing behaviour → `ARCHITECTURE.md` (the 8-department map, the data flow)
 - finding a file → `MODULES.md`
-- asking "why is it like this?" → `DECISIONS.md` (184 numbered decisions as of 2026-11-06)
+- asking "why is it like this?" → `DECISIONS.md` (186 numbered decisions as of 2026-11-06)
 - which paper account does what → `docs/ACCOUNTS.md`
 - what is on a branch but not merged yet → `docs/BRANCHES.md`
 - whether a doc in `docs/` is still true → `docs/README.md` (the index)

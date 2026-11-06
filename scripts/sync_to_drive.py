@@ -1,5 +1,5 @@
 # MANUAL OFFLINE TOOL — compiles the repo's docs, config and code into NotebookLM source packs and syncs them to Google Drive.
-"""Not on any cron: runs by hand or from the optional git post-commit hook. Never imported from src/."""
+"""Each pack is a Google Doc (NotebookLM re-syncs Drive Docs by itself). Run by scripts/notebooklm_autosync.sh. Never imported from src/."""
 import argparse
 import os
 import sys
@@ -12,6 +12,10 @@ CRAWL_DIRS = ("src", "config", "docs")
 GUIDE_EXTRA = ("docs/README.md", "docs/ACCOUNTS.md", "docs/BRANCHES.md")
 HISTORY_FILES = ("HANDOVER.md", "docs/handover_archive.md", "docs/observation_week_ledger.md")
 WORD_CAP = 350_000  # NotebookLM refuses or truncates a source past 500k words; keep headroom
+CHAR_CAP = 800_000  # a Google Doc holds about 1.02M characters
+DOC_MIME = "application/vnd.google-apps.document"
+HTTP_TIMEOUT_S = 600  # converting ~800k characters into a Google Doc can take minutes
+STALE_NOTE = "This part is no longer used: the repository now fits in fewer parts. It is safe to remove from the notebook.\n"
 INCLUDE_EXT = {".py", ".md", ".json", ".yaml"}
 EXCLUDE_DIRS = {".git", "__pycache__", "venv", ".venv", "logs", "node_modules"}
 EXCLUDE_EXT = {".db", ".csv"}
@@ -87,8 +91,21 @@ def _section(root, path):
     return f"\n---\n\n### File: {rel}\n\n~~~{lang}\n{text.rstrip()}{note}\n~~~\n"
 
 
-def build_packs(root=ROOT, now=None, word_cap=WORD_CAP):
-    """[(file name, content)]: one pack per topic, split into parts when over word_cap."""
+def _chunks(sec, char_cap):
+    """Split one oversized file section on line boundaries."""
+    if len(sec) <= char_cap:
+        return [sec]
+    out, cur = [], ""
+    for line in sec.splitlines(keepends=True):
+        if cur and len(cur) + len(line) > char_cap:
+            out.append(cur)
+            cur = "\n[... file continues in the next part ...]\n"
+        cur += line
+    return out + [cur]
+
+
+def build_packs(root=ROOT, now=None, word_cap=WORD_CAP, char_cap=CHAR_CAP):
+    """[(doc name, content)]: one pack per topic, split into parts over word_cap or char_cap."""
     root = Path(root)
     now = now or datetime.now(timezone.utc)
     groups = {}
@@ -99,18 +116,18 @@ def build_packs(root=ROOT, now=None, word_cap=WORD_CAP):
         groups["alpha_01_guide"].sort(key=lambda p: (order.get(p.relative_to(root).as_posix(), 99), p.name))
     out = []
     for pack in sorted(groups):
-        parts, cur, words = [], [], 0
+        parts, cur, words, chars = [], [], 0, 0
         for path in groups[pack]:
-            sec = _section(root, path)
-            n = len(sec.split())
-            if cur and words + n > word_cap:
-                parts.append(cur)
-                cur, words = [], 0
-            cur.append(sec)
-            words += n
+            for sec in _chunks(_section(root, path), char_cap):
+                n, c = len(sec.split()), len(sec)
+                if cur and (words + n > word_cap or chars + c > char_cap):
+                    parts.append(cur)
+                    cur, words, chars = [], 0, 0
+                cur.append(sec)
+                words, chars = words + n, chars + c
         parts.append(cur)
         for i, secs in enumerate(parts, 1):
-            name = f"{pack}.md" if len(parts) == 1 else f"{pack}_part{i}.md"
+            name = pack if len(parts) == 1 else f"{pack}_part{i}"
             head = (f"# alpha_trading — {PACK_TITLES[pack]}"
                     + (f" (part {i} of {len(parts)})" if len(parts) > 1 else "")
                     + f"\n\nGenerated {now.strftime('%Y-%m-%d %H:%M UTC')} from the repository "
@@ -122,7 +139,7 @@ def build_packs(root=ROOT, now=None, word_cap=WORD_CAP):
 
 def build_codex(root=ROOT, now=None):
     """The old single-file codex: every pack concatenated (kept for --output)."""
-    return "".join(content for _, content in build_packs(root, now, word_cap=10**12))
+    return "".join(content for _, content in build_packs(root, now, word_cap=10**12, char_cap=10**12))
 
 
 def get_service():
@@ -146,27 +163,41 @@ def get_service():
         TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         TOKEN_FILE.write_text(creds.to_json())
         os.chmod(TOKEN_FILE, 0o600)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    import google_auth_httplib2
+    import httplib2
+
+    http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_S))
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
-def find_existing_id(service, folder_id, name=CODEX_NAME):
+def find_existing_id(service, folder_id, name=CODEX_NAME, mime=None):
     query = f"name = '{name}' and '{folder_id}' in parents and trashed = false"
+    if mime:
+        query += f" and mimeType = '{mime}'"
     resp = service.files().list(q=query, fields="files(id, name)", pageSize=10, orderBy="modifiedTime desc").execute()
     files = resp.get("files", [])
     return files[0]["id"] if files else None
 
 
-def upload(service, folder_id, content, name=CODEX_NAME):
+def upload(service, folder_id, content, name=CODEX_NAME, as_doc=False):
+    """Create or update one file by name; as_doc converts the markdown into a Google Doc (same id on update)."""
     from googleapiclient.http import MediaInMemoryUpload
 
     media = MediaInMemoryUpload(content.encode("utf-8"), mimetype="text/markdown", resumable=False)
-    file_id = find_existing_id(service, folder_id, name)
+    file_id = find_existing_id(service, folder_id, name, DOC_MIME if as_doc else None)
     if file_id:
-        service.files().update(fileId=file_id, media_body=media, fields="id").execute()
+        service.files().update(fileId=file_id, media_body=media, fields="id").execute(num_retries=3)
         return "updated", file_id
-    meta = {"name": name, "parents": [folder_id], "mimeType": "text/markdown"}
-    created = service.files().create(body=meta, media_body=media, fields="id").execute()
+    meta = {"name": name, "parents": [folder_id], "mimeType": DOC_MIME if as_doc else "text/markdown"}
+    created = service.files().create(body=meta, media_body=media, fields="id").execute(num_retries=3)
     return "created", created["id"]
+
+
+def stale_parts(service, folder_id, keep):
+    """Pack Docs in the folder from an earlier, longer run that this run no longer writes."""
+    query = f"'{folder_id}' in parents and trashed = false and mimeType = '{DOC_MIME}' and name contains 'alpha_0'"
+    resp = service.files().list(q=query, fields="files(id, name)", pageSize=100).execute()
+    return sorted(f["name"] for f in resp.get("files", []) if f["name"] not in keep)
 
 
 def main(argv=None):
@@ -175,16 +206,17 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="build the packs, print stats, no upload")
     ap.add_argument("--output-dir", help="also write every pack into this local folder (drag them into NotebookLM)")
     ap.add_argument("--output", help="also write the old single-file codex to this local path")
+    ap.add_argument("--root", default=str(ROOT), help="repository tree to read (the autosync passes a clean export of origin/main)")
     args = ap.parse_args(argv)
 
-    packs = build_packs()
+    packs = build_packs(Path(args.root))
     if args.output:
-        Path(args.output).write_text(build_codex(), encoding="utf-8")
+        Path(args.output).write_text(build_codex(Path(args.root)), encoding="utf-8")
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     for name, content in packs:
         if args.output_dir:
-            (Path(args.output_dir) / name).write_text(content, encoding="utf-8")
+            (Path(args.output_dir) / f"{name}.md").write_text(content, encoding="utf-8")
         print(f"{name}: {content.count(chr(10) + '### File: ')} files, {len(content.split()):,} words")
     if args.dry_run:
         return 0
@@ -192,8 +224,11 @@ def main(argv=None):
         raise SystemExit("no target folder: pass --folder-id or set DRIVE_FOLDER_ID")
     service = get_service()
     for name, content in packs:
-        action, file_id = upload(service, args.folder_id, content, name)
-        print(f"{name} {action} (file id {file_id})")
+        action, file_id = upload(service, args.folder_id, content, name, as_doc=True)
+        print(f"{name} {action} (Google Doc https://docs.google.com/document/d/{file_id})")
+    for name in stale_parts(service, args.folder_id, {n for n, _ in packs}):
+        upload(service, args.folder_id, STALE_NOTE, name, as_doc=True)
+        print(f"{name} emptied (no longer used)")
     return 0
 
 

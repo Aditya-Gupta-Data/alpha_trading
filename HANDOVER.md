@@ -43,6 +43,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-06 (Fri, late night) — NotebookLM auto-sync: the repo as 10 Google Docs, refreshed hourly from `origin/main` by a Mac LaunchAgent
+
+- **Live now (owner's Drive, verified):** `sync_to_drive.py` uploaded 10 Google Docs into the existing Drive folder (`alpha_01_guide_part1/2`, `alpha_02_history`, `alpha_03_specs`, `alpha_04_config`, `alpha_05_code_part1–5`); a second run updated the first five in place (same ids). Google Docs, not `.md` uploads, because NotebookLM re-syncs Drive Docs automatically (rolled out 2026-05-26); an uploaded `.md` is a frozen copy.
+- **Automation:** `scripts/notebooklm_autosync.sh` (fetch → if `origin/main` moved → clean `git archive` → sync), run by Mac LaunchAgent `com.alphatrading.notebooklm-sync` (login + hourly). Reads `main` only, so uncommitted work never uploads. Supersedes the post-commit hook (never installed). **The owner installs the agent:** `bash scripts/install_notebooklm_autosync.sh` (the agent's session was not permitted to install a persistent job).
+- **Gotchas:** a Doc conversion of ~800k characters takes minutes (timeout raised to 600 s after the first run timed out). OAuth scope `drive.file` sees only files this app created, so it cannot read the folder itself, only write into it. The old `Architecture_Codex.md` (11-01) is still in the folder and no longer updated.
+- **Open:** the notebook is created in NotebookLM with the owner's Google sign-in. If the repo grows into an 11th part, that Doc must be added to the notebook once.
 ## 2026-11-06 (Fri, night) — GraphRAG news shadow: 15 more feeds (#184) + forward test (#185) LIVE on the Mini PC (`main` `ee4213a`); VM untouched
 
 - **Live on the Mini PC:** the shadow now also reads 15 shadow-only feeds (`config/rss_feeds.json` `shadow_feeds`: Business Standard ×3, BusinessLine ×3, Mint ×3, ET company/economy/commodities, RBI ×2, SEBI), cap 600/day; the event engine's feeds are unchanged. New node cron 22:10 Mon–Fri `src.knowledge_graph.graphrag_shadow_forward` grades shadow edges against the bhavcopy lake (1/3/5 sessions, shuffled-ticker placebo, n ≥ 60) into `logs/graphrag_shadow_forward.jsonl`; verdicts only. Crontab backup: `/tmp/crontab_before_185.txt` on the Mini PC (the reinstall added only the #185 line; the manual alt-data lines kept, moved below the block).

@@ -40,7 +40,7 @@ class _Req:
     def __init__(self, result):
         self.result = result
 
-    def execute(self):
+    def execute(self, num_retries=0):
         return self.result
 
 
@@ -98,19 +98,31 @@ def test_packs_route_files_and_split_over_cap(tmp_path):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("word " * n)
     packs = dict(sync.build_packs(tmp_path, word_cap=80))
-    assert "### File: README.md" in packs["alpha_01_guide.md"]
-    assert "### File: docs/BRANCHES.md" in packs["alpha_01_guide.md"]
-    assert "### File: HANDOVER.md" in packs["alpha_02_history.md"]
-    assert "### File: docs/d.md" in packs["alpha_03_specs.md"]
-    assert "### File: config/c.json" in packs["alpha_04_config.md"]
+    assert "### File: README.md" in packs["alpha_01_guide"]
+    assert "### File: docs/BRANCHES.md" in packs["alpha_01_guide"]
+    assert "### File: HANDOVER.md" in packs["alpha_02_history"]
+    assert "### File: docs/d.md" in packs["alpha_03_specs"]
+    assert "### File: config/c.json" in packs["alpha_04_config"]
     code = [n for n in packs if n.startswith("alpha_05_code")]
     assert len(code) > 1 and all("_part" in n for n in code)
     assert sum(v.count("### File: src/") for k, v in packs.items() if k in code) == 3
 
 
-def test_upload_uses_pack_name(monkeypatch):
+def test_upload_as_google_doc(monkeypatch):
     _fake_media(monkeypatch)
     svc = _Svc(existing=False)
-    sync.upload(svc, "FOLDER", "body", "alpha_01_guide.md")
-    assert "alpha_01_guide.md" in svc.f.calls[0][1]["q"]
-    assert svc.f.calls[1][1]["body"]["name"] == "alpha_01_guide.md"
+    sync.upload(svc, "FOLDER", "body", "alpha_01_guide", as_doc=True)
+    assert "alpha_01_guide" in svc.f.calls[0][1]["q"] and sync.DOC_MIME in svc.f.calls[0][1]["q"]
+    body = svc.f.calls[1][1]["body"]
+    assert body["name"] == "alpha_01_guide" and body["mimeType"] == sync.DOC_MIME
+
+
+def test_char_cap_splits_packs_and_oversized_files(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "big.py").write_text("x = 1\n" * 400)
+    (tmp_path / "src" / "small.py").write_text("y = 2\n")
+    packs = sync.build_packs(tmp_path, char_cap=1000)
+    code = [c for n, c in packs if n.startswith("alpha_05_code")]
+    assert len(code) > 2
+    assert all(len(c) < 1400 for c in code)
+    assert "file continues in the next part" in "".join(code)

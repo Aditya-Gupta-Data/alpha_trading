@@ -16,7 +16,7 @@ repository — only a market-data connection. Every "trade" is paper.
 |---|---|
 | Understand the system to change it | **[ARCHITECTURE.md](ARCHITECTURE.md)** — the 8-department map + data flow. **Start here.** |
 | Know what a specific file does | [MODULES.md](MODULES.md) — one line per file, grouped by department |
-| Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 184 numbered decisions (2026-11-06), append-only |
+| Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 186 numbered decisions (2026-11-06), append-only |
 | Know the paper accounts and what each tests | [docs/ACCOUNTS.md](docs/ACCOUNTS.md) — the seven books side by side |
 | Know what is on branches but **not in `main` yet** | [docs/BRANCHES.md](docs/BRANCHES.md) — regenerated at every session wrap |
 | Find any doc in `docs/` and whether it is still true | [docs/README.md](docs/README.md) — the index, with a status per file |

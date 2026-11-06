@@ -46,11 +46,11 @@ listed at the bottom.
 
 - **Where:** local; checked out at `/Users/adityagupta/Documents/Claude/alpha_trading_docs`
 - **Last commit:** 2026-11-06 by mahakagrawal963-hub (0 days ago)
-- **Not in main:** 1 commit(s); main is 1 commits ahead of this branch
+- **Not in main:** 2 commit(s); main is 0 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
-- `f5eb8bc` 2026-11-06 — docs: refresh overview docs to 2026-11-06; branch report, accounts page, docs index, NotebookLM packs
+- `cffbd79` 2026-11-06 — docs: refresh overview docs to 2026-11-06; branch report, accounts page, docs index, NotebookLM packs
   > - README / ARCHITECTURE / CLAUDE.md: seven accounts, four machines, 183 decisions,
   > 3,515 tests; ARCHITECTURE gains a "Current state — 2026-11-06" section (#100–#183)
   > - docs/ACCOUNTS.md: the seven paper accounts and what each one tests
@@ -59,25 +59,26 @@ listed at the bottom.
   > - docs/README.md: index of every doc with a status (flags built-but-"planning only" specs)
   > - sync_to_drive.py: six topic packs under 350k words each, root docs included
   > (the single codex was ~612k words, over NotebookLM's 500k per-source limit)
-  > … (2 more lines: `git show f5eb8bc`)
+  > … (2 more lines: `git show cffbd79`)
+- `f8f4cd7` 2026-11-06 — docs: BRANCHES snapshot after the refresh commit
 
-**Files changed vs. where it left main (15 files changed, 963 insertions(+), 96 deletions(-)):**
+**Files changed vs. where it left main (15 files changed, 1021 insertions(+), 96 deletions(-)):**
 
-    ARCHITECTURE.md                     |  71 +++++++++++++++---
-    CLAUDE.md                           |  21 ++++--
-    CRON_SETUP.md                       |  10 ++-
+    ARCHITECTURE.md                     |  71 ++++++++++++--
+    CLAUDE.md                           |  21 ++++-
+    CRON_SETUP.md                       |  10 +-
     HANDOVER.md                         |  16 +++-
-    MODULES.md                          |  13 +++-
-    README.md                           |  72 +++++++++++-------
-    docs/ACCOUNTS.md                    |  71 ++++++++++++++++++
-    docs/BRANCHES.md                    | 223 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    docs/README.md                      |  98 +++++++++++++++++++++++++
-    scripts/branch_report.py            | 206 +++++++++++++++++++++++++++++++++++++++++++++++++++
+    MODULES.md                          |  13 ++-
+    README.md                           |  72 +++++++++------
+    docs/ACCOUNTS.md                    |  71 ++++++++++++++
+    docs/BRANCHES.md                    | 281 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    docs/README.md                      |  98 ++++++++++++++++++++
+    scripts/branch_report.py            | 206 +++++++++++++++++++++++++++++++++++++++++
     scripts/install_post_commit_hook.sh |   2 +-
-    scripts/sync_to_drive.py            | 156 ++++++++++++++++++++++++++++-----------
-    scripts/wrap_session.sh             |  15 +++-
-    tests/test_branch_report.py         |  60 +++++++++++++++
-    tests/test_sync_to_drive.py         |  25 +++++++
+    scripts/sync_to_drive.py            | 156 ++++++++++++++++++++++---------
+    scripts/wrap_session.sh             |  15 ++-
+    tests/test_branch_report.py         |  60 ++++++++++++
+    tests/test_sync_to_drive.py         |  25 +++++
 
 ### `feature/graphrag-altdata-wiring` — ACTIVE
 
@@ -272,10 +273,15 @@ listed at the bottom.
   - `scripts/update_graph_altdata.py` (M)
   - `src/analysis/altdata_graph.py` (M)
   - `tests/test_altdata_graph.py` (M)
+- `/Users/adityagupta/Documents/Claude/alpha_trading_docs` on `docs/refresh-2026-11-06`: 4 uncommitted file(s)
+  - `ARCHITECTURE.md` (M)
+  - `CLAUDE.md` (M)
+  - `HANDOVER.md` (M)
+  - `README.md` (M)
 
 ## Branches with nothing left to merge
 
-`claude/blissful-pascal-73dd54`, `claude/diag-fixes-1016`, `claude/earnings-s1-s3`, `claude/gex-seam`, `claude/mobile-hello-7nrjqn`, `claude/sharp-kalam-d5aaee`, `claude/test-coverage-analysis-o9bf3n`, `claude/trading-discord-message-tjdakj`, `claude/upbeat-hamilton-haw8tp`, `claude/vigilant-feynman-i2kz45`, `feature/altdata-expansion`, `feature/altdata-fleet`, `feature/altdata-live-fixes`, `feature/bucket-migration`, `feature/cross-asset-alpha`, `feature/dept5-proving-court`, `feature/deterministic-risk-triage`, `feature/gex-vex-cex`, `feature/graph-patch-and-rbi`, `feature/m4-bucket-isolation`, `feature/mcx-contract-roller`, `feature/notebookllm-sync`, `feature/oms-recon-daemon`, `feature/semantic-transcript-router`, `fix/day1-audit-findings`, `phase1-graphrag`  
+`claude/blissful-pascal-73dd54`, `claude/diag-fixes-1016`, `claude/earnings-s1-s3`, `claude/gex-seam`, `claude/mobile-hello-7nrjqn`, `claude/sharp-kalam-d5aaee`, `claude/test-coverage-analysis-o9bf3n`, `claude/trading-discord-message-tjdakj`, `claude/upbeat-hamilton-haw8tp`, `claude/vigilant-feynman-i2kz45`, `feature/altdata-expansion`, `feature/altdata-fleet`, `feature/altdata-live-fixes`, `feature/bucket-migration`, `feature/cross-asset-alpha`, `feature/dept5-proving-court`, `feature/deterministic-risk-triage`, `feature/gex-vex-cex`, `feature/graph-patch-and-rbi`, `feature/graphrag-shadow-forward-test`, `feature/m4-bucket-isolation`, `feature/mcx-contract-roller`, `feature/notebookllm-sync`, `feature/oms-recon-daemon`, `feature/semantic-transcript-router`, `fix/day1-audit-findings`, `phase1-graphrag`  
 Everything on these is already in main; they are safe to delete once nobody is using them.
 
 <!-- END AUTO -->

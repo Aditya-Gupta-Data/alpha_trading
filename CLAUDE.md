@@ -19,7 +19,7 @@ having to explain it.
 Then, depending on the task:
 - changing behaviour → `ARCHITECTURE.md` (the 8-department map, the data flow)
 - finding a file → `MODULES.md`
-- asking "why is it like this?" → `DECISIONS.md` (183 numbered decisions as of 2026-11-06)
+- asking "why is it like this?" → `DECISIONS.md` (184 numbered decisions as of 2026-11-06)
 - which paper account does what → `docs/ACCOUNTS.md`
 - what is on a branch but not merged yet → `docs/BRANCHES.md`
 - whether a doc in `docs/` is still true → `docs/README.md` (the index)
@@ -109,7 +109,7 @@ not running** — whatever its docstring claims.
 
 ## RULE 6 — Testing
 
-The suite is hermetic and fast: **3,515 tests, ~60 seconds** (2026-11-06; 2,216 on 2026-09-16;
+The suite is hermetic and fast: **3,516 tests, ~60 seconds** (2026-11-06; 2,216 on 2026-09-16;
 it was ~220 s while five tests were quietly dialling Dhan and Gemini — ledger
 Issue 29 — so a run that creeps back toward minutes is a leak, not growth).
 

@@ -16,7 +16,7 @@ repository — only a market-data connection. Every "trade" is paper.
 |---|---|
 | Understand the system to change it | **[ARCHITECTURE.md](ARCHITECTURE.md)** — the 8-department map + data flow. **Start here.** |
 | Know what a specific file does | [MODULES.md](MODULES.md) — one line per file, grouped by department |
-| Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 183 numbered decisions (2026-11-06), append-only |
+| Know *why* something is the way it is | [DECISIONS.md](DECISIONS.md) — 184 numbered decisions (2026-11-06), append-only |
 | Know the paper accounts and what each tests | [docs/ACCOUNTS.md](docs/ACCOUNTS.md) — the seven books side by side |
 | Know what is on branches but **not in `main` yet** | [docs/BRANCHES.md](docs/BRANCHES.md) — regenerated at every session wrap |
 | Find any doc in `docs/` and whether it is still true | [docs/README.md](docs/README.md) — the index, with a status per file |
@@ -107,7 +107,7 @@ The full test suite is the fastest way to confirm a working checkout:
 python3 -m pytest -q
 ```
 
-**3,515 tests (2026-11-06) in about a minute, fully hermetic** — no network, no live token, no
+**3,516 tests (2026-11-06) in about a minute, fully hermetic** — no network, no live token, no
 production data. If a test you write is slow, it is almost certainly reaching a
 real external system; see the testing philosophy in
 [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -144,7 +144,7 @@ src/                 215 modules (not every one is on a cron; see MODULES.md)
   knowledge_graph/   GraphRAG, spreading activation, the placebo court
   execution/         the OMS, paper venue and live pricer
   event_engine/      policy events → cards → the PAPER_EVENTS book
-tests/               263 files, 3,515 tests — the live suite
+tests/               263 files, 3,516 tests — the live suite
 research_archive/    parked code, kept for reuse, on NO execution path
 docs/                46 specs, plans and audits — indexed in docs/README.md
 data/                the lake + artifacts (mostly gitignored)

@@ -15,7 +15,7 @@ in plain English, what it does, what goes in, what comes out, and the ONE place
 to change it. The department chapters were written at `c271068` (2026-07-25)
 and are still the right map; **"Current state — 2026-11-06" below lists what
 was added since** (machines, accounts, trade path, knowledge graph). Suite:
-**3,515 tests** passing 2026-11-06.
+**3,516 tests** passing 2026-11-06.
 
 ---
 
@@ -57,7 +57,7 @@ touch anything:
 8. **Fail open, never crash the clock.** Every nightly stage is caught
    independently. A dead source produces an honest gap in the record; it must
    never abort the cron or the stages after it.
-9. **The suite is hermetic and fast (3,515 tests, ~60s).** If a test you write
+9. **The suite is hermetic and fast (3,516 tests, ~60s).** If a test you write
    is slow, you have reached a real external system. See "Testing philosophy"
    near the end of this file.
 
@@ -69,7 +69,7 @@ python3 -m pytest -q          # ~60s, proves the whole checkout works
 
 ## Current state — 2026-11-06 (what changed since the chapters below were written)
 
-*Built from `DECISIONS.md` #100–#183 and HANDOVER.md. Each line names its
+*Built from `DECISIONS.md` #100–#184 and HANDOVER.md. Each line names its
 decision; read the decision for the mechanics. Everything here is on `main`;
 work on other branches is in `docs/BRANCHES.md`.*
 
@@ -99,7 +99,7 @@ quotes, GEX steering, take-every-setup (the Shadow Learner), and policy events.
 **The knowledge graph is built** (it was "vision, not built" in July; see the Phase 2 chapter)
 
 - GraphRAG: extraction, spreading activation, the event-engine emitter, a forward-outcome placebo court and the self-evolving brain map (#162–#164, #168, #169). Zero execution authority: promotion needs a passed test and a person's command (#163, #177).
-- News shadow graph: every RSS headline goes into a separate `data/graphrag_shadow.db` on the Mini PC, covering every NSE company (#174, #175).
+- News shadow graph: every RSS headline goes into a separate `data/graphrag_shadow.db` on the Mini PC, covering every NSE company; from 11-06 it also reads 15 shadow-only feeds (Business Standard, BusinessLine, Mint, ET, RBI, SEBI) with a 600-headline cap (#174, #175, #184).
 - Alt-data edges (Vahan, GeM, Agmarknet) and the alt-data edge-class court (#177, #180).
 
 **Built, switched off:** the multi-bucket ledger M1/M4 (capital buckets, ceilings, halted-capital firewall; #141, #142, #164, #170, #171, #178), and multi-seat tenancy (#166). The config switch `multi_bucket_ledger` is false.
@@ -950,7 +950,7 @@ VM's IP. The VM reads artifacts and ticks the clock. This is why the VM is a
 
 ## Testing philosophy — zero drift, zero network
 
-`tests/` holds the live suite: **3,515 tests on 2026-11-06** (it was 132 files, 1,589 tests, ~83 seconds in July).
+`tests/` holds the live suite: **3,516 tests on 2026-11-06** (it was 132 files, 1,589 tests, ~83 seconds in July).
 `research_archive/tests/` holds frozen tests for archived modules and is
 excluded from collection by `pytest.ini` (`testpaths = tests`).
 

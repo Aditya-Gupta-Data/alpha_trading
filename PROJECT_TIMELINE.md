@@ -235,8 +235,19 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-11-06 · 5 commits · 37 files touched
+### 2026-11-06 · 16 commits · 59 files touched
 
+- `d17d6cc` feat(notebooklm): dated file headers, stale warnings, current-state preface; drop archive_v0
+- `7b26e46` fix(notebooklm): Drive Docs are docs-only; code/config packs need --with-code
+- `cdf7c63` feat(notebooklm): packs as auto-syncing Google Docs, hourly Mac LaunchAgent from origin/main
+- `e28967a` docs: #186 propagated shadow calls — MODULES row + decision
+- `6ea9897` feat(graphrag): shadow forward test grades PROPAGATED calls — sector/commodity/policy edges traced to companies without look-ahead (#186)
+- `3b08a23` docs: handover 11-06 night — shadow feeds #184 + forward test #185 live on the Mini PC
+- `ee4213a` feat(graphrag): forward test for the news shadow — next-open entry, 1/3/5 sessions, shuffled-ticker placebo, node cron 22:10 (#185)
+- `94e74d2` docs: counts after rebasing onto #184 (184 decisions, 3,516 tests); BRANCHES snapshot
+- `f8f4cd7` docs: BRANCHES snapshot after the refresh commit
+- `cffbd79` docs: refresh overview docs to 2026-11-06; branch report, accounts page, docs index, NotebookLM packs
+- `04a8212` feat(graphrag): 15 shadow-only news feeds (BS, BusinessLine, Mint, ET, RBI, SEBI); shadow cap 600 (#184)
 - `aa599f1` docs(handover): #183 desk rework live on the dashboard box
 - `5466ead` feat(desk): #183 overview = market read + simple returns chart; Portfolios tab; Needs attention removed
 - `72ed057` docs(handover): #181 + #182 deployed to VM, Mini PC and dashboard box (f97ec8b)

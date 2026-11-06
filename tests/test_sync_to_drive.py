@@ -89,3 +89,28 @@ def test_upload_creates_when_absent(monkeypatch):
     svc = _Svc(existing=False)
     assert sync.upload(svc, "FOLDER", "body") == ("created", "NEW")
     assert svc.f.calls[1][1]["body"]["parents"] == ["FOLDER"]
+
+
+def test_packs_route_files_and_split_over_cap(tmp_path):
+    _tree(tmp_path)
+    for rel, n in (("README.md", 5), ("HANDOVER.md", 5), ("docs/BRANCHES.md", 5), ("src/b.py", 50), ("src/c.py", 50)):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("word " * n)
+    packs = dict(sync.build_packs(tmp_path, word_cap=80))
+    assert "### File: README.md" in packs["alpha_01_guide.md"]
+    assert "### File: docs/BRANCHES.md" in packs["alpha_01_guide.md"]
+    assert "### File: HANDOVER.md" in packs["alpha_02_history.md"]
+    assert "### File: docs/d.md" in packs["alpha_03_specs.md"]
+    assert "### File: config/c.json" in packs["alpha_04_config.md"]
+    code = [n for n in packs if n.startswith("alpha_05_code")]
+    assert len(code) > 1 and all("_part" in n for n in code)
+    assert sum(v.count("### File: src/") for k, v in packs.items() if k in code) == 3
+
+
+def test_upload_uses_pack_name(monkeypatch):
+    _fake_media(monkeypatch)
+    svc = _Svc(existing=False)
+    sync.upload(svc, "FOLDER", "body", "alpha_01_guide.md")
+    assert "alpha_01_guide.md" in svc.f.calls[0][1]["q"]
+    assert svc.f.calls[1][1]["body"]["name"] == "alpha_01_guide.md"

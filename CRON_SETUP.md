@@ -10,8 +10,11 @@ and `DECISIONS.md` #48/#51.
 
 ## The VM (the engine — always on)
 
-All 25 jobs are installed by the idempotent script (safe to re-run after every
-`git pull`):
+Every VM job is installed by the idempotent script (safe to re-run after every
+`git pull`). On 2026-11-06 the script's jobs are numbered 1–38; #39 (alt-data
+fleet) and #40 (alt-data → GraphRAG) are deliberately NOT installed on the VM
+and run from a manual crontab line on the Mini PC. Jobs added after July
+(#33, #35–#38) are described in their own sections at the end of this file.
 
 ```bash
 # on the VM (SSH from the Mac: gcloud compute ssh adigupta1998@alpha-trading-vm \
@@ -38,9 +41,12 @@ unless the host clock is +0530 — Debian cron ignores `CRON_TZ`, ledger Issue 1
 | 16:35 Mon-Fri | `src.reporting.markdown_ledger` | **NEW 2026-09-19 (cron #32):** renders the LIVE TRADE BOOK `docs/LIVE_TRADE_BOOK.md` (account line, open trades with margin/age, last 50 resolved with P&L/R/verdict) from the journal + equity events + brain_map.db (read-only). After the CEO brief so the day's settlements are in. The Mac's launchd sync agent pulls it down (`mac_auto_sync.sh` stage 3). Log: `logs/markdown_ledger.log` |
 | 18:50 daily | `src.ingestion.rss_ingester` | Publishers' own RSS → dedup → classify NEW via Text Intelligence Manager (#75). Cost-safe: inherits the `ollama` backend ⇒ zero API spend on the VM until enabled. |
 | 19:10 daily | `src.news_processor` | Google-News RSS → Gemini → `data/news_sentiment.json` (the cloud LLM the VM can reach). Feeds `forecast.py`. |
+| 19:15 daily | `src.ingestion.bhavcopy_clerk --backfill 5` | NSE EOD bhavcopy into the lake (moved Mac → VM 08-04). `--backfill 5` self-heals up to 5 missing days. NSE, not Dhan: no token. Log: `logs/bhavcopy_clerk.log`. Indexed here 2026-11-06. |
 | 19:20 daily | `src.ingestion.earnings_calendar` | `days_to_results` feed; whole-calendar overwrite so postponements heal. |
+| 19:25 daily | `src.ingestion.corporate_events` | NSE corporate announcements into `data/lake/events/` (job 28, wired 08-05). The evidence for `corporate_risk_halt`, which fails CLOSED on a stale feed, so this job is what makes the halt work; labels triaged by #176. Log: `logs/corporate_events.log`. Indexed here 2026-11-06. |
 | 19:30 daily | `src.ingestion.deals_tracker` | EOD bulk & block deals footprint → `data/bulk_deals.json`. Advisory-only (#60), fails open. |
 | 19:35 daily | `src.ingestion.flows_tracker` | FII/DII daily cash flows; one row/day into `data/` + the lake. |
+| 19:40 daily | `src.ingestion.cross_asset` | MCX commodities + global indices into `data/lake/cross_asset/` (job 29). Capture-only: nothing in Dept 2/3 imports it. Expired MCX ids return no bars, so contracts are rolled (`scrip_master` roller, state in `data/state/active_mcx_contracts.json`). Log: `logs/cross_asset.log`. Indexed here 2026-11-06. |
 | 19:45 daily | `src.ingestion.daily_archiver` | Snapshots perishable news/macro artifacts into the lake before sleep_phase. |
 | 19:50 Mon-Fri | `src.firm_treasury --rotate` | Re-routes the equity desk's budget after the Mac's ~19:20 artifact ship (#83). |
 | 19:50 daily | `src.analysis.macro_nightly` | The Dept-8 macro heartbeat: FRED ingest → NSE indices ingest → regime `declare()` → Stage-B forward scoring (fail-open last). No Dhan token, so the shared 19:50 slot is contention-free. |

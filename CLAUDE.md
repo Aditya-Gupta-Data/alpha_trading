@@ -19,7 +19,10 @@ having to explain it.
 Then, depending on the task:
 - changing behaviour → `ARCHITECTURE.md` (the 8-department map, the data flow)
 - finding a file → `MODULES.md`
-- asking "why is it like this?" → `DECISIONS.md` (85 numbered decisions)
+- asking "why is it like this?" → `DECISIONS.md` (183 numbered decisions as of 2026-11-06)
+- which paper account does what → `docs/ACCOUNTS.md`
+- what is on a branch but not merged yet → `docs/BRANCHES.md`
+- whether a doc in `docs/` is still true → `docs/README.md` (the index)
 - what runs when → `CRON_SETUP.md`
 - what to build next / long-term order → `docs/ARCHITECTURE_ROADMAP.md` (Phase 1 GraphRAG blueprint, then Phase 2 Cycle Hunter, then OMS/multi-bucket/multi-seat; owner-fixed order 2026-10-28)
 
@@ -41,12 +44,20 @@ Concretely, before you finish:
    the next person should do first. `HANDOVER.md` is
    **reverse-chronological — prepend, never rewrite the history below.**
 2. **Run `bash scripts/wrap_session.sh`** to append the day's commits to
-   `PROJECT_TIMELINE.md` and commit the doc update. It runs the suite as a gate
-   and touches only that one file.
+   `PROJECT_TIMELINE.md`, regenerate `docs/BRANCHES.md`, and commit those two
+   files. It runs the suite as a gate and touches nothing else.
 3. **Update `MODULES.md` in the same commit as any module change.** An
    undocumented module is a review bug, not a follow-up.
 4. **Log incidents in `docs/observation_week_ledger.md`** — verified facts
    only. If a fix is unverified, say so.
+5. **Work left on a branch is recorded, not just committed.** If you end a
+   session with commits that are not merged into `main`, add or update that
+   branch's row in the hand-written verdict table at the top of
+   `docs/BRANCHES.md` (what it is, whether it is deployed, what blocks the
+   merge) and say so in the HANDOVER block. The owner reads these docs through
+   NotebookLM, so a branch nobody wrote down does not exist for them.
+6. **A new doc gets a row in `docs/README.md`**, and a doc whose feature you
+   built, cancelled or replaced gets its Status cell updated there.
 
 `wrap_session.sh` deliberately does NOT write `HANDOVER.md`. Deciding what is
 actually broken and what matters next requires judgment a script cannot infer
@@ -82,7 +93,7 @@ apply to exactly one of four files; the other three were current.
 
 ## RULE 5 — What "live" means
 
-The live execution path is: the 35 VM cron jobs in `scripts/setup_cron.sh`, the
+The live execution path is: the VM cron jobs in `scripts/setup_cron.sh` (numbered 1–38 on 2026-11-06), the
 3 Mac cron jobs, the 2 Mac LaunchAgents, the systemd services, and the MCP
 server in `.mcp.json`. **If a module is not reachable from one of those, it is
 not running** — whatever its docstring claims.
@@ -98,7 +109,7 @@ not running** — whatever its docstring claims.
 
 ## RULE 6 — Testing
 
-The suite is hermetic and fast: **2,216 tests, ~60 seconds** (2026-09-16;
+The suite is hermetic and fast: **3,515 tests, ~60 seconds** (2026-11-06; 2,216 on 2026-09-16;
 it was ~220 s while five tests were quietly dialling Dhan and Gemini — ledger
 Issue 29 — so a run that creeps back toward minutes is a leak, not growth).
 

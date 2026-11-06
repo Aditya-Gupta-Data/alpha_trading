@@ -7,12 +7,15 @@ through 50 files: find the department, go to its manager.
 
 - **Why** behind each choice → `DECISIONS.md` (numbered).
 - **Per-file** one-liners → `MODULES.md` (grouped by these same departments).
-- **The rules** the code may never break → `OVERVIEW.md`.
+- **The rules** the code may never break → `CLAUDE.md` (binding) and "Structural non-negotiables" below. (`OVERVIEW.md` is archived at `docs/archive_v0/`.)
+- **The paper accounts** → `docs/ACCOUNTS.md`. **Work not merged yet** → `docs/BRANCHES.md`. **Every doc's status** → `docs/README.md`.
 
 Written for the strategic brain, not the compiler: every department below says,
 in plain English, what it does, what goes in, what comes out, and the ONE place
-to change it. Current as of `c271068` (2026-07-25, post-hygiene sweep), suite
-**1589 green in ~83s**.
+to change it. The department chapters were written at `c271068` (2026-07-25)
+and are still the right map; **"Current state — 2026-11-06" below lists what
+was added since** (machines, accounts, trade path, knowledge graph). Suite:
+**3,515 tests** passing 2026-11-06.
 
 ---
 
@@ -27,9 +30,10 @@ touch anything:
 1. **Find the department, then its Manager.** Eight departments, each with ONE
    file/seam you approach to change its behaviour. Never dig through 50 files.
    The table is in `MODULES.md`; the departments are described below.
-2. **The live execution path is the 32 VM cron jobs in `scripts/setup_cron.sh`**
-   plus 3 Mac cron jobs, 2 Mac LaunchAgents, three systemd services, and the
-   MCP server in `.mcp.json`. That list is the definition of "live". If a
+2. **The live execution path is the VM cron jobs in `scripts/setup_cron.sh`**
+   (numbered 1–38 on 2026-11-06), the Mini PC's crontab blocks, the Mac's cron
+   jobs and LaunchAgents (`CRON_SETUP.md` has the current list), the systemd
+   services, and the MCP server in `.mcp.json`. That list is the definition of "live". If a
    module is not reachable from one of those, it is not running, whatever its
    docstring claims.
 3. **`research_archive/` is parked code on NO execution path.** Never import it
@@ -53,15 +57,54 @@ touch anything:
 8. **Fail open, never crash the clock.** Every nightly stage is caught
    independently. A dead source produces an honest gap in the record; it must
    never abort the cron or the stages after it.
-9. **The suite is hermetic and fast (1,589 tests, ~83s).** If a test you write
+9. **The suite is hermetic and fast (3,515 tests, ~60s).** If a test you write
    is slow, you have reached a real external system. See "Testing philosophy"
    near the end of this file.
 
 The single most useful orientation command:
 
 ```bash
-python3 -m pytest -q          # 83s, proves the whole checkout works
+python3 -m pytest -q          # ~60s, proves the whole checkout works
 ```
+
+## Current state — 2026-11-06 (what changed since the chapters below were written)
+
+*Built from `DECISIONS.md` #100–#183 and HANDOVER.md. Each line names its
+decision; read the decision for the mechanics. Everything here is on `main`;
+work on other branches is in `docs/BRANCHES.md`.*
+
+**Four machines, one of which trades** (#146, #147, #173)
+
+| Machine | Role | May never |
+|---|---|---|
+| GCP VM `alpha-trading-vm` | The **only execution node**: the live session (`master_scheduler`, `live_bridge`), the book, settlement, recon, Discord cards, API gateway | — |
+| Mini PC (home, `minipc1`) | **Analytics hub** on its own database: the VM's schedule minus the live lane and book jobs (#144, #147); the edge miner and weekly evolution (#149); LLM jobs through the local FreeLLMAPI router (#148); GraphRAG extraction and the news shadow graph (#169, #174); the alt-data scraper fleet (manual crontab line, residential IP); the event engine's card builder (#156); sector bars (#160) | Run the live loop or place a paper trade: `master_scheduler`, `live_bridge` and `setup_cron.sh` refuse to start there |
+| Oracle dashboard box | Always-on showcase: React desk + read-only FastAPI bridge + Streamlit behind nginx and a Cloudflare tunnel; the VM pushes the ledger mirror every 15 minutes (#111–#113, #118). Desk layout: Overview = market read, Portfolios tab = accounts (#183) | Write to the book |
+| Mac | Development, the chat agent, the artifact ship (`com.aditrader.sync`) | Be needed for trading |
+| HP laptop | At most a local-LLM backend for GraphRAG extraction; **not wired** (#173) | Hold a book, a cron job or an order path |
+
+**Seven paper accounts** (#102, #115, #120, #140, #156, #161). See `docs/ACCOUNTS.md`.
+In short: PAPER_10L is the primary (with the equity desk inside it), and the
+others each test one question: small size, capital rotation, live crossed
+quotes, GEX steering, take-every-setup (the Shadow Learner), and policy events.
+
+**The trade path, as changed since September**
+
+- **Orders as tickets.** Every entry and exit is an OMS ticket that the paper venue fills with tier slippage (#100, #101, #103). The protective leg fills first (#179); every venue sweep enforces this (#181).
+- **Sizing:** 2% of each account's own equity at risk (#106); a lot whose max loss is over 2.5% of equity is refused (#145).
+- **Exits:** no mid-trade stop on a defined-risk spread (#105); directional spreads exit on the profit ratchet (#110), moved only on crossed quotes (#135); forced exit before expiry (#129); the equity desk uses an ATR trail (#107). Intraday exits cross the bid/ask (#126).
+- **Entry gates added:** NSE holiday calendar (#124); one position per underlying and direction across the firm (#127); an approval re-checks the entry (#128, #131); hard earnings gate within 5 days for stocks (#151); corporate-risk veto driven by NSE's filing labels (#176); expiry liquidity fallback (#161); GEX zone steering for PAPER_2L and PAPER_2L_LIVE_GEX only (#160, #161).
+- **Halts:** account ruin halt at 10%, judged on true equity since 11-06 (#181); the equity desk latch (#125); a recon divergence latches the desk-wide halt, with recon every 5 minutes in session (#172, #179); Discord `/halt` kill switch for the authorised user (#165).
+
+**The knowledge graph is built** (it was "vision, not built" in July; see the Phase 2 chapter)
+
+- GraphRAG: extraction, spreading activation, the event-engine emitter, a forward-outcome placebo court and the self-evolving brain map (#162–#164, #168, #169). Zero execution authority: promotion needs a passed test and a person's command (#163, #177).
+- News shadow graph: every RSS headline goes into a separate `data/graphrag_shadow.db` on the Mini PC, covering every NSE company (#174, #175).
+- Alt-data edges (Vahan, GeM, Agmarknet) and the alt-data edge-class court (#177, #180).
+
+**Built, switched off:** the multi-bucket ledger M1/M4 (capital buckets, ceilings, halted-capital firewall; #141, #142, #164, #170, #171, #178), and multi-seat tenancy (#166). The config switch `multi_bucket_ledger` is false.
+
+**The Brain Map MCP server** (`src/brain_mcp.py`, in `.mcp.json`): read-only tools `darling_tier_table`, `valuation_scores`, `earnings_quality`, `event_history`, `entity_affinity`, `fo_liquidity`, `market_regime`, `firm_equity_curve`, `strategy_stats`, `graphrag_propagation`, `bayesian_win_posterior`.
 
 > **2026-07-23 — the Macro Regime Engine, FINALIZED (spec:
 > `docs/macro_regime_engine_spec.md`; auto-discovery:
@@ -146,6 +189,10 @@ python3 -m pytest -q          # 83s, proves the whole checkout works
 > timelock-tested.
 
 ## Phase 2: Qualitative Engine (The Knowledge Graph) — VISION, NOT BUILT
+
+> **Status 2026-11-06: built since.** This chapter is the July vision, kept as
+> written. GraphRAG Phases 1–2.5 were built 2026-10-28 (#162–#164) and run on
+> the Mini PC (#169, #174); see "Current state — 2026-11-06" above.
 
 > **Owner directive 2026-07-23. Logged for the future; no code exists.
 > Build only after the macro/DTW engine has its Oct-1 track record.**
@@ -844,9 +891,13 @@ VM's IP. The VM reads artifacts and ticks the clock. This is why the VM is a
 
 ## Infrastructure (where the departments physically run)
 
+> **2026-11-06:** this section predates the Mini PC, the dashboard box and the
+> laptop. The four-machine table under "Current state — 2026-11-06" is current;
+> `CRON_SETUP.md` has every schedule. The bullets below are the July picture.
+
 - **The VM (`alpha-trading-vm`, GCP) is the sole live engine.** It runs the
   decision loop, risk gates, reporting cards, and the gateway via `systemd`
-  services + a cron block (`scripts/setup_cron.sh` — **24 numbered jobs**; the
+  services + a cron block (`scripts/setup_cron.sh` — **24 numbered jobs** in July, 38 by November; the
   token renews once at 07:00 IST). It mints its Dhan token from GCP Secret
   Manager. See `CRON_SETUP.md` for the full schedule and `HANDOVER.md` for the
   deploy checklist. **The host clock must be IST**: Debian cron ignores
@@ -899,7 +950,7 @@ VM's IP. The VM reads artifacts and ticks the clock. This is why the VM is a
 
 ## Testing philosophy — zero drift, zero network
 
-`tests/` holds the live suite: **132 files, 1,589 tests, ~83 seconds.**
+`tests/` holds the live suite: **3,515 tests on 2026-11-06** (it was 132 files, 1,589 tests, ~83 seconds in July).
 `research_archive/tests/` holds frozen tests for archived modules and is
 excluded from collection by `pytest.ini` (`testpaths = tests`).
 

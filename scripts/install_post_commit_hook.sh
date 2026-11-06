@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MANUAL OFFLINE TOOL — installs a git post-commit hook that syncs Architecture_Codex.md to Drive in the background.
+# MANUAL OFFLINE TOOL — installs a git post-commit hook that syncs the NotebookLM source packs to Drive in the background.
 # Usage: DRIVE_FOLDER_ID=<folder id> bash scripts/install_post_commit_hook.sh
 set -euo pipefail
 

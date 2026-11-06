@@ -19,7 +19,7 @@
 #   bash scripts/wrap_session.sh --push           # also push to origin
 #
 # DESIGN NOTES (please keep these properties if you edit this file):
-#   * It stages ONLY PROJECT_TIMELINE.md. Never `git add -A` here — this script
+#   * It stages ONLY PROJECT_TIMELINE.md and docs/BRANCHES.md. Never `git add -A` here — this script
 #     runs at the end of a session when unrelated work may be in the tree, and
 #     silently sweeping that into a "doc sync" commit would be a nasty surprise.
 #   * It is IDEMPOTENT: re-running for the same date regenerates that date's
@@ -134,6 +134,12 @@ path.write_text(head + marker + "\n\n" + block.strip() + "\n" + tail)
 print(f"wrap_session: wrote {date} block into {path}")
 PYEOF
 
+# --- 3b. Branch report: docs/BRANCHES.md (fail-open) ------------------------
+BRANCHES="docs/BRANCHES.md"
+if [ "$DRY_RUN" -eq 0 ]; then
+    python3 scripts/branch_report.py || echo "wrap_session: branch_report failed — $BRANCHES left as it was." >&2
+fi
+
 # --- 4. The test gate --------------------------------------------------------
 if [ "$SKIP_TESTS" -eq 1 ]; then
     echo "wrap_session: --skip-tests given, NOT running the suite."
@@ -151,16 +157,17 @@ else
 fi
 
 # --- 5. Commit ONLY the doc --------------------------------------------------
-if git diff --quiet -- "$TIMELINE"; then
-    echo "wrap_session: $TIMELINE unchanged — nothing to commit."
+if git diff --quiet -- "$TIMELINE" "$BRANCHES" && git ls-files --error-unmatch "$BRANCHES" >/dev/null 2>&1; then
+    echo "wrap_session: $TIMELINE and $BRANCHES unchanged — nothing to commit."
 else
     # `git commit -- <path>` is PATHSPEC-LIMITED: it commits that file only,
     # ignoring whatever else is already staged. Plain `git add <path>` followed
     # by `git commit` would commit the WHOLE INDEX — so anything the user had
     # staged before running this would be silently swept into a "doc sync"
     # commit. That is the exact surprise this script promises not to spring.
+    git add -- "$BRANCHES" 2>/dev/null || true
     git commit -q -m "chore: EOD doc sync — ${DATE} (${COMMIT_COUNT} commits)" \
-        -- "$TIMELINE"
+        -- "$TIMELINE" "$BRANCHES"
     echo "wrap_session: committed the $DATE timeline entry."
 fi
 

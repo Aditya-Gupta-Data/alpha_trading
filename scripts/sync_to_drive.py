@@ -1,5 +1,5 @@
-# MANUAL OFFLINE TOOL — compiles src/config/docs into one Architecture_Codex.md and syncs it to Google Drive (NotebookLM source).
-"""Not on any cron: runs from the optional git post-commit hook. Never imported from src/."""
+# MANUAL OFFLINE TOOL — compiles the repo's docs, config and code into NotebookLM source packs and syncs them to Google Drive.
+"""Not on any cron: runs by hand or from the optional git post-commit hook. Never imported from src/."""
 import argparse
 import os
 import sys
@@ -9,10 +9,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CODEX_NAME = "Architecture_Codex.md"
 CRAWL_DIRS = ("src", "config", "docs")
+GUIDE_EXTRA = ("docs/README.md", "docs/ACCOUNTS.md", "docs/BRANCHES.md")
+HISTORY_FILES = ("HANDOVER.md", "docs/handover_archive.md", "docs/observation_week_ledger.md")
+WORD_CAP = 350_000  # NotebookLM refuses or truncates a source past 500k words; keep headroom
 INCLUDE_EXT = {".py", ".md", ".json", ".yaml"}
 EXCLUDE_DIRS = {".git", "__pycache__", "venv", ".venv", "logs", "node_modules"}
 EXCLUDE_EXT = {".db", ".csv"}
-MAX_FILE_BYTES = 400_000
+MAX_FILE_BYTES = 2_000_000
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 CONFIG_DIR = Path(os.environ.get("DRIVE_SYNC_DIR", Path.home() / ".config" / "alpha_trading"))
 CREDENTIALS_FILE = Path(os.environ.get("DRIVE_CREDENTIALS_FILE", CONFIG_DIR / "drive_credentials.json"))
@@ -26,40 +29,100 @@ def default_folder_id():
     return FOLDER_ID_FILE.read_text().strip() if FOLDER_ID_FILE.exists() else None
 
 
-def collect_files(root=ROOT):
+def _walk(base):
     found = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDE_DIRS)
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            ext = path.suffix.lower()
+            if ext in EXCLUDE_EXT or ext not in INCLUDE_EXT:
+                continue
+            found.append(path)
+    return found
+
+
+def collect_files(root=ROOT):
+    root = Path(root)
+    found = [p for p in sorted(root.glob("*.md")) if p.is_file()]
     for top in CRAWL_DIRS:
-        base = Path(root) / top
-        if not base.is_dir():
-            continue
-        for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDE_DIRS)
-            for name in sorted(filenames):
-                path = Path(dirpath) / name
-                ext = path.suffix.lower()
-                if ext in EXCLUDE_EXT or ext not in INCLUDE_EXT:
-                    continue
-                found.append(path)
+        if (root / top).is_dir():
+            found += _walk(root / top)
     return sorted(found, key=lambda p: p.relative_to(root).as_posix())
 
 
-def build_codex(root=ROOT, now=None):
+def pack_of(rel):
+    """Which NotebookLM source pack a repo-relative path belongs to."""
+    if rel in HISTORY_FILES:
+        return "alpha_02_history"
+    if "/" not in rel or rel in GUIDE_EXTRA:
+        return "alpha_01_guide"
+    if rel.startswith("docs/"):
+        return "alpha_03_specs"
+    if rel.startswith("config/"):
+        return "alpha_04_config"
+    return "alpha_05_code"
+
+
+PACK_TITLES = {
+    "alpha_01_guide": "the guide: README, architecture, module index, decisions, cron, accounts, branches",
+    "alpha_02_history": "the history: HANDOVER (newest first), the handover archive, the incident ledger",
+    "alpha_03_specs": "design specs, plans, audits and research notes under docs/",
+    "alpha_04_config": "configuration under config/",
+    "alpha_05_code": "the Python source under src/",
+}
+GUIDE_ORDER = ("README.md", "docs/README.md", "CLAUDE.md", "ARCHITECTURE.md", "docs/ACCOUNTS.md",
+               "docs/BRANCHES.md", "MODULES.md", "CRON_SETUP.md", "DECISIONS.md")
+
+
+def _section(root, path):
+    rel = path.relative_to(root).as_posix()
+    raw = path.read_bytes()
+    truncated = len(raw) > MAX_FILE_BYTES
+    text = raw[:MAX_FILE_BYTES].decode("utf-8", errors="replace")
+    note = f"\n[... truncated at {MAX_FILE_BYTES} of {len(raw)} bytes ...]" if truncated else ""
+    if path.suffix == ".md":
+        return f"\n---\n\n### File: {rel}\n\n{text.rstrip()}{note}\n"
+    lang = path.suffix.lstrip(".")
+    return f"\n---\n\n### File: {rel}\n\n~~~{lang}\n{text.rstrip()}{note}\n~~~\n"
+
+
+def build_packs(root=ROOT, now=None, word_cap=WORD_CAP):
+    """[(file name, content)]: one pack per topic, split into parts when over word_cap."""
     root = Path(root)
     now = now or datetime.now(timezone.utc)
-    files = collect_files(root)
-    parts = [
-        f"# Architecture Codex — alpha_trading\n\nGenerated {now.strftime('%Y-%m-%d %H:%M UTC')} "
-        f"from {', '.join(d + '/' for d in CRAWL_DIRS)} ({len(files)} files).\n"
-    ]
-    for path in files:
-        rel = path.relative_to(root).as_posix()
-        raw = path.read_bytes()
-        truncated = len(raw) > MAX_FILE_BYTES
-        text = raw[:MAX_FILE_BYTES].decode("utf-8", errors="replace")
-        note = f"\n[... truncated at {MAX_FILE_BYTES} of {len(raw)} bytes ...]" if truncated else ""
-        lang = path.suffix.lstrip(".")
-        parts.append(f"\n---\n\n### File: {rel}\n\n~~~{lang}\n{text.rstrip()}{note}\n~~~\n")
-    return "".join(parts)
+    groups = {}
+    for path in collect_files(root):
+        groups.setdefault(pack_of(path.relative_to(root).as_posix()), []).append(path)
+    order = {r: i for i, r in enumerate(GUIDE_ORDER)}
+    if "alpha_01_guide" in groups:
+        groups["alpha_01_guide"].sort(key=lambda p: (order.get(p.relative_to(root).as_posix(), 99), p.name))
+    out = []
+    for pack in sorted(groups):
+        parts, cur, words = [], [], 0
+        for path in groups[pack]:
+            sec = _section(root, path)
+            n = len(sec.split())
+            if cur and words + n > word_cap:
+                parts.append(cur)
+                cur, words = [], 0
+            cur.append(sec)
+            words += n
+        parts.append(cur)
+        for i, secs in enumerate(parts, 1):
+            name = f"{pack}.md" if len(parts) == 1 else f"{pack}_part{i}.md"
+            head = (f"# alpha_trading — {PACK_TITLES[pack]}"
+                    + (f" (part {i} of {len(parts)})" if len(parts) > 1 else "")
+                    + f"\n\nGenerated {now.strftime('%Y-%m-%d %H:%M UTC')} from the repository "
+                    f"({len(secs)} files). Each file starts with a `### File: <path>` header. "
+                    "Docs describe `main`; work not merged yet is in docs/BRANCHES.md.\n")
+            out.append((name, head + "".join(secs)))
+    return out
+
+
+def build_codex(root=ROOT, now=None):
+    """The old single-file codex: every pack concatenated (kept for --output)."""
+    return "".join(content for _, content in build_packs(root, now, word_cap=10**12))
 
 
 def get_service():
@@ -86,22 +149,22 @@ def get_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def find_existing_id(service, folder_id):
-    query = f"name = '{CODEX_NAME}' and '{folder_id}' in parents and trashed = false"
+def find_existing_id(service, folder_id, name=CODEX_NAME):
+    query = f"name = '{name}' and '{folder_id}' in parents and trashed = false"
     resp = service.files().list(q=query, fields="files(id, name)", pageSize=10, orderBy="modifiedTime desc").execute()
     files = resp.get("files", [])
     return files[0]["id"] if files else None
 
 
-def upload(service, folder_id, content):
+def upload(service, folder_id, content, name=CODEX_NAME):
     from googleapiclient.http import MediaInMemoryUpload
 
     media = MediaInMemoryUpload(content.encode("utf-8"), mimetype="text/markdown", resumable=False)
-    file_id = find_existing_id(service, folder_id)
+    file_id = find_existing_id(service, folder_id, name)
     if file_id:
         service.files().update(fileId=file_id, media_body=media, fields="id").execute()
         return "updated", file_id
-    meta = {"name": CODEX_NAME, "parents": [folder_id], "mimeType": "text/markdown"}
+    meta = {"name": name, "parents": [folder_id], "mimeType": "text/markdown"}
     created = service.files().create(body=meta, media_body=media, fields="id").execute()
     return "created", created["id"]
 
@@ -109,21 +172,28 @@ def upload(service, folder_id, content):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--folder-id", default=default_folder_id(), help="target Drive folder id (or DRIVE_FOLDER_ID, or the drive_folder_id file)")
-    ap.add_argument("--dry-run", action="store_true", help="build the codex, print stats, no upload")
-    ap.add_argument("--output", help="also write the codex to this local path")
+    ap.add_argument("--dry-run", action="store_true", help="build the packs, print stats, no upload")
+    ap.add_argument("--output-dir", help="also write every pack into this local folder (drag them into NotebookLM)")
+    ap.add_argument("--output", help="also write the old single-file codex to this local path")
     args = ap.parse_args(argv)
 
-    content = build_codex()
+    packs = build_packs()
     if args.output:
-        Path(args.output).write_text(content, encoding="utf-8")
-    n_files = content.count("\n### File: ")
-    print(f"codex: {n_files} files, {len(content.encode('utf-8')):,} bytes")
+        Path(args.output).write_text(build_codex(), encoding="utf-8")
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    for name, content in packs:
+        if args.output_dir:
+            (Path(args.output_dir) / name).write_text(content, encoding="utf-8")
+        print(f"{name}: {content.count(chr(10) + '### File: ')} files, {len(content.split()):,} words")
     if args.dry_run:
         return 0
     if not args.folder_id:
         raise SystemExit("no target folder: pass --folder-id or set DRIVE_FOLDER_ID")
-    action, file_id = upload(get_service(), args.folder_id, content)
-    print(f"{CODEX_NAME} {action} (file id {file_id})")
+    service = get_service()
+    for name, content in packs:
+        action, file_id = upload(service, args.folder_id, content, name)
+        print(f"{name} {action} (file id {file_id})")
     return 0
 
 

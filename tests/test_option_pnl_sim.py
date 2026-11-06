@@ -65,7 +65,8 @@ def test_untraded_strikes_are_not_a_chain(tmp_path):
     spots = [22000 + 60 * i for i in range(6)]
     days = _write_days(tmp_path, spots, traded=False)
     fo = ops.FoHistory(tmp_path)
-    assert ops.chain_for(fo.day(days[0])["NIFTY"], EXPIRY)["oc"] == {}
+    oc = ops.chain_for(fo.day(days[0])["NIFTY"], EXPIRY)["oc"]
+    assert oc and all(leg["last_price"] == 0 for node in oc.values() for leg in node.values())
     res = ops.simulate(days[0], days[-1], "live", symbols=("NIFTY",), fo=fo,
                        closes_by_sym={"NIFTY": _closes(days, spots)}, vix_by_day={})
     assert res["trades"] == [] and sum(res["refusals"].values()) > 0

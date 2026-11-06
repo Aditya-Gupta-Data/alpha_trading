@@ -84,11 +84,12 @@ def closes_for(sym: str, fo: FoHistory, macro_dir=None) -> list:
 
 
 def chain_for(day_sym: dict, expiry: str) -> dict:
-    """A Dhan-shaped chain of the strikes that TRADED that day at that expiry (last_price = the close)."""
+    """A Dhan-shaped chain of every listed strike at that expiry; only a leg that TRADED that day carries a price
+    (its close), so the live `_leg_fill` refuses an untraded leg exactly as it refuses a dead quote."""
     oc = {}
     for (exp, strike, kind), (close, _settle, vol) in day_sym["opts"].items():
-        if exp == expiry and vol > 0 and close and close > 0:
-            oc.setdefault(f"{strike:.6f}", {})[kind.lower()] = {"last_price": close}
+        if exp == expiry:
+            oc.setdefault(f"{strike:.6f}", {})[kind.lower()] = {"last_price": close if vol > 0 and close else 0}
     return {"last_price": day_sym["spot"], "oc": oc}
 
 
@@ -141,7 +142,8 @@ def walk(spread: dict, entry_day: str, ticker: str, fo: FoHistory, sym: str):
 def simulate(start: str, end: str, mode: str = "live", symbols=tuple(NAMES), fo: FoHistory = None,
              closes_by_sym: dict = None, vix_by_day: dict = None, equity: float = EQUITY) -> dict:
     from src import plan_tracker as pt
-    from src.options_proposer import build_proposal, horizon_for, market_view, pick_expiry
+    from src.options_proposer import (_nearer_expiries, build_proposal, has_live_book, horizon_for, market_view,
+                                      pick_expiry)
     from src.simulator import analysis_from_closes
     fo = fo or FoHistory()
     vix_by_day = vix_by_day if vix_by_day is not None else _vix()
@@ -167,12 +169,20 @@ def simulate(start: str, end: str, mode: str = "live", symbols=tuple(NAMES), fo:
                 continue
             override = "bullish" if mode == "bull_only" and view == "bearish" else None
             expiries = sorted({e for (e, _, _) in ds["opts"]})
-            expiry = pick_expiry(expiries, today=date.fromisoformat(d), underlying=ticker, horizon=horizon_for(a))
+            today, horizon = date.fromisoformat(d), horizon_for(a)
+            expiry = pick_expiry(expiries, today=today, underlying=ticker, horizon=horizon)
             if expiry is None:
                 refusals["no usable expiry"] += 1
                 continue
+            chain = chain_for(ds, expiry)
+            if horizon == "long" and not has_live_book(chain, ds["spot"]):     # the live Issue 52 fallback
+                for alt in _nearer_expiries(expiries, expiry, today, ticker):
+                    alt_chain = chain_for(ds, alt)
+                    if has_live_book(alt_chain, ds["spot"]):
+                        expiry, chain = alt, alt_chain
+                        break
             res = build_proposal(ticker, analysis=a, vix=vix_by_day.get(d), expiry=expiry,
-                                 chain=chain_for(ds, expiry), book={"cash": 1e12, "holdings": {}}, prices={},
+                                 chain=chain, book={"cash": 1e12, "holdings": {}}, prices={},
                                  account_equity=equity, account_cash=equity, today=date.fromisoformat(d),
                                  view_override=override)
             p = res.get("proposal")

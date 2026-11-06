@@ -43,6 +43,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-06 (Fri, ~20:00) — NotebookLM Docs are docs-only (4 Docs); the 6 code/config Docs are retired
+
+- **Why:** in the owner's notebook 6 of 10 sources failed (`alpha_03_specs`, `alpha_04_config`, `alpha_05_code_part1–4`). Drive's own export of `alpha_05_code_part1` returned HTTP 500, so the ~800k-character code Docs are not readable; specs and config exported fine and probably failed because the sync was rewriting them while they were added. The first scheduled sync was still running after 20 minutes, rewriting the code Docs, and was stopped by hand.
+- **Now:** `sync_to_drive.py` builds the code/config packs only with `--with-code`; the scheduled sync uploads 4 Docs (`alpha_01_guide_part1/2`, `alpha_02_history`, `alpha_03_specs`) and overwrites the 6 retired Docs with a "no longer used" note.
+- **Owner, once:** remove the 6 failed sources from the notebook; if `alpha_03_specs` was among them, re-add it from Drive.
+
 ## 2026-11-06 (Fri, late night) — NotebookLM auto-sync: the repo as 10 Google Docs, refreshed hourly from `origin/main` by a Mac LaunchAgent
 
 - **Live now (owner's Drive, verified):** `sync_to_drive.py` uploaded 10 Google Docs into the existing Drive folder (`alpha_01_guide_part1/2`, `alpha_02_history`, `alpha_03_specs`, `alpha_04_config`, `alpha_05_code_part1–5`); a second run updated the first five in place (same ids). Google Docs, not `.md` uploads, because NotebookLM re-syncs Drive Docs automatically (rolled out 2026-05-26); an uploaded `.md` is a frozen copy.

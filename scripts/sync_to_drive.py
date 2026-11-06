@@ -15,6 +15,7 @@ WORD_CAP = 350_000  # NotebookLM refuses or truncates a source past 500k words; 
 CHAR_CAP = 800_000  # a Google Doc holds about 1.02M characters
 DOC_MIME = "application/vnd.google-apps.document"
 HTTP_TIMEOUT_S = 600  # converting ~800k characters into a Google Doc can take minutes
+CODE_PACKS = ("alpha_04_config", "alpha_05_code")  # Google cannot reliably convert hundreds of thousands of code lines into Docs
 STALE_NOTE = "This part is no longer used: the repository now fits in fewer parts. It is safe to remove from the notebook.\n"
 INCLUDE_EXT = {".py", ".md", ".json", ".yaml"}
 EXCLUDE_DIRS = {".git", "__pycache__", "venv", ".venv", "logs", "node_modules"}
@@ -104,12 +105,14 @@ def _chunks(sec, char_cap):
     return out + [cur]
 
 
-def build_packs(root=ROOT, now=None, word_cap=WORD_CAP, char_cap=CHAR_CAP):
-    """[(doc name, content)]: one pack per topic, split into parts over word_cap or char_cap."""
+def build_packs(root=ROOT, now=None, word_cap=WORD_CAP, char_cap=CHAR_CAP, with_code=True):
+    """[(doc name, content)]: one pack per topic, split into parts over word_cap or char_cap; with_code=False keeps the docs only."""
     root = Path(root)
     now = now or datetime.now(timezone.utc)
     groups = {}
     for path in collect_files(root):
+        if not with_code and pack_of(path.relative_to(root).as_posix()) in CODE_PACKS:
+            continue
         groups.setdefault(pack_of(path.relative_to(root).as_posix()), []).append(path)
     order = {r: i for i, r in enumerate(GUIDE_ORDER)}
     if "alpha_01_guide" in groups:
@@ -206,10 +209,11 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="build the packs, print stats, no upload")
     ap.add_argument("--output-dir", help="also write every pack into this local folder (drag them into NotebookLM)")
     ap.add_argument("--output", help="also write the old single-file codex to this local path")
+    ap.add_argument("--with-code", action="store_true", help="also build the config and src/ packs (the NotebookLM Docs are docs-only by default)")
     ap.add_argument("--root", default=str(ROOT), help="repository tree to read (the autosync passes a clean export of origin/main)")
     args = ap.parse_args(argv)
 
-    packs = build_packs(Path(args.root))
+    packs = build_packs(Path(args.root), with_code=args.with_code)
     if args.output:
         Path(args.output).write_text(build_codex(Path(args.root)), encoding="utf-8")
     if args.output_dir:

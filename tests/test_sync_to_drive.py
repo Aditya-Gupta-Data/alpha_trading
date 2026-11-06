@@ -126,3 +126,11 @@ def test_char_cap_splits_packs_and_oversized_files(tmp_path):
     assert len(code) > 2
     assert all(len(c) < 1400 for c in code)
     assert "file continues in the next part" in "".join(code)
+
+
+def test_docs_only_leaves_out_config_and_code(tmp_path):
+    _tree(tmp_path)
+    (tmp_path / "README.md").write_text("# r")
+    names = [n for n, _ in sync.build_packs(tmp_path, with_code=False)]
+    assert "alpha_01_guide" in names and "alpha_03_specs" in names
+    assert not any(n.startswith(("alpha_04", "alpha_05")) for n in names)

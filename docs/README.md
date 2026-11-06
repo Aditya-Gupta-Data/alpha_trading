@@ -93,12 +93,14 @@ current with no re-uploading. The chain:
    `scripts/sync_to_drive.py`, which rewrites each Google Doc in place (same Doc, same id).
 3. NotebookLM picks up the changed Docs.
 
-The packs (about 10 Docs): `alpha_01_guide_part1/2` (README, CLAUDE, ARCHITECTURE,
-this index, ACCOUNTS, BRANCHES, MODULES, CRON_SETUP, DECISIONS, other root docs),
-`alpha_02_history` (HANDOVER, archive, incident ledger), `alpha_03_specs` (the rest of
-`docs/`), `alpha_04_config`, `alpha_05_code_part1–5` (`src/`). A new part (when the
-repo grows) has to be added to the notebook once by hand; a part no longer needed is
-replaced by a short "no longer used" note.
+The packs (4 Docs): `alpha_01_guide_part1/2` (README, CLAUDE, ARCHITECTURE, this
+index, ACCOUNTS, BRANCHES, MODULES, CRON_SETUP, DECISIONS, other root docs),
+`alpha_02_history` (HANDOVER, archive, incident ledger), `alpha_03_specs` (the rest
+of `docs/`). Code and config are left out: Google could not convert the code into
+readable Docs (HTTP 500 on export, sources failed in NotebookLM), and MODULES.md
+already describes every file. `--with-code` builds them for a local `--output-dir`.
+If the docs grow into a new part, add that Doc to the notebook once by hand; a part
+no longer needed is replaced by a short "no longer used" note.
 
 Force a sync now: `bash ~/.config/alpha_trading/notebooklm_autosync.sh --force`.
 Preview locally: `python3 scripts/sync_to_drive.py --dry-run --output-dir <folder>`.

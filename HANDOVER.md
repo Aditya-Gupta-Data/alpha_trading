@@ -42,6 +42,14 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-06 (Fri, evening) — #183 desk rework LIVE on the dashboard box: Overview = market read + one returns chart, new Portfolios tab, 'Needs attention' removed
+
+- **Live now (dashboard box, `5466ead`):** desk bundle shipped 17:55, box checkout fast-forwarded, `alpha-api-bridge` + `alpha-dashboard` restarted, all four box services active; `/overview` 200 through the tunnel, `/portfolios` 200 locally. VM and Mini PC unchanged (still `f97ec8b`; #183 is dashboard-only).
+- **Overview:** four tiles (the desk's read today, India VIX, FII/DII net, NIFTY 50 with dealer gamma) and 'Worth knowing' sentences from the new `/api/market-view`, then a one-axis Returns chart (each book's % since it opened + Nifty 50 rebased to the books' first point). On the box's 16:45 mirror it produced 6 sentences: book leans bearish against a bullish read on 3/3 names; FII net buyers 5 sessions (₹35,809 cr) while DII sold ₹19,045 cr; VIX 15.62 → 17.21 (mid → high); NIFTY above Thursday's 25,000 call wall; dealers short gamma on 19/26 names; cross-asset horizons disagree.
+- **Portfolios tab:** the account cards (pies + per-trade tables), compounding tiles, the detailed ₹/% chart and the recon line, moved unchanged from the old Overview.
+- **Unverified:** the pages viewed with the owner's key (checked on mock data at desktop and phone width; the API route needs the key, so only its reader was run on the box).
+- **Know:** 'the desk's read' only covers names it proposed trades on that day (3 on 11-06), not every name it scanned.
+
 ## 2026-11-06 (Fri, after the close) — #181 + #182 DEPLOYED: VM, Mini PC and dashboard box all on `f97ec8b`
 
 - **Live now:** VM fast-forwarded `0297446` → `f97ec8b` at 17:18 IST (no job running; `master_scheduler` had exited). 102 scoped tests passed on the VM and every changed module imports. `alpha-trading` + `alpha-discord-bot` restarted at 17:19 and both are active (the API answers 401 without the key, i.e. up). Mini PC on `f97ec8b`, 84 scoped tests passed. Dashboard box: desk bundle shipped 17:21 (`ship_ui.sh`, the Mac's identical `node_modules`), box checkout on `f97ec8b`, `alpha-api-bridge` + `alpha-dashboard` restarted, all four box services active, desk 200 locally and through its tunnel. No cron change, so `setup_cron.sh` was not re-run.

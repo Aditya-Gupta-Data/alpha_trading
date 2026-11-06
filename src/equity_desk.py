@@ -389,7 +389,7 @@ def _execute_equity_exit(entry: dict, exit_event: dict, conn=None, venue_mod=Non
                 conn, entry, qty, float(price), str(exit_event.get("reason") or "exit"),
                 source=f"equity_desk.{exit_event.get('reason') or 'exit'}")
             tid = issued["ticket_id"]
-            venue.sweep(conn, today=today, stamp=False)
+            venue.sweep(conn, today=today, stamp=False, enforce_wings_first=True)
             view = oms.ticket_view(conn, tid) or {}
             record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"))
             if view.get("status") != oms.FILLED:

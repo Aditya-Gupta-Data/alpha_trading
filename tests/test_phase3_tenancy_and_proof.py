@@ -339,3 +339,15 @@ def test_wings_first_multi_leg_chase_and_paper_venue_unhedged_wing_guard():
     states_by_side = {l["side"]: l["state"] for l in view_after["legs"]}
     assert states_by_side == {"BUY": oms.REJECTED, "SELL": oms.CANCELLED}
 
+
+
+def test_every_production_venue_sweep_enforces_wings_first():
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "src"
+    calls = []
+    for f in root.rglob("*.py"):
+        for m in re.finditer(r"\b(?:venue|_pv|pv)\.sweep\(([^)]*)\)", f.read_text()):
+            calls.append((f.name, m.group(1)))
+    assert len(calls) >= 4
+    assert all("enforce_wings_first=True" in args for _, args in calls), calls

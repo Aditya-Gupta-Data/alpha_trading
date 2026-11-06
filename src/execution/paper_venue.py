@@ -270,4 +270,4 @@ def sweep(conn=None, today: date = None, slippage_fn=None, fill_fraction_fn=None
 
 if __name__ == "__main__":
     import json
-    print(json.dumps(sweep(), indent=2, default=str))
+    print(json.dumps(sweep(enforce_wings_first=True), indent=2, default=str))

@@ -2466,7 +2466,7 @@ def _execute_paper_entry(entry: dict, conn=None, venue_mod=None, live_requote: d
             # The caller (decide_pending) writes this row itself, under the
             # journal lock, after this returns — the venue's own stamp is
             # off here; the fills are copied onto the legs below instead.
-            venue.sweep(conn, stamp=False)
+            venue.sweep(conn, stamp=False, enforce_wings_first=True)
             view = oms.ticket_view(conn, tid) or {}
             record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"),
                           filled_legs=sum(1 for l in view.get("legs", [])

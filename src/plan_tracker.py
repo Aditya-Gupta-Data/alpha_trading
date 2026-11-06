@@ -665,7 +665,7 @@ def _execute_paper_exit(entry: dict, leg_limits: dict, resolution: str,
                 record.update(mode="paper_venue", ticket_id=tids[lead], fenced=True,
                               status=(oms.ticket_view(conn, tids[lead]) or {}).get("status"))
                 return record
-            venue.sweep(conn, today=today, stamp=False)
+            venue.sweep(conn, today=today, stamp=False, enforce_wings_first=True)
             tid = tids[lead]
             view = oms.ticket_view(conn, tid) or {}
             record.update(mode="paper_venue", ticket_id=tid, status=view.get("status"))

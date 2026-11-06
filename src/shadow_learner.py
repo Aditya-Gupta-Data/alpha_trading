@@ -164,7 +164,7 @@ def take(entry: dict, reason: str, conn=None, venue_mod=None, account: str = ACC
                                        source="shadow_learner" if account == ACCOUNT else "gex_steering",
                                        account_id=account, lots=lots_now)
         stid = issued["ticket_id"]
-        venue.sweep(conn, stamp=False)
+        venue.sweep(conn, stamp=False, enforce_wings_first=True)
         sview = oms.ticket_view(conn, stid) or {}
         verdict.update(ticket_id=stid, venue_status=sview.get("status"))
         op._live_after_fill(conn, account, entry, stid, sview, rq["quote_ts"])

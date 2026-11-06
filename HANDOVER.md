@@ -42,6 +42,15 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-06 (Fri, ~11:20) — #181 hotfix: legacy margins REPAIRED on the VM; true-equity ruin halt + wings-first flag on `main`, NOT deployed
+
+- **Live now (VM DB, verified):** `scripts/fix_legacy_margins.py --apply` ran 11:13:37 IST from `/tmp` (VM checkout still `0297446`, clean). 18 open lock rows that kept the pre-#145 debit margin were shrunk to each trade's max loss. PAPER_10L freed Rs.5,14,000 (4e40647d alone Rs.3,90,000); liquid Rs.1,319 → Rs.5,60,698. LIVE freed Rs.40,000, ROT Rs.52,000, learner Rs.4,82,000. Backup `data/brain_map.db.bak-legacy-margins-20261106T111337`.
+- **On `main`, not deployed:** (1) the ruin halt judges max(realized, true-equity) drawdown, true equity from the last 2 fully priced `net_equity_history` readings ≤45 min old, against the realized peak; learner exempt. (2) every `paper_venue.sweep` caller passes `enforce_wings_first=True` (a failed BUY cancels the ticket's SELLs). Suite green.
+- **⚠️ Deploying (1) halts three accounts at once:** 10:45 true-equity drawdowns PAPER_10L 12.8%, PAPER_2L_LIVE 11.0%, PAPER_2L_ROT 12.9%. Each latch stays until the owner clears it, and re-arms while still past 10%.
+- **⚠️ Until the deploy:** PAPER_10L has Rs.5.6L free under the old realized-only rule, so it can open new trades today.
+- **Correction:** the 11-06 audit said wings-first was unenforced; #179's OMS rule already blocked SELL fills before BUYs.
+- **Next (owner):** decide the deploy. VM: `cd ~/alpha_trading && git fetch -q && git merge --ff-only origin/main`. No restart: each new cron process loads the new code; today's running `master_scheduler` keeps the old code until it exits after the close.
+
 ## 2026-11-04 (Wed, evening) — Day-1 audit: VM clean; three fixes (#180)
 
 **Day 1 (verified):** VM — 80 recon passes, all parity, 0 alerts; 7 multi-leg tickets filled

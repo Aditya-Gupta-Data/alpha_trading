@@ -20,7 +20,8 @@ as the simulator's `simulated_trades`), with three strict risk guards:
      Discord alert — just a `margin_exhaustion` row in `account_events`.
 
   3. RISK OF RUIN — the account tracks its full equity curve and trailing
-     drawdown from peak. If net portfolio drawdown ever breaches the
+     drawdown from peak — realized, or true equity incl. open P&L when that
+     is deeper (2026-11-06). If net portfolio drawdown ever breaches the
      hard-coded MAX_DRAWDOWN_PCT (10%), execution is blocked ENTIRELY:
      every subsequent entry is rejected until the equity recovers above
      the threshold, and the halt is logged as a `risk_of_ruin_halt`.
@@ -188,6 +189,59 @@ def drawdown_pct(conn) -> float:
     return round(max(0.0, (peak - equity(conn)) / peak * 100), 4)
 
 
+# True-equity ruin reading (2026-11-06): open P&L counts toward the 10% halt.
+TRUE_EQUITY_TABLE = "net_equity_history"   # src/equity_history.py, every 15 min on the VM
+TRUE_EQUITY_READS = 2                      # consecutive fully priced readings must both breach
+TRUE_EQUITY_MAX_AGE_MIN = 45               # older readings are not a live view: abstain
+
+
+def _now_ist_naive() -> datetime:
+    return datetime.now(IST).replace(tzinfo=None)
+
+
+def _fully_priced(marked_of) -> bool:
+    try:
+        marked, n_open = (int(x) for x in str(marked_of).split("/"))
+    except (TypeError, ValueError):
+        return False
+    return marked == n_open
+
+
+def true_equity_drawdown_pct(conn, account: str = None, now: datetime = None):
+    """Drawdown of true equity (realized + open P&L) below the realized peak: the smaller of
+    the last TRUE_EQUITY_READS fully priced, fresh net_equity_history readings. None when
+    there are not enough of them (the realized rule then stands alone). The Shadow Learner
+    has no halt (#140)."""
+    acct = ACCOUNT_PAPER_10L if _is_primary(account) else account
+    if acct == ACCOUNT_PAPER_SHADOW_LEARNER:
+        return None
+    now = now or _now_ist_naive()
+    lo = (now - timedelta(minutes=TRUE_EQUITY_MAX_AGE_MIN)).isoformat(timespec="seconds")
+    try:
+        rows = conn.execute(f"SELECT net_equity, marked_of FROM {TRUE_EQUITY_TABLE} WHERE account_id = ? "
+                            "AND ts >= ? AND ts <= ? ORDER BY ts DESC LIMIT ?",
+                            (acct, lo, now.isoformat(timespec="seconds"), TRUE_EQUITY_READS)).fetchall()
+        peak = float((get_account(conn) if _is_primary(account)
+                      else get_paper_account(conn, account))["peak_equity"])
+    except Exception:
+        return None
+    if len(rows) < TRUE_EQUITY_READS or peak <= 0 or not all(_fully_priced(r[1]) for r in rows):
+        return None
+    return round(min(max(0.0, (peak - float(r[0])) / peak * 100) for r in rows), 4)
+
+
+def ruin_drawdown_pct(conn, account: str = None) -> float:
+    """The drawdown the ruin halt judges: realized, or true equity when that is deeper."""
+    realized = paper_drawdown_pct(conn, account)
+    true_dd = true_equity_drawdown_pct(conn, account)
+    return realized if true_dd is None else max(realized, true_dd)
+
+
+def _ruin_basis(conn, account: str = None) -> str:
+    true_dd = true_equity_drawdown_pct(conn, account)
+    return "true-equity" if true_dd is not None and true_dd > paper_drawdown_pct(conn, account) else "realized"
+
+
 def halt_latched(conn) -> bool:
     """True while a risk-of-ruin halt is LATCHED and not since cleared.
 
@@ -248,7 +302,7 @@ def clear_halt(conn, why: str = "", who: str = "owner") -> dict:
     if not halt_latched(conn):
         return {"cleared": False, "reason": "no latched halt to clear",
                 "halted": trading_halted(conn)}
-    dd = drawdown_pct(conn)
+    dd = ruin_drawdown_pct(conn)
     log_event(conn, HALT_CLEAR_EVENT,
               f"latched ruin halt cleared by {who} at drawdown {dd:.2f}% "
               f"(limit {MAX_DRAWDOWN_PCT:g}%) — {why}")
@@ -269,8 +323,9 @@ def trading_halted(conn) -> bool:
     `clear_halt()` does."""
     if halt_latched(conn):
         return True
-    if drawdown_pct(conn) >= MAX_DRAWDOWN_PCT:
-        latch_halt(conn, f"drawdown {drawdown_pct(conn):.2f}% >= "
+    dd = ruin_drawdown_pct(conn)
+    if dd >= MAX_DRAWDOWN_PCT:
+        latch_halt(conn, f"{_ruin_basis(conn)} drawdown {dd:.2f}% >= "
                          f"{MAX_DRAWDOWN_PCT:g}% of peak equity")
         return True
     return False
@@ -441,7 +496,7 @@ def _ruin_halt_card(conn) -> None:
             "'ruin_halt_card' AND ts LIKE ?", (f"{today}%",)).fetchone()
         if seen:
             return
-        dd = drawdown_pct(conn)
+        dd = ruin_drawdown_pct(conn)
         log_event(conn, "ruin_halt_card",
                   f"SYSTEM PAUSED card fired (drawdown {dd:.2f}%)")
         from src.notifier import fire_broadcast
@@ -483,7 +538,7 @@ def halt_banner_lines(conn=None) -> list:
             return []
         _ruin_halt_card(conn)
         return [(f"🔴 SYSTEM PAUSED — risk-of-ruin halt LATCHED (drawdown "
-                 f"{drawdown_pct(conn):.2f}% vs the {MAX_DRAWDOWN_PCT:g}% "
+                 f"{ruin_drawdown_pct(conn):.2f}% vs the {MAX_DRAWDOWN_PCT:g}% "
                  "limit on peak equity). New entries are blocked on both "
                  "desks; open positions are still managed "
                  "(exits/stops/settlements run). It will not lift by "
@@ -509,7 +564,7 @@ def halt_banner_lines(conn=None) -> list:
 def _risk_of_ruin_check(conn) -> dict:
     halted = trading_halted(conn)
     return {"halted": halted, "event": "risk_of_ruin_halt",
-            "reason": (f"risk-of-ruin halt: drawdown {drawdown_pct(conn):.2f}% "
+            "reason": (f"risk-of-ruin halt: drawdown {ruin_drawdown_pct(conn):.2f}% "
                        f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked"
                        if halted else "drawdown within limits")}
 
@@ -539,7 +594,7 @@ def entry_halt(conn, account: str = None):
         return None
     if paper_trading_halted(conn, account):
         return {"halted": True, "event": "risk_of_ruin_halt",
-                "reason": (f"risk-of-ruin halt: drawdown {paper_drawdown_pct(conn, account):.2f}% "
+                "reason": (f"risk-of-ruin halt: drawdown {ruin_drawdown_pct(conn, account):.2f}% "
                            f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked")}
     breaker = paper_daily_breaker_status(conn, account)
     if breaker["halted"]:
@@ -1277,10 +1332,11 @@ def paper_trading_halted(conn, account: str) -> bool:
         return trading_halted(conn)
     if paper_halt_latched(conn, account):
         return True
-    dd = paper_drawdown_pct(conn, account)
+    dd = ruin_drawdown_pct(conn, account)
     if dd >= MAX_DRAWDOWN_PCT:
         paper_log_event(conn, account, HALT_LATCH_EVENT, None,
-                        f"drawdown {dd:.2f}% >= {MAX_DRAWDOWN_PCT:g}% of peak equity")
+                        f"{_ruin_basis(conn, account)} drawdown {dd:.2f}% >= "
+                        f"{MAX_DRAWDOWN_PCT:g}% of peak equity")
         return True
     return False
 
@@ -1307,7 +1363,7 @@ def paper_clear_halt(conn, account: str, why: str = "", who: str = "owner") -> d
     if not paper_halt_latched(conn, account):
         return {"cleared": False, "account_id": account, "reason": "no latched halt to clear",
                 "halted": paper_trading_halted(conn, account)}
-    dd = paper_drawdown_pct(conn, account)
+    dd = ruin_drawdown_pct(conn, account)
     paper_log_event(conn, account, HALT_CLEAR_EVENT, None,
                     f"latched ruin halt cleared by {who} at drawdown {dd:.2f}% "
                     f"(limit {MAX_DRAWDOWN_PCT:g}%) — {why}")

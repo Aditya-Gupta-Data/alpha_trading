@@ -47,7 +47,7 @@ def _closes(days, spots):
 
 
 def test_a_bullish_view_trades_a_bull_call_spread_on_real_closes_and_exits_by_the_rules(tmp_path):
-    spots = [22000 + 60 * i for i in range(12)]
+    spots = [22000 + 60 * i for i in range(21)]
     days = _write_days(tmp_path, spots)
     fo = ops.FoHistory(tmp_path)
     res = ops.simulate(days[0], days[-1], "live", symbols=("NIFTY",), fo=fo,
@@ -73,7 +73,7 @@ def test_untraded_strikes_are_not_a_chain(tmp_path):
 
 
 def test_skip_bearish_and_bull_only_modes(tmp_path):
-    spots = [22800 - 60 * i for i in range(12)]
+    spots = [22800 - 60 * i for i in range(21)]
     days = _write_days(tmp_path, spots)
     fo = ops.FoHistory(tmp_path)
     falling = [((date(2023, 1, 2) + timedelta(days=i)).isoformat(), 26000 - 8 * i) for i in range(380)]
@@ -95,3 +95,19 @@ def test_summarize_drawdown_and_profit_factor():
     s = ops.summarize(tr)
     assert s["n"] == 3 and s["max_drawdown_rs"] == -300.0 and s["profit_factor"] == 0.5 and s["total_rs"] == -150.0
     assert ops.summarize([]) == {"n": 0}
+
+
+def test_a_nearly_free_spread_is_refused_and_open_positions_are_not_scored(tmp_path, monkeypatch):
+    spots = [22000 + 60 * i for i in range(21)]
+    days = _write_days(tmp_path, spots)
+    fo = ops.FoHistory(tmp_path)
+    kw = dict(symbols=("NIFTY",), fo=fo, closes_by_sym={"NIFTY": _closes(days, spots)}, vix_by_day={})
+    monkeypatch.setattr(ops, "MAX_PLAUSIBLE_REWARD_RISK", 0.1)
+    res = ops.simulate(days[0], days[-1], "live", **kw)
+    assert res["trades"] == [] and res["refusals"].get("implausible close-price book (reward:risk > 9)")
+    monkeypatch.setattr(ops, "MAX_PLAUSIBLE_REWARD_RISK", 9.0)
+    short = ops.FoHistory(tmp_path)
+    short.days = short.days[:4]
+    res = ops.simulate(days[0], days[3], "live", symbols=("NIFTY",), fo=short,
+                       closes_by_sym={"NIFTY": _closes(days, spots)}, vix_by_day={})
+    assert all(t["resolution"] != "open_at_data_end" for t in res["trades"])

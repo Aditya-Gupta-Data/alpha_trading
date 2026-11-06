@@ -35,6 +35,8 @@ NAMES = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK", "FINNIFTY": "NIFTY FIN 
 INDEX_CSV = {"NIFTY": "NIFTY.csv", "BANKNIFTY": "NIFTY_BANK.csv", "FINNIFTY": "NIFTY_FIN_SERVICE.csv"}
 EQUITY = 200_000.0
 MODES = ("live", "skip_bearish", "bull_only")
+# Closes of different strikes print at different moments, so a "spread" can look nearly free; no live book offers that.
+MAX_PLAUSIBLE_REWARD_RISK = 9.0
 
 
 def _f(v):
@@ -136,6 +138,8 @@ def walk(spread: dict, entry_day: str, ticker: str, fo: FoHistory, sym: str):
             return ("profit_take",) + last
         if pt.in_forced_exit_window(ticker, expiry, date.fromisoformat(d)):
             return ("pre_expiry_exit",) + last
+    if last and fo.days and fo.days[-1] < expiry:
+        return ("open_at_data_end",) + last
     return ("expiry_last_mark",) + last if last else None
 
 
@@ -190,11 +194,19 @@ def simulate(start: str, end: str, mode: str = "live", symbols=tuple(NAMES), fo:
                 refusals[str(res.get("reason"))[:60]] += 1
                 continue
             spread = p["spread"]
+            ml, mp = float(spread["max_loss"]), float(spread["max_profit"])
+            if ml <= 0 or mp / ml > MAX_PLAUSIBLE_REWARD_RISK:
+                refusals["implausible close-price book (reward:risk > 9)"] += 1
+                continue
             hit = walk(spread, d, ticker, fo, sym)
             if hit is None:
                 refusals["no later marks"] += 1
                 continue
             resolution, exit_day, m_exit, prices = hit
+            if resolution == "open_at_data_end":
+                refusals["still open when the data ends"] += 1
+                busy_until = exit_day
+                continue
             qty = int(spread["lot_size"]) * int(spread.get("lots", 1))
             gross = (m_exit - pt._spread_entry_mark(spread)) * qty
             fr, sl = pt._spread_exit_costs_quoted(spread, prices)

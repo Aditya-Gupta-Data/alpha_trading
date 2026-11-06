@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-11-06 · 1 commits · 15 files touched
+
+- `6d71499` fix(risk): #181 true-equity ruin halt, wings-first at every sweep, legacy margin repair
+
+
 ### 2026-11-03 · 4 commits · 10 files touched
 
 - `2d45447` docs: HANDOVER — 11-03 alt-data fleet merge + cron #39

@@ -2532,3 +2532,13 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Cause (verified in code and by `tests/test_long_options.py`): `options_proposer._live_refuse` replaces `entry['accounts'][acct]` with a new dict, but `shadow_learner.take` returned its own original verdict (status 'approved'); `_learner_path` then wrote that back onto the entry and journaled it.
 - Verified 11-06 on the VM, read-only: of 344 learner-only journal rows, 9 say PAPER_SHADOW_LEARNER 'approved' while the account logged `live_entry_refused` for the ref and holds no live position for it (first 1cd733a3 2026-10-12, last 00e6534f 2026-11-02). Money was not affected: the locks were released by the refusal.
 - Fix (#182): `take` returns the entry's final verdict. The 9 past rows are left as they are (the journal is the record; a repair would be an owner decision).
+
+## Deploy 2026-11-06 17:18–17:24 IST — #181 + #182 to the VM, the Mini PC and the dashboard box (`main` `0297446` → `f97ec8b`)
+
+- Mac suite 3,504 passed (before the push). VM: no job running, fast-forward clean, 102 scoped tests passed, imports OK, `alpha-trading` + `alpha-discord-bot` restarted 17:19, both active, API 401 without the key (up). Gateway tunnel rotated with the restart.
+- Mini PC: fast-forward clean, 84 scoped tests passed, imports OK.
+- Dashboard box: `ship_ui.sh` bundle 17:21 (new strings in the overview chunk), checkout `f97ec8b`, bridge + Streamlit restarted, desk 200 on :8080 and through the tunnel. Treasury data read with the bridge's data dir: `lock_breakdown` on all six accounts; locks over 20% of equity: 3, all in the learner.
+- Issue 57: the true-equity halt is now live. Read-only preview on the 15:46 readings: PAPER_10L 12.07%, ROT 12.14%, LIVE 12.53%, LIVE_GEX 5.25%. After the close the rule abstains (readings older than 45 min). No new latch was armed at deploy.
+- Issue 58: the fix is live; the 9 past rows are unchanged.
+- Unverified: the Monday 11-09 latches, the first live long option and its exits, the desk viewed with the owner's key.
+

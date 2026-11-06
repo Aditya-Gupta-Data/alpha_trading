@@ -235,8 +235,9 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-11-06 · 1 commits · 15 files touched
+### 2026-11-06 · 2 commits · 27 files touched
 
+- `3c35ce2` feat(learner,desk): #182 learner long options, capital pies, per-trade drill-down
 - `6d71499` fix(risk): #181 true-equity ruin halt, wings-first at every sweep, legacy margin repair
 
 

@@ -43,6 +43,13 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-06 (Fri, night) — GraphRAG news shadow: 15 more feeds (#184) + forward test (#185) LIVE on the Mini PC (`main` `ee4213a`); VM untouched
+
+- **Live on the Mini PC:** the shadow now also reads 15 shadow-only feeds (`config/rss_feeds.json` `shadow_feeds`: Business Standard ×3, BusinessLine ×3, Mint ×3, ET company/economy/commodities, RBI ×2, SEBI), cap 600/day; the event engine's feeds are unchanged. New node cron 22:10 Mon–Fri `src.knowledge_graph.graphrag_shadow_forward` grades shadow edges against the bhavcopy lake (1/3/5 sessions, shuffled-ticker placebo, n ≥ 60) into `logs/graphrag_shadow_forward.jsonl`; verdicts only. Crontab backup: `/tmp/crontab_before_185.txt` on the Mini PC (the reinstall added only the #185 line; the manual alt-data lines kept, moved below the block).
+- **First reads (11-06, tiny n, no placebo yet):** of 1,191 shadow edges only 71 calls (49 companies) target a company. 1-session ALL n=46, 52% hit. 3-session `drives` 8/10 +3.56%, `hurts` 1/10 −4.66% (stocks called "hurt" rose). 5-session windows complete from ~11-09. Treat as noise until n ≥ 60 with placebo.
+- **Watch / open:** the first #184 run (≈500 new items) was still running at deploy; check `tail logs/graphrag_shadow.log` and today's call count against 600. `invalid_predicate` is now the main rejection. Moneycontrol feeds 503/403 (Issue 54) still open.
+- **Git note:** the Mac checkout was found on another session's branch `feature/graphrag-altdata-wiring` with uncommitted edits; this session worked in a separate worktree. That branch still carries `4cd433d` (the #184 change numbered #177) — drop it when that branch is merged, `main` has it as `04a8212`.
+
 ## 2026-11-06 (Fri, night) — docs refresh: overview docs brought up to date, branch report, accounts page, docs index, NotebookLM packs (branch `docs/refresh-2026-11-06`, NOT merged)
 
 - **Docs only; no trading code, config or cron line changed.** Nothing to deploy to the VM, Mini PC or dashboard box.

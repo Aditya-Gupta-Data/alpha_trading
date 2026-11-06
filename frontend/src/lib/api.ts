@@ -58,6 +58,25 @@ export interface AccountTreasury {
   open_positions: number;
   /** When the engine published the marks (IST, tz-aware). */
   marks_as_of: string | null;
+  /** #182: every open lock, largest first, as a share of realized equity (older bridges omit it). */
+  lock_breakdown?: LockSlice[];
+  largest_lock_pct?: number | null;
+  concentration_threshold_pct?: number;
+}
+
+export interface LockSlice {
+  ref: string;
+  label: string;
+  /** The account's latest ENTRY ticket for this ref (OMS `trade_tickets`); null before the paper venue. */
+  ticket_id?: string | null;
+  ticker?: string | null;
+  strategy?: string | null;
+  /** This account's open P&L on the trade, on the same marks as the card's total; null = unpriced. */
+  unrealized_pnl?: number | null;
+  margin_rs: number;
+  pct_of_equity: number | null;
+  /** True when this one lock is above `concentration_threshold_pct` of equity. */
+  concentrated: boolean;
 }
 
 export interface EquityPoint {
@@ -75,6 +94,8 @@ export interface Treasury {
   /** The live-quote arm (decision #120): marks and exits on crossed bid/ask; absent until its first fill. */
   PAPER_2L_LIVE?: AccountTreasury & { rejections: number };
   PAPER_2L_LIVE_GEX?: AccountTreasury & { rejections: number };
+  /** The Shadow Learner (#140): raw setups and #182's long options; no margin wall. */
+  PAPER_SHADOW_LEARNER?: AccountTreasury & { rejections: number };
   equity_curve: EquityPoint[];
   /** Compounding (return / CAGR) is measured from this date — the ₹10L base (#116). */
   base_epoch?: string;
@@ -237,6 +258,76 @@ const MOCK_TREASURY: Treasury = {
     marked_positions: 5,
     open_positions: 6,
     marks_as_of: NOW.toISOString(),
+    lock_breakdown: [
+      {
+        ref: "4e40647d",
+        label: "NIFTY 50 bear put spread",
+        ticket_id: "tkt:bd925b76b34089",
+        ticker: "NIFTY 50",
+        strategy: "Bear Put",
+        unrealized_pnl: -41250,
+        margin_rs: 245_000,
+        pct_of_equity: 22.57,
+        concentrated: true,
+      },
+      {
+        ref: "7da29e4f",
+        label: "HDFCBANK.NS bear put spread",
+        ticket_id: "tkt:7da29e4f0a11c2",
+        ticker: "HDFCBANK.NS",
+        strategy: "Bear Put",
+        unrealized_pnl: 3120,
+        margin_rs: 65_325,
+        pct_of_equity: 6.02,
+        concentrated: false,
+      },
+      {
+        ref: "8be5df84",
+        label: "HDFCBANK.NS iron butterfly",
+        ticket_id: "tkt:8be5df84c3d901",
+        ticker: "HDFCBANK.NS",
+        strategy: "Iron Butterfly",
+        unrealized_pnl: 1840,
+        margin_rs: 48_175,
+        pct_of_equity: 4.44,
+        concentrated: false,
+      },
+      {
+        ref: "c7150c46",
+        label: "TCS.NS bear put spread",
+        ticket_id: null,
+        ticker: "TCS.NS",
+        strategy: "Bear Put",
+        unrealized_pnl: -8900,
+        margin_rs: 24_000,
+        pct_of_equity: 2.21,
+        concentrated: false,
+      },
+      {
+        ref: "5268120c",
+        label: "TCS.NS bear put spread",
+        ticket_id: null,
+        ticker: "TCS.NS",
+        strategy: "Bear Put",
+        unrealized_pnl: -7600,
+        margin_rs: 18_000,
+        pct_of_equity: 1.66,
+        concentrated: false,
+      },
+      {
+        ref: "eqd:3101de2d",
+        label: "Darling 3101de2d",
+        ticket_id: null,
+        ticker: "CASTROLIND.NS",
+        strategy: "Equity Long",
+        unrealized_pnl: null,
+        margin_rs: 12_000,
+        pct_of_equity: 1.11,
+        concentrated: false,
+      },
+    ],
+    largest_lock_pct: 22.57,
+    concentration_threshold_pct: 20,
   },
   PAPER_2L: {
     account_id: "PAPER_2L",
@@ -257,6 +348,43 @@ const MOCK_TREASURY: Treasury = {
     open_positions: 3,
     marks_as_of: NOW.toISOString(),
     rejections: 4,
+    lock_breakdown: [
+      {
+        ref: "59df93f4",
+        label: "NIFTY MID SELECT bear put spread",
+        ticket_id: "tkt:59df93f4aa0021",
+        ticker: "NIFTY MID SELECT",
+        strategy: "Bear Put",
+        unrealized_pnl: -2100,
+        margin_rs: 38_000,
+        pct_of_equity: 18.71,
+        concentrated: false,
+      },
+      {
+        ref: "238e849f",
+        label: "NIFTY FIN SERVICE bear put spread",
+        ticket_id: "tkt:238e849f5b7710",
+        ticker: "NIFTY FIN SERVICE",
+        strategy: "Bear Put",
+        unrealized_pnl: -1450,
+        margin_rs: 33_800,
+        pct_of_equity: 16.64,
+        concentrated: false,
+      },
+      {
+        ref: "d0f949e4",
+        label: "NIFTY 50 iron butterfly",
+        ticket_id: "tkt:d0f949e40c3e55",
+        ticker: "NIFTY 50",
+        strategy: "Iron Butterfly",
+        unrealized_pnl: 1730,
+        margin_rs: 25_000,
+        pct_of_equity: 12.31,
+        concentrated: false,
+      },
+    ],
+    largest_lock_pct: 18.71,
+    concentration_threshold_pct: 20,
   },
   equity_curve: EQUITY_CURVE,
   base_epoch: "2026-08-07",

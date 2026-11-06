@@ -250,3 +250,61 @@ def test_the_portfolio_graph_axis_ticks_on_calendar_units():
     assert d.time_axis(10 * 86400) == {"format": "%d %b", "interval": "day", "step": 2}
     assert d.time_axis(30 * 86400) == {"format": "%d %b", "interval": "day", "step": 7}
     assert d.time_axis(290 * 86400) == {"format": "%b '%y", "interval": "month", "step": 2}
+
+
+def test_treasury_breaks_locks_down_and_flags_one_over_twenty_pct(tmp_path):
+    from src import brain_map, portfolio_manager as pm
+    p = _db(tmp_path)
+    conn = brain_map.connect(str(p))
+    pm.request_entry(conn, "big00001", 250000.0)
+    conn.close()
+    (tmp_path / "journal.jsonl").write_text(json.dumps(
+        {"short_id": "big00001", "ticker": "NIFTY 50", "spread": {"strategy": "bear_put_spread"}}) + "\n")
+    a = d.treasury(p)["PAPER_10L"]
+    assert [(r["ref"], r["margin_rs"], r["pct_of_equity"], r["concentrated"]) for r in a["lock_breakdown"]] == [
+        ("big00001", 250000.0, 25.0, True), ("ab12cd34", 50000.0, 5.0, False)]
+    assert a["lock_breakdown"][0]["label"] == "NIFTY 50 Bear Put"
+    assert a["lock_breakdown"][0]["ticker"] == "NIFTY 50" and a["lock_breakdown"][0]["strategy"] == "Bear Put"
+    assert a["lock_breakdown"][1]["label"] == "ab12cd34"                   # no journal row: the ref itself
+    assert a["largest_lock_pct"] == 25.0 and a["concentration_threshold_pct"] == 20.0
+    b = d.treasury(p)["PAPER_2L"]
+    assert b["lock_breakdown"][0]["pct_of_equity"] == 4.5 and not b["lock_breakdown"][0]["concentrated"]
+
+
+def test_lock_breakdown_labels_darlings_and_survives_no_equity():
+    out = d.lock_breakdown([{"journal_ref": "eqd:abc", "margin_rs": 10.0}], 0, {})
+    assert out["lock_breakdown"] == [{"ref": "eqd:abc", "label": "Darling abc", "ticker": None, "strategy": None,
+                                      "ticket_id": None, "unrealized_pnl": None, "margin_rs": 10.0,
+                                      "pct_of_equity": None, "concentrated": False}]
+    assert d.lock_breakdown({"error": "locked"}, 100, {})["lock_breakdown"] == []
+
+
+def test_lock_rows_carry_ticket_and_unrealized_on_the_treasury_marks(tmp_path, monkeypatch):
+    from src import brain_map, oms, portfolio_manager as pm
+    from src.execution import live_pricer as lp
+    p = _db(tmp_path)
+    conn = brain_map.connect(str(p))
+    oms.ensure_schema(conn)
+    lp.ensure_schema(conn)
+    pm.get_paper_account(conn, "PAPER_SHADOW_LEARNER")
+    pm.paper_request_entry(conn, "PAPER_SHADOW_LEARNER", "lc000001", 9100.0, lots=1, primary_lots=1)
+    conn.execute("INSERT INTO paper_live_positions (account_id, journal_ref, ticker, strategy, direction, expiry, "
+                 "lots, lot_size, legs_json, entry_mark_ps, width_ps, max_profit_ps, max_loss_ps, opened_at, state, "
+                 "last_profit_ps, last_mark_ts) VALUES ('PAPER_SHADOW_LEARNER', 'lc000001', 'INFY.NS', 'long_call', "
+                 "'bullish', '2026-11-27', 1, 400, '[]', 22.75, 0, 1500, 22.75, '2026-11-06T10:00:00', 'open', "
+                 "-2.5, '2026-11-06T11:00:00')")
+    conn.execute("INSERT INTO trade_tickets (ticket_id, journal_ref, underlying, strategy, direction, lots, lot_size, "
+                 "source, status, issued_at, updated_at, account_id, kind) VALUES ('tkt:abc', 'lc000001', 'INFY.NS', "
+                 "'long_call', 'bullish', 1, 400, 'shadow_learner', 'FILLED', '2026-11-06T10:00:00', "
+                 "'2026-11-06T10:00:00', 'PAPER_SHADOW_LEARNER', 'ENTRY')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(d, "_snapshot", lambda: {"as_of": "2026-11-06T11:00:00",
+                                                 "marks": [{"short_id": "ab12cd34", "live_pnl_rs": 1200.0}]})
+    T = d.treasury(p)
+    row, = T["PAPER_SHADOW_LEARNER"]["lock_breakdown"]
+    assert (row["ticket_id"], row["ticker"], row["strategy"], row["margin_rs"], row["unrealized_pnl"]) == (
+        "tkt:abc", "INFY.NS", "Long Call", 9100.0, -1000.0)
+    assert row["label"] == "INFY.NS Long Call"
+    two = T["PAPER_2L"]["lock_breakdown"][0]
+    assert two["ref"] == "ab12cd34" and two["unrealized_pnl"] == 600.0 and two["ticket_id"] is None

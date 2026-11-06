@@ -182,6 +182,9 @@ def test_direction_map_agrees_with_every_constructor():
         "iron_butterfly": sc.construct_iron_butterfly(
             24100, 300, 180.0, 175.0, 60.0, 65.0),
     }
+    from src import long_options as lo                     # #182: built from a spread's BUY leg
+    built["long_call"] = lo.from_spread(built["bull_call_spread"])
+    built["long_put"] = lo.from_spread(built["bear_put_spread"])
     assert set(built) == set(eg.DIRECTION_BY_STRATEGY)
     for strategy, spread in built.items():
         assert spread["direction"] == eg.DIRECTION_BY_STRATEGY[strategy], \

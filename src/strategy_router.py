@@ -46,6 +46,11 @@ ROUTING_TABLE = {
                          "premium": "credit", "defined_risk": True},
     "iron_butterfly":   {"direction": "neutral", "family": "range_bound",
                          "premium": "credit", "defined_risk": True},
+    # #182: single-leg long options, Shadow Learner only (src/long_options.py); max loss = premium
+    "long_call":        {"direction": "bullish", "family": "long_option",
+                         "premium": "debit", "defined_risk": True},
+    "long_put":         {"direction": "bearish", "family": "long_option",
+                         "premium": "debit", "defined_risk": True},
 }
 
 # view -> the structure the desk trades for it (the proposer's chain, as one row)
@@ -263,6 +268,11 @@ def issue_exit(conn, entry: dict, leg_limits: dict, resolution: str, **kw) -> di
 def issue(conn, proposal: dict, **kw) -> dict:
     """Build and persist a ticket (every leg PENDING). The only write door
     from a proposal into the OMS. Not on any live path."""
+    from src.long_options import refusal_for_account
+    refused = refusal_for_account((proposal.get("spread") or {}).get("strategy"),
+                                  kw.get("account_id") or oms.PRIMARY_ACCOUNT)
+    if refused:
+        raise ValueError(refused)
     ticket = build_ticket(proposal, **kw)
     res = oms.issue_ticket(conn, ticket)
     return {**res, "ticket": ticket}

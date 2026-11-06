@@ -42,6 +42,13 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-06 (Fri, afternoon) — #182 learner long options + desk capital pies on `main`; NOT deployed (owner deploys after the close)
+
+- **On `main`, not on the VM / Mini PC / dashboard box:** `src/long_options.py` — the Shadow Learner may take the BUY leg of each bull call / bear put the proposer builds as a LONG_CALL / LONG_PUT (learner only, Rs.15,000 premium cap, exits: −50% premium stop, gain-ladder trail, theta time stop, pre-expiry). React desk: a free-cash vs per-lock donut on every account card, a lock over 20% of equity in red, plus a learner card; 'More details' is now a per-trade table (ticket, symbol, strategy, margin locked, unrealized P&L) instead of the five summary blocks. Also the Issue 58 fix in `shadow_learner.take`.
+- **Deploy (owner, after the close, with #181):** VM `cd ~/alpha_trading && git fetch -q && git merge --ff-only origin/main`. Dashboard box: from the Mac `bash scripts/dashboard_box/ship_ui.sh`; on the box `git pull` and restart the bridge (as on 10-16) so `/api/treasury` sends `lock_breakdown`. Until the bridge restarts, the pie shows one 'locked' slice (older-bridge fallback).
+- **Watch first session:** learner verdicts naming `premium cap` (expect many on index ATM lots); the first `long_call`/`long_put` rows in `paper_live_positions` and their exit resolutions.
+- **Remember:** #181's true-equity halt does not apply to the learner (exempt, #140), so long options keep trading while the other accounts are halted.
+
 ## 2026-11-06 (Fri, ~11:20) — #181 hotfix: legacy margins REPAIRED on the VM; true-equity ruin halt + wings-first flag on `main`, NOT deployed
 
 - **Live now (VM DB, verified):** `scripts/fix_legacy_margins.py --apply` ran 11:13:37 IST from `/tmp` (VM checkout still `0297446`, clean). 18 open lock rows that kept the pre-#145 debit margin were shrunk to each trade's max loss. PAPER_10L freed Rs.5,14,000 (4e40647d alone Rs.3,90,000); liquid Rs.1,319 → Rs.5,60,698. LIVE freed Rs.40,000, ROT Rs.52,000, learner Rs.4,82,000. Backup `data/brain_map.db.bak-legacy-margins-20261106T111337`.

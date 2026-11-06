@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
+import { AccountTrades } from "@/components/desk/AccountTrades";
 import { Actionables } from "@/components/desk/Actionables";
+import { CapitalPie } from "@/components/desk/CapitalPie";
 import { EmptyState, Panel } from "@/components/desk/Panel";
 import { PageHeader } from "@/components/desk/PageHeader";
 import { PortfoliosPanel } from "@/components/desk/PortfoliosPanel";
@@ -11,7 +13,6 @@ import {
   EM_DASH,
   formatIstDate,
   formatIstDateTime,
-  formatNumber,
   formatPct,
   formatRupees,
   formatRupeesSigned,
@@ -36,21 +37,6 @@ export const Route = createFileRoute("/_authenticated/overview")({
   }),
   component: OverviewPage,
 });
-
-function Metric({ label, value, tone }: { label: string; value: string; tone?: "up" | "down" }) {
-  return (
-    <div className="border-t border-border pt-2">
-      <p className="num text-[10px] tracking-[0.1em] text-muted-foreground uppercase">{label}</p>
-      <p
-        className={`num mt-0.5 text-sm font-semibold ${
-          tone === "up" ? "text-pnl-up" : tone === "down" ? "text-pnl-down" : ""
-        }`}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
 
 function AccountCard({ account }: { account: AccountTreasury }) {
   const realizedUp = account.realized_pnl >= 0;
@@ -105,17 +91,10 @@ function AccountCard({ account }: { account: AccountTreasury }) {
           <p className="text-[11px] text-muted-foreground">realized, from the peak</p>
         </div>
       </div>
+      <CapitalPie account={account} />
       <details className="mt-5 text-xs">
         <summary className="cursor-pointer text-muted-foreground">More details</summary>
-        <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
-          <Metric label="Started with" value={formatRupees(account.starting_capital)} />
-          <Metric label="Locked margin" value={formatRupees(account.locked_margin)} />
-          <Metric label="Open locks" value={formatNumber(account.open_locks)} />
-          <Metric label="Available cash" value={formatRupees(account.available_cash)} />
-          {account.rejections !== undefined && (
-            <Metric label="Rejections" value={formatNumber(account.rejections)} />
-          )}
-        </div>
+        <AccountTrades account={account} />
       </details>
     </Panel>
   );
@@ -191,6 +170,9 @@ function OverviewPage() {
               {treasury.data.PAPER_2L_LIVE && <AccountCard account={treasury.data.PAPER_2L_LIVE} />}
               {treasury.data.PAPER_2L_LIVE_GEX && (
                 <AccountCard account={treasury.data.PAPER_2L_LIVE_GEX} />
+              )}
+              {treasury.data.PAPER_SHADOW_LEARNER && (
+                <AccountCard account={treasury.data.PAPER_SHADOW_LEARNER} />
               )}
             </div>
 

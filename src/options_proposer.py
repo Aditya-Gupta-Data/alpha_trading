@@ -892,6 +892,41 @@ def _learner_path(underlying: str, result: dict, p: dict, reason: str) -> dict:
             "rejected": _rejected_facts(underlying, result, p)}
 
 
+def _learner_long_option_entry(underlying: str, result: dict, take_fn=None, log_fn=None, ready_fn=None):
+    """#182: the Shadow Learner's own long option on the BUY leg of the directional spread this cycle
+    built (approved or refused), once per (underlying, strategy, session). Journaled REJECTED for the
+    primary, which never takes it, only once it opens. Fail-open, never raises; None when there is
+    nothing to take."""
+    try:
+        from src import long_options as lo, shadow_learner
+        result = result or {}
+        spread = (result.get("proposal") or {}).get("spread") or result.get("rejected_spread")
+        opt = lo.from_spread(spread or {}, expiry=(spread or {}).get("expiry") or result.get("expiry"))
+        if opt is None or not opt.get("expiry"):
+            return None
+        ok, why = (ready_fn or shadow_learner.ready)(underlying, strategy=opt["strategy"])
+        if not ok:
+            return {"status": "skipped", "reason": why}
+        leg = opt["legs"][0]
+        reason = f"learner-only: {opt['strategy'].replace('_', ' ')} (#182, premium cap Rs.{lo.MAX_PREMIUM_RS:,.0f})"
+        p = {"action": "SPREAD", "ticker": underlying, "shares": opt["lot_size"], "price": opt["net_debit"],
+             "signal": (f"{result.get('view')} read on {underlying} — {opt['strategy'].replace('_', ' ')} "
+                        f"{leg['strike']:g} {leg['option_type']}, learner only"),
+             "spread": opt, "view": result.get("view"), "vix": result.get("vix"), "lots": 1}
+        entry = to_journal_entry(p, "rejected", reason)
+        entry["learner_only"] = reason
+        verdict = (take_fn or shadow_learner.take)(entry, reason)
+        entry.setdefault("accounts", {})[shadow_learner.ACCOUNT] = verdict
+        if verdict.get("status") == "approved":           # a refusal retries next cycle: never a journal row
+            (log_fn or journal.log)(entry)
+        print(f"  [{shadow_learner.ACCOUNT}] {entry.get('short_id')}: {opt['strategy']} "
+              f"{verdict.get('status')} — {verdict.get('reason')}")
+        return verdict
+    except Exception as exc:
+        print(f"  ({underlying}: learner long option skipped: {type(exc).__name__}: {exc})")
+        return {"status": "error", "reason": str(exc)}
+
+
 def _primary_available_cash(book: dict) -> float:
     """The primary's liquid cash (equity minus locks); the legacy book's cash only when the ledger is unreadable."""
     if not os.environ.get("PYTEST_CURRENT_TEST"):
@@ -1231,6 +1266,8 @@ def run_headless(underlying: str = "NIFTY 50", state: dict = None) -> dict:
     result = build_proposal(underlying, **state, **bp_extras)
     if "book" not in state and not learner_only:
         _gex_own_entry(underlying, state, result)            # #161: PAPER_2L_LIVE_GEX's own D6 trade, isolated
+    if learner_on:
+        _learner_long_option_entry(underlying, result)       # #182: the learner's LONG_CALL / LONG_PUT
     if result["proposal"] is None:
         # `rejected` rides along for the proposal ledger / ghost tracker
         # (2026-08-07). Additive only — every caller reads `proposed`,

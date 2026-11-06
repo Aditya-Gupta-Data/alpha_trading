@@ -46,7 +46,7 @@ CAPITAL_EVENT_TYPES = ("clean_sheet", "capital_injection")
 LIVE_ACCOUNTS = ("PAPER_2L_LIVE", "PAPER_SHADOW_LEARNER", "PAPER_2L_LIVE_GEX")
 STRATEGY_LABELS = {"bear_put_spread": "Bear Put", "bull_call_spread": "Bull Call",
                    "iron_condor": "Iron Condor", "iron_butterfly": "Iron Butterfly",
-                   "equity_long": "Equity Long"}
+                   "equity_long": "Equity Long", "long_call": "Long Call", "long_put": "Long Put"}
 
 
 def connect_ro(db_path=None, timeout: float = 5.0):
@@ -244,7 +244,7 @@ def _stale_policy(now: datetime = None, captured_at: datetime = None) -> tuple:
 
 
 def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: datetime = None,
-                          captured_at: datetime = None) -> dict:
+                          captured_at: datetime = None, by_ref: dict = None) -> dict:
     """{account: {unrealized_pnl, marked_positions, open_positions}} from the
     ENGINE'S published marks (`market_snapshot.json` — the same marks the
     Discord card's ladder reads first). Never a fresh quote. The primary sums
@@ -278,6 +278,10 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
     out = {"PAPER_10L": {"unrealized_pnl": round(sum(priced), 2) if priced else None,
                          "marked_positions": len(priced), "open_positions": len(rows),
                          "unmarked_names": [r.get("symbol") or r.get("id") for r in rows if r.get("mtm_rs") is None]}}
+    # #182 drill-down: `by_ref` (when given) gets {account: {ref: {pnl, ticker, strategy}}} on the SAME marks
+    by_ref = {} if by_ref is None else by_ref
+    primary_info = {r.get("id"): {"ticker": r.get("symbol"), "strategy": r.get("strategy")} for r in rows}
+    by_ref["PAPER_10L"] = {r.get("id"): dict(primary_info[r.get("id")], pnl=r.get("mtm_rs")) for r in rows}
     locks = _q(conn, "SELECT account_id, journal_ref, lots, primary_lots FROM paper_margin_locks "
                      "WHERE released_at IS NULL")
     for l in (locks if isinstance(locks, list) else []):
@@ -287,9 +291,12 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
             continue                    # priced below from its own crossed marks (#120)
         a["open_positions"] += 1
         m = marks.get(l["journal_ref"]) or {}
+        slot = by_ref.setdefault(l["account_id"], {})[l["journal_ref"]] = dict(
+            primary_info.get(l["journal_ref"]) or {}, pnl=None)
         if m.get("live_pnl_rs") is None or not l["primary_lots"]:
             continue
         pnl = float(m["live_pnl_rs"]) * float(l["lots"]) / float(l["primary_lots"])
+        slot["pnl"] = round(pnl, 2)
         a["unrealized_pnl"] = round((a["unrealized_pnl"] or 0.0) + pnl, 2)
         a["marked_positions"] += 1
     # decision #120: the live-quote arm marks itself on crossed bid/ask —
@@ -304,6 +311,10 @@ def unrealized_by_account(conn, snapshot: dict = None, rows: list = None, now: d
             _live_mark_stale(r, ref, max_age_s) if max_age_s is not None else None)
         if r["last_mark_ts"] and str(r["last_mark_ts"]) < oldest.get(r["account_id"], "~"):
             oldest[r["account_id"]] = str(r["last_mark_ts"])
+        by_ref.setdefault(r["account_id"], {})[r["journal_ref"]] = {
+            "ticker": r["ticker"], "strategy": STRATEGY_LABELS.get(r["strategy"], r["strategy"]),
+            "pnl": None if r["last_profit_ps"] is None
+            else round(float(r["last_profit_ps"]) * int(r["lots"]) * int(r["lot_size"]), 2)}
         if r["last_profit_ps"] is None:
             continue
         a["unrealized_pnl"] = round((a["unrealized_pnl"] or 0.0)
@@ -348,7 +359,49 @@ def _with_mtm(acct: dict, u: dict | None, as_of) -> dict:
     return acct
 
 
-def treasury(db_path=None, now: datetime = None) -> dict:
+CONCENTRATION_PCT = 20.0     # #182: one lock above this share of the account's equity is flagged
+
+
+def _lock_labels(journal_path=None) -> dict:
+    """{short_id: {ticker, strategy}} for the capital pie; {} when the journal is unreadable."""
+    out = {}
+    for e in _jsonl(journal_path or JOURNAL_PATH):
+        sid = e.get("short_id")
+        if sid:
+            kind = (e.get("spread") or {}).get("strategy") or e.get("action") or ""
+            out[sid] = {"ticker": e.get("ticker"), "strategy": STRATEGY_LABELS.get(kind, kind.replace("_", " "))}
+    return out
+
+
+def _entry_tickets(conn, account: str) -> dict:
+    """{journal_ref: ticket_id} — the account's latest ENTRY ticket per ref; {} when the OMS is absent."""
+    rows = _q(conn, "SELECT journal_ref, ticket_id FROM trade_tickets WHERE account_id = ? AND kind = 'ENTRY' "
+                    "ORDER BY issued_at, rowid", (account,))
+    return {r["journal_ref"]: r["ticket_id"] for r in rows} if isinstance(rows, list) else {}
+
+
+def lock_breakdown(locks, equity, labels: dict, tickets: dict = None) -> dict:
+    """Every open lock, largest first: its share of realized equity, the >20% flag, and the
+    drill-down's ticket / ticker / strategy (unrealized P&L is filled in by treasury)."""
+    eq = float(equity or 0)
+    rows = []
+    for r in locks if isinstance(locks, list) else []:
+        ref, m = str(r["journal_ref"]), float(r["margin_rs"])
+        key = ref[4:] if ref.startswith("eqd:") else ref
+        pct = round(m / eq * 100, 2) if eq > 0 else None
+        info = labels.get(key) or labels.get(ref) or {}
+        ticker, strategy = info.get("ticker"), info.get("strategy")
+        label = " ".join(x for x in (ticker, strategy) if x) or ("Darling " + key if ref.startswith("eqd:") else ref)
+        rows.append({"ref": ref, "label": label, "ticker": ticker, "strategy": strategy,
+                     "ticket_id": (tickets or {}).get(ref), "unrealized_pnl": None,
+                     "margin_rs": round(m, 2), "pct_of_equity": pct,
+                     "concentrated": pct is not None and pct > CONCENTRATION_PCT})
+    rows.sort(key=lambda x: -x["margin_rs"])
+    return {"lock_breakdown": rows, "largest_lock_pct": rows[0]["pct_of_equity"] if rows else 0.0,
+            "concentration_threshold_pct": CONCENTRATION_PCT}
+
+
+def treasury(db_path=None, now: datetime = None, journal_path=None) -> dict:
     """{'PAPER_10L': {...}, 'PAPER_2L': {...}, 'error'?} — equity, realized,
     drawdown, locks per account, straight from the account tables. `now`
     defaults to the wall clock (tests inject it)."""
@@ -356,6 +409,7 @@ def treasury(db_path=None, now: datetime = None) -> dict:
     if conn is None:
         return {"error": f"database unavailable or locked: {db_path or DB_PATH}"}
     out = {}
+    labels = _lock_labels(journal_path or (Path(db_path).with_name("journal.jsonl") if db_path else None))
     try:
         rows = _q(conn, "SELECT starting_capital, realized_pnl, peak_equity FROM account_state WHERE id = 1")
         if isinstance(rows, dict):
@@ -393,7 +447,10 @@ def treasury(db_path=None, now: datetime = None) -> dict:
                                 "base_ts": base_ts,
                                 "days_elapsed": days,
                                 "abs_return_pct": round((eq / base_eq - 1) * 100, 2) if base_eq else None,
-                                "cagr_pct": cagr(base_eq, eq, days)}
+                                "cagr_pct": cagr(base_eq, eq, days),
+                                **lock_breakdown(_q(conn, "SELECT journal_ref, margin_rs FROM margin_locks "
+                                                          "WHERE released_at IS NULL"), eq, labels,
+                                                 _entry_tickets(conn, "PAPER_10L"))}
         pa = _q(conn, "SELECT account_id, starting_capital, realized_pnl, peak_equity, created_at FROM paper_accounts")
         if isinstance(pa, list):
             for a in pa:
@@ -415,7 +472,10 @@ def treasury(db_path=None, now: datetime = None) -> dict:
                              "rejections": int(rej[0]["n"]) if isinstance(rej, list) and rej else None,
                              "days_elapsed": days,
                              "abs_return_pct": round((eq / a["starting_capital"] - 1) * 100, 2) if a["starting_capital"] else None,
-                             "cagr_pct": cagr(a["starting_capital"], eq, days)}
+                             "cagr_pct": cagr(a["starting_capital"], eq, days),
+                             **lock_breakdown(_q(conn, "SELECT journal_ref, margin_rs FROM paper_margin_locks "
+                                                       "WHERE account_id = ? AND released_at IS NULL", (acct,)),
+                                              eq, labels, _entry_tickets(conn, acct))}
         curve = _q(conn, "SELECT ts, equity, drawdown_pct FROM equity_curve ORDER BY ts, rowid")
         out["equity_curve"] = curve if isinstance(curve, list) else []
         out["base_epoch"] = CURVE_EPOCH
@@ -432,14 +492,23 @@ def treasury(db_path=None, now: datetime = None) -> dict:
             snap = _snapshot()
             # the live arm's mark is judged as of when THIS copy was taken
             # (review of Fix D: the box's 15-min mirror), not the viewer's clock
-            u = unrealized_by_account(conn, snap, now=now, captured_at=_captured_at(db_path or DB_PATH))
+            per_ref = {}
+            u = unrealized_by_account(conn, snap, now=now, captured_at=_captured_at(db_path or DB_PATH),
+                                      by_ref=per_ref)
         except Exception:
-            snap, u = {}, {}
+            snap, u, per_ref = {}, {}, {}
         for acct in [k for k in out if k.startswith("PAPER_")]:
             # the live-quote arm is NOT priced from the snapshot: its marks are
             # as of its own oldest open mark (audit F02 — it used to borrow the
             # snapshot's fresh timestamp for a mark that could be days old)
             as_of = (u.get(acct) or {}).get("last_mark_ts") if acct in LIVE_ACCOUNTS else snap.get("as_of")
+            for row in out[acct].get("lock_breakdown") or []:
+                got = (per_ref.get(acct) or {}).get(row["ref"]) or {}
+                row["unrealized_pnl"] = got.get("pnl")
+                row["ticker"] = row["ticker"] or got.get("ticker")
+                row["strategy"] = row["strategy"] or got.get("strategy")
+                if got.get("ticker") and row["label"] in (row["ref"], "Darling " + row["ref"][4:]):
+                    row["label"] = " ".join(x for x in (row["ticker"], row["strategy"]) if x)
             _with_mtm(out[acct], u.get(acct), as_of)
     finally:
         conn.close()

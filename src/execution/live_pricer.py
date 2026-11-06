@@ -496,7 +496,10 @@ def structure_bounds(spread: dict, d: float) -> dict:
     — which requote_entry and open_position refuse by name
     (`premium_refusal`) before anything is booked. A structure the routing
     table does not know raises: its bounds cannot be derived."""
+    from src import long_options
     from src.strategy_router import premium_of
+    if long_options.is_long_option(spread.get("strategy")):
+        return long_options.bounds(spread, d)
     kind = premium_of(spread.get("strategy"))
     if kind is None:
         raise ValueError(f"unknown structure {spread.get('strategy')!r}: no debit/credit type to bound it by")
@@ -1710,6 +1713,9 @@ def evaluate(row: dict, chain: dict, today: date, now: datetime = None) -> dict:
         return {"ok": False, "reason": impossible, "signal": None}
     d, max_loss, max_profit = float(row["entry_mark_ps"]), float(row["max_loss_ps"]), float(row["max_profit_ps"])
     profit_ps = _clamp(m["mark_ps"] - d, max_loss, max_profit)
+    from src import long_options as lo
+    if lo.is_long_option(row.get("strategy")):
+        return _evaluate_long_option(row, m, d, profit_ps, today)
     capture = _capture(profit_ps, max_profit)
     peak, lock = row.get("ratchet_peak_pct"), row.get("ratchet_lock_pct")
     signal, unconfirmed = "hold", None
@@ -1747,6 +1753,39 @@ def evaluate(row: dict, chain: dict, today: date, now: datetime = None) -> dict:
             "days_left": days_left}
 
 
+def _evaluate_long_option(row: dict, m: dict, d: float, profit_ps: float, today: date) -> dict:
+    """#182: a long option's exits on gain % of its premium; peak/lock are gain %, and a new trail
+    rung waits for a second fetch exactly like a ratchet rung (F01)."""
+    from src import long_options as lo, plan_tracker as pt, profit_ratchet as pr
+    gain = lo.gain_pct(m["mark_ps"], d)
+    peak, lock = row.get("ratchet_peak_pct"), row.get("ratchet_lock_pct")
+    confirmed = lo.lock_for(peak, lock)
+    new_peak = gain if peak is None else max(float(peak), gain)
+    new_lock = lo.lock_for(new_peak, lock)
+    unconfirmed = None
+    if new_lock is not None and (confirmed is None or new_lock > confirmed):
+        unconfirmed = {"peak": pr.floor2(new_peak), "lock": new_lock, "capture": pr.floor2(gain)}
+        lock = confirmed
+    else:
+        peak, lock = new_peak, new_lock
+    expiry = date.fromisoformat(row["expiry"])
+    opened = (_entered_at(row) or datetime.combine(today, datetime.min.time())).date()
+    signal = lo.exit_signal(gain, lock, opened, expiry, today)
+    if signal == "hold" and pt.in_forced_exit_window(row["ticker"], row["expiry"], today):
+        signal = "pre_expiry_exit"
+    return {"ok": True, "reason": None, "mark_ps": m["mark_ps"], "profit_ps": round(profit_ps, 4),
+            "capture_pct": round(gain, 2), "peak": None if peak is None else pr.floor2(float(peak)),
+            "lock": lock, "unconfirmed": unconfirmed, "signal": signal, "prices": m["prices"],
+            "days_left": (expiry - today).days}
+
+
+def _rung_lock(row: dict, peak, lock0):
+    from src import long_options as lo, profit_ratchet as pr
+    if lo.is_long_option(row.get("strategy")):
+        return lo.lock_for(peak, lock0)
+    return pr.state(peak, lock0)["locked_pct"]
+
+
 def _confirm_rung(row: dict, ev: dict, src) -> dict:
     """Audit F01: a ratchet lock rises only when TWO independently fetched
     chains both clear the new rung. `src` is the `_CHAIN_CACHE` entry `ev`
@@ -1772,7 +1811,7 @@ def _confirm_rung(row: dict, ev: dict, src) -> dict:
     agreed = min(float(first["capture"]), float(seen["capture"]))
     peak0, lock0 = row.get("ratchet_peak_pct"), row.get("ratchet_lock_pct")
     peak = agreed if peak0 is None else max(float(peak0), agreed)
-    lock = pr.state(peak, lock0)["locked_pct"]
+    lock = _rung_lock(row, peak, lock0)
     # Defensive: the two reads agree on no rung above the confirmed lock
     # (the record moved under the first sighting) — start over from this one.
     if lock is None or (ev["lock"] is not None and lock <= ev["lock"]):

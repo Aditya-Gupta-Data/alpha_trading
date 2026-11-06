@@ -116,13 +116,36 @@ def evidence(conn, strategy: str) -> dict:
             "r_sum": round(sum(float(r[1] or 0) for r in rows), 3)}
 
 
+def _final(entry: dict, account: str, verdict: dict) -> dict:
+    """The verdict as it stands on the entry: a live refusal replaces the dict (2026-11-06 fix)."""
+    return (entry.get("accounts") or {}).get(account) or verdict
+
+
+def _cap_requoted(conn, account: str, entry: dict, rq: dict, lots: int):
+    """#182: the Rs.15k premium cap on the CROSSED re-quote — lots cut (lock shrunk) or refused."""
+    from src import long_options as lo, options_proposer as op, portfolio_manager as pm
+    prem, lot = float(rq["entry_mark_ps"]), int(entry["spread"]["lot_size"])
+    new = lo.cap_lots(prem, lot, lots)
+    if new <= 0:
+        op._live_refuse(conn, account, entry, f"crossed re-quote {lo.cap_reason(prem, lot)}")
+        return None
+    if new < lots:
+        held = pm._active_shadow_lock(conn, account, entry.get("short_id"))
+        if held is not None and held[1]:
+            pm.paper_resize_lock(conn, account, entry.get("short_id"), new, round(held[0] * new / held[1], 2))
+    verdict = (entry.get("accounts") or {}).get(account)
+    if isinstance(verdict, dict):
+        verdict.update(lots=new, premium_paid_rs=lo.premium_paid_rs(prem, lot, new))
+    return new
+
+
 def take(entry: dict, reason: str, conn=None, venue_mod=None, account: str = ACCOUNT) -> dict:
     """Open the learner's position on crossed quotes: sizing on its own equity, the margin wall,
     the live re-quote + desk entry rules (F12), one venue ticket, the live book. Returns the verdict
     (also stamped on entry['accounts'][account]). Never raises. `account` (default the learner) is any
     LIVE account opening its OWN entry — PAPER_2L_LIVE_GEX's GEX trades use it (#161); only the learner
     writes Court rows."""
-    from src import oms, options_proposer as op, portfolio_manager as pm, strategy_router
+    from src import long_options as lo, oms, options_proposer as op, portfolio_manager as pm, strategy_router
     from src.config import PAPER_VENUE_ENABLED
     verdict = {"status": "rejected", "lots": 0, "margin_rs": None, "reason": "", "learner_only": reason}
     entry.setdefault("accounts", {})[account] = verdict
@@ -136,11 +159,22 @@ def take(entry: dict, reason: str, conn=None, venue_mod=None, account: str = ACC
             conn = brain_map.connect()
         spread = entry["spread"]
         ref = entry.get("short_id")
+        long_opt = lo.is_long_option(spread.get("strategy"))
+        refused = lo.refusal_for_account(spread.get("strategy"), account)
+        if refused:
+            verdict["reason"] = refused
+            return verdict
         sized = pm.size_for_account(conn, account, spread, risk_pct=None, vix=entry.get("vix"))
         if int(sized.get("lots") or 0) <= 0:
             verdict["reason"] = f"sizing refused: {sized.get('reason')}"
             return verdict
         lots = int(sized["lots"])
+        if long_opt:
+            prem = float(spread["net_debit"])
+            lots = lo.cap_lots(prem, spread["lot_size"], lots)
+            if lots <= 0:
+                verdict["reason"] = lo.cap_reason(prem, spread["lot_size"])
+                return verdict
         required = pm.required_margin_for({"spread": dict(spread, lots=lots), "vix": entry.get("vix")})
         gate = pm.paper_request_entry(conn, account, ref, required, lots=lots, primary_lots=int(entry.get("lots") or 1))
         if not gate.get("approved"):
@@ -151,10 +185,14 @@ def take(entry: dict, reason: str, conn=None, venue_mod=None, account: str = ACC
                        sizing={k: sized.get(k) for k in ("by_risk", "by_margin", "floor_applied", "risk_pct", "equity")})
         rq = op._live_requote(conn, account, entry)
         if rq is None:
-            return verdict
+            return _final(entry, account, verdict)
         lots_now = op._live_entry_rules(conn, account, entry, rq, lots)
         if lots_now is None:
-            return verdict
+            return _final(entry, account, verdict)
+        if long_opt:
+            lots_now = _cap_requoted(conn, account, entry, rq, lots_now)
+            if lots_now is None:
+                return _final(entry, account, verdict)
         venue = venue_mod
         if venue is None:
             from src.execution import paper_venue as venue
@@ -170,7 +208,7 @@ def take(entry: dict, reason: str, conn=None, venue_mod=None, account: str = ACC
         op._live_after_fill(conn, account, entry, stid, sview, rq["quote_ts"])
         if account == ACCOUNT and verdict.get("status") == "approved" and sview.get("status") == oms.FILLED:
             record_fire(conn, entry)
-        return verdict
+        return _final(entry, account, verdict)
     except Exception as exc:
         verdict["reason"] = f"learner entry failed ({type(exc).__name__}: {exc})"
         return verdict

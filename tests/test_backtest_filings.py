@@ -78,3 +78,19 @@ def test_items_ingest_grade_end_to_end(tmp_path):
     v = reps[0]["verdicts"]["drives"]
     assert v["n"] == 1 and v["hit_rate"] == 1.0
     assert p["ledger"].exists() and "BACKTEST" in reps[0]["label"]
+    f = reps[0]["verdicts"]["FILER_ORDER"]
+    assert f["n"] == 1 and f["hit_rate"] == 1.0 and reps[0]["filer_calls"] == 1
+    assert "BACKTEST" in p["ledger"].read_text()
+
+
+def test_filer_calls_split_orders_from_mna(tmp_path):
+    p = bt.paths(2025, tmp_path)
+    p["filings"].parent.mkdir(parents=True, exist_ok=True)
+    rows = [bt.keep(ORDER),
+            {"id": "9", "at": "2025-05-02T10:00:00+05:30", "symbol": "CCL", "desc": "Acquisition",
+             "text": "CCL Products (India) Limited has informed the Exchange about Agreement to acquire equity stake in a roaster"},
+            {"id": "8", "at": "2025-05-02T10:00:00+05:30", "symbol": "Z", "desc": "Disclosure under SEBI Takeover Regulations",
+             "text": "Z has submitted Regulation 31(4) Substantial Acquisition of Shares paperwork"}]
+    p["filings"].write_text("".join(json.dumps(r) + "\n" for r in rows))
+    calls = bt.filer_calls(2025, tmp_path)
+    assert [(c["ticker"], c["relation"], c["sign"]) for c in calls] == [("HFCL", "FILER_ORDER", 1), ("CCL", "FILER_MNA", 1)]

@@ -5,7 +5,7 @@
 #   python3 scripts/backtest_filings.py items --year 2025         items.jsonl + system.txt for the laptop runner
 #   (laptop) powershell -File backtest_filings_runner.ps1         Ollama, one raw JSON line per item, resumable
 #   python3 scripts/backtest_filings.py ingest --year 2025 --raw FILE   production validator into the backtest graph
-#   python3 scripts/backtest_filings.py grade --year 2025         the #185/#186 court on the backtest graph
+#   python3 scripts/backtest_filings.py grade --year 2025         the #185/#186 court on the backtest graph + FILER classes
 import argparse
 import json
 import re
@@ -153,19 +153,45 @@ def ingest(year: int, raw_path, out_dir=None) -> dict:
     return stats
 
 
+_ORDER = re.compile(r"\border|contract|letter of (award|intent)|\bLoA\b|\bLoI\b|awarded|bags|secures", re.I)
+_MNA = re.compile(r"acqui|merger|amalgamat|stake|takeover", re.I)
+
+
+def filer_calls(year: int, out_dir=None) -> list:
+    """FILER classes: the announcing company itself, sign +1, one call per filing. An event study of the
+    announcement, not of the graph — FILER_ORDER for orders/contracts, FILER_MNA for acquisitions/mergers."""
+    p = paths(year, out_dir)
+    out = []
+    for line in p["filings"].open(encoding="utf-8"):
+        f = json.loads(line)
+        if not substantive(f["desc"], f["text"]) or not f.get("symbol"):
+            continue
+        blob = f"{f['desc']} {f['text']}"
+        kind = "FILER_ORDER" if _ORDER.search(blob) else "FILER_MNA" if _MNA.search(blob) else None
+        if kind:
+            out.append({"date": f["at"][:10], "ticker": f["symbol"], "relation": kind, "sign": 1})
+    return out
+
+
 def grade(year: int, out_dir=None, horizons=(1, 3, 5), bars_loader=None) -> list:
-    """The forward-test court (#185/#186) on the backtest graph; its own ledger in data/backtest/."""
+    """The forward-test court (#185/#186) on the backtest graph plus the FILER classes; ledger in data/backtest/."""
+    from src.knowledge_graph import graphrag_eval as ge
     from src.knowledge_graph import graphrag_shadow_forward as fwd
     p = paths(year, out_dir)
     if bars_loader is None:
         from src.ingestion import bhavcopy_clerk
         bars_loader = lambda syms: bhavcopy_clerk.bars_for_many(syms, days=BAR_DAYS)
-    calls = fwd.load_calls(p["db"])
+    calls = fwd.load_calls(p["db"]) or ([], [])
+    filers = filer_calls(year, out_dir)
+    filer_bars = bars_loader(sorted({c["ticker"] for c in filers})) if filers else {}
     reports = []
     for h in horizons:
-        rep = fwd.run(db_path=p["db"], bars_loader=bars_loader, horizon_sessions=h, ledger_path=p["ledger"],
-                      calls=calls)
-        rep["label"] = f"BACKTEST {year} (filings, laptop LLM) — not forward evidence"
+        rep = fwd.run(db_path=p["db"], bars_loader=bars_loader, horizon_sessions=h, ledger_path=None, calls=calls)
+        rep["verdicts"] = dict(rep.get("verdicts") or {}, **ge.evaluate_altdata_edge_classes(
+            filers, filer_bars, horizon_sessions=h)) if filers else rep.get("verdicts")
+        rep.update(filer_calls=len(filers), label=f"BACKTEST {year} (filings, laptop LLM) — not forward evidence")
+        with p["ledger"].open("a") as fh:
+            fh.write(json.dumps(rep, sort_keys=True, default=str) + "\n")
         reports.append(rep)
         print("\n".join(fwd.summary_lines(rep)))
     return reports

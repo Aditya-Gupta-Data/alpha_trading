@@ -368,6 +368,12 @@ untouched). Since 2026-11-01 (#175) every run first seeds `config/nse_companies.
 into the shadow graph only. Since 2026-11-06 (#184) it also reads the 15 `shadow_feeds` in `config/rss_feeds.json`
 (the event engine does not) and `config.json` sets its cap to 600/day. What it holds: `venv/bin/python -m src.knowledge_graph.graphrag_news_shadow --report`.
 
+## Mini PC: GraphRAG shadow forward test (added 2026-11-06, decision #185)
+
+`10 22 * * 1-5` (node replica block, node-only line) → `python -m src.knowledge_graph.graphrag_shadow_forward`, log
+`logs/graphrag_shadow_forward.log` + one JSON line per horizon in `logs/graphrag_shadow_forward.jsonl`. No LLM, no network:
+reads the shadow graph read-only and the bhavcopy lake (19:15). Verdicts only; nothing reads them.
+
 ## Mini PC: sector bars (added 2026-10-28, decision #160)
 
 `10 16 * * 1-5` and `30 8 * * 1-5` (node replica block, node-only lines) → `scripts/node_sector_bars.sh`:

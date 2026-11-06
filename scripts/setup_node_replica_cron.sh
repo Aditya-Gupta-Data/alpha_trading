@@ -93,6 +93,8 @@ $VM_LINES
 40 21 * * * cd \"$REPO_ROOT\" && \"$PY\" -m src.event_engine.emit >> \"$REPO_ROOT/logs/event_emit.log\" 2>&1
 # node-only GraphRAG news shadow (#174): every RSS headline into data/graphrag_shadow.db; nothing reads it
 15 7-23/2 * * * cd \"$REPO_ROOT\" && \"$PY\" -m src.knowledge_graph.graphrag_news_shadow >> \"$REPO_ROOT/logs/graphrag_shadow.log\" 2>&1
+# node-only GraphRAG shadow forward test (#185): grades shadow edges against the bhavcopy lake; verdicts only
+10 22 * * 1-5 cd \"$REPO_ROOT\" && \"$PY\" -m src.knowledge_graph.graphrag_shadow_forward >> \"$REPO_ROOT/logs/graphrag_shadow_forward.log\" 2>&1
 # node-only sector bars (#160): the live bullish veto's input, moved off the Mac (it slept, the veto self-disabled)
 10 16 * * 1-5 cd \"$REPO_ROOT\" && bash scripts/node_sector_bars.sh >> \"$REPO_ROOT/logs/sector_bars.log\" 2>&1
 30 8 * * 1-5 cd \"$REPO_ROOT\" && bash scripts/node_sector_bars.sh >> \"$REPO_ROOT/logs/sector_bars.log\" 2>&1

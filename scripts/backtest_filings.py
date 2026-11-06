@@ -22,6 +22,14 @@ KEEP_CLASSES = {"CATALYST", "EXPANSION"}
 IST = timezone(timedelta(hours=5, minutes=30))
 BAR_DAYS = 800
 WEEK_PAUSE_SECS = 8
+# Shareholding / takeover-code paperwork: "Substantial Acquisition of Shares" trips the EXPANSION keyword but names no business link.
+_BOILERPLATE = re.compile(r"substantial acquisition of shares|takeovers?\) regulation|regulation (29|31)\s*\(|regulation 30 of|"
+                          r"listing obligations and disclosure requirements|news verification|clarification", re.I)
+_SKIP_DESC = {"Disclosure under SEBI Takeover Regulations", "News Verification", "Resignation"}
+
+
+def substantive(desc: str, text: str) -> bool:
+    return desc not in _SKIP_DESC and not _BOILERPLATE.search(text or "")
 
 
 def paths(year: int, out_dir=None) -> dict:
@@ -38,7 +46,7 @@ def keep(row: dict) -> dict | None:
     text = re.sub(r"\s+", " ", str(row.get("attchmntText") or "")).strip()
     if not KEEP_CLASSES & set(ce.classify(f"{desc} {text}")):
         return None
-    if len(text) < 90 or text.lower().rstrip(". ").endswith(f"about {desc.lower()}"):
+    if len(text) < 90 or text.lower().rstrip(". ").endswith(f"about {desc.lower()}") or not substantive(desc, text):
         return None
     try:
         ts = datetime.strptime(str(row.get("an_dt")), "%d-%b-%Y %H:%M:%S").replace(tzinfo=IST)
@@ -90,6 +98,8 @@ def items(year: int, out_dir=None) -> int:
     with p["items"].open("w", encoding="utf-8") as fh:
         for line in p["filings"].open(encoding="utf-8"):
             f = json.loads(line)
+            if not substantive(f["desc"], f["text"]):
+                continue
             fh.write(json.dumps({"id": f["id"], "text": gx.compose_input_text({"title": f["desc"], "text": f["text"]})},
                                 ensure_ascii=False) + "\n")
             n += 1

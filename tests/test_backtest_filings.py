@@ -21,7 +21,14 @@ AGM = {"seq_id": 3, "an_dt": "07-Mar-2025 10:00:00", "symbol": "X", "desc": "Sha
        "attchmntText": "X Limited has informed the Exchange about the outcome of the annual general meeting held today"}
 
 
+TAKEOVER = {"seq_id": 4, "an_dt": "07-Mar-2025 11:00:00", "symbol": "GRASIM", "desc": "Disclosure under SEBI Takeover Regulations",
+            "attchmntText": "Grasim Industries Limited has Submitted to the Exchange a copy of Disclosure under Regulation 31(4) "
+                            "of the SEBI (Substantial Acquisition of Shares and Takeovers) Regulations"}
+
+
 def test_keep_takes_real_order_text_only():
+    assert bt.keep(TAKEOVER) is None
+    assert not bt.substantive("Updates", TAKEOVER["attchmntText"])
     k = bt.keep(ORDER)
     assert k["id"] == "1" and k["symbol"] == "HFCL" and k["at"] == "2025-03-07T22:59:41+05:30"
     assert bt.keep(BOILER) is None and bt.keep(AGM) is None

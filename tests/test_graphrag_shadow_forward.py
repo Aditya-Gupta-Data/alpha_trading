@@ -13,8 +13,11 @@ def _db(tmp_path, edges):
     conn = brain_map.connect(p)
     graphrag.seed_nodes(conn)
     for i, (src, rel, tgt, pol, ts) in enumerate(edges):
-        s = graphrag.resolve_node(conn, src, "company") or graphrag.resolve_node(conn, src, "commodity")
-        t = graphrag.resolve_node(conn, tgt, "company") or graphrag.resolve_node(conn, tgt, "theme")
+        s = (graphrag.resolve_node(conn, src.split(":", 1)[1], src.split(":", 1)[0]) if src.startswith("theme:")
+             else graphrag.resolve_node(conn, src, "company") or graphrag.resolve_node(conn, src, "commodity"))
+        t = (graphrag.resolve_node(conn, tgt, "company") or graphrag.resolve_node(conn, tgt, "sector")
+             if tgt.startswith("sector:") else
+             graphrag.resolve_node(conn, tgt, "company") or graphrag.resolve_node(conn, tgt, "theme"))
         graphrag.upsert_graphrag_edge(conn, source_node=s, relation=rel, target_node=t,
                                       edge_class=graphrag.PREDICATE_TO_CLASS[rel], polarity=pol, strength=0.8,
                                       content_hash=f"h{i}", quote="q", source_ref="r", extractor="llm:test",
@@ -65,8 +68,36 @@ def test_no_shadow_db_and_read_only(tmp_path):
 
 def test_main_runs_every_horizon(monkeypatch, capsys):
     seen = []
-    monkeypatch.setattr(fwd, "run", lambda horizon_sessions: seen.append(horizon_sessions) or {"status": "x"})
+    monkeypatch.setattr(fwd, "load_calls", lambda: ([], []))
+    monkeypatch.setattr(fwd, "run", lambda horizon_sessions, calls: seen.append(horizon_sessions) or {"status": "x"})
     assert fwd.main([]) == 0 and seen == [1, 3, 5]
     seen.clear()
     fwd.main(["--horizon", "2"])
     assert seen == [2]
+
+
+def test_propagated_calls_follow_structural_links_without_look_ahead(tmp_path):
+    import sqlite3
+    p = _db(tmp_path, [
+        ("Crude Oil", "hurts", "sector:AUTO", -1, "2026-11-02T04:00:00+00:00"),
+        ("Crude Oil", "hurts", "Reliance Industries", -1, "2026-11-02T04:00:00+00:00"),
+    ])
+    conn = sqlite3.connect(p)
+    prop = fwd.load_propagated_activations(conn)
+    assert {"date": "2026-11-02", "ticker": "MARUTI", "relation": fwd.PROPAGATED, "sign": -1} in prop
+    assert all(a["relation"] == fwd.PROPAGATED and a["date"] == "2026-11-02" for a in prop)
+    assert "RELIANCE" not in {a["ticker"] for a in prop}
+    rep = fwd.run(db_path=p, bars_loader=lambda syms: {s: _bars() for s in syms}, ledger_path=None, n_shuffles=5)
+    assert rep["propagated_calls"] == len(prop) and rep["verdicts"][fwd.PROPAGATED]["n"] >= 1
+
+
+def test_a_later_edge_does_not_carry_an_earlier_seed(tmp_path):
+    import sqlite3
+    p = _db(tmp_path, [
+        ("Crude Oil", "hurts", "theme:Freight Costs", -1, "2026-11-02T04:00:00+00:00"),
+        ("theme:Freight Costs", "hurts", "Maruti Suzuki", -1, "2026-11-05T04:00:00+00:00"),
+        ("Crude Oil", "hurts", "theme:Freight Costs", -1, "2026-11-06T04:00:00+00:00"),
+    ])
+    prop = fwd.load_propagated_activations(sqlite3.connect(p))
+    maruti = {a["date"] for a in prop if a["ticker"] == "MARUTI"}
+    assert "2026-11-06" in maruti and "2026-11-02" not in maruti

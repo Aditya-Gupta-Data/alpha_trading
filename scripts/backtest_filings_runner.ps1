@@ -1,7 +1,7 @@
 # MANUAL OFFLINE TOOL — laptop side of scripts/backtest_filings.py. Not on any cron; run by hand (or a one-off task).
 # Reads items.jsonl + system.txt from -Dir, asks local Ollama (think=false, temp 0), appends {id, raw, secs} to
-# <model>.jsonl. Resumable: ids already in the output are skipped. Progress lines go to progress.txt.
-param([string]$Dir = "C:\Users\HP\backtest", [string]$Model = "qwen3:8b")
+# <model>.jsonl. Cooling: a -BreakMin pause after every -WorkMin of work, and a wait whenever the ACPI sensor reads >= -HotC until <= -CoolC. Resumable: ids already in the output are skipped. Progress lines go to progress.txt.
+param([string]$Dir = "C:\Users\HP\backtest", [string]$Model = "qwen3:8b", [int]$WorkMin = 55, [int]$BreakMin = 5, [int]$HotC = 84, [int]$CoolC = 76)
 Set-Location $Dir
 $utf8 = New-Object Text.UTF8Encoding($false)
 $system = [IO.File]::ReadAllText("$Dir\system.txt", $utf8)
@@ -12,8 +12,20 @@ if (Test-Path $out) { Get-Content $out -Encoding UTF8 | Where-Object { $_.Trim()
 ollama ps | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\s+')[0] } | Where-Object { $_ -and $_ -ne $Model } | ForEach-Object { ollama stop $_ }
 "start $Model $(Get-Date -Format s) todo $($items.Count - $have.Count)" | Out-File "$Dir\progress.txt" -Append
 $n = 0
+$workStart = Get-Date
+function Get-TempC { try { [math]::Round((Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Select-Object -First 1).CurrentTemperature / 10 - 273.15, 1) } catch { 0 } }
 foreach ($it in $items) {
   if ($have.ContainsKey([string]$it.id)) { continue }
+  if (((Get-Date) - $workStart).TotalMinutes -ge $WorkMin) {
+    "$Model cooling break $BreakMin min at $(Get-Date -Format s) temp $(Get-TempC)" | Out-File "$Dir\progress.txt" -Append
+    Start-Sleep -Seconds ($BreakMin * 60)
+    $workStart = Get-Date
+  }
+  if ((Get-TempC) -ge $HotC) {
+    "$Model too hot $(Get-TempC) C, waiting for $CoolC C at $(Get-Date -Format s)" | Out-File "$Dir\progress.txt" -Append
+    while ((Get-TempC) -gt $CoolC) { Start-Sleep -Seconds 20 }
+    $workStart = Get-Date
+  }
   $body = @{ model = $Model; stream = $false; think = $false; format = "json"; keep_alive = "30m"
     options = @{ temperature = 0; num_predict = 900 }
     messages = @(@{ role = "system"; content = "$system" }, @{ role = "user"; content = "$($it.text)" }) } | ConvertTo-Json -Depth 6

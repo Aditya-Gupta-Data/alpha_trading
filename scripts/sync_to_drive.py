@@ -18,7 +18,20 @@ HTTP_TIMEOUT_S = 600  # converting ~800k characters into a Google Doc can take m
 CODE_PACKS = ("alpha_04_config", "alpha_05_code")  # Google cannot reliably convert hundreds of thousands of code lines into Docs
 STALE_NOTE = "This part is no longer used: the repository now fits in fewer parts. It is safe to remove from the notebook.\n"
 INCLUDE_EXT = {".py", ".md", ".json", ".yaml"}
-EXCLUDE_DIRS = {".git", "__pycache__", "venv", ".venv", "logs", "node_modules"}
+EXCLUDE_DIRS = {".git", "__pycache__", "venv", ".venv", "logs", "node_modules", "archive_v0"}  # archive_v0: superseded July plans
+STALE_AFTER_DAYS = 45
+DATES_FILE = ".file_dates.tsv"  # written by notebooklm_autosync.sh: <path>\t<last change date> from origin/main
+PREFACE = """## How to read these sources
+
+This notebook is built from the alpha_trading repository and refreshed automatically from `main`.
+Some files are months old and describe the system as it was then. To judge what is true today:
+
+1. The newest date wins. Every file below says when it last changed; files not updated for a long time carry a warning.
+2. Current state, open bugs and next steps: the top (newest) blocks of HANDOVER.md, in the `alpha_02_history` source. HANDOVER is newest-first; older blocks are history.
+3. The system as it is now: README.md, the \"Current state\" section of ARCHITECTURE.md, docs/ACCOUNTS.md.
+4. Work not yet merged: docs/BRANCHES.md. Whether a design spec is built, cancelled or still a plan: the Status column of docs/README.md (trust it over the spec's own header).
+5. Why things are the way they are: DECISIONS.md, by number; a later decision can reverse an earlier one.
+"""
 EXCLUDE_EXT = {".db", ".csv"}
 MAX_FILE_BYTES = 2_000_000
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
@@ -80,16 +93,75 @@ GUIDE_ORDER = ("README.md", "docs/README.md", "CLAUDE.md", "ARCHITECTURE.md", "d
                "docs/BRANCHES.md", "MODULES.md", "CRON_SETUP.md", "DECISIONS.md")
 
 
-def _section(root, path):
+def file_dates(root):
+    """{repo path: last change date (YYYY-MM-DD)} from the autosync's dates file, else from git; {} if neither."""
+    import subprocess
+
+    f = Path(root) / DATES_FILE
+    if f.exists():
+        return dict(line.split("\t", 1) for line in f.read_text().splitlines() if "\t" in line)
+    r = subprocess.run(["git", "-C", str(root), "log", "--name-only", "--format=@%ad", "--date=short", "HEAD"],
+                       capture_output=True, text=True)
+    return parse_git_dates(r.stdout) if r.returncode == 0 else {}
+
+
+def parse_git_dates(log):
+    """First (newest) date per path from `git log --name-only --format=@%ad`."""
+    dates, cur = {}, None
+    for line in log.splitlines():
+        if line.startswith("@"):
+            cur = line[1:].strip()
+        elif line.strip() and cur:
+            dates.setdefault(line.strip(), cur)
+    return dates
+
+
+def _date_note(rel, dates, newest):
+    d = dates.get(rel)
+    if not d:
+        return ""
+    note = f" (last changed {d})"
+    if newest:
+        age = (datetime.strptime(newest, "%Y-%m-%d") - datetime.strptime(d, "%Y-%m-%d")).days
+        if age > STALE_AFTER_DAYS:
+            note += (f"\n\n> ⚠️ Not updated for {age} days before the newest file in this repository. "
+                     "It may describe an older state of the system; prefer newer sources where they disagree.")
+    return note
+
+
+RECENT_HANDOVER_DAYS = 10
+
+
+def recent_handover(root, days=RECENT_HANDOVER_DAYS):
+    """HANDOVER.md's dated blocks from the last `days` days before its newest block (it is newest-first)."""
+    import re
+
+    path = Path(root) / "HANDOVER.md"
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    blocks = re.split(r"(?m)^(?=## \d{4}-\d{2}-\d{2})", text)
+    dated = [(b[3:13], b) for b in blocks if re.match(r"## \d{4}-\d{2}-\d{2}", b)]
+    if not dated:
+        return ""
+    newest = datetime.strptime(dated[0][0], "%Y-%m-%d")
+    keep = [b for d, b in dated if (newest - datetime.strptime(d, "%Y-%m-%d")).days <= days]
+    return ("\n---\n\n### Current state: the latest HANDOVER blocks "
+            f"({keep and dated[len(keep) - 1][0]} to {dated[0][0]}, newest first; the full file is in alpha_02_history)\n\n"
+            + "".join(keep).rstrip() + "\n")
+
+
+def _section(root, path, dates=None, newest=None):
     rel = path.relative_to(root).as_posix()
+    when = _date_note(rel, dates or {}, newest)
     raw = path.read_bytes()
     truncated = len(raw) > MAX_FILE_BYTES
     text = raw[:MAX_FILE_BYTES].decode("utf-8", errors="replace")
     note = f"\n[... truncated at {MAX_FILE_BYTES} of {len(raw)} bytes ...]" if truncated else ""
     if path.suffix == ".md":
-        return f"\n---\n\n### File: {rel}\n\n{text.rstrip()}{note}\n"
+        return f"\n---\n\n### File: {rel}{when}\n\n{text.rstrip()}{note}\n"
     lang = path.suffix.lstrip(".")
-    return f"\n---\n\n### File: {rel}\n\n~~~{lang}\n{text.rstrip()}{note}\n~~~\n"
+    return f"\n---\n\n### File: {rel}{when}\n\n~~~{lang}\n{text.rstrip()}{note}\n~~~\n"
 
 
 def _chunks(sec, char_cap):
@@ -110,6 +182,8 @@ def build_packs(root=ROOT, now=None, word_cap=WORD_CAP, char_cap=CHAR_CAP, with_
     root = Path(root)
     now = now or datetime.now(timezone.utc)
     groups = {}
+    dates = file_dates(root)
+    newest = max(dates.values()) if dates else None
     for path in collect_files(root):
         if not with_code and pack_of(path.relative_to(root).as_posix()) in CODE_PACKS:
             continue
@@ -121,7 +195,7 @@ def build_packs(root=ROOT, now=None, word_cap=WORD_CAP, char_cap=CHAR_CAP, with_
     for pack in sorted(groups):
         parts, cur, words, chars = [], [], 0, 0
         for path in groups[pack]:
-            for sec in _chunks(_section(root, path), char_cap):
+            for sec in _chunks(_section(root, path, dates, newest), char_cap):
                 n, c = len(sec.split()), len(sec)
                 if cur and (words + n > word_cap or chars + c > char_cap):
                     parts.append(cur)
@@ -135,7 +209,11 @@ def build_packs(root=ROOT, now=None, word_cap=WORD_CAP, char_cap=CHAR_CAP, with_
                     + (f" (part {i} of {len(parts)})" if len(parts) > 1 else "")
                     + f"\n\nGenerated {now.strftime('%Y-%m-%d %H:%M UTC')} from the repository "
                     f"({len(secs)} files). Each file starts with a `### File: <path>` header. "
-                    "Docs describe `main`; work not merged yet is in docs/BRANCHES.md.\n")
+                    "Docs describe `main`; work not merged yet is in docs/BRANCHES.md."
+                    + (f" Source commit: `{os.environ['ALPHA_SYNC_SHA'][:7]}`." if os.environ.get("ALPHA_SYNC_SHA") else "")
+                    + (" When sources disagree, the newer date wins.\n" if pack != "alpha_01_guide" or i > 1 else "\n\n" + PREFACE))
+            if pack == "alpha_01_guide" and i == 1:
+                head += recent_handover(root)
             out.append((name, head + "".join(secs)))
     return out
 

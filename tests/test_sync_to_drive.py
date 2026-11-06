@@ -134,3 +134,27 @@ def test_docs_only_leaves_out_config_and_code(tmp_path):
     names = [n for n, _ in sync.build_packs(tmp_path, with_code=False)]
     assert "alpha_01_guide" in names and "alpha_03_specs" in names
     assert not any(n.startswith(("alpha_04", "alpha_05")) for n in names)
+
+
+def test_dates_warn_on_old_files_and_preface_leads_the_guide(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "README.md").write_text("# r")
+    (tmp_path / "docs" / "old.md").write_text("# old")
+    (tmp_path / sync.DATES_FILE).write_text("README.md\t2026-11-06\ndocs/old.md\t2026-07-01\n")
+    packs = dict(sync.build_packs(tmp_path, with_code=False))
+    assert "### File: README.md (last changed 2026-11-06)" in packs["alpha_01_guide"]
+    assert "How to read these sources" in packs["alpha_01_guide"]
+    assert "Not updated for 128 days" in packs["alpha_03_specs"]
+    assert "Not updated" not in packs["alpha_01_guide"]
+
+
+def test_parse_git_dates_keeps_newest():
+    log = "@2026-11-06\nA.md\n\n@2026-07-01\nA.md\nB.md\n"
+    assert sync.parse_git_dates(log) == {"A.md": "2026-11-06", "B.md": "2026-07-01"}
+
+
+def test_recent_handover_keeps_last_days(tmp_path):
+    (tmp_path / "HANDOVER.md").write_text(
+        "# H\nintro\n## 2026-11-06 (Fri) new\nx\n## 2026-11-01 mid\ny\n## 2026-10-01 old\nz\n")
+    out = sync.recent_handover(tmp_path, days=10)
+    assert "new" in out and "mid" in out and "old" not in out

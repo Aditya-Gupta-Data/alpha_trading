@@ -19,6 +19,9 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 git -C "$REPO" archive origin/main | tar -x -C "$TMP"
+git -C "$REPO" log --name-only --format=@%ad --date=short origin/main \
+    | awk '/^@/{d=substr($0,2);next} NF && !($0 in s){s[$0]=1; print $0 "\t" d}' > "$TMP/.file_dates.tsv"
+export ALPHA_SYNC_SHA="$SHA"
 echo "$(stamp) syncing origin/main ${SHA:0:7}"
 if "$PY" "$TMP/scripts/sync_to_drive.py" --root "$TMP"; then
     mkdir -p "$STATE_DIR"

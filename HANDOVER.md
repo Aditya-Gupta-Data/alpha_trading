@@ -43,6 +43,11 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-06 (Fri, ~21:00) — NotebookLM Docs carry dates and a current-state preface
+
+- **Owner report:** the notebook "seems stale and old". Verified the 4 Docs were current (generated 19:38 IST from `7b26e46`, contained #186 and that evening's HANDOVER). The stale feel comes from the history inside them (HANDOVER back to July, July/August docs), which NotebookLM cannot date.
+- **Changed:** each file header now says when it last changed; files more than 45 days older than the newest file carry a ⚠️ warning; `alpha_01_guide_part1` opens with "How to read these sources" and the last 10 days of HANDOVER; `docs/archive_v0/` is left out. Same 4 Docs, same ids: nothing to re-add.
+
 ## 2026-11-06 (Fri, ~20:00) — NotebookLM Docs are docs-only (4 Docs); the 6 code/config Docs are retired
 
 - **Why:** in the owner's notebook 6 of 10 sources failed (`alpha_03_specs`, `alpha_04_config`, `alpha_05_code_part1–4`). Drive's own export of `alpha_05_code_part1` returned HTTP 500, so the ~800k-character code Docs are not readable; specs and config exported fine and probably failed because the sync was rewriting them while they were added. The first scheduled sync was still running after 20 minutes, rewriting the code Docs, and was stopped by hand.

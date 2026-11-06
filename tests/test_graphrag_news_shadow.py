@@ -86,3 +86,19 @@ def test_learning_list_lets_an_unlisted_company_resolve(tmp_path):
     rel = conn.execute("SELECT in_universe, aliases_json FROM graph_nodes WHERE node_id='RELIANCE'").fetchone()
     assert rel["in_universe"] == 1 and "reliance industries ltd" in rel["aliases_json"]
     assert conn.execute("SELECT in_universe FROM graph_nodes WHERE node_id='EMAMIPAP'").fetchone()[0] == 0
+
+
+def test_shadow_feeds_are_read_by_the_shadow_only(tmp_path):
+    from src.ingestion import rss_ingester
+    feeds = tmp_path / "feeds.json"
+    feeds.write_text('{"feeds": [{"name": "live", "url": "http://live", "sector": "markets"}], '
+                     '"shadow_feeds": [{"name": "bl", "url": "http://bl", "sector": "business"}, {"name": "bad"}]}')
+    xml = ("<rss><channel><item><title>GSPL plans &amp;#8377;3,500-cr capex</title>"
+           "<description>&lt;p&gt;It aims to lift capacity&lt;/p&gt;</description><link>http://x</link></item></channel></rss>")
+    fetched = []
+    rows = shadow.shadow_feed_items(feeds, fetch_fn=lambda url: fetched.append(url) or xml)
+    assert fetched == ["http://bl"]
+    assert rows == [{"title": "GSPL plans ₹3,500-cr capex", "text": "It aims to lift capacity", "url": "http://x",
+                     "published": "", "source": "rss:bl"}]
+    assert [f["name"] for f in rss_ingester.load_feeds(feeds)] == ["live"]
+    assert shadow.shadow_feed_items(tmp_path / "missing.json") == []

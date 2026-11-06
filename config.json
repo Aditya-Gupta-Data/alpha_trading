@@ -16,6 +16,7 @@
     "llm_run_call_cap": 150,
     "graphrag_enabled": true,
     "graphrag_shadow_enabled": true,
+    "graphrag_shadow_daily_cap": 600,
     "move_per_revenue_pct": 1.0,
     "priced_in_tolerance_pct": 1.0
   },

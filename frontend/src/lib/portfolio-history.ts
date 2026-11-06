@@ -149,6 +149,19 @@ export function toDualRows(
   return rows.sort((a, b) => (a["t"] ?? 0) - (b["t"] ?? 0));
 }
 
+/** recharts rows for the one-axis Returns chart (#183): every book and benchmark in % (`<acct>_pct`, `bench_<key>`). */
+export function toPctRows(
+  accounts: Map<string, SeriesPoint[]>,
+  benchmarks: Map<string, SeriesPoint[]> = new Map(),
+): Array<Record<string, number>> {
+  const rows: Array<Record<string, number>> = [];
+  for (const [account, list] of accounts)
+    for (const p of list) if (p.pct !== null) rows.push({ t: p.t, [pctKey(account)]: p.pct });
+  for (const [key, list] of benchmarks)
+    for (const p of list) if (p.pct !== null) rows.push({ t: p.t, [benchKey(key)]: p.pct });
+  return rows.sort((a, b) => (a["t"] ?? 0) - (b["t"] ?? 0));
+}
+
 /** True when some account has at least two points — a line, not a dot. */
 export function hasLine(points: PortfolioPoint[]): boolean {
   const n = new Map<string, number>();

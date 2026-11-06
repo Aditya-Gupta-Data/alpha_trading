@@ -1001,3 +1001,204 @@ def freshness() -> dict:
         except OSError:
             out[name] = None
     return out
+
+
+# ---------------------------------------------------------- market view
+LEARNER = "PAPER_SHADOW_LEARNER"
+
+
+# the routing table's directions, copied: the router module imports the order system, which
+# this read-only layer must not (tests/test_market_view.py keeps the two equal)
+STRATEGY_DIRECTIONS = {"bull_call_spread": "bullish", "bear_put_spread": "bearish", "iron_condor": "neutral",
+                       "iron_butterfly": "neutral", "long_call": "bullish", "long_put": "bearish",
+                       "equity_long": "bullish"}
+
+
+def _direction(strategy: str | None):
+    return STRATEGY_DIRECTIONS.get(strategy or "")
+
+
+def _engine_reads(journal: list) -> dict:
+    """The proposer's own per-name read on its latest day: the last regime_read per ticker."""
+    rows = [e for e in journal if isinstance(e.get("regime_read"), dict) and e.get("date") and e.get("ticker")]
+    if not rows:
+        return {"date": None, "names": []}
+    day = max(e["date"] for e in rows)
+    latest = {}
+    for e in sorted((e for e in rows if e["date"] == day), key=lambda e: str(e.get("created_at") or "")):
+        rr = e["regime_read"]
+        latest[e["ticker"]] = {"ticker": e["ticker"], "view": rr.get("view"), "grade": rr.get("grade"),
+                               "rsi": None if rr.get("rsi") is None else round(float(rr["rsi"]), 1),
+                               "vix": rr.get("vix"), "at": e.get("created_at")}
+    return {"date": day, "names": sorted(latest.values(), key=lambda r: r["ticker"])}
+
+
+def _book_tilt(conn, journal: list) -> dict:
+    """Direction of every open trade in the real-capital books (learner excluded), one count per trade."""
+    strat = {e["short_id"]: (e.get("spread") or {}).get("strategy") or e.get("action")
+             for e in journal if e.get("short_id")}
+    refs = set()
+    for sql, args in (("SELECT journal_ref FROM margin_locks WHERE released_at IS NULL", ()),
+                      ("SELECT journal_ref FROM paper_margin_locks WHERE released_at IS NULL AND account_id != ?",
+                       (LEARNER,))):
+        got = _q(conn, sql, args)
+        if isinstance(got, list):
+            refs.update(str(r["journal_ref"]) for r in got)
+    out = {"bullish": 0, "bearish": 0, "neutral": 0, "unknown": 0}
+    for ref in refs:
+        kind = "equity_long" if ref.startswith("eqd:") else strat.get(ref)
+        out[_direction(kind) or "unknown"] += 1
+    out["total"] = len(refs)
+    return out
+
+
+def _flows(rows: list) -> dict | None:
+    """Latest FII/DII net (₹ crore) and the run of same-sign FII days ending on it."""
+    days = [r for r in rows if r.get("fii_net") is not None]
+    if not days:
+        return None
+    last = days[0]
+    sign = 1 if last["fii_net"] >= 0 else -1
+    run = []
+    for r in days:
+        if (1 if r["fii_net"] >= 0 else -1) != sign:
+            break
+        run.append(r)
+    dii = [r["dii_net"] for r in run if r.get("dii_net") is not None]
+    return {"date": last["date"], "fii_net_cr": last["fii_net"], "dii_net_cr": last.get("dii_net"),
+            "fii_run_days": len(run), "fii_run_from": run[-1]["date"],
+            "fii_run_sum_cr": round(sum(r["fii_net"] for r in run), 2),
+            "dii_run_sum_cr": round(sum(dii), 2) if len(dii) == len(run) else None}
+
+
+def _gamma(conn) -> dict | None:
+    """The latest dealer-gamma day: NIFTY 50 / NIFTY BANK zones and walls, plus breadth across names."""
+    day = _q(conn, "SELECT MAX(date) AS d FROM dealer_exposure_daily")
+    if not isinstance(day, list) or not day or not day[0]["d"]:
+        return None
+    rows = _q(conn, "SELECT underlying, dealer, spot, regime_at_spot, zero_gamma, call_wall, put_wall "
+                    "FROM dealer_exposure_daily WHERE date = ?", (day[0]["d"],))
+    if not isinstance(rows, list) or not rows:
+        return None
+    if any(r["dealer"] == "non_client" for r in rows):
+        rows = [r for r in rows if r["dealer"] == "non_client"]
+    idx = {r["underlying"]: {k: r[k] for k in ("spot", "regime_at_spot", "zero_gamma", "call_wall", "put_wall")}
+           for r in rows if r["underlying"] in ("NIFTY 50", "NIFTY BANK")}
+    zones = [r["regime_at_spot"] for r in rows if r["regime_at_spot"] in ("positive", "negative")]
+    return {"date": day[0]["d"], "indices": idx, "names": len(zones),
+            "short_gamma": zones.count("negative"), "long_gamma": zones.count("positive")}
+
+
+def _day(iso) -> str:
+    """'2026-11-05' / an ISO timestamp → '5 Nov'; the raw text when unparseable."""
+    try:
+        d = date.fromisoformat(str(iso)[:10])
+        return f"{d.day} {d:%b}"
+    except ValueError:
+        return str(iso)
+
+
+def _fmt_cr(v: float) -> str:
+    return f"₹{abs(v):,.0f} cr"
+
+
+def _sign_word(v: float, up: str, down: str) -> str:
+    return up if v >= 0 else down
+
+
+def market_highlights(view: dict) -> list:
+    """Plain, numbered sentences from the view — each only when its data is present. Pure."""
+    out = []
+    reads = (view.get("engine") or {}).get("names") or []
+    tilt = view.get("book") or {}
+    if reads and tilt.get("total"):
+        bull = sum(1 for r in reads if r["view"] == "bullish")
+        bear = sum(1 for r in reads if r["view"] == "bearish")
+        lean = "bullish" if bull > bear else "bearish" if bear > bull else None
+        book_lean = max(("bullish", "bearish", "neutral"), key=lambda k: tilt.get(k, 0))
+        counts = f"{tilt.get('bullish', 0)} bullish, {tilt.get('bearish', 0)} bearish, {tilt.get('neutral', 0)} neutral"
+        if lean and book_lean != lean:
+            out.append({"tone": "warn", "text": f"Today's read is {lean} on {max(bull, bear)} of the {len(reads)} "
+                        f"names it proposed trades on, but the open book leans {book_lean}: {counts} "
+                        f"({tilt['total']} trades)."})
+        else:
+            out.append({"tone": "neutral", "text": f"The open book ({tilt['total']} trades) leans {book_lean}: "
+                        f"{counts}."})
+    f = view.get("flows")
+    if f and f["fii_run_days"] >= 2:
+        side = _sign_word(f["fii_net_cr"], "net buyers", "net sellers")
+        text = (f"Foreign investors (FII) were {side} for {f['fii_run_days']} sessions in a row "
+                f"({_day(f['fii_run_from'])} to {_day(f['date'])}), {_fmt_cr(f['fii_run_sum_cr'])} in total")
+        if f.get("dii_run_sum_cr") is not None:
+            text += f"; domestic funds (DII) net {_sign_word(f['dii_run_sum_cr'], 'bought', 'sold')} " \
+                    f"{_fmt_cr(f['dii_run_sum_cr'])} over the same days"
+        out.append({"tone": "up" if f["fii_net_cr"] >= 0 else "down", "text": text + "."})
+    v = view.get("vix") or {}
+    if v.get("close") is not None and v.get("intraday") is not None and v.get("close_band") != v.get("intraday_band"):
+        out.append({"tone": "warn", "text": f"India VIX moved from {v['close']:.2f} ({_day(v['close_date'])} close, "
+                    f"{v['close_band']}) to {v['intraday']:.2f} by {str(v.get('intraday_at') or '')[11:16]} on "
+                    f"{_day(v.get('intraday_at'))}, so the desk now treats volatility as {v['intraday_band']}."})
+    g = view.get("gamma") or {}
+    nifty = (g.get("indices") or {}).get("NIFTY 50")
+    if nifty and nifty.get("regime_at_spot") in ("positive", "negative"):
+        long_g = nifty["regime_at_spot"] == "positive"
+        text = (f"On {_day(g['date'])} dealers were {'long' if long_g else 'short'} gamma on NIFTY 50 — "
+                f"they {'lean against moves (damping)' if long_g else 'chase moves (amplifying)'}")
+        cw, pw = nifty.get("call_wall"), nifty.get("put_wall")
+        if cw and pw:
+            text += f"; biggest call wall {cw:,.0f}, put wall {pw:,.0f}"
+            spot = (view.get("spots") or {}).get("NIFTY 50")
+            if spot:
+                where = ("above the call wall" if spot > cw else "below the put wall" if spot < pw
+                         else "between the walls")
+                text += f"; NIFTY now {spot:,.0f}, {where}"
+        out.append({"tone": "neutral", "text": text + "."})
+    if g.get("names"):
+        out.append({"tone": "neutral", "text": f"Dealers were short gamma on {g['short_gamma']} of the {g['names']} "
+                    f"F&O names measured on {_day(g['date'])}, so moves in those names tend to run further."})
+    m = view.get("macro") or {}
+    s, md = m.get("nifty_short"), m.get("nifty_medium")
+    if s is not None and md is not None and (s >= 0) != (md >= 0) and max(abs(s), abs(md)) >= 0.2:
+        out.append({"tone": "neutral", "text": f"Cross-asset signals for NIFTY 50 disagree by horizon: "
+                    f"{_sign_word(s, 'tailwind', 'headwind')} short-term ({s:+.1f}), "
+                    f"{_sign_word(md, 'tailwind', 'headwind')} medium-term ({md:+.1f}), on a scale of −1 to +1."})
+    return out
+
+
+def market_view(db_path=None, journal_path=None, snapshot: dict = None) -> dict:
+    """How the desk reads the market (#183): the proposer's per-name read, VIX, FII/DII flows,
+    dealer gamma, cross-asset macro and the open book's tilt — all from mirrored files."""
+    conn = connect_ro(db_path)
+    if conn is None:
+        return {"error": f"database unavailable or locked: {db_path or DB_PATH}"}
+    journal = _jsonl(journal_path or (Path(db_path).with_name("journal.jsonl") if db_path else JOURNAL_PATH))
+    snap = _snapshot() if snapshot is None else snapshot
+    try:
+        ctx = _q(conn, "SELECT date, vix, vix_band, macro_source, macro_nifty_short, macro_nifty_medium, "
+                       "macro_bank_short, macro_bank_medium, fii_net, dii_net FROM daily_context "
+                       "ORDER BY date DESC LIMIT 30")
+        ctx = ctx if isinstance(ctx, list) else []
+        engine = _engine_reads(journal)
+        vix_row = next((r for r in ctx if r.get("vix") is not None), None)
+        live = [n for n in engine["names"] if n.get("vix") is not None]
+        last_live = max(live, key=lambda n: str(n["at"] or "")) if live else None
+        from src.regime import vix_band
+        vix = {"close": vix_row["vix"] if vix_row else None,
+               "close_date": vix_row["date"] if vix_row else None,
+               "close_band": vix_row["vix_band"] if vix_row else None,
+               "intraday": last_live["vix"] if last_live else None,
+               "intraday_at": last_live["at"] if last_live else None,
+               "intraday_band": vix_band(last_live["vix"]) if last_live else None}
+        mrow = next((r for r in ctx if r.get("macro_source") not in (None, "none")), None)
+        macro = None if mrow is None else {"date": mrow["date"], "nifty_short": mrow["macro_nifty_short"],
+                                           "nifty_medium": mrow["macro_nifty_medium"],
+                                           "bank_short": mrow["macro_bank_short"],
+                                           "bank_medium": mrow["macro_bank_medium"]}
+        view = {"engine": engine, "vix": vix, "flows": _flows(ctx), "gamma": _gamma(conn), "macro": macro,
+                "book": _book_tilt(conn, journal),
+                "spots": snap.get("spots") if isinstance(snap.get("spots"), dict) else {},
+                "spots_as_of": snap.get("as_of")}
+    finally:
+        conn.close()
+    view["highlights"] = market_highlights(view)
+    return view

@@ -802,6 +802,201 @@ export interface BrainMap {
   source: string;
 }
 
+/** /api/market-view — how the desk reads the market (#183). Every block is null when its source is absent. */
+export interface MarketRead {
+  ticker: string;
+  view: string | null;
+  grade: string | null;
+  rsi: number | null;
+  vix: number | null;
+  at: string | null;
+}
+
+export interface MarketHighlight {
+  tone: "up" | "down" | "warn" | "neutral";
+  text: string;
+}
+
+export interface IndexGamma {
+  spot: number | null;
+  regime_at_spot: string | null;
+  zero_gamma: number | null;
+  call_wall: number | null;
+  put_wall: number | null;
+}
+
+export interface MarketView {
+  engine: { date: string | null; names: MarketRead[] };
+  vix: {
+    close: number | null;
+    close_date: string | null;
+    close_band: string | null;
+    intraday: number | null;
+    intraday_at: string | null;
+    intraday_band: string | null;
+  };
+  flows: {
+    date: string;
+    fii_net_cr: number;
+    dii_net_cr: number | null;
+    fii_run_days: number;
+    fii_run_from: string;
+    fii_run_sum_cr: number;
+    dii_run_sum_cr: number | null;
+  } | null;
+  gamma: {
+    date: string;
+    indices: Record<string, IndexGamma>;
+    names: number;
+    short_gamma: number;
+    long_gamma: number;
+  } | null;
+  macro: {
+    date: string;
+    nifty_short: number | null;
+    nifty_medium: number | null;
+    bank_short: number | null;
+    bank_medium: number | null;
+  } | null;
+  book: { bullish: number; bearish: number; neutral: number; unknown: number; total: number };
+  spots: Record<string, number>;
+  spots_as_of: string | null;
+  highlights: MarketHighlight[];
+}
+
+const MOCK_MARKET_VIEW: MarketView = {
+  engine: {
+    date: "2026-11-06",
+    names: [
+      {
+        ticker: "HDFCBANK.NS",
+        view: "bullish",
+        grade: "bullish",
+        rsi: 63.0,
+        vix: 17.21,
+        at: "2026-11-06T15:09:54+05:30",
+      },
+      {
+        ticker: "ICICIBANK.NS",
+        view: "bullish",
+        grade: "strong_bullish",
+        rsi: 73.3,
+        vix: 16.67,
+        at: "2026-11-06T09:40:37+05:30",
+      },
+      {
+        ticker: "TCS.NS",
+        view: "bullish",
+        grade: "strong_bullish",
+        rsi: 63.0,
+        vix: 17.12,
+        at: "2026-11-06T11:40:21+05:30",
+      },
+    ],
+  },
+  vix: {
+    close: 15.62,
+    close_date: "2026-11-05",
+    close_band: "mid",
+    intraday: 17.21,
+    intraday_at: "2026-11-06T15:09:54+05:30",
+    intraday_band: "high",
+  },
+  flows: {
+    date: "2026-11-05",
+    fii_net_cr: 14974.68,
+    dii_net_cr: -10444.54,
+    fii_run_days: 5,
+    fii_run_from: "2026-10-30",
+    fii_run_sum_cr: 35808.74,
+    dii_run_sum_cr: -19045.33,
+  },
+  gamma: {
+    date: "2026-11-05",
+    indices: {
+      "NIFTY 50": {
+        spot: 24536.6,
+        regime_at_spot: "positive",
+        zero_gamma: 25081.91,
+        call_wall: 25000,
+        put_wall: 24500,
+      },
+      "NIFTY BANK": {
+        spot: 57773.65,
+        regime_at_spot: "positive",
+        zero_gamma: null,
+        call_wall: 58000,
+        put_wall: 58000,
+      },
+    },
+    names: 26,
+    short_gamma: 19,
+    long_gamma: 7,
+  },
+  macro: {
+    date: "2026-11-05",
+    nifty_short: -0.3,
+    nifty_medium: 1.0,
+    bank_short: -0.5,
+    bank_medium: 1.0,
+  },
+  book: { bullish: 5, bearish: 8, neutral: 5, unknown: 0, total: 18 },
+  spots: { "NIFTY 50": 25030.35, "NIFTY BANK": 59086.0 },
+  spots_as_of: "2026-11-06T15:29:16+05:30",
+  highlights: [
+    {
+      tone: "warn",
+      text: "Today's read is bullish on 3 of the 3 names it proposed trades on, but the open book leans bearish: 5 bullish, 8 bearish, 5 neutral (18 trades).",
+    },
+    {
+      tone: "up",
+      text: "Foreign investors (FII) were net buyers for 5 sessions in a row (30 Oct to 5 Nov), ₹35,809 cr in total; domestic funds (DII) net sold ₹19,045 cr over the same days.",
+    },
+    {
+      tone: "warn",
+      text: "India VIX moved from 15.62 (5 Nov close, mid) to 17.21 by 15:09 on 6 Nov, so the desk now treats volatility as high.",
+    },
+    {
+      tone: "neutral",
+      text: "On 5 Nov dealers were long gamma on NIFTY 50 — they lean against moves (damping); biggest call wall 25,000, put wall 24,500; NIFTY now 25,030, above the call wall.",
+    },
+    {
+      tone: "neutral",
+      text: "Dealers were short gamma on 19 of the 26 F&O names measured on 5 Nov, so moves in those names tend to run further.",
+    },
+    {
+      tone: "neutral",
+      text: "Cross-asset signals for NIFTY 50 disagree by horizon: headwind short-term (-0.3), tailwind medium-term (+1.0), on a scale of −1 to +1.",
+    },
+  ],
+};
+
+/** Mock-only: a fortnight of 15-min-ish true-net points per book, so the Returns chart has lines. */
+function buildMockHistory(): PortfolioPoint[] {
+  const rand = seeded(11);
+  const books: Array<[string, number]> = [
+    ["PAPER_10L", 1_000_000],
+    ["PAPER_2L", 200_000],
+    ["PAPER_2L_ROT", 200_000],
+    ["PAPER_2L_LIVE", 200_000],
+    ["PAPER_2L_LIVE_GEX", 200_000],
+  ];
+  const out: PortfolioPoint[] = [];
+  for (const [account, base] of books) {
+    let pct = (rand() - 0.5) * 4;
+    for (let i = 0; i <= 40; i++) {
+      pct += (rand() - 0.52) * 1.2;
+      out.push({
+        account,
+        ts: isoMinutesAgo((40 - i) * 8 * 60),
+        equity: Math.round(base * (1 + pct / 100)),
+        pct: Math.round(pct * 100) / 100,
+      });
+    }
+  }
+  return out;
+}
+
 /* ------------------------------------------------------- swappable readers */
 
 export async function getTreasury(): Promise<Treasury> {
@@ -841,7 +1036,12 @@ export async function getFreshness(): Promise<Freshness> {
 
 export async function getEquityHistory(): Promise<EquityHistory> {
   if (USE_MOCK)
-    return delay({ realized: [], net: [], capital_events: [], notes: ["mock: no history"] });
+    return delay({
+      realized: [],
+      net: buildMockHistory(),
+      capital_events: [],
+      notes: ["mock history"],
+    });
   return fetchJson<EquityHistory>("/api/equity-history");
 }
 
@@ -849,6 +1049,11 @@ export async function getBrainMap(): Promise<BrainMap> {
   if (USE_MOCK)
     return delay({ html: "<html><body>mock brain map</body></html>", stats: {}, source: "mock" });
   return fetchJson<BrainMap>("/api/brain-map");
+}
+
+export async function getMarketView(): Promise<MarketView> {
+  if (USE_MOCK) return delay(MOCK_MARKET_VIEW);
+  return fetchJson<MarketView>("/api/market-view");
 }
 
 /* ----------------------------------------------------------------- helpers */

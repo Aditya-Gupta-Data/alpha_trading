@@ -34,7 +34,7 @@ def client(tmp_path, monkeypatch):
 
 def test_every_route_needs_the_key_and_health_does_not(client):
     for path in ("/api/treasury", "/api/open-trades", "/api/recent-outcomes", "/api/recon/latest",
-                 "/api/recon/history", "/api/audit", "/api/freshness", "/api/equity-history", "/api/brain-map"):
+                 "/api/recon/history", "/api/audit", "/api/freshness", "/api/equity-history", "/api/brain-map", "/api/market-view"):
         assert client.get(path).status_code == 401, path
         assert client.get(path, headers={"X-Access-Key": "wrong"}).status_code == 401, path
         assert client.get(path, headers={"X-Access-Key": "s3cret"}).status_code == 200, path
@@ -67,7 +67,7 @@ def test_bridge_is_get_only_and_imports_no_execution_path():
         assert not re.search(r"\b" + pat + r"\b", src), pat
     routes = sorted(r.path for r in api_bridge.app.routes if r.path.startswith("/api"))
     assert routes == ["/api/audit", "/api/brain-map", "/api/equity-history", "/api/freshness", "/api/health",
-                      "/api/open-trades", "/api/recent-outcomes", "/api/recon/history", "/api/recon/latest",
+                      "/api/market-view", "/api/open-trades", "/api/recent-outcomes", "/api/recon/history", "/api/recon/latest",
                       "/api/treasury"]
 
 

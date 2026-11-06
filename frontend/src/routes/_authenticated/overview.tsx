@@ -1,263 +1,226 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { AccountTrades } from "@/components/desk/AccountTrades";
-import { Actionables } from "@/components/desk/Actionables";
-import { CapitalPie } from "@/components/desk/CapitalPie";
 import { EmptyState, Panel } from "@/components/desk/Panel";
 import { PageHeader } from "@/components/desk/PageHeader";
-import { PortfoliosPanel } from "@/components/desk/PortfoliosPanel";
-import { StatusPill } from "@/components/desk/StatusPill";
-import { latestReconQuery, treasuryQuery } from "@/lib/desk-queries";
-import {
-  EM_DASH,
-  formatIstDate,
-  formatIstDateTime,
-  formatPct,
-  formatRupees,
-  formatRupeesSigned,
-} from "@/lib/desk-format";
-import type { AccountTreasury, ReconRow } from "@/lib/api";
+import { ReturnsChart } from "@/components/desk/ReturnsChart";
+import { marketViewQuery } from "@/lib/desk-queries";
+import { EM_DASH, formatIstDateTime } from "@/lib/desk-format";
+import type { MarketHighlight, MarketView } from "@/lib/api";
 
 export const Route = createFileRoute("/_authenticated/overview")({
   head: () => ({
     meta: [
       { title: "Overview — Alpha Trading Prop Desk" },
-      {
-        name: "description",
-        content: "Paper account equity, realised P&L, drawdown and reconciliation status.",
-      },
+      { name: "description", content: "How the desk reads the market right now." },
       { name: "robots", content: "noindex, nofollow" },
       { property: "og:title", content: "Overview — Alpha Trading Prop Desk" },
-      {
-        property: "og:description",
-        content: "Paper account equity, realised P&L, drawdown and reconciliation status.",
-      },
+      { property: "og:description", content: "How the desk reads the market right now." },
     ],
   }),
   component: OverviewPage,
 });
 
-function AccountCard({ account }: { account: AccountTreasury }) {
-  const realizedUp = account.realized_pnl >= 0;
-  const unreal = account.unrealized_pnl;
-  // an older bridge (before #116) sends no MTM fields: treat as unpriced
-  const priced = typeof unreal === "number";
-  const headline =
-    priced && typeof account.net_equity === "number" ? account.net_equity : account.equity;
-  const hasCoverage = typeof account.open_positions === "number";
-  return (
-    <Panel>
-      <p className="text-sm text-muted-foreground">{account.account_id}</p>
-      <p className="num mt-1 text-3xl font-semibold">{formatRupees(headline)}</p>
-      <p className="text-xs text-muted-foreground">
-        {priced
-          ? "True net equity — realized + open positions at the engine's last marks"
-          : "Realized equity — no open position has a live mark"}
-      </p>
-      <div className="mt-5 grid grid-cols-2 gap-6 sm:grid-cols-3">
-        <div>
-          <p className="text-xs text-muted-foreground">Unrealized P&amp;L</p>
-          <p
-            className={`num text-lg font-semibold ${!priced ? "" : (unreal ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}
-          >
-            {priced ? formatRupeesSigned(unreal) : EM_DASH}
-          </p>
-          {hasCoverage && (
-            <p className="text-[11px] text-muted-foreground">
-              priced on {account.marked_positions} of {account.open_positions} open
-              {account.marks_as_of ? ` · ${formatIstDateTime(account.marks_as_of)}` : ""}
-            </p>
-          )}
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground">Realized P&amp;L</p>
-          <p
-            className={`num text-lg font-semibold ${realizedUp ? "text-pnl-up" : "text-pnl-down"}`}
-          >
-            {formatRupeesSigned(account.realized_pnl)}
-          </p>
-          <p className="text-[11px] text-muted-foreground">
-            realized equity {formatRupees(account.equity)}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground">Drawdown from peak</p>
-          <p
-            className={`num text-lg font-semibold ${account.drawdown_pct > 0 ? "text-pnl-down" : ""}`}
-          >
-            {formatPct(account.drawdown_pct)}
-          </p>
-          <p className="text-[11px] text-muted-foreground">realized, from the peak</p>
-        </div>
-      </div>
-      <CapitalPie account={account} />
-      <details className="mt-5 text-xs">
-        <summary className="cursor-pointer text-muted-foreground">More details</summary>
-        <AccountTrades account={account} />
-      </details>
-    </Panel>
-  );
+const VIEW_TONE: Record<string, string> = {
+  bullish: "text-pnl-up",
+  bearish: "text-pnl-down",
+};
+
+const DOT: Record<MarketHighlight["tone"], string> = {
+  up: "bg-pnl-up",
+  down: "bg-pnl-down",
+  warn: "bg-warn",
+  neutral: "bg-muted-foreground",
+};
+
+function day(iso: string | null | undefined): string {
+  if (!iso) return EM_DASH;
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00+05:30`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "Asia/Kolkata" });
 }
 
-function ReconBanner({
-  recon,
-  isPending,
+const crore = (v: number | null | undefined) =>
+  typeof v === "number"
+    ? `${v >= 0 ? "+" : "−"}₹${Math.abs(v).toLocaleString("en-IN", { maximumFractionDigits: 0 })} cr`
+    : EM_DASH;
+
+const level = (v: number | null | undefined) =>
+  typeof v === "number" ? v.toLocaleString("en-IN", { maximumFractionDigits: 0 }) : EM_DASH;
+
+function Tile({
+  label,
+  value,
+  tone = "",
+  children,
 }: {
-  recon: ReconRow | null | undefined;
-  isPending: boolean;
+  label: string;
+  value: string;
+  tone?: string;
+  children?: React.ReactNode;
 }) {
-  if (isPending) return null;
-  const verdict = recon?.verdict ?? "UNKNOWN";
-  const text =
-    verdict === "PARITY"
-      ? "Broker records match our records."
-      : verdict === "MISMATCH"
-        ? "Broker records do not match our records."
-        : "Could not confirm broker records.";
-  const tone = verdict === "PARITY" ? "ok" : verdict === "MISMATCH" ? "bad" : "warn";
   return (
-    <div className="flex items-center gap-3 text-sm text-muted-foreground">
-      <StatusPill
-        label={verdict === "PARITY" ? "OK" : verdict === "MISMATCH" ? "Problem" : "Unsure"}
-        tone={tone}
-      />
-      {text}
-      {recon && <span className="text-xs">· {formatIstDateTime(recon.ts)}</span>}
+    <div className="min-w-0">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className={`num mt-0.5 text-2xl font-semibold ${tone}`}>{value}</p>
+      <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">{children}</div>
     </div>
   );
 }
 
-function OverviewPage() {
-  const treasury = useQuery(treasuryQuery);
-  const recon = useQuery(latestReconQuery);
-  // X axis on real time (decision #116): each point carries its epoch ms so
-  // a two-week gap is wider than seven settlements in one morning.
-  const curve = (treasury.data?.equity_curve ?? [])
-    .map((p) => ({ ...p, t: Date.parse(p.ts) }))
-    .filter((p) => !Number.isNaN(p.t));
-  // Pool moves (decision #117): a reset or an injection moves equity with no
-  // trade behind it — drawn as a labelled dashed line, never smoothed away.
-  const events = (treasury.data?.capital_events ?? [])
-    .map((e) => ({ ...e, t: Date.parse(e.ts) }))
-    .filter((e) => !Number.isNaN(e.t));
+function MarketRead({ view }: { view: MarketView }) {
+  const names = view.engine.names;
+  const bull = names.filter((n) => n.view === "bullish").length;
+  const bear = names.filter((n) => n.view === "bearish").length;
+  const lean =
+    names.length === 0 ? null : bull > bear ? "Bullish" : bear > bull ? "Bearish" : "Mixed";
+  const nifty = view.gamma?.indices["NIFTY 50"];
+  const spot = view.spots["NIFTY 50"];
+  const vix = view.vix.intraday ?? view.vix.close;
+  const vixBand = view.vix.intraday !== null ? view.vix.intraday_band : view.vix.close_band;
+  const flows = view.flows;
+  return (
+    <Panel
+      title="How the desk reads the market"
+      right={
+        view.spots_as_of ? (
+          <span className="num text-[11px] text-muted-foreground">
+            prices {formatIstDateTime(view.spots_as_of)}
+          </span>
+        ) : undefined
+      }
+    >
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <Tile
+          label="Desk's read today"
+          value={lean ?? EM_DASH}
+          tone={lean === "Bullish" ? "text-pnl-up" : lean === "Bearish" ? "text-pnl-down" : ""}
+        >
+          {names.length > 0 ? (
+            <>
+              <p>
+                {Math.max(bull, bear)} of {names.length} names it proposed trades on ·{" "}
+                {day(view.engine.date)}
+              </p>
+              <p className="flex flex-wrap gap-x-2">
+                {names.map((n) => (
+                  <span key={n.ticker} className={VIEW_TONE[n.view ?? ""] ?? ""}>
+                    {n.ticker.replace(/\.NS$/, "")}
+                  </span>
+                ))}
+              </p>
+            </>
+          ) : (
+            <p>No proposals on record yet</p>
+          )}
+        </Tile>
+        <Tile
+          label="India VIX"
+          value={typeof vix === "number" ? vix.toFixed(2) : EM_DASH}
+          tone={vixBand === "high" ? "text-pnl-down" : ""}
+        >
+          <p>{vixBand ? `${vixBand} band (high is 16 and above)` : "band unknown"}</p>
+          {view.vix.close !== null && view.vix.intraday !== null && (
+            <p>
+              {day(view.vix.close_date)} close {view.vix.close.toFixed(2)}
+            </p>
+          )}
+        </Tile>
+        <Tile
+          label="Foreign investors (FII), net"
+          value={crore(flows?.fii_net_cr)}
+          tone={flows ? (flows.fii_net_cr >= 0 ? "text-pnl-up" : "text-pnl-down") : ""}
+        >
+          {flows ? (
+            <>
+              <p>
+                {day(flows.date)} · domestic funds (DII) {crore(flows.dii_net_cr)}
+              </p>
+              {flows.fii_run_days >= 2 && (
+                <p>
+                  {flows.fii_net_cr >= 0 ? "buying" : "selling"} {flows.fii_run_days} sessions
+                  running
+                </p>
+              )}
+            </>
+          ) : (
+            <p>No flow data on record</p>
+          )}
+        </Tile>
+        <Tile label="NIFTY 50" value={level(spot ?? nifty?.spot)}>
+          {nifty ? (
+            <>
+              <p>
+                dealers{" "}
+                {nifty.regime_at_spot === "positive"
+                  ? "long gamma (damping)"
+                  : nifty.regime_at_spot === "negative"
+                    ? "short gamma (amplifying)"
+                    : "gamma unknown"}{" "}
+                · {day(view.gamma?.date)}
+              </p>
+              {nifty.call_wall !== null && nifty.put_wall !== null && (
+                <p>
+                  call wall {level(nifty.call_wall)} · put wall {level(nifty.put_wall)}
+                </p>
+              )}
+            </>
+          ) : (
+            <p>No dealer-gamma reading on record</p>
+          )}
+        </Tile>
+      </div>
+    </Panel>
+  );
+}
 
+function WorthKnowing({ items }: { items: MarketHighlight[] }) {
+  return (
+    <Panel title="Worth knowing">
+      {items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Nothing out of the ordinary in today's data.
+        </p>
+      ) : (
+        <ul className="space-y-3 text-sm">
+          {items.map((h) => (
+            <li key={h.text} className="flex gap-3">
+              <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${DOT[h.tone]}`} />
+              <span>{h.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+function OverviewPage() {
+  const market = useQuery(marketViewQuery);
   return (
     <>
       <PageHeader
         title="Overview"
-        description="How much money each practice account has, and whether anything needs a look."
-        sources={["journal", "market_snapshot", "recon"]}
+        description="How the desk reads the market right now, and how its books have done."
+        sources={["journal", "brain_map.db"]}
       />
-
       <div className="space-y-8">
-        <Actionables />
-
-        {treasury.isError ? (
+        {market.isError ? (
           <Panel>
-            <EmptyState label="Account data unavailable" />
+            <EmptyState label="Market read unavailable" />
           </Panel>
-        ) : treasury.isPending ? (
+        ) : market.isPending ? (
           <Panel>
             <EmptyState label="Loading…" />
           </Panel>
         ) : (
           <>
-            <div className="grid gap-6 lg:grid-cols-2">
-              <AccountCard account={treasury.data.PAPER_10L} />
-              <AccountCard account={treasury.data.PAPER_2L} />
-              {treasury.data.PAPER_2L_ROT && <AccountCard account={treasury.data.PAPER_2L_ROT} />}
-              {treasury.data.PAPER_2L_LIVE && <AccountCard account={treasury.data.PAPER_2L_LIVE} />}
-              {treasury.data.PAPER_2L_LIVE_GEX && (
-                <AccountCard account={treasury.data.PAPER_2L_LIVE_GEX} />
-              )}
-              {treasury.data.PAPER_SHADOW_LEARNER && (
-                <AccountCard account={treasury.data.PAPER_SHADOW_LEARNER} />
-              )}
-            </div>
-
-            <Panel title="Compounding — PAPER_10L">
-              {(() => {
-                const a = treasury.data.PAPER_10L;
-                const cagrTone =
-                  a.cagr_pct === null ? "" : a.cagr_pct >= 0 ? "text-pnl-up" : "text-pnl-down";
-                return (
-                  <div className="mb-5 grid grid-cols-2 gap-6 sm:grid-cols-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground">CAGR (annualised)</p>
-                      <p className={`num text-2xl font-semibold ${cagrTone}`}>
-                        {formatPct(a.cagr_pct)}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {a.days_elapsed === null
-                          ? "epoch unknown"
-                          : a.days_elapsed < 30
-                            ? `from only ${a.days_elapsed.toFixed(0)} days — noisy`
-                            : `from ${a.days_elapsed.toFixed(0)} days of live trading`}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Return since the ₹10L base</p>
-                      <p
-                        className={`num text-2xl font-semibold ${(a.abs_return_pct ?? 0) >= 0 ? "text-pnl-up" : "text-pnl-down"}`}
-                      >
-                        {formatPct(a.abs_return_pct)}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        on {formatRupees(a.base_equity ?? a.starting_capital)} contributed
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Days compounding</p>
-                      <p className="num text-2xl font-semibold">
-                        {a.days_elapsed === null ? EM_DASH : a.days_elapsed.toFixed(0)}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        since {a.base_ts ? formatIstDate(a.base_ts) : "the ₹10L base"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Formula</p>
-                      <p className="num text-sm font-semibold">(E/E₀)^(365/d) − 1</p>
-                      <p className="text-[11px] text-muted-foreground">
-                        realized equity, no unrealized marks
-                      </p>
-                    </div>
-                  </div>
-                );
-              })()}
-              {events.length > 0 && (
-                <ul className="mt-3 space-y-1 text-xs">
-                  {events.map((e) => (
-                    <li key={`${e.kind}-${e.t}`} className="flex gap-2">
-                      <span className="num shrink-0 text-muted-foreground">
-                        {formatIstDate(e.ts)}
-                      </span>
-                      <span>
-                        <span className="font-semibold">{e.short ?? e.label}</span> — {e.label}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {curve.length > 0 && (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  The ₹ curve is the left axis of the portfolios chart below, with the benchmarks.
-                  Capital moves above are not trading. Return and CAGR are measured from the ₹10L
-                  base
-                  {treasury.data.PAPER_10L.base_ts
-                    ? ` (${formatIstDate(treasury.data.PAPER_10L.base_ts)})`
-                    : ""}
-                  .
-                </p>
-              )}
-            </Panel>
-
-            <PortfoliosPanel />
-
-            <ReconBanner recon={recon.data} isPending={recon.isPending} />
+            <MarketRead view={market.data} />
+            <WorthKnowing items={market.data.highlights} />
           </>
         )}
+        <ReturnsChart />
       </div>
     </>
   );

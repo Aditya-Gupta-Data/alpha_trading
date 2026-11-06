@@ -17,6 +17,7 @@ import { Route as AuthenticatedBrainMapRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedLiveBookRouteImport } from './routes/_authenticated/live-book'
 import { Route as AuthenticatedOutcomesRouteImport } from './routes/_authenticated/outcomes'
 import { Route as AuthenticatedOverviewRouteImport } from './routes/_authenticated/overview'
+import { Route as AuthenticatedPortfoliosRouteImport } from './routes/_authenticated/portfolios'
 import { Route as AuthenticatedReconRouteImport } from './routes/_authenticated/recon'
 
 const IndexRoute = IndexRouteImport.update({
@@ -58,6 +59,11 @@ const AuthenticatedOverviewRoute = AuthenticatedOverviewRouteImport.update({
   path: '/overview',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedPortfoliosRoute = AuthenticatedPortfoliosRouteImport.update({
+  id: '/portfolios',
+  path: '/portfolios',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedReconRoute = AuthenticatedReconRouteImport.update({
   id: '/recon',
   path: '/recon',
@@ -72,6 +78,7 @@ export interface FileRoutesByFullPath {
   '/live-book': typeof AuthenticatedLiveBookRoute
   '/outcomes': typeof AuthenticatedOutcomesRoute
   '/overview': typeof AuthenticatedOverviewRoute
+  '/portfolios': typeof AuthenticatedPortfoliosRoute
   '/recon': typeof AuthenticatedReconRoute
 }
 export interface FileRoutesByTo {
@@ -82,6 +89,7 @@ export interface FileRoutesByTo {
   '/live-book': typeof AuthenticatedLiveBookRoute
   '/outcomes': typeof AuthenticatedOutcomesRoute
   '/overview': typeof AuthenticatedOverviewRoute
+  '/portfolios': typeof AuthenticatedPortfoliosRoute
   '/recon': typeof AuthenticatedReconRoute
 }
 export interface FileRoutesById {
@@ -94,6 +102,7 @@ export interface FileRoutesById {
   '/_authenticated/live-book': typeof AuthenticatedLiveBookRoute
   '/_authenticated/outcomes': typeof AuthenticatedOutcomesRoute
   '/_authenticated/overview': typeof AuthenticatedOverviewRoute
+  '/_authenticated/portfolios': typeof AuthenticatedPortfoliosRoute
   '/_authenticated/recon': typeof AuthenticatedReconRoute
 }
 export interface FileRouteTypes {
@@ -106,6 +115,7 @@ export interface FileRouteTypes {
     | '/live-book'
     | '/outcomes'
     | '/overview'
+    | '/portfolios'
     | '/recon'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -116,6 +126,7 @@ export interface FileRouteTypes {
     | '/live-book'
     | '/outcomes'
     | '/overview'
+    | '/portfolios'
     | '/recon'
   id:
     | '__root__'
@@ -127,6 +138,7 @@ export interface FileRouteTypes {
     | '/_authenticated/live-book'
     | '/_authenticated/outcomes'
     | '/_authenticated/overview'
+    | '/_authenticated/portfolios'
     | '/_authenticated/recon'
   fileRoutesById: FileRoutesById
 }
@@ -194,6 +206,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOverviewRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/portfolios': {
+      id: '/_authenticated/portfolios'
+      path: '/portfolios'
+      fullPath: '/portfolios'
+      preLoaderRoute: typeof AuthenticatedPortfoliosRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/recon': {
       id: '/_authenticated/recon'
       path: '/recon'
@@ -210,6 +229,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedLiveBookRoute: typeof AuthenticatedLiveBookRoute
   AuthenticatedOutcomesRoute: typeof AuthenticatedOutcomesRoute
   AuthenticatedOverviewRoute: typeof AuthenticatedOverviewRoute
+  AuthenticatedPortfoliosRoute: typeof AuthenticatedPortfoliosRoute
   AuthenticatedReconRoute: typeof AuthenticatedReconRoute
 }
 
@@ -219,6 +239,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedLiveBookRoute: AuthenticatedLiveBookRoute,
   AuthenticatedOutcomesRoute: AuthenticatedOutcomesRoute,
   AuthenticatedOverviewRoute: AuthenticatedOverviewRoute,
+  AuthenticatedPortfoliosRoute: AuthenticatedPortfoliosRoute,
   AuthenticatedReconRoute: AuthenticatedReconRoute,
 }
 

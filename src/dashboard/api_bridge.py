@@ -153,6 +153,16 @@ def equity_history(request: Request):
     return h
 
 
+@app.get("/api/market-view")
+def market_view(request: Request):
+    """The Overview's market read (#183): `data.market_view` from the mirrored files."""
+    _check_key(request)
+    v = d.market_view()
+    if v.get("error"):
+        raise HTTPException(status_code=503, detail=v["error"])
+    return v
+
+
 @app.get("/api/brain-map")
 def brain_map(request: Request):
     """The Brain Map page (Architect 2026-10-09): {html, stats, source} from

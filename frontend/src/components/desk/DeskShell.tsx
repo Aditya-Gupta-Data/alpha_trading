@@ -25,6 +25,7 @@ function useTheme() {
 
 const NAV = [
   { to: "/overview", label: "Overview" },
+  { to: "/portfolios", label: "Portfolios" },
   { to: "/live-book", label: "Live Book" },
   { to: "/outcomes", label: "Outcomes" },
   { to: "/recon", label: "Recon" },

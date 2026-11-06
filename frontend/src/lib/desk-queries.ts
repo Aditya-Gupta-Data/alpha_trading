@@ -6,6 +6,7 @@ import {
   getEquityHistory,
   getFreshness,
   getLatestRecon,
+  getMarketView,
   getOpenTrades,
   getRecentOutcomes,
   getReconHistory,
@@ -69,4 +70,11 @@ export const brainMapQuery = queryOptions({
   queryFn: getBrainMap,
   refetchInterval: 15 * 60_000,
   staleTime: 15 * 60_000,
+});
+
+// The market read changes with the evening jobs and the session's proposals; 5 min is plenty.
+export const marketViewQuery = queryOptions({
+  queryKey: ["market-view"],
+  queryFn: getMarketView,
+  refetchInterval: 5 * 60_000,
 });

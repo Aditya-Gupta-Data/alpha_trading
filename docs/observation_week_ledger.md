@@ -2542,3 +2542,9 @@ what the clock promises and what Dept 5 will have to rule on. Needs a decision.
 - Issue 58: the fix is live; the 9 past rows are unchanged.
 - Unverified: the Monday 11-09 latches, the first live long option and its exits, the desk viewed with the owner's key.
 
+
+## Issue 59 — the daily 🔴 SYSTEM PAUSED card reports the realized drawdown (2.92%), not the true-equity drawdown that latched the halt (~12%) (found 2026-11-11; NOT fixed)
+- Verified 11-11 on the VM mirror (`account_events`): `ruin_halt_latched` 11-09 09:18:27 "true-equity drawdown 12.27% >= 10% of peak equity"; every `risk_of_ruin_halt` refusal 11-09 to 11-11 names 10.86–12.36%; the `ruin_halt_card` rows of 11-10 08:05:02 and 11-11 08:05:01 say "SYSTEM PAUSED card fired (drawdown 2.92%)". 2.92% is the realized figure: realized peak Rs.12,18,281 vs realized equity Rs.11,82,750.
+- Cause (verified in code on `main`): `portfolio_manager._ruin_halt_card` and `halt_banner_lines` format `drawdown_pct(conn)` (realized only, pre-#181), while the gate judges `ruin_drawdown_pct` (max of realized and true-equity, #181). The Discord card and the digest banner therefore show an owner "2.92% vs the 10% limit" for a halt the gate holds at ~12%.
+- Impact: information only; the halt itself is correct and still blocks entries. Fix is to format `ruin_drawdown_pct` in both places and say which rule tripped (`ruin_halt_basis`).
+- Same day, for the record: 10 Nov was an NSE holiday (Diwali-Balipratipada, `nse_calendar.py`) — no readings, no trades; nothing was missed.

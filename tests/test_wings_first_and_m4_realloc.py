@@ -136,6 +136,8 @@ def test_venue_fills_a_sell_first_listed_ticket_in_one_pass():
 def test_recon_announces_a_standing_mismatch_once(monkeypatch, tmp_path):
     fired = []
     from src import notifier
+    from src.execution import recon_engine as _re
+    monkeypatch.setattr(_re, "OWNER_TRADES_AT_BROKER", False)   # strict ghost-row rules (#188 pins owner mode)
     monkeypatch.setattr(notifier, "fire_broadcast", lambda p: fired.append(p))
     from tests.test_recon_engine import _db, _read_fn
     positions = [{"securityId": "11536", "tradingSymbol": "TCS", "exchangeSegment": "NSE_EQ", "netQty": -5}]

@@ -111,3 +111,10 @@ def test_a_broken_reading_never_breaks_the_card_or_the_banner(conn, sent, monkey
     monkeypatch.setattr(pm, "ruin_halt_reading", lambda c: (_ for _ in ()).throw(RuntimeError("boom")))
     pm._ruin_halt_card(conn)                                                          # swallowed, prints a note
     assert pm.halt_banner_lines(conn=conn) == []                                      # fail-safe: [] not a raise
+
+
+@pytest.fixture(autouse=True)
+def _enforced_ruin_latch(monkeypatch):
+    """These tests pin the enforced 10% latch; production runs it record-only (#187)."""
+    from src import portfolio_manager as _pm
+    monkeypatch.setattr(_pm, "RUIN_HALT_BLOCKS_ENTRIES", True)

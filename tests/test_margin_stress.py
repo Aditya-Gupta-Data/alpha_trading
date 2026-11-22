@@ -458,3 +458,10 @@ def test_peak_never_sits_below_equity_after_a_capital_move(conn):
     pm.inject_capital(800_000.0, conn=conn)
     after = pm.account_summary(conn)
     assert after["peak_equity"] >= after["equity"]
+
+
+@pytest.fixture(autouse=True)
+def _enforced_ruin_latch(monkeypatch):
+    """These tests pin the enforced 10% latch; production runs it record-only (#187)."""
+    from src import portfolio_manager as _pm
+    monkeypatch.setattr(_pm, "RUIN_HALT_BLOCKS_ENTRIES", True)

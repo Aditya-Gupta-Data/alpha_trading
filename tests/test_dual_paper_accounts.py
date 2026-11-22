@@ -339,3 +339,10 @@ def test_no_order_path_and_the_journal_stays_the_primary_book():
     assert "journal.jsonl" in venue and "portfolio_manager" not in venue
     op = (ROOT / "src/options_proposer.py").read_text()
     assert op.count("strategy_router.issue(") == 1
+
+
+@pytest.fixture(autouse=True)
+def _enforced_ruin_latch(monkeypatch):
+    """These tests pin the enforced 10% latch; production runs it record-only (#187)."""
+    from src import portfolio_manager as _pm
+    monkeypatch.setattr(_pm, "RUIN_HALT_BLOCKS_ENTRIES", True)

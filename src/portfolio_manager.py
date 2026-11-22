@@ -61,6 +61,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 STARTING_CAPITAL = 1_000_000.0   # Rs.10,00,000 simulated allocation pool
 MAX_DRAWDOWN_PCT = 10.0          # hard-coded risk-of-ruin parameter
+RUIN_HALT_BLOCKS_ENTRIES = False # #187 (owner 11-23): paper books learn on; the 10% line is recorded, not latched
+RUIN_LINE_EVENT = "ruin_line_crossed"   # #187: once per IST day per account while past the line
 HALT_LATCH_EVENT = "ruin_halt_latched"   # the persistent risk-of-ruin brake
 HALT_CLEAR_EVENT = "ruin_halt_cleared"   # (Dept 3 ruling 2026-08-17) —
                                  # arming is automatic, clearing is an
@@ -320,15 +322,38 @@ def trading_halted(conn) -> bool:
     latch — not the live drawdown — is what keeps the brake on. Recovering
     equity, and above all a capital injection that merely dilutes the
     percentage, no longer resume trading by themselves; only
-    `clear_halt()` does."""
+    `clear_halt()` does. Under #187 a drawdown only records the line; a recon or /halt latch still blocks."""
     if halt_latched(conn):
         return True
     dd = ruin_drawdown_pct(conn)
+    if dd >= MAX_DRAWDOWN_PCT and not RUIN_HALT_BLOCKS_ENTRIES:
+        _note_ruin_line(conn, None, dd)
+        return False
     if dd >= MAX_DRAWDOWN_PCT:
         latch_halt(conn, f"{_ruin_basis(conn)} drawdown {dd:.2f}% >= "
                          f"{MAX_DRAWDOWN_PCT:g}% of peak equity")
         return True
     return False
+
+
+def _note_ruin_line(conn, account, dd: float) -> None:
+    """#187: record (once per IST day) that the account is past the 10% line; never blocks, never raises."""
+    try:
+        day = _now_iso()[:10]
+        detail = (f"{_ruin_basis(conn, account)} drawdown {dd:.2f}% >= {MAX_DRAWDOWN_PCT:g}% of peak "
+                  "equity — recorded, not enforced (#187)")
+        if _is_primary(account):
+            ensure_schema(conn)
+            if not conn.execute("SELECT 1 FROM account_events WHERE event_type = ? AND ts LIKE ?",
+                                (RUIN_LINE_EVENT, f"{day}%")).fetchone():
+                log_event(conn, RUIN_LINE_EVENT, detail)
+        elif account != ACCOUNT_PAPER_SHADOW_LEARNER and account in PAPER_ACCOUNTS:
+            ensure_accounts_schema(conn)
+            if not conn.execute("SELECT 1 FROM paper_account_events WHERE account_id = ? AND event_type = ? "
+                                "AND ts LIKE ?", (account, RUIN_LINE_EVENT, f"{day}%")).fetchone():
+                paper_log_event(conn, account, RUIN_LINE_EVENT, None, detail)
+    except Exception as e:
+        print(f"  (ruin line not recorded — {e})")
 
 
 def log_event(conn, event_type: str, detail: str = "") -> None:
@@ -1359,6 +1384,9 @@ def paper_trading_halted(conn, account: str) -> bool:
     if paper_halt_latched(conn, account):
         return True
     dd = ruin_drawdown_pct(conn, account)
+    if dd >= MAX_DRAWDOWN_PCT and not RUIN_HALT_BLOCKS_ENTRIES:
+        _note_ruin_line(conn, account, dd)
+        return False
     if dd >= MAX_DRAWDOWN_PCT:
         paper_log_event(conn, account, HALT_LATCH_EVENT, None,
                         f"{_ruin_basis(conn, account)} drawdown {dd:.2f}% >= "

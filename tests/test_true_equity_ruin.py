@@ -106,3 +106,10 @@ def test_clear_re_arms_while_true_equity_is_still_breached(conn):
     assert pm.trading_halted(conn) is True
     out = pm.clear_halt(conn, why="test")
     assert out["cleared"] is True and out["halted"] is True and out["drawdown_pct"] == 12.0
+
+
+@pytest.fixture(autouse=True)
+def _enforced_ruin_latch(monkeypatch):
+    """These tests pin the enforced 10% latch; production runs it record-only (#187)."""
+    from src import portfolio_manager as _pm
+    monkeypatch.setattr(_pm, "RUIN_HALT_BLOCKS_ENTRIES", True)

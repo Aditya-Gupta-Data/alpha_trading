@@ -153,3 +153,10 @@ def test_a_loss_short_of_the_latch_still_counts_in_the_ceiling(switch_on):
     _options_loss(c, 5.0)
     assert not buckets.is_bucket_halted(c, IDX)
     assert buckets.ceiling_state(c, DARL)["ceiling_rs"] < before
+
+
+@pytest.fixture(autouse=True)
+def _enforced_ruin_latch(monkeypatch):
+    """These tests pin the enforced 10% latch; production runs it record-only (#187)."""
+    from src import portfolio_manager as _pm
+    monkeypatch.setattr(_pm, "RUIN_HALT_BLOCKS_ENTRIES", True)

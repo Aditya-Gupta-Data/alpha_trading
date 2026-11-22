@@ -156,3 +156,10 @@ def test_dry_run_reads_the_book_only():
                       log_path=Path(tmp) / "r.jsonl", announce=False)
     assert res["verdict"] == "unknown" and res["book_rows"] == 1
     assert any("dry run" in e for e in res["errors"])
+
+
+@pytest.fixture(autouse=True)
+def _strict_broker_parity(monkeypatch):
+    """These tests pin the strict ghost-row rules; production files every broker row as the owner's (#188)."""
+    from src.execution import recon_engine as _re
+    monkeypatch.setattr(_re, "OWNER_TRADES_AT_BROKER", False)

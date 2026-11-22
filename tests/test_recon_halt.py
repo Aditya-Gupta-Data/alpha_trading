@@ -141,3 +141,10 @@ def test_cli_no_halt_flag_is_passed_through(monkeypatch):
     assert re_.main(["--no-halt", "--quiet"]) == 0 and seen["halt"] is False and seen["announce"] is False
     re_.main([])
     assert seen["halt"] is True
+
+
+@pytest.fixture(autouse=True)
+def _strict_broker_parity(monkeypatch):
+    """These tests pin the strict ghost-row rules; production files every broker row as the owner's (#188)."""
+    from src.execution import recon_engine as _re
+    monkeypatch.setattr(_re, "OWNER_TRADES_AT_BROKER", False)

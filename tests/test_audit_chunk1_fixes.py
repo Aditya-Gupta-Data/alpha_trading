@@ -769,3 +769,10 @@ def test_the_live_arm_stores_a_floored_peak(monkeypatch):
     assert ev["peak"] == 59.99 and ev["lock"] == 0.0
     ev2 = lp.evaluate(dict(row, ratchet_peak_pct=ev["peak"]), {}, date(2026, 9, 29))
     assert ev2["lock"] == 0.0 and ev2["signal"] == "hold"            # 20% capture stays above lock 0
+
+
+@pytest.fixture(autouse=True)
+def _enforced_ruin_latch(monkeypatch):
+    """These tests pin the enforced 10% latch; production runs it record-only (#187)."""
+    from src import portfolio_manager as _pm
+    monkeypatch.setattr(_pm, "RUIN_HALT_BLOCKS_ENTRIES", True)

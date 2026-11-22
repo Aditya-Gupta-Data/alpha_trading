@@ -10,6 +10,8 @@ Run either of these from the project folder:
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.portfolio import buy, sell, total_value, max_affordable_shares, STARTING_CASH
@@ -655,3 +657,10 @@ if __name__ == "__main__":
         except AssertionError:
             print(f"FAIL  {t.__name__}")
     print(f"\n{passed}/{len(tests)} tests passed.")
+
+
+@pytest.fixture(autouse=True)
+def _enforced_ruin_latch(monkeypatch):
+    """These tests pin the enforced 10% latch; production runs it record-only (#187)."""
+    from src import portfolio_manager as _pm
+    monkeypatch.setattr(_pm, "RUIN_HALT_BLOCKS_ENTRIES", True)

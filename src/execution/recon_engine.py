@@ -65,6 +65,10 @@ ENDPOINTS = ("/positions", "/holdings", "/fundlimit", "/orders")
 INERT_ORDER_STATES = ("REJECTED", "CANCELLED", "EXPIRED")
 
 MISMATCH_TAG = "🔴 RECON MISMATCH"
+# #188 (owner 11-23): the owner trades real money by hand in this Dhan account. Rule 7 means the system
+# never orders, so every broker row is the owner's own: recorded apart, never a mismatch, never a halt.
+OWNER_TRADES_AT_BROKER = True
+OWNER_TAG = "👤 OWNER TRADE (outside the system)"
 
 
 # ------------------------------------------------------------------ broker
@@ -364,9 +368,14 @@ def compare(broker: dict, book: list, now: str = None) -> dict:
               "broker_orders": len(broker.get("orders") or []),
               "book_rows": len(book), "funds": broker.get("funds") or {},
               "errors": list(broker.get("errors") or []),
-              "mismatches": [], "paper_only": []}
+              "mismatches": [], "paper_only": [], "owner_trades": []}
     if not result["broker_reachable"]:
         result["verdict"] = "unknown"      # never "in parity" on a failed read
+        return result
+    if OWNER_TRADES_AT_BROKER:
+        _owner_rows(broker, result)
+        _paper_rows(book, result)
+        result["verdict"] = "mismatch" if result["mismatches"] else "parity"
         return result
     book_names = {_canon(r.get("underlying")) for r in book if r.get("underlying")}
     for p in broker.get("positions") or []:
@@ -407,6 +416,31 @@ def compare(broker: dict, book: list, now: str = None) -> dict:
                        f"{o['status']} — never sent by paper, nothing reached the exchange" if inert else
                        f"{MISMATCH_TAG}: broker order {o['order_id']} {o['side']} {o['qty']} "
                        f"{o['symbol']} is {o['status']} ({o['filled_qty']} filled) — paper never sends orders")})
+    _paper_rows(book, result)
+    result["verdict"] = "mismatch" if result["mismatches"] else "parity"
+    return result
+
+
+def _owner_rows(broker: dict, result: dict) -> None:
+    """#188: every broker position, holding and order is the owner's own real-money trade."""
+    own = result["owner_trades"]
+    for p in broker.get("positions") or []:
+        own.append({"kind": "owner_position", "severity": "OWNER", "symbol": p["symbol"],
+                    "security_id": p["security_id"], "segment": p["segment"], "net_qty": p["net_qty"],
+                    "detail": f"{OWNER_TAG}: position {p['net_qty']:+d} {p['symbol']} ({p['segment']})"})
+    for h in broker.get("holdings") or []:
+        own.append({"kind": "owner_holding", "severity": "OWNER", "symbol": h["symbol"],
+                    "security_id": h["security_id"], "segment": h["segment"], "net_qty": h["qty"],
+                    "detail": f"{OWNER_TAG}: demat holding {h['qty']} {h['symbol']}"})
+    for o in broker.get("orders") or []:
+        own.append({"kind": "owner_order", "severity": "OWNER", "symbol": o["symbol"],
+                    "order_id": o["order_id"], "segment": o["segment"], "status": o["status"],
+                    "net_qty": o["filled_qty"],
+                    "detail": (f"{OWNER_TAG}: order {o['order_id']} {o['side']} {o['qty']} {o['symbol']} "
+                               f"{o['status']} ({o['filled_qty']} filled)")})
+
+
+def _paper_rows(book: list, result: dict) -> None:
     for r in book:
         result["paper_only"].append({
             "kind": "paper_only", "severity": "INFO", "ref": r["ref"],
@@ -415,8 +449,6 @@ def compare(broker: dict, book: list, now: str = None) -> dict:
             "detail": (f"paper {r['account']} {r['ref']} "
                        f"({r.get('underlying') or 'underlying n/a'}) — expected "
                        f"absent at the broker while Rule 7 holds")})
-    result["verdict"] = "mismatch" if result["mismatches"] else "parity"
-    return result
 
 
 def _canon(name) -> str:
@@ -555,7 +587,7 @@ def render(result: dict) -> str:
             f"{'reachable' if result['broker_reachable'] else 'NOT READ'} · "
             f"broker positions {result['broker_positions']} · holdings "
             f"{result['broker_holdings']} · orders {result.get('broker_orders', 0)} · paper rows "
-            f"{result['book_rows']}")
+            f"{result['book_rows']} · owner trades {len(result.get('owner_trades') or [])}")
     lines = [head]
     f = result.get("funds") or {}
     if f:
@@ -567,6 +599,8 @@ def render(result: dict) -> str:
         lines.append("  ⛔ desk-wide halt LATCHED by this recon")
     for m in result.get("mismatches") or []:
         lines.append(f"  {m['detail']}")
+    for r in result.get("owner_trades") or []:
+        lines.append(f"  {r['detail']}")
     for r in result.get("paper_only") or []:
         lines.append(f"  · {r['detail']}")
     return "\n".join(lines)

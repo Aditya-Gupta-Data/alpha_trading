@@ -49,8 +49,11 @@ def buffer() -> TipBuffer:
 def plan_ingest(group: dict, message_text: str) -> dict:
     """What to send the gateway: the joined text when the group is (or became) a tip worth a card or a reject,
     else this message alone, so the ledger logs it once and an unchanged card is not re-quoted."""
+    from src.tip_desk.calls import direction_of
     kind = group["parsed"]["kind"]
     joined = kind not in IGNORED_KINDS and not (kind in TRADE_KINDS and not group["changed"])
+    if kind in IGNORED_KINDS and len(group["message_ids"]) > 1 and direction_of(group["text"])[0]:
+        joined = True                      # a direction split over two chatter lines is still a call (Arm 2)
     return {"group_id": group["group_id"], "text": group["text"] if joined else message_text,
             "message_ids": group["message_ids"], "joined": joined}
 

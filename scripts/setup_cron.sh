@@ -523,6 +523,10 @@ CRON_TZ=Asia/Kolkata
 #     every 30 s and applies their stop loss, T1/T2/T3 booking + trail and the 15:15 expiry-day square-off.
 #     Exits at once on a holiday, with tip_desk.enabled false, or on the analytics node (#146).
 14 9 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.tip_desk.manager >> "$REPO_ROOT/logs/tip_desk_manager.log" 2>&1
+# 42. Tipster direction calls, graded (decision #189, Arm 2 — record and grade only): every logged call whose
+#     1-session or 5-session window has closed is scored on the 19:15 bhavcopy close (indexes on Dhan daily
+#     bars); one report card when new grades land. Read-only on every book.
+40 20 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.tip_desk.calls --grade --notify >> "$REPO_ROOT/logs/tip_calls.log" 2>&1
 # 39. AltData Fleet (#39) is intentionally excluded from the VM and must be scheduled manually via
 #     local crontab on the Mini PC (Residential IP). Not here, so node_replica_block.py cannot copy it.
 # 40. update_graph_altdata.py (GraphRAG injector) must also be scheduled manually on the Mini PC, at

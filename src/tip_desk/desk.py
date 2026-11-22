@@ -52,7 +52,7 @@ def _levels_onto_open(conn, group_id: str, parsed: dict) -> list:
 
 
 def ingest(conn, group_id: str, text: str, message_ids: list = None, now: datetime = None, expiries_fn=None,
-           chain_fn=None, cfg: dict = None) -> dict:
+           chain_fn=None, cfg: dict = None, known_symbols: set = None, spot_fn=None) -> dict:
     _ready(conn)
     cfg = cfg or settings()
     now = now or now_ist()
@@ -60,6 +60,13 @@ def ingest(conn, group_id: str, text: str, message_ids: list = None, now: dateti
     parsed = parser.classify(text, now.date())
     kind = parsed["kind"]
     base = {"group_id": group_id, "kind": kind, "reason": parsed.get("reason"), "parsed": parsed}
+    try:                                    # Arm 2: record the direction call whatever Arm 1 does with it
+        from src.tip_desk import calls
+        base["calls"] = calls.record(conn, group_id, text, kind, known=known_symbols, spot_fn=spot_fn, now=now,
+                                     parsed=parsed)
+    except Exception as exc:
+        print(f"  (tip_desk: direction call not recorded: {type(exc).__name__}: {exc})")
+        base["calls"] = []
 
     def log(event, reason=None, detail=None):
         store.log(conn, event, group_id, kind=kind, reason=reason or parsed.get("reason"), raw_text=text,

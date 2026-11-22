@@ -26,7 +26,7 @@ EXECUTION_JOBS = ("src.master_scheduler", "src.live_bridge", "src.execution.reco
 # ... and the jobs that report on or move the VM's book, or repeat its watchlist cards (#147).
 BOOK_JOBS = ("src.main", "src.suggest", "src.morning_brief", "src.eod_summary", "src.ceo_brief",
              "src.portfolio_report", "src.portfolio_greeks", "src.performance", "src.firm_treasury --rotate",
-             "src.reporting.markdown_ledger")
+             "src.reporting.markdown_ledger", "src.tip_desk.calls")
 NEVER_ON_NODE = NOT_ON_NODE + EXECUTION_JOBS + BOOK_JOBS
 _NEVER = re.compile("|".join(rf"(?<![\w./]){re.escape(x)}(?![\w.])" for x in NEVER_ON_NODE))
 

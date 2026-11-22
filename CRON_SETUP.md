@@ -346,6 +346,14 @@ need it: they run in the API gateway (`alpha-trading`) when the owner taps a but
 re-running `scripts/setup_cron.sh`.
 
 
+## Job 42 — Tipster direction calls graded (added 2026-11-23, decision #190)
+
+`40 20 * * 1-5` → `src.tip_desk.calls --grade --notify` (log `logs/tip_calls.log`). Grades every logged tipster
+call whose 1- or 5-session window has closed on the 19:15 bhavcopy close, and posts one report card when new
+grades land. Read-only on every book; a `BOOK_JOBS` entry, so the node never runs it. By hand:
+`venv/bin/python -m src.tip_desk.calls --report`.
+
+
 ## Job 37 — Event engine 1.1, VM half (added 2026-10-21, decision #156)
 
 `35 9 * * 1-5` → `src.event_engine.executor` (log `logs/event_executor.log`) and `5 11,13,15 * * 1-5` →

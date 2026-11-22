@@ -508,3 +508,88 @@ def test_replay_1117_nifty_tip_books_t1_and_trails_out_before_the_collapse(tmp_p
     assert (b["exit_reason"], b["exit_premium"]) == ("trailing_stop", 53.0)       # stop sat at T1 = 54 after T2
     assert a["pnl_net"] > 0 and b["pnl_net"] > 0
     assert pm.paper_account_summary(conn, ACCOUNT)["realized_pnl"] == round(a["pnl_net"] + b["pnl_net"], 2) > 8000
+
+
+# ------------------------------------------------------------- Arm 2: record + grade the direction calls
+from src.tip_desk import calls  # noqa: E402
+
+KNOWN = {"ANGELONE", "BSE", "MCX", "CDSL", "CGPOWER", "SWIGGY", "RELIANCE"}
+
+
+def _spot(prices):
+    return lambda sym: (prices[sym], "fake") if prices.get(sym) else (None, "no LTP")
+
+
+def test_direction_calls_from_the_owner_samples():
+    ex = lambda t: [(c["symbol"], c["direction"]) for c in calls.extract(t, KNOWN, parser.classify(t))]  # noqa: E731
+    assert ex("BSE, MCX, ANGELONE, CDSL All Flying.") == []                  # past move, not a call
+    assert ex("Angle one BSE\nCE SELL COULD BE DONE") == [("ANGELONE", "bearish"), ("BSE", "bearish")]
+    assert ex("Swiggy put seller can rollover to next month same strike") == [("SWIGGY", "bullish")]
+    assert ex("Nifty TODAYS 25400 ce buy @25-28") == [("NIFTY 50", "bullish")]
+    assert ex("BUY NIFTY 25400 CE SELL 25600 CE @ 40") == [("NIFTY 50", "bullish")]   # spread: not "both ways"
+    assert ex("Booking now") == [] and ex("Place limit orders in CG POWER") == []
+    assert ex("CG Power short below 806") == [("CGPOWER", "bearish")]
+
+
+def test_rejected_tips_still_log_their_direction_with_spot(tmp_path):
+    conn = _db(tmp_path)
+    r = desk.ingest(conn, "g1", "Angle one BSE\nCE SELL COULD BE DONE", now=NOW, cfg=CFG, known_symbols=KNOWN,
+                    spot_fn=_spot({"ANGELONE": 362.4}))
+    assert r["action"] == "reject"
+    rows = conn.execute("SELECT symbol, direction, arm1_kind, spot, spot_source FROM tip_calls ORDER BY id").fetchall()
+    assert rows == [("ANGELONE", "bearish", UNSAFE_REJECT, 362.4, "fake"), ("BSE", "bearish", UNSAFE_REJECT, None,
+                                                                             "no LTP")]
+    desk.ingest(conn, "g1", "Angle one BSE\nCE SELL COULD BE DONE", now=NOW, cfg=CFG, known_symbols=KNOWN,
+                spot_fn=_spot({}))
+    assert conn.execute("SELECT COUNT(*) FROM tip_calls").fetchone()[0] == 2          # once per (group, symbol)
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        conn.execute("DELETE FROM tip_calls")
+
+
+def test_grading_1d_5d_against_direction(tmp_path):
+    conn = _db(tmp_path)
+    calls.ensure_schema(conn)
+    paste = datetime(2026, 11, 17, 12, 58, tzinfo=IST)
+    calls.record(conn, "g1", "Angle one BSE\nCE SELL COULD BE DONE", UNSAFE_REJECT, known=KNOWN,
+                 spot_fn=_spot({"ANGELONE": 362.4}), now=paste)
+    calls.record(conn, "g2", "Swiggy put seller can rollover", UNSAFE_REJECT, known=KNOWN, spot_fn=_spot({}),
+                 now=paste)
+    days = ["2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-23", "2026-11-24"]
+    series = {"ANGELONE": [350.2, 345.0, 340.0, 338.0, 336.0, 333.0], "BSE": [3857, 3756, 3800, 3790, 3810, 3700],
+              "SWIGGY": [400, 404, 398, 401, 410, 420]}
+    closes_fn = lambda s: list(zip(days, series[s]))                                              # noqa: E731
+    first = calls.grade(conn, closes_fn=closes_fn, now=datetime(2026, 11, 20, 20, 40, tzinfo=IST))
+    assert {(g["call_id"], g["horizon"]) for g in first} == {(1, 1), (2, 1), (3, 1)}      # 5D not closed yet...
+    g = {(r[0], r[1]): r for r in conn.execute("SELECT call_id, horizon, entry_basis, hit, signed_ret_pct "
+                                               "FROM tip_call_grades")}
+    assert g[(1, 1)][2] == "spot_at_paste" and g[(1, 1)][3] == 1                           # ANGELONE fell: hit
+    assert g[(2, 1)][2] == "paste_day_close" and g[(2, 1)][3] == 1                         # BSE 3857 → 3756
+    assert g[(3, 1)][3] == 1                                                                # SWIGGY bullish, rose
+    later = datetime(2026, 11, 24, 20, 40, tzinfo=IST)
+    calls.grade(conn, closes_fn=closes_fn, now=later)
+    assert conn.execute("SELECT COUNT(*) FROM tip_call_grades WHERE horizon = 5").fetchone()[0] == 3
+    assert calls.grade(conn, closes_fn=closes_fn, now=later) == []                         # idempotent
+    rep = calls.report(conn)
+    assert rep["1D"]["n"] == 3 and rep["1D"]["hit_rate"] == 1.0 and rep["1D"]["not_arm1"]["n"] == 3
+    assert rep["1D"]["bearish"] == 2 and rep["1D"]["base_rate_rose"] == round(1 / 3, 3)
+    assert "too few to call it edge" in calls.report_text(rep)
+
+
+def test_grade_waits_for_the_horizon_and_never_invents_an_entry():
+    call = {"id": 1, "ts": "2026-11-20T10:00:00+05:30", "direction": "bullish", "spot": None}
+    assert calls.grade_one(call, [("2026-11-20", 100.0)], 1) is None                       # no session after yet
+    assert calls.grade_one(call, [("2026-11-23", 101.0)], 1) is None                       # no paste-day close
+    hit = calls.grade_one(dict(call, spot=100.0), [("2026-11-23", 99.0)], 1)
+    assert hit["hit"] == 0 and hit["signed_ret_pct"] == -1.0
+
+
+def test_bot_joins_a_direction_split_over_two_chatter_lines():
+    buf = TipBuffer(120)
+    buf.add("m1", "Angel One looking weak", now=0)
+    g = buf.add("m2", "PE buy can be done", now=10)
+    assert g["parsed"]["kind"] in IGNORED_KINDS
+    assert tip_bot.plan_ingest(g, "PE buy can be done")["joined"] is True
+
+
+def test_call_grader_never_runs_on_the_node():
+    assert "src.tip_desk.calls" in node_role.BOOK_JOBS

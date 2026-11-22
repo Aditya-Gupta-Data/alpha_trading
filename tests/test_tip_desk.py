@@ -487,3 +487,24 @@ def test_hourly_orphan_reconcile_leaves_isolated_locks_alone(tmp_path, monkeypat
     assert out == {}
     assert pm.paper_locked_margin(conn, pm.ACCOUNT_PAPER_EVENTS) == 1000.0
     assert pm.paper_locked_margin(conn, ACCOUNT) == 1000.0
+
+
+def test_replay_1117_nifty_tip_books_t1_and_trails_out_before_the_collapse(tmp_path):
+    """The 11-17 path as reported by the deploy session from Dhan minute bars (not re-verified here): entry
+    ~27, T1 54 at 13:50, T2 78 at 13:55, peak 97.65 at 14:09, T3 110 never, then down to 5 by 15:26."""
+    conn = _db(tmp_path)
+    day = datetime(2026, 11, 17, 13, 23, tzinfo=IST)
+    exp_fn, chain_fn, state = _fakes({(25400, "CE"): (26.4, 27.0, 26.8)}, expiries=("2026-11-17", "2026-11-24"))
+    r = desk.ingest(conn, "m1", "Nifty TODAYS 25400 ce buy @25-28\nSl 5 tgt 54 78 110", now=day,
+                    expiries_fn=exp_fn, chain_fn=chain_fn, cfg=CFG)
+    desk.confirm(conn, r["card_id"], now=day.replace(minute=26), chain_fn=chain_fn, market_open_fn=lambda n: True,
+                 cfg=CFG, notify_fn=_notify)
+    for hhmm, bid in (("13:50", 54.0), ("13:55", 78.0), ("14:09", 97.65), ("14:40", 53.0), ("15:26", 5.0)):
+        state["chain"] = _chain({(25400, "CE"): (bid, bid + 0.5, bid + 0.2)})
+        h, m = map(int, hhmm.split(":"))
+        manager.tick(conn, now=day.replace(hour=h, minute=m), chain_fn=chain_fn, cfg=CFG, notify_fn=_notify)
+    a, b = store.position(conn, "tip:m1:A"), store.position(conn, "tip:m1:B")
+    assert (a["exit_reason"], a["exit_premium"]) == ("t1_booked", 54.0)
+    assert (b["exit_reason"], b["exit_premium"]) == ("trailing_stop", 53.0)       # stop sat at T1 = 54 after T2
+    assert a["pnl_net"] > 0 and b["pnl_net"] > 0
+    assert pm.paper_account_summary(conn, ACCOUNT)["realized_pnl"] == round(a["pnl_net"] + b["pnl_net"], 2) > 8000

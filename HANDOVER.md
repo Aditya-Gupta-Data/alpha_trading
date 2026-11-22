@@ -43,6 +43,12 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-22 (Sun, evening) — guest login for the Mini PC (branch `ccr-c531c968-ocq32j`, owner not yet run)
+
+- **What:** the owner wants a collaborator (Hega) to run his own project on the Mini PC's spare compute without disturbing alpha trading. Added `scripts/guest_user_setup.sh` (MANUAL OFFLINE TOOL): a separate `hega` Linux user, no sudo/docker/gpu, password login for him only, 30 GB loop-file home, low-priority CPU/RAM/IO caps, Ollama port blocked, owner home 750 / `.env` 600. No cron line, no repo or `data/` change; the VM remains the only execution node (#146).
+- **State:** NOT run anywhere yet. The owner's Mini PC web terminal accepts typing only, so the owner fetches it from this branch (`git fetch origin ccr-c531c968-ocq32j && git show FETCH_HEAD:scripts/guest_user_setup.sh > /tmp/g.sh && bash /tmp/g.sh`). The script was syntax-checked only; its output CHECK block is the proof. Unverified: whether Tailscale SSH (on, per HOME_NODE_SETUP) accepts a shared-in user's password login on port 22.
+- **Next:** owner runs it, shares `minipc1` with Hega in Tailscale admin, gives him the password privately. Verify cron slots (07:30, 12:30, 19:20, 21:00) still fire while he runs jobs: `python3 scripts/node_trial_report.py`.
+
 ## 2026-11-22 (Sun, afternoon) — owner rulings, halts cleared, two read-only studies; Sonnet lane briefed (branch `fix/data-plan-alert-issue59`, not yet built)
 
 - **Halts (owner ruling, told the re-latch consequence first):** `--reset-halt` run on the VM 11-22 (backup `data/brain_map.db.bak-20261122-halt-clear`). PAPER_10L cleared at 5.73% realized → entries live from Mon. PAPER_2L cleared and **re-latched at once** (12.02% realized). ROT and LIVE had **never latched** (the 11-06 "expect 10L/ROT/LIVE to latch 11-09" forecast came true for 10L only). **Expect Mon 11-23 ~09:30 latches** once two fresh, fully priced readings exist: intrinsic on the 11-20 closes puts PAPER_10L ~13%, ROT ~15%, LIVE ~14% under their peaks.

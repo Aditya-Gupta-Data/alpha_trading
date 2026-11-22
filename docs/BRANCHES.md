@@ -24,15 +24,15 @@ listed at the bottom.
 
 <!-- BEGIN AUTO: scripts/branch_report.py -->
 
-## Snapshot 2026-11-06 (compared against `origin/main` at d17d6cc 2026-11-06)
+## Snapshot 2026-11-23 (compared against `origin/main` at 49ce242 2026-11-22)
 
-**6 branch(es) hold work not in main.** STALE = no commit for over 30 days: probably abandoned or superseded; read it before merging or deleting.
+**9 branch(es) hold work not in main.** STALE = no commit for over 30 days: probably abandoned or superseded; read it before merging or deleting.
 
 ### `claude/adoring-rubin-do2j66` — ACTIVE
 
 - **Where:** local
-- **Last commit:** 2026-10-28 by mahakagrawal963-hub (9 days ago)
-- **Not in main:** 1 commit(s); main is 174 commits ahead of this branch
+- **Last commit:** 2026-10-28 by mahakagrawal963-hub (26 days ago)
+- **Not in main:** 1 commit(s); main is 185 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -42,11 +42,27 @@ listed at the bottom.
 
     PROP_ROADMAP.md | 18 +++++++++++++++++-
 
+### `feature/direction-backtest` — ACTIVE
+
+- **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtdir`
+- **Last commit:** 2026-11-06 by mahakagrawal963-hub (17 days ago)
+- **Not in main:** 1 commit(s); main is 10 commits ahead of this branch
+
+**Commits not in main (oldest first):**
+
+- `fc4de8f` 2026-11-06 — feat(research): direction backtest of the desk's market_view — next-close entry, 5/10/20 sessions, sign-permutation placebo (branch)
+
+**Files changed vs. where it left main (3 files changed, 197 insertions(+)):**
+
+    MODULES.md                         |   1 +
+    src/research/direction_backtest.py | 148 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    tests/test_direction_backtest.py   |  48 +++++++++++++++++++
+
 ### `feature/graphrag-altdata-wiring` — ACTIVE
 
 - **Where:** local, origin; checked out at `/Users/adityagupta/Documents/Claude/alpha_trading`
-- **Last commit:** 2026-11-06 by mahakagrawal963-hub (0 days ago)
-- **Not in main:** 1 commit(s); main is 45 commits ahead of this branch
+- **Last commit:** 2026-11-06 by mahakagrawal963-hub (17 days ago)
+- **Not in main:** 1 commit(s); main is 56 commits ahead of this branch
 - **⚠️ Decision number clash #177:** the branch uses it for "15 MORE NEWS FEEDS FOR THE GRAPHRAG SHADOW ONLY; SHADOW CAP 300 → 600 (owner, 2026-11-06)."; main already uses it for "ALTDATA EDGE-CLASS PROVING COURT; PROMOTION IS A PERSON'S COMMAND (architect directive, 2026-11-03).". Renumber before merging.
 
 **Commits not in main (oldest first):**
@@ -66,27 +82,54 @@ listed at the bottom.
 ### `feature/graphrag-filings-backtest` — ACTIVE
 
 - **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtbt`
-- **Last commit:** 2026-11-06 by mahakagrawal963-hub (0 days ago)
-- **Not in main:** 3 commit(s); main is 1 commits ahead of this branch
+- **Last commit:** 2026-11-07 by mahakagrawal963-hub (16 days ago)
+- **Not in main:** 5 commit(s); main is 12 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
 - `c249507` 2026-11-06 — feat(backtest): GraphRAG filings backtest tool — NSE order/M&A text, laptop LLM, separate graph, #185 court (branch only)
 - `e1b1813` 2026-11-06 — fix(backtest): drop takeover-code / LODR paperwork that tripped the acquisition keyword (7,536 -> 2,506 filings for 2025)
 - `2ccb89f` 2026-11-06 — feat(backtest): FILER_ORDER / FILER_MNA classes — grade the announcing company itself, apart from the graph classes
+- `d2eb4bc` 2026-11-07 — feat(backtest): laptop runner takes a 5-min break every 55 min and waits when the ACPI sensor is hot
+- `f235971` 2026-11-07 — chore(backtest): laptop runner — heat guard only, no timed breaks
 
-**Files changed vs. where it left main (4 files changed, 343 insertions(+)):**
+**Files changed vs. where it left main (4 files changed, 348 insertions(+)):**
 
     MODULES.md                          |   1 +
     scripts/backtest_filings.py         | 217 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    scripts/backtest_filings_runner.ps1 |  29 ++++++++
+    scripts/backtest_filings_runner.ps1 |  34 +++++++++
     tests/test_backtest_filings.py      |  96 +++++++++++++++++++++++++
+
+### `feature/option-pnl-sim` — ACTIVE
+
+- **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtopt`
+- **Last commit:** 2026-11-07 by mahakagrawal963-hub (16 days ago)
+- **Not in main:** 6 commit(s); main is 10 commits ahead of this branch
+
+**Commits not in main (oldest first):**
+
+- `fc4de8f` 2026-11-06 — feat(research): direction backtest of the desk's market_view — next-close entry, 5/10/20 sessions, sign-permutation placebo (branch)
+- `cfeab65` 2026-11-06 — feat(backtest): historical NSE F&O UDiFF backfill for the desk's underlyings (branch)
+- `05d06ed` 2026-11-06 — docs(modules): backfill_fo_history row
+- `597c3dd` 2026-11-06 — feat(research): option P&L backtest on real NSE option closes — live proposal logic, today's exit rules, three modes (branch)
+- `731e60c` 2026-11-06 — fix(research): sim chain lists every strike (untraded = no price) and takes the live Issue 52 expiry fallback
+- `31fd596` 2026-11-07 — fix(research): refuse implausible close-price books (reward:risk > 9); positions open at data end are not scored
+
+**Files changed vs. where it left main (7 files changed, 749 insertions(+)):**
+
+    MODULES.md                         |   3 +
+    scripts/backfill_fo_history.py     |  88 +++++++++++++++++
+    src/research/direction_backtest.py | 148 +++++++++++++++++++++++++++++
+    src/research/option_pnl_sim.py     | 292 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    tests/test_backfill_fo_history.py  |  57 +++++++++++
+    tests/test_direction_backtest.py   |  48 ++++++++++
+    tests/test_option_pnl_sim.py       | 113 ++++++++++++++++++++++
 
 ### `ccr-205cd70d-ntl0gx` — ACTIVE
 
 - **Where:** origin
-- **Last commit:** 2026-11-02 by Claude (4 days ago)
-- **Not in main:** 1 commit(s); main is 59 commits ahead of this branch
+- **Last commit:** 2026-11-02 by Claude (21 days ago)
+- **Not in main:** 1 commit(s); main is 70 commits ahead of this branch
 - **⚠️ Decision number clash #176:** the branch uses it for "STOCK OPTIONS ARE COLLARED AT 33% OF THE ACTIVE OPTIONS BUDGET; INDEX OPTIONS AND THE SHADOW LEARNER ARE UNTOUCHED (owner, 2026-11-02)."; main already uses it for "CORPORATE RISK VETO TRIAGES THE NSE LABEL FIRST: DETERMINISTIC TABLE, NOT AN LLM (owner, 2026-11-02; recorded 2026-11-03).". Renumber before merging.
 
 **Commits not in main (oldest first):**
@@ -114,11 +157,31 @@ listed at the bottom.
     src/proposal_ledger.py          |   3 +
     tests/test_equity_option_cap.py | 176 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+### `ccr-c531c968-ocq32j` — ACTIVE
+
+- **Where:** origin
+- **Last commit:** 2026-11-22 by Claude (1 days ago)
+- **Not in main:** 3 commit(s); main is 5 commits ahead of this branch
+
+**Commits not in main (oldest first):**
+
+- `1e58771` 2026-11-22 — feat(node): guest_user_setup.sh — capped, secret-blind guest login on the Mini PC
+- `056e5f4` 2026-11-22 — fix(node): guest_user_setup.sh accepts a root login via OWNER_USER
+- `a9dd3d2` 2026-11-22 — feat(node): guest_web_terminal.sh — login-protected browser terminal for the guest user
+
+**Files changed vs. where it left main (5 files changed, 170 insertions(+)):**
+
+    HANDOVER.md                   |  7 +++++
+    MODULES.md                    |  2 ++
+    docs/BRANCHES.md              |  1 +
+    scripts/guest_user_setup.sh   | 88 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    scripts/guest_web_terminal.sh | 72 +++++++++++++++++++++++++++++++++++++++++++++++++++
+
 ### `claude/back-after-long-1cyewz` — STALE
 
 - **Where:** origin
-- **Last commit:** 2026-09-09 by Claude (58 days ago)
-- **Not in main:** 2 commit(s); main is 439 commits ahead of this branch
+- **Last commit:** 2026-09-09 by Claude (75 days ago)
+- **Not in main:** 2 commit(s); main is 450 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -139,8 +202,8 @@ listed at the bottom.
 ### `claude/hello-d9m45n` — STALE
 
 - **Where:** origin
-- **Last commit:** 2026-07-22 by Claude (107 days ago)
-- **Not in main:** 9 commit(s); main is 606 commits ahead of this branch
+- **Last commit:** 2026-07-22 by Claude (124 days ago)
+- **Not in main:** 9 commit(s); main is 617 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -254,12 +317,12 @@ listed at the bottom.
   - `scripts/update_graph_altdata.py` (M)
   - `src/analysis/altdata_graph.py` (M)
   - `tests/test_altdata_graph.py` (M)
-- `/Users/adityagupta/Documents/Claude/alpha_trading/.claude/worktrees/hotfix-1106` on `main`: 1 uncommitted file(s)
+- `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/523cb9e2-9fb7-4f04-aaed-48a1518653e1/scratchpad/wt` on `(detached)`: 1 uncommitted file(s)
   - `PROJECT_TIMELINE.md` (M)
 
 ## Branches with nothing left to merge
 
-`claude/blissful-pascal-73dd54`, `claude/diag-fixes-1016`, `claude/earnings-s1-s3`, `claude/gex-seam`, `claude/mobile-hello-7nrjqn`, `claude/sharp-kalam-d5aaee`, `claude/test-coverage-analysis-o9bf3n`, `claude/trading-discord-message-tjdakj`, `claude/upbeat-hamilton-haw8tp`, `claude/vigilant-feynman-i2kz45`, `docs/notebooklm-autosync`, `docs/notebooklm-docs-only`, `docs/notebooklm-freshness`, `docs/refresh-2026-11-06`, `feature/altdata-expansion`, `feature/altdata-fleet`, `feature/altdata-live-fixes`, `feature/bucket-migration`, `feature/cross-asset-alpha`, `feature/dept5-proving-court`, `feature/deterministic-risk-triage`, `feature/gex-vex-cex`, `feature/graph-patch-and-rbi`, `feature/m4-bucket-isolation`, `feature/mcx-contract-roller`, `feature/notebookllm-sync`, `feature/oms-recon-daemon`, `feature/semantic-transcript-router`, `fix/day1-audit-findings`, `phase1-graphrag`  
+`claude/blissful-pascal-73dd54`, `claude/diag-fixes-1016`, `claude/earnings-s1-s3`, `claude/gex-seam`, `claude/mobile-hello-7nrjqn`, `claude/sharp-kalam-d5aaee`, `claude/test-coverage-analysis-o9bf3n`, `claude/trading-discord-message-tjdakj`, `claude/upbeat-hamilton-haw8tp`, `claude/vigilant-feynman-i2kz45`, `docs/notebooklm-autosync`, `docs/notebooklm-docs-only`, `docs/notebooklm-freshness`, `docs/refresh-2026-11-06`, `feature/altdata-expansion`, `feature/altdata-fleet`, `feature/altdata-live-fixes`, `feature/bucket-migration`, `feature/cross-asset-alpha`, `feature/dept5-proving-court`, `feature/deterministic-risk-triage`, `feature/gex-vex-cex`, `feature/graph-patch-and-rbi`, `feature/m4-bucket-isolation`, `feature/mcx-contract-roller`, `feature/notebookllm-sync`, `feature/oms-recon-daemon`, `feature/semantic-transcript-router`, `fix/data-plan-alert-issue59`, `fix/day1-audit-findings`, `phase1-graphrag`  
 Everything on these is already in main; they are safe to delete once nobody is using them.
 
 <!-- END AUTO -->

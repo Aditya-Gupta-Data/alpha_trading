@@ -235,6 +235,11 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
+### 2026-11-23 · 1 commits · 1 files touched
+
+- `b991c9a` docs(handover): 11-23 pre-open — Issue 59+60 fixes deployed (VM 49ce242), data-gap thread closed
+
+
 ### 2026-11-06 · 16 commits · 59 files touched
 
 - `d17d6cc` feat(notebooklm): dated file headers, stale warnings, current-state preface; drop archive_v0

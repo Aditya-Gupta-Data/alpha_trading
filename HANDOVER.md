@@ -43,6 +43,17 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-23 (Mon, 01:30 IST) — Issue 59 + 60 fixes DEPLOYED before the open (VM `49ce242`); data-gap thread closed
+
+- **Deployed:** `fix/data-plan-alert-issue59` fast-forwarded onto `main` and pulled on the VM (`git merge --ff-only`, no restart, no cron change). Full Mac suite on `49ce242`: 3,549 passed. Trading-path code unchanged; the pull also brought the 11-06 dashboard + Mini PC GraphRAG shadow commits (#183–#186), which run nowhere on the VM's execution path.
+  - Issue 60: DH-902 / DATA BLIND reds now page straight to Discord past the 5/day budget; the 20:30 ops sweep reads Dhan `/v2/profile` and pages red if the plan is not Active, ⚠️ once a day from 5 days before `dataValidity`. No @mention (owner ruling 11-22).
+  - Issue 59: the SYSTEM PAUSED card and banner now quote the drawdown that latched (realized vs true-equity) and when.
+- **Verified on the VM 01:30:** `dataPlan: Active`, `dataValidity: 2026-12-23`, `plan_alarm` = none; `alpha-trading` service active; 80 cron lines. Halts: PAPER_2L latched (12.0%, 11-22 12:12), PAPER_10L / ROT / LIVE / firm clear.
+- **Expect, not bugs:** tonight's 20:30 ops card may still page 🔴 AUTH for the blackout's DH-902 lines inside its lookback window (139 on 11-22); it should drop once the window passes 11-20. Mon ~09:30 halt latches on 10L (~13%), ROT (~15%), LIVE (~14%) once two fresh priced readings exist — the card will now show those true-equity figures.
+- **First thing Mon 11-23 (after 09:30):** confirm the 31 rows expiring 11-23 settle on `last_close_on_or_before_expiry` (not max loss), `last_mark_ts` moves past 11-11, and the 08:05 / halt cards read the latch figure.
+- **Owner note 11-23:** the owner said real-money trading starts on their side from a strategy received by message (someone else's calls, executed by the owner). That is outside this repo: the system stays paper-only (RULE 7), no broker/order path, nothing here takes or sizes those trades.
+- **Still open:** Issues 26–28 (older), 2027 NSE holiday calendar PROVISIONAL, next Dhan renewal 2026-12-23 on auto-pay (keep the Dhan balance funded).
+
 ## 2026-11-22 (Sun, afternoon) — owner rulings, halts cleared, two read-only studies; Sonnet lane briefed (branch `fix/data-plan-alert-issue59`, not yet built)
 
 - **Halts (owner ruling, told the re-latch consequence first):** `--reset-halt` run on the VM 11-22 (backup `data/brain_map.db.bak-20261122-halt-clear`). PAPER_10L cleared at 5.73% realized → entries live from Mon. PAPER_2L cleared and **re-latched at once** (12.02% realized). ROT and LIVE had **never latched** (the 11-06 "expect 10L/ROT/LIVE to latch 11-09" forecast came true for 10L only). **Expect Mon 11-23 ~09:30 latches** once two fresh, fully priced readings exist: intrinsic on the 11-20 closes puts PAPER_10L ~13%, ROT ~15%, LIVE ~14% under their peaks.

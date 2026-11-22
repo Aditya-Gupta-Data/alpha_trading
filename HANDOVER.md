@@ -43,6 +43,11 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-23 (Mon, ~02:20 IST) — correction: the owner will NOT trade by hand; asks for the system to place real orders — NOT BUILT
+
+- The owner clarified that the real-money trades are not punched by hand: they want alpha_trading itself to place them (the strategy comes from someone else's message). **Nothing was built.** Rule 7 stands: no order path in `src/`; the VM places no real orders today. Agent pushback given: an untested live order path cannot be built and switched on before the 09:15 open after a 9-day data blackout; if wanted, it is its own decision (Dept 5) with its own gates.
+- The ~02:00 block below says the owner trades by hand — that premise is withdrawn. #188 (recon files every Dhan row as the owner's) is still exact while the system never orders; it must become a ticket-tag match before any order path goes live.
+
 ## 2026-11-23 (Mon, ~02:00 IST) — no paper freezes (#187); owner's real Dhan trades filed apart (#188); DEPLOYED (VM `8973ff7`)
 
 - **#187 (owner: "we do not need this freeze in paper trading, it is for learning"):** the 10% drawdown no longer latches or blocks any paper book. Past the line, one `ruin_line_crossed` event per account per IST day is written instead (record kept for a later "would stopping have helped?" study). The latch itself is unchanged: a recon divergence or Discord `/halt` still blocks; the equity desk's own latch and the 3% daily breakers are untouched. PAPER_2L's 11-22 drawdown latch cleared on deploy (why `#187`). Verified on the VM: no book halted; first `ruin_line_crossed` row = PAPER_2L 12.02%.

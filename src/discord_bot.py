@@ -209,7 +209,7 @@ def _bridge_base_url() -> str:
     return (os.environ.get("BRIDGE_BASE_URL") or BRIDGE_DEFAULT_URL).rstrip("/")
 
 
-def _bridge_call(method: str, path: str, payload: dict = None) -> tuple:
+def _bridge_call(method: str, path: str, payload: dict = None, timeout: float = None) -> tuple:
     """One authenticated gateway call -> (http_status, parsed_json_body).
     Never raises for HTTP error statuses (401/404/409 are meaningful
     answers here); connection-level failures do raise, and callers report
@@ -223,7 +223,7 @@ def _bridge_call(method: str, path: str, payload: dict = None) -> tuple:
     )
     ctx = _SSL_CTX if base.startswith("https") else None
     try:
-        with urllib.request.urlopen(req, timeout=BRIDGE_TIMEOUT, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or BRIDGE_TIMEOUT, context=ctx) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
         try:

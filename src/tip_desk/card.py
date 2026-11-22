@@ -19,9 +19,20 @@ def contract(res: dict, legs=None) -> str:
     return f"{res.get('underlying')} {c} · expiry {res.get('expiry')}"
 
 
+TRADING_SYMBOLS = {"NIFTY 50": "NIFTY", "NIFTY BANK": "BANKNIFTY", "NIFTY FIN SERVICE": "FINNIFTY",
+                   "NIFTY MID SELECT": "MIDCPNIFTY"}
+
+
+def trading_symbol(underlying: str) -> str:
+    """The name the Dhan app searches by: NIFTY, BANKNIFTY, RELIANCE — not our internal keys."""
+    u = str(underlying or "")
+    return TRADING_SYMBOLS.get(u, u.removesuffix(".NS"))
+
+
 def order_line(res: dict, lots: int) -> str:
     qty = int(lots) * int(res.get("lot_size") or 0)
-    parts = [f"{l['side']} {res.get('underlying')} {float(l['strike']):g}{l['option_type']} {res.get('expiry')} "
+    parts = [f"{l['side']} {trading_symbol(res.get('underlying'))} {float(l['strike']):g}{l['option_type']} "
+             f"{res.get('expiry')} "
              f"qty {qty} LIMIT {float(l['price']):g}" for l in res.get("legs") or []]
     return " + ".join(parts)
 
@@ -76,7 +87,8 @@ def refusal_text(reply: dict) -> str:
 
 
 def unsafe_text(reply: dict) -> str:
-    return f"⛔ **UNSAFE — not traded.** {reply.get('reason')}. Logged for the tipster's record."
+    why = str(reply.get("reason") or "").removeprefix("unsafe: ")
+    return f"⛔ **UNSAFE — not traded:** {why}. Logged for the tipster's record."
 
 
 def exit_lines(positions: list) -> list:

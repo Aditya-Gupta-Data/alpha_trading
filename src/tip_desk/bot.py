@@ -6,6 +6,7 @@ only way it changes anything is an authenticated gateway call. Buttons: [Confirm
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 
@@ -20,6 +21,7 @@ _BUFFER = {"buf": None}
 CARD_MESSAGES = {}          # group_id -> the card's Discord message (in memory: edits only, a restart replies anew)
 TIP_TEMPLATE = r"tip:(?P<action>confirm|cancel|exit):(?P<ref>.+)"
 STATUS_RETIRES = {"cancelled", "confirmed", "expired", "paper_only", "not_found"}
+TIP_TIMEOUT_S = 60      # a card waits on the host-wide Dhan chain lane (3.5 s a call) behind the live session
 
 
 def configure(bridge_call, is_owner) -> None:
@@ -90,7 +92,7 @@ class TipButton(discord.ui.DynamicItem[discord.ui.Button], template=TIP_TEMPLATE
                          "cancel": ("/api/tipdesk/cancel", {"card_id": self.ref}),
                          "exit": ("/api/tipdesk/exit", {"group_id": self.ref})}[self.action]
         try:
-            status, body = await asyncio.to_thread(_HOOKS["bridge_call"], "POST", path, payload)
+            status, body = await asyncio.to_thread(_HOOKS["bridge_call"], "POST", path, payload, TIP_TIMEOUT_S)
         except Exception as e:
             await interaction.followup.send(f"Gateway unreachable: {e}")
             return
@@ -138,9 +140,12 @@ async def handle_message(message: discord.Message) -> None:
         return
     group = buffer().add(message.id, message.content or "", now=time.monotonic())
     req = plan_ingest(group, message.content or "")
+    typing = getattr(getattr(message, "channel", None), "typing", None)
     try:
-        status, body = await asyncio.to_thread(_HOOKS["bridge_call"], "POST", "/api/tipdesk/ingest",
-                                               {k: req[k] for k in ("group_id", "text", "message_ids")})
+        async with (typing() if typing and group["parsed"]["kind"] in TRADE_KINDS else contextlib.nullcontext()):
+            status, body = await asyncio.to_thread(_HOOKS["bridge_call"], "POST", "/api/tipdesk/ingest",
+                                                   {k: req[k] for k in ("group_id", "text", "message_ids")},
+                                                   TIP_TIMEOUT_S)
     except Exception as e:
         await message.reply(f"Tip desk gateway unreachable: {e}")
         return

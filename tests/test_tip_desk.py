@@ -376,7 +376,7 @@ def test_card_text_carries_the_order_details_and_no_live_path(tmp_path):
     r = desk.ingest(conn, "m1", "Nifty TODAYS 25400 ce buy @25-28\nSl 5 tgt 54 78 110", now=NOW,
                     expiries_fn=exp_fn, chain_fn=chain_fn, cfg=CFG)
     text = "\n".join(card_mod.trade_card(r["card"])["lines"])
-    assert "BUY NIFTY 50 25400CE 2026-11-25 qty 325 LIMIT 28" in text
+    assert "BUY NIFTY 25400CE 2026-11-25 qty 325 LIMIT 28" in text
     assert "book 2 lot(s) at T1" in text and "Paper only" in text
 
 
@@ -405,7 +405,8 @@ class _Msg:
 def _run_bot(messages, answers):
     calls = []
 
-    def bridge(method, path, payload):
+    def bridge(method, path, payload, timeout=None):
+        assert timeout == tip_bot.TIP_TIMEOUT_S
         calls.append((path, payload))
         return 200, answers(path, payload)
     tip_bot.configure(bridge_call=bridge, is_owner=lambda uid: uid == 42)

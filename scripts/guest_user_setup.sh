@@ -12,14 +12,17 @@
 # CPU/RAM/IO/task caps with LOW priority (alpha trading wins under contention), and a block on
 # the local Ollama port. The owner's home becomes mode 750 and .env 600, so the guest cannot
 # read tokens or keys. It touches nothing in the repo, `data/`, `logs/` or the crontab.
+# Logged in as root (web terminal)? Name the owner: OWNER_USER=<user> bash scripts/guest_user_setup.sh
 # Safe to re-run. It refuses the VM and macOS (the VM is the only execution node, #146).
 # ==============================================================================
 G="${1:-hega}"
 [[ "$G" =~ ^[a-z][a-z0-9_-]{1,30}$ ]] || { echo "bad user name: $G"; exit 1; }
 [ "$(uname -s)" = "Linux" ] || { echo "Linux only."; exit 1; }
 case "$(hostname)" in alpha-trading-vm*) echo "REFUSED: this is the VM."; exit 1 ;; esac
-OWNER="$(id -un)"; [ "$OWNER" = "root" ] && OWNER="${SUDO_USER:-}"
-[ -n "$OWNER" ] && [ "$OWNER" != "$G" ] || { echo "run as the owner's normal user (not root)."; exit 1; }
+OWNER="$(id -un)"
+# logged in as root (e.g. a web terminal)? name the owner's user: OWNER_USER=alpha bash g.sh
+[ "$OWNER" = "root" ] && OWNER="${OWNER_USER:-${SUDO_USER:-}}"
+[ -n "$OWNER" ] && [ "$OWNER" != "$G" ] && [ -d "/home/$OWNER" ] || { echo "who owns the repo? run: OWNER_USER=<that user> bash $0 $G   (see: ls /home)"; exit 1; }
 IMG="/var/${G}.img"; SIZE_GB=30
 sudo -v || exit 1
 

@@ -43,6 +43,14 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-23 (Mon, ~02:00 IST) — no paper freezes (#187); owner's real Dhan trades filed apart (#188); DEPLOYED (VM `8973ff7`)
+
+- **#187 (owner: "we do not need this freeze in paper trading, it is for learning"):** the 10% drawdown no longer latches or blocks any paper book. Past the line, one `ruin_line_crossed` event per account per IST day is written instead (record kept for a later "would stopping have helped?" study). The latch itself is unchanged: a recon divergence or Discord `/halt` still blocks; the equity desk's own latch and the 3% daily breakers are untouched. PAPER_2L's 11-22 drawdown latch cleared on deploy (why `#187`). Verified on the VM: no book halted; first `ruin_line_crossed` row = PAPER_2L 12.02%.
+- **The 09:30 latches forecast in the block below will NOT happen** — the books trade on.
+- **#188 (owner: "distinguish, can't have this confusion at all"):** the owner trades real money by hand in the same Dhan account from 11-23, on a strategy received from someone else (not the system's decisions). The recon (every 5 min in session + 15:42) now files every Dhan position/holding/order as `👤 OWNER TRADE (outside the system)`: verdict parity, no card, no halt. Rule 7 makes that exact (the system never orders). Nothing else in `src/` reads the Dhan account's own positions/funds, so paper P&L, margin and sizing never see those trades. Verified on the VM: `verdict PARITY · owner trades 0`. If an order path is ever built, #188 must become a ticket-tag match first.
+- **Dhan funds read 01:59: available Rs.1,411.18** — the 12-23 data-plan auto-pay and any real trades need balance there (owner's matter).
+- Full suite 3,560 passed on `8973ff7`. The old enforced-halt and strict-recon tests still run with the switches flipped back (`RUIN_HALT_BLOCKS_ENTRIES`, `OWNER_TRADES_AT_BROKER`).
+
 ## 2026-11-23 (Mon, 01:30 IST) — Issue 59 + 60 fixes DEPLOYED before the open (VM `49ce242`); data-gap thread closed
 
 - **Deployed:** `fix/data-plan-alert-issue59` fast-forwarded onto `main` and pulled on the VM (`git merge --ff-only`, no restart, no cron change). Full Mac suite on `49ce242`: 3,549 passed. Trading-path code unchanged; the pull also brought the 11-06 dashboard + Mini PC GraphRAG shadow commits (#183–#186), which run nowhere on the VM's execution path.

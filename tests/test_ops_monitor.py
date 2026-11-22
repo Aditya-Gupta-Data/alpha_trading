@@ -517,8 +517,8 @@ def _capture_notify(monkeypatch):
     """Replace the notifier's text door; returns the list of kwargs each send used."""
     sent = []
 
-    async def fake(message, thread_id=None, *, event="text_note", page=False, ping=False):
-        sent.append({"event": event, "page": page, "ping": ping, "text": message})
+    async def fake(message, thread_id=None, *, event="text_note", page=False):
+        sent.append({"event": event, "page": page, "text": message})
         return True
 
     from src import notifier
@@ -532,31 +532,31 @@ def _sweep(tmp, files, plan_fn=lambda: None, now=MONDAY):
                         now=now, staleness_root=tmp, plan_fn=plan_fn)
 
 
-def test_a_dh902_only_night_pages_with_a_ping_instead_of_queueing(monkeypatch):
+def test_a_dh902_only_night_pages_instead_of_queueing(monkeypatch):
     """Issue 60: auth alarms had no 'red' key, so the card said RED but the pager saw none."""
     sent = _capture_notify(monkeypatch)
     monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
     with tempfile.TemporaryDirectory() as tmp:
         _sweep(tmp, {"master_scheduler.log": DH902_LINE + "\n"})
     assert len(sent) == 1
-    assert sent[0]["event"] == "ops_alarm" and sent[0]["page"] is True and sent[0]["ping"] is True
+    assert sent[0]["event"] == "ops_alarm" and sent[0]["page"] is True
     assert "RED alarm" in sent[0]["text"]
 
 
-def test_a_clean_night_spools_and_never_pings(monkeypatch):
+def test_a_clean_night_spools(monkeypatch):
     sent = _capture_notify(monkeypatch)
     monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
     with tempfile.TemporaryDirectory() as tmp:
         _sweep(tmp, {"a.log": "all fine\n"})
-    assert sent[0]["event"] == "ops_card" and sent[0]["page"] is False and sent[0]["ping"] is False
+    assert sent[0]["event"] == "ops_card" and sent[0]["page"] is False
 
 
-def test_a_red_non_data_alarm_pages_without_a_ping(monkeypatch):
+def test_a_red_memory_alarm_pages(monkeypatch):
     sent = _capture_notify(monkeypatch)
     monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 50, "mem_used_pct": 95})
     with tempfile.TemporaryDirectory() as tmp:
         _sweep(tmp, {"a.log": "all fine\n"})
-    assert sent[0]["page"] is True and sent[0]["ping"] is False
+    assert sent[0]["page"] is True
 
 
 def test_plan_alarm_red_when_the_profile_says_not_active():
@@ -605,14 +605,14 @@ def test_plan_alarm_dedupe_fails_open_when_the_state_file_is_unwritable():
     assert om.plan_alarm_once_a_day(alarm, date(2026, 12, 20), Path("/nonexistent-dir/x/plan.json")) == alarm
 
 
-def test_an_expired_plan_pages_and_pings_in_the_sweep(monkeypatch):
+def test_an_expired_plan_pages_in_the_sweep(monkeypatch):
     sent = _capture_notify(monkeypatch)
     monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
     with tempfile.TemporaryDirectory() as tmp:
         out = _sweep(tmp, {"a.log": "fine\n"},
                      plan_fn=lambda: {"dataPlan": "Deactive", "dataValidity": "NA"})
     assert out["alarms"] == ["plan"] and out["red_alarms"] == 1
-    assert sent[0]["page"] is True and sent[0]["ping"] is True
+    assert sent[0]["page"] is True
     assert "DHAN DATA PLAN NOT ACTIVE" in sent[0]["text"]
 
 
@@ -624,7 +624,7 @@ def test_the_expiry_warning_pages_but_is_not_counted_red(monkeypatch):
         out = _sweep(tmp, {"a.log": "fine\n"}, now=datetime(2026, 12, 20, 20, 30),
                      plan_fn=lambda: {"dataPlan": "Active", "dataValidity": "2026-12-23 00:00:00.0"})
     assert out["alarms"] == ["plan_expiring"] and out["red_alarms"] == 0
-    assert sent[0]["page"] is True and sent[0]["ping"] is True and sent[0]["event"] == "ops_alarm"
+    assert sent[0]["page"] is True and sent[0]["event"] == "ops_alarm"
     assert "ends in 3 day(s)" in sent[0]["text"]
 
 
@@ -661,10 +661,9 @@ def test_fetch_data_plan_fails_open_and_is_muzzled_under_pytest():
     assert om.fetch_data_plan(read_fn=boom) is None
 
 
-def test_page_decision_is_pure():
-    assert om.page_decision([]) == (False, False)
-    assert om.page_decision([{"kind": "auth", "red": True}]) == (True, True)
-    assert om.page_decision([{"kind": "low_disk", "red": True}]) == (True, False)
-    assert om.page_decision([{"kind": "zero_capture", "red": False}]) == (False, False)
-    assert om.page_decision([{"kind": "plan_expiring", "red": False, "page": True}]) == (True, True)
-    assert om.is_problem_line('{"error": null} but the upload failed')
+def test_should_page_is_pure():
+    assert om.should_page([]) is False
+    assert om.should_page([{"kind": "auth", "red": True}]) is True
+    assert om.should_page([{"kind": "low_disk", "red": True}]) is True
+    assert om.should_page([{"kind": "zero_capture", "red": False}]) is False
+    assert om.should_page([{"kind": "plan_expiring", "red": False, "page": True}]) is True

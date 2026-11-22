@@ -232,8 +232,6 @@ def auth_alarms(problems: list) -> list:
 # Dhan Data API plan (Issue 60, 2026-11-22): the plan lapsed 11-11 and the
 # DH-902 card (no "red" key then) queued into the digest instead of paging.
 PLAN_WARN_DAYS = 5
-PLAN_ALARM_KINDS = ("plan", "plan_expiring")
-DATA_ALARM_KINDS = ("auth", "zero_capture") + PLAN_ALARM_KINDS     # these ping the owner when they page
 PLAN_STATE_NAME = ".plan_alarm_state.json"
 
 
@@ -314,10 +312,9 @@ def plan_alarm_once_a_day(alarm: dict | None, today: date, state_path: Path) -> 
     return alarm
 
 
-def page_decision(alarms: list) -> tuple:
-    """(page, ping): any red alarm or any alarm marked `page` goes past the Discord budget; a data/plan one also pings."""
-    paging = [a for a in (alarms or []) if a.get("red") or a.get("page")]
-    return bool(paging), any(a.get("kind") in DATA_ALARM_KINDS for a in paging)
+def should_page(alarms: list) -> bool:
+    """Any red alarm, or any alarm marked `page`, goes past the Discord budget."""
+    return any(a.get("red") or a.get("page") for a in (alarms or []))
 
 
 def capture_alarm(blind: dict) -> dict | None:
@@ -804,14 +801,13 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
                       alarms=alarms, designed_blocks=sum(blocks.values()))
     print(card, flush=True)
     if notify_fn is None:
-        red, ping = page_decision(alarms)
+        red = should_page(alarms)
 
         def notify_fn(text):
             import asyncio
             from src.notifier import send_discord_message
             try:                                   # B3: a RED night pages past the budget, a clean night spools
-                return asyncio.run(send_discord_message(text, event="ops_alarm" if red else "ops_card",
-                                                        page=red, ping=ping))
+                return asyncio.run(send_discord_message(text, event="ops_alarm" if red else "ops_card", page=red))
             except Exception as e:
                 print(f"  (ops card notify failed: {e})")
                 return False

@@ -43,7 +43,7 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-11-23 (Mon, evening) — #tip-desk built on branch `feature/discord-tip-desk` (#189); NOT merged, NOT deployed
+## 2026-11-23 (Mon, ~04:20 IST) — #tip-desk (#189) + Arm 2 call grading (#190) + Issue 62 fix MERGED to `main` (owner go); NOT deployed
 
 - **What it is:** the owner pastes a tipster's WhatsApp calls into a private Discord channel; the bot (owner id only) joins split messages for 120 s, a rule parser classifies them, and the gateway posts a card with the live Dhan contract, tip band vs live ask (⚠️ STALE when >10% over), lots sized by total premium, SL/targets and `[Confirm Paper] [Cancel]`. A tap fills on the isolated ₹20,000 `PAPER_TIP_SANDBOX`. "Booking now" lists open tips with `[Exit Now]`. A cron line (#41, 09:14) runs the stop / T1 / trail / 15:15 square-off manager. Code: `src/tip_desk/`; rulings in DECISIONS #189 (no live button, same-day expiry allowed for this book, no daily breaker, SENSEX later, per-tip cap ₹10k default).
 - **Found + fixed on the branch (ledger Issue 62):** the hourly orphan-lock reconcile released every PAPER_EVENTS lock at zero ~30 min after it opened (no journal row by design). VM checked 11-23 by the deploy session: no effect yet — PAPER_EVENTS has never opened a trade (why is unverified). Nothing to repair.

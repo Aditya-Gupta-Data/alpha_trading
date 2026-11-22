@@ -43,13 +43,22 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
-## 2026-11-23 (Mon, ~04:20 IST) — #tip-desk (#189) + Arm 2 call grading (#190) + Issue 62 fix MERGED to `main` (owner go); NOT deployed
+## 2026-11-23 (Mon, 04:22 IST) — #tip-desk (#189) + Arm 2 call grading (#190) + Issue 62 fix DEPLOYED to the VM (`c3601cd`, owner go "now, before open") — but INERT until the owner adds two Discord ids
+
+- **Live now (verified on the VM 04:22):** code `c3601cd` (ff from `8973ff7`); cron 45 → 47 lines (#41 `14 9 * * 1-5 src.tip_desk.manager`, #42 `40 20 * * 1-5 src.tip_desk.calls --grade --notify`; backup `~/user_crontab.bak-20261123-tipdesk`); `alpha-trading`, `alpha-discord-bot`, `cloudflared-tunnel` active; the bot reconnected to the Discord gateway; `/api/tipdesk/open` → `PAPER_TIP_SANDBOX` ₹20,000 free, 0 open; tables `tip_ledger` / `tip_cards` / `tip_positions` created (`tip_calls` appears on the first ingest).
+- **Blocking, owner:** the VM `.env` has NO `AUTHORIZED_DISCORD_USER_ID` and NO `TIP_DESK_CHANNEL_ID`. Without them the bot ignores every tip (fail-closed). The missing owner id ALSO means `/halt` has been refusing everyone (pre-existing, not caused today). Add both lines (Discord → Developer Mode → right-click yourself → Copy User ID; right-click `#tip-desk` → Copy Channel ID), then `sudo systemctl restart alpha-discord-bot`.
+- **Side effects:** the gateway restart restarted `cloudflared-tunnel` (04:22) → the quick-tunnel URL rotated; the 09:10 session posts the new link card. The Mini PC was NOT pulled (nothing there needs it; its replica block already excludes both new jobs once it re-installs).
+- **Tests on the VM:** the scoped set ran 143 passed, 2 failed — `test_node_replica.py::test_the_replica_installer_block` and `::test_the_seed_script_is_read_only_on_the_vm_…` fail on the VM because the node scripts refuse to run on the VM host; the same 2 fail on `8973ff7` (checked in a throwaway worktree), so they are pre-existing VM-only failures, not today's change. Mac full suite 3,605 passed.
+- **Spot at paste time:** `data/darling_ids.json` (built 11-22, 189 ids) has ANGELONE, BSE, CDSL, CGPOWER, MCX; not SWIGGY (its calls grade from the paste day's close).
+- **Watch Mon 11-23:** `logs/tip_desk_manager.log` from 09:14 (should start, find no positions, exit at 15:30); after the ids are in, paste one real tip in market hours and confirm the card; `logs/tip_calls.log` at 20:40.
+
+### Earlier same night — merged to `main` (owner go)
 
 - **What it is:** the owner pastes a tipster's WhatsApp calls into a private Discord channel; the bot (owner id only) joins split messages for 120 s, a rule parser classifies them, and the gateway posts a card with the live Dhan contract, tip band vs live ask (⚠️ STALE when >10% over), lots sized by total premium, SL/targets and `[Confirm Paper] [Cancel]`. A tap fills on the isolated ₹20,000 `PAPER_TIP_SANDBOX`. "Booking now" lists open tips with `[Exit Now]`. A cron line (#41, 09:14) runs the stop / T1 / trail / 15:15 square-off manager. Code: `src/tip_desk/`; rulings in DECISIONS #189 (no live button, same-day expiry allowed for this book, no daily breaker, SENSEX later, per-tip cap ₹10k default).
 - **Found + fixed on the branch (ledger Issue 62):** the hourly orphan-lock reconcile released every PAPER_EVENTS lock at zero ~30 min after it opened (no journal row by design). VM checked 11-23 by the deploy session: no effect yet — PAPER_EVENTS has never opened a trade (why is unverified). Nothing to repair.
 - **Arm 2, record and grade only (#190, owner 11-23):** every direction the tipster calls — including the tips Arm 1 rejects (naked sells, stock names outside our option list) — is logged in `tip_calls` with paste time, symbol, direction and the spot at paste time; cron #42 (20:40) grades them at 1D / 5D on the bhavcopy close with the base rate beside the hit rate. No execution around his triggers until the record shows edge (n ≥ 20 at least).
 - **11-17 replay (test):** the NIFTY 25400 CE tip under these rules books 2 lots at T1 54 and trails the other 3 out at 53, about +Rs.8.5k (price path reported by the deploy session from Dhan minute bars, not re-verified).
-- **Owner steps to go live (after merging to `main`):**
+- **Owner steps to go live (as written before the deploy; steps 3 is DONE 04:22, 1–2 still needed):**
   1. Discord: create a private channel `#tip-desk`, copy its id (Developer Mode → right-click → Copy Channel ID).
   2. VM `.env`: add `TIP_DESK_CHANNEL_ID=<that id>`; `AUTHORIZED_DISCORD_USER_ID` must already be your id (the `/halt` setting).
   3. VM, after the 15:30 close: `cd ~/alpha_trading && git fetch -q && git merge --ff-only origin/main && bash scripts/setup_cron.sh && sudo systemctl restart alpha-trading alpha-discord-bot` (adds cron #41 and #42).

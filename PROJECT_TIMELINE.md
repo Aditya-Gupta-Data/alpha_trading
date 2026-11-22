@@ -235,8 +235,10 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-11-23 · 1 commits · 1 files touched
+### 2026-11-23 · 3 commits · 19 files touched
 
+- `8089cde` docs(handover): 11-23 ~02:00 — #187 no paper freezes, #188 owner trades filed apart, VM 8973ff7
+- `8973ff7` feat(risk): 10% drawdown line recorded not enforced on paper books (#187); owner's real Dhan trades filed apart by recon (#188)
 - `b991c9a` docs(handover): 11-23 pre-open — Issue 59+60 fixes deployed (VM 49ce242), data-gap thread closed
 
 

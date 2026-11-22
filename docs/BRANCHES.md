@@ -24,15 +24,15 @@ listed at the bottom.
 
 <!-- BEGIN AUTO: scripts/branch_report.py -->
 
-## Snapshot 2026-11-23 (compared against `origin/main` at 49ce242 2026-11-22)
+## Snapshot 2026-11-23 (compared against `origin/main` at 8973ff7 2026-11-23)
 
-**9 branch(es) hold work not in main.** STALE = no commit for over 30 days: probably abandoned or superseded; read it before merging or deleting.
+**10 branch(es) hold work not in main.** STALE = no commit for over 30 days: probably abandoned or superseded; read it before merging or deleting.
 
 ### `claude/adoring-rubin-do2j66` — ACTIVE
 
 - **Where:** local
 - **Last commit:** 2026-10-28 by mahakagrawal963-hub (26 days ago)
-- **Not in main:** 1 commit(s); main is 185 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 188 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -42,11 +42,25 @@ listed at the bottom.
 
     PROP_ROADMAP.md | 18 +++++++++++++++++-
 
+### `feat/paper-halt-advisory` — ACTIVE
+
+- **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/523cb9e2-9fb7-4f04-aaed-48a1518653e1/scratchpad/wt2`
+- **Last commit:** 2026-11-23 by mahakagrawal963-hub (0 days ago)
+- **Not in main:** 1 commit(s); main is 0 commits ahead of this branch
+
+**Commits not in main (oldest first):**
+
+- `8089cde` 2026-11-23 — docs(handover): 11-23 ~02:00 — #187 no paper freezes, #188 owner trades filed apart, VM 8973ff7
+
+**Files changed vs. where it left main (1 file changed, 8 insertions(+)):**
+
+    HANDOVER.md | 8 ++++++++
+
 ### `feature/direction-backtest` — ACTIVE
 
 - **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtdir`
 - **Last commit:** 2026-11-06 by mahakagrawal963-hub (17 days ago)
-- **Not in main:** 1 commit(s); main is 10 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 13 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -62,7 +76,7 @@ listed at the bottom.
 
 - **Where:** local, origin; checked out at `/Users/adityagupta/Documents/Claude/alpha_trading`
 - **Last commit:** 2026-11-06 by mahakagrawal963-hub (17 days ago)
-- **Not in main:** 1 commit(s); main is 56 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 59 commits ahead of this branch
 - **⚠️ Decision number clash #177:** the branch uses it for "15 MORE NEWS FEEDS FOR THE GRAPHRAG SHADOW ONLY; SHADOW CAP 300 → 600 (owner, 2026-11-06)."; main already uses it for "ALTDATA EDGE-CLASS PROVING COURT; PROMOTION IS A PERSON'S COMMAND (architect directive, 2026-11-03).". Renumber before merging.
 
 **Commits not in main (oldest first):**
@@ -83,7 +97,7 @@ listed at the bottom.
 
 - **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtbt`
 - **Last commit:** 2026-11-07 by mahakagrawal963-hub (16 days ago)
-- **Not in main:** 5 commit(s); main is 12 commits ahead of this branch
+- **Not in main:** 5 commit(s); main is 15 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -104,7 +118,7 @@ listed at the bottom.
 
 - **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtopt`
 - **Last commit:** 2026-11-07 by mahakagrawal963-hub (16 days ago)
-- **Not in main:** 6 commit(s); main is 10 commits ahead of this branch
+- **Not in main:** 6 commit(s); main is 13 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -129,7 +143,7 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-11-02 by Claude (21 days ago)
-- **Not in main:** 1 commit(s); main is 70 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 73 commits ahead of this branch
 - **⚠️ Decision number clash #176:** the branch uses it for "STOCK OPTIONS ARE COLLARED AT 33% OF THE ACTIVE OPTIONS BUDGET; INDEX OPTIONS AND THE SHADOW LEARNER ARE UNTOUCHED (owner, 2026-11-02)."; main already uses it for "CORPORATE RISK VETO TRIAGES THE NSE LABEL FIRST: DETERMINISTIC TABLE, NOT AN LLM (owner, 2026-11-02; recorded 2026-11-03).". Renumber before merging.
 
 **Commits not in main (oldest first):**
@@ -161,7 +175,7 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-11-22 by Claude (1 days ago)
-- **Not in main:** 3 commit(s); main is 5 commits ahead of this branch
+- **Not in main:** 3 commit(s); main is 8 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -181,7 +195,7 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-09-09 by Claude (75 days ago)
-- **Not in main:** 2 commit(s); main is 450 commits ahead of this branch
+- **Not in main:** 2 commit(s); main is 453 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -203,7 +217,7 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-07-22 by Claude (124 days ago)
-- **Not in main:** 9 commit(s); main is 617 commits ahead of this branch
+- **Not in main:** 9 commit(s); main is 620 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -317,7 +331,7 @@ listed at the bottom.
   - `scripts/update_graph_altdata.py` (M)
   - `src/analysis/altdata_graph.py` (M)
   - `tests/test_altdata_graph.py` (M)
-- `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/523cb9e2-9fb7-4f04-aaed-48a1518653e1/scratchpad/wt` on `(detached)`: 1 uncommitted file(s)
+- `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/523cb9e2-9fb7-4f04-aaed-48a1518653e1/scratchpad/wt2` on `feat/paper-halt-advisory`: 1 uncommitted file(s)
   - `PROJECT_TIMELINE.md` (M)
 
 ## Branches with nothing left to merge

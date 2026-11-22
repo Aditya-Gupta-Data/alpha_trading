@@ -97,5 +97,17 @@
   ],
   "ratchet_effective_date": "2026-09-24",
   "stale_approval_max_days": 1,
-  "shadow_learner_enabled": true
+  "shadow_learner_enabled": true,
+  "tip_desk": {
+    "enabled": true,
+    "sandbox_capital_rs": 20000,
+    "max_open_premium_rs": 20000,
+    "max_per_tip_rs": 10000,
+    "stale_band_pct": 10,
+    "buffer_seconds": 120,
+    "card_ttl_minutes": 15,
+    "square_off_hhmm": "15:15",
+    "fees_per_order_rs": 20,
+    "poll_seconds": 30
+  }
 }

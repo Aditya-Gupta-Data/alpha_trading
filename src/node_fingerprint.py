@@ -63,7 +63,7 @@ SMALL_TABLES = ("paper_accounts", "treasury_state", "portfolios")      # dumped 
 # Books that live on the VM only and are never replicated to the node (#156: the event engine's
 # auto-executed PAPER_EVENTS). Their rows are left out of every count and dump, so the nightly
 # VM-vs-node reconcile does not call a VM-only book a divergence.
-VM_ONLY_ACCOUNTS = ("PAPER_EVENTS",)
+VM_ONLY_ACCOUNTS = ("PAPER_EVENTS", "PAPER_TIP_SANDBOX")
 _NOT_VM_ONLY = "account_id NOT IN (" + ", ".join("'" + a + "'" for a in VM_ONLY_ACCOUNTS) + ")"
 _DATE_COLS = ("issued_at", "created_at", "ts", "timestamp", "date", "opened_at", "closed_at", "updated_at")
 _LIST_CAP = 500

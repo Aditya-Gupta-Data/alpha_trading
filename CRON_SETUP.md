@@ -336,6 +336,16 @@ systemd service (Streamlit on :8501) and a 03:05 `git pull` of code only.
 `0 22 * * 5` → `src.analysis.weekly_recalibration`. Moved from the Mac's Saturday 10:00 crontab: the No-Orphan pins are now built against the VM's live `logs/equity_shadow_journal.jsonl`. **On the Mac:** `( crontab -l | grep -v src.analysis.weekly_recalibration ) | crontab -`. Install on the VM by re-running `scripts/setup_cron.sh`.
 
 
+## Job 41 — #tip-desk manager (added 2026-11-23, decision #189)
+
+`14 9 * * 1-5` → `src.tip_desk.manager` (log `logs/tip_desk_manager.log`). One process from 09:14 to 15:30 that
+marks every open `PAPER_TIP_SANDBOX` position every 30 s (`tip_desk.poll_seconds`) and applies its stop loss,
+T1/T2/T3 booking and trail, and the 15:15 expiry-day square-off. It exits at once on an NSE holiday, while
+`tip_desk.enabled` is false, or on the analytics node (`node_role.EXECUTION_JOBS`). Cards and confirms do not
+need it: they run in the API gateway (`alpha-trading`) when the owner taps a button. Install on the VM by
+re-running `scripts/setup_cron.sh`.
+
+
 ## Job 37 — Event engine 1.1, VM half (added 2026-10-21, decision #156)
 
 `35 9 * * 1-5` → `src.event_engine.executor` (log `logs/event_executor.log`) and `5 11,13,15 * * 1-5` →

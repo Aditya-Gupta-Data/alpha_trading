@@ -43,6 +43,18 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-23 (Mon, evening) — #tip-desk built on branch `feature/discord-tip-desk` (#189); NOT merged, NOT deployed
+
+- **What it is:** the owner pastes a tipster's WhatsApp calls into a private Discord channel; the bot (owner id only) joins split messages for 120 s, a rule parser classifies them, and the gateway posts a card with the live Dhan contract, tip band vs live ask (⚠️ STALE when >10% over), lots sized by total premium, SL/targets and `[Confirm Paper] [Cancel]`. A tap fills on the isolated ₹20,000 `PAPER_TIP_SANDBOX`. "Booking now" lists open tips with `[Exit Now]`. A cron line (#41, 09:14) runs the stop / T1 / trail / 15:15 square-off manager. Code: `src/tip_desk/`; rulings in DECISIONS #189 (no live button, same-day expiry allowed for this book, no daily breaker, SENSEX later, per-tip cap ₹10k default).
+- **Found + fixed on the branch (ledger Issue 62):** the hourly orphan-lock reconcile released every PAPER_EVENTS lock at zero ~30 min after it opened (no journal row by design). Reproduced on a scratch DB only; **the VM effect is not checked** — the read-only check is in the ledger entry. Past rows not repaired.
+- **Suite:** 3,598 passed (55 s) on the branch.
+- **Owner steps to go live (after merging to `main`):**
+  1. Discord: create a private channel `#tip-desk`, copy its id (Developer Mode → right-click → Copy Channel ID).
+  2. VM `.env`: add `TIP_DESK_CHANNEL_ID=<that id>`; `AUTHORIZED_DISCORD_USER_ID` must already be your id (the `/halt` setting).
+  3. VM: `cd ~/alpha_trading && git fetch -q && git merge --ff-only origin/main && bash scripts/setup_cron.sh && sudo systemctl restart alpha-trading alpha-discord-bot`.
+  4. Test in market hours with one real tip; read `logs/tip_desk_manager.log` after.
+- **Not done / open:** never run against a live Dhan chain or a live Discord server; SENSEX/BANKEX (BSE options) is the next build; the per-tip cap ₹10k was not explicitly ruled (owner's spec sized the whole sandbox into one tip — `tip_desk.max_per_tip_rs` 20000 restores that); the manager is not in `ops_monitor.EXPECTED_JOBS`.
+
 ## 2026-11-23 (Mon, ~02:20 IST) — correction: the owner will NOT trade by hand; asks for the system to place real orders — NOT BUILT
 
 - The owner clarified that the real-money trades are not punched by hand: they want alpha_trading itself to place them (the strategy comes from someone else's message). **Nothing was built.** Rule 7 stands: no order path in `src/`; the VM places no real orders today. Agent pushback given: an untested live order path cannot be built and switched on before the 09:15 open after a 9-day data blackout; if wanted, it is its own decision (Dept 5) with its own gates.

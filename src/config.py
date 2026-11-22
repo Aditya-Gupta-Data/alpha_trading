@@ -159,6 +159,14 @@ EVENT_ENGINE_DEFAULTS = {
     "graphrag_shadow_enabled": False, "graphrag_shadow_daily_cap": 300,
 }
 EVENT_ENGINE = dict(EVENT_ENGINE_DEFAULTS, **(_CONFIG.get("event_engine") or {}))
+# #tip-desk (decision #189): owner-pasted tips → 1-tap paper cards on the isolated PAPER_TIP_SANDBOX book.
+TIP_DESK_DEFAULTS = {
+    "enabled": True, "sandbox_capital_rs": 20000.0, "max_open_premium_rs": 20000.0, "max_per_tip_rs": 10000.0,
+    "stale_band_pct": 10.0, "buffer_seconds": 120, "card_ttl_minutes": 15, "square_off_hhmm": "15:15",
+    "fees_per_order_rs": 20.0, "poll_seconds": 30,
+}
+TIP_DESK = dict(TIP_DESK_DEFAULTS, **(_CONFIG.get("tip_desk") or {}))
+PAPER_TIP_SANDBOX_CAPITAL_RS = float(TIP_DESK["sandbox_capital_rs"])
 # M1 multi-bucket ledger (blueprint docs/m1_multi_bucket_ledger_blueprint.md): schema is additive and always
 # present; the switch moves the gate/settle seams onto the buckets. Off until the VM dry-run is verified.
 MULTI_BUCKET_LEDGER = bool(_CONFIG.get("multi_bucket_ledger", False))

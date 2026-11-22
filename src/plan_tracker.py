@@ -1793,6 +1793,8 @@ def _reconcile_locked(now_naive, conn, grace_minutes, out, sweeps) -> None:
             for acct, ref, locked_at in conn.execute(
                     "SELECT account_id, journal_ref, locked_at FROM paper_margin_locks "
                     "WHERE released_at IS NULL"):
+                if acct in pm.ISOLATED_ACCOUNTS:      # #189: their own engine settles them; no journal row by design
+                    continue
                 locks.setdefault(ref, []).append(locked_at)
             for ref, stamps in locks.items():
                 if str(ref).startswith("eqd:"):

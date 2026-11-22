@@ -28,6 +28,9 @@ Commands:
                            time in trade) via the gateway's read-only
                            /api/discord/positions endpoint
   (reply to any bot message, or @mention it, to chat -- answered by Gemini)
+  #tip-desk channel     -- (TIP_DESK_CHANNEL_ID in .env; owner only) pasted tips
+                           -> a PAPER card with Confirm Paper / Cancel, via
+                           the gateway's /api/tipdesk/* (src/tip_desk/bot.py)
 
 Setup: DISCORD_BOT_TOKEN in .env (from the Discord Developer Portal, with
 Message Content Intent enabled); GEMINI_API_KEY in .env for the chat side
@@ -59,6 +62,7 @@ import discord
 from discord import app_commands
 
 from src import deploy_log
+from src.tip_desk import bot as tip_bot
 from src.forecast import describe, forecast, load_news, load_tickers, load_weights
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -431,6 +435,7 @@ tree = app_commands.CommandTree(client)
 # Persistent buttons: taps on Approve/Reject keep working across bot
 # restarts because the trade_id round-trips through the custom_id.
 client.add_dynamic_items(DecisionButton)
+client.add_dynamic_items(tip_bot.TipButton)      # #tip-desk (#189): Confirm Paper / Cancel / Exit Now
 
 
 @client.event
@@ -829,9 +834,16 @@ async def halt(interaction: discord.Interaction,
     await interaction.followup.send(_format_halt_reply(result), ephemeral=True)
 
 
+tip_bot.configure(bridge_call=_bridge_call, is_owner=_is_authorized_owner)
+
+
 @client.event
 async def on_message(message: discord.Message):
     if message.author == client.user or message.author.bot:
+        return
+    # #tip-desk (#189): the configured channel is the tip lane only — owner messages there are tips, never chat.
+    if tip_bot.is_tip_channel(getattr(message.channel, "id", None)):
+        await tip_bot.handle_message(message)
         return
     # Chat only when clearly addressed: a reply to one of the bot's
     # messages, or an @mention. Ordinary server chatter is left alone.

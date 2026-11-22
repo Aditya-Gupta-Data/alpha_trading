@@ -219,6 +219,70 @@ def discord_pnl():
     return {"ok": True, "card": build_pnl_card()}
 
 
+# ----------------------------------------------------------------- #tip-desk (decision #189)
+# The Discord bot's #tip-desk lane. The bot only buffers and renders; every parse, quote, size and paper fill
+# happens here, on PAPER_TIP_SANDBOX, through src.tip_desk.desk. Paper only: no endpoint places an order.
+
+class TipIngestRequest(BaseModel):
+    group_id: str
+    text: str
+    message_ids: list = []
+
+
+class TipCardRequest(BaseModel):
+    card_id: str
+    mode: str = "paper"
+
+
+class TipExitRequest(BaseModel):
+    group_id: str
+
+
+def _tip_call(fn, *args, **kw):
+    from src import brain_map
+    conn = brain_map.connect()
+    try:
+        return fn(conn, *args, **kw)
+    finally:
+        conn.close()
+
+
+@app.post("/api/tipdesk/ingest")
+def tipdesk_ingest(req: TipIngestRequest):
+    from src.tip_desk import desk
+    return _tip_call(desk.ingest, req.group_id, req.text, message_ids=req.message_ids)
+
+
+@app.post("/api/tipdesk/confirm")
+def tipdesk_confirm(req: TipCardRequest):
+    from src.tip_desk import desk
+    return _tip_call(desk.confirm, req.card_id, req.mode)
+
+
+@app.post("/api/tipdesk/cancel")
+def tipdesk_cancel(req: TipCardRequest):
+    from src.tip_desk import desk
+    return _tip_call(desk.cancel, req.card_id)
+
+
+@app.post("/api/tipdesk/exit")
+def tipdesk_exit(req: TipExitRequest):
+    from src.tip_desk import desk
+    return _tip_call(desk.exit_now, req.group_id)
+
+
+@app.get("/api/tipdesk/open")
+def tipdesk_open():
+    from src.tip_desk import desk, store
+    from src import portfolio_manager as pm
+
+    def _open(conn):
+        pm.ensure_accounts_schema(conn)
+        store.ensure_schema(conn)
+        return {"ok": True, "positions": desk.open_summary(conn),
+                "account": pm.paper_account_summary(conn, desk.ACCOUNT)}
+    return _tip_call(_open)
+
 # Everything else — watchlist, chat, decision, scorecard, static dashboard —
 # is the engine app, unchanged, now behind the strict gate. Mounted LAST so
 # the gateway's own routes above win the match first.

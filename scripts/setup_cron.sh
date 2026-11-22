@@ -519,6 +519,10 @@ CRON_TZ=Asia/Kolkata
 #     folds it into yesterday's profile before the 09:15 session playbook reads it (master_scheduler).
 45 18 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
 50 8 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.ingestion.participant_oi --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1; "$PYTHON_BIN" scripts/backfill_gex_profiles.py --today >> "$REPO_ROOT/logs/gex_daily.log" 2>&1
+# 41. #tip-desk manager (decision #189): one process 09:14 → 15:30 that marks PAPER_TIP_SANDBOX positions
+#     every 30 s and applies their stop loss, T1/T2/T3 booking + trail and the 15:15 expiry-day square-off.
+#     Exits at once on a holiday, with tip_desk.enabled false, or on the analytics node (#146).
+14 9 * * 1-5 cd "$REPO_ROOT" && "$PYTHON_BIN" -m src.tip_desk.manager >> "$REPO_ROOT/logs/tip_desk_manager.log" 2>&1
 # 39. AltData Fleet (#39) is intentionally excluded from the VM and must be scheduled manually via
 #     local crontab on the Mini PC (Residential IP). Not here, so node_replica_block.py cannot copy it.
 # 40. update_graph_altdata.py (GraphRAG injector) must also be scheduled manually on the Mini PC, at

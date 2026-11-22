@@ -53,7 +53,7 @@ from src.config import (ACCOUNT_RISK_PER_TRADE_PCT,
                         PAPER_2L_ACCOUNT_ENABLED, PAPER_2L_LIVE_GEX_ENABLED, PAPER_2L_LIVE_ACCOUNT_ENABLED,
                         PAPER_2L_STARTING_CAPITAL_RS,
                         SHADOW_LEARNER_CAPITAL_RS, SHADOW_LEARNER_ENABLED,
-                        PAPER_EVENTS_CAPITAL_RS)
+                        PAPER_EVENTS_CAPITAL_RS, PAPER_TIP_SANDBOX_CAPITAL_RS)
 from src.position_sizing import fractional_lots
 from src.portfolio import span_stress_factor
 
@@ -647,6 +647,8 @@ def entry_halt(conn, account: str = None):
         return {"halted": True, "event": "risk_of_ruin_halt",
                 "reason": (f"risk-of-ruin halt: drawdown {ruin_drawdown_pct(conn, account):.2f}% "
                            f">= {MAX_DRAWDOWN_PCT:g}% — all entries blocked")}
+    if account in DAILY_BREAKER_EXEMPT:
+        return None
     breaker = paper_daily_breaker_status(conn, account)
     if breaker["halted"]:
         return {"halted": True, "event": "daily_breaker_halt", "reason": breaker["reason"],
@@ -1060,6 +1062,7 @@ ACCOUNT_PAPER_2L_LIVE = "PAPER_2L_LIVE"  # the Rs.2L live-quote arm (#120)
 ACCOUNT_PAPER_SHADOW_LEARNER = "PAPER_SHADOW_LEARNER"  # the Shadow Learner arm (Architect 2026-10-09)
 ACCOUNT_PAPER_2L_LIVE_GEX = "PAPER_2L_LIVE_GEX"    # the GEX steering experiment (#161): self-priced, isolated
 ACCOUNT_PAPER_EVENTS = "PAPER_EVENTS"    # event engine 1.1 (#156): isolated, auto-executed, long options only
+ACCOUNT_PAPER_TIP_SANDBOX = "PAPER_TIP_SANDBOX"   # #tip-desk (#189): isolated, owner-confirmed tips, premium-capped
 
 # account_id -> starting capital. The primary's pool is whatever the live
 # `account_state` row says (STARTING_CAPITAL only seeds an empty DB).
@@ -1070,11 +1073,14 @@ PAPER_ACCOUNTS = {
     ACCOUNT_PAPER_2L_LIVE_GEX: float(PAPER_2L_STARTING_CAPITAL_RS),        # GEX steering experiment (#161)
     ACCOUNT_PAPER_SHADOW_LEARNER: float(SHADOW_LEARNER_CAPITAL_RS),   # paper-only data bucket (#140, owner-authorised)
     ACCOUNT_PAPER_EVENTS: float(PAPER_EVENTS_CAPITAL_RS),             # event engine 1.1 (#156)
+    ACCOUNT_PAPER_TIP_SANDBOX: float(PAPER_TIP_SANDBOX_CAPITAL_RS),   # #tip-desk (#189)
 }
 # Accounts on the paper door that are NEVER a shadow of the primary's proposals: they get
 # their own entries from their own engine (the event engine's executor), so
 # shadow_account_ids() must never list them (#156).
-ISOLATED_ACCOUNTS = frozenset({ACCOUNT_PAPER_EVENTS})
+ISOLATED_ACCOUNTS = frozenset({ACCOUNT_PAPER_EVENTS, ACCOUNT_PAPER_TIP_SANDBOX})
+# Accounts whose entry gate skips the 3% daily breaker (#189): the premium cap is their whole risk rule.
+DAILY_BREAKER_EXEMPT = frozenset({ACCOUNT_PAPER_TIP_SANDBOX})
 # The accounts that price and SETTLE THEMSELVES on live bid/ask quotes
 # (decision #120, execution/live_pricer). The primary's exit does not close
 # them; release_shadow_locks skips their lock only while live_pricer holds an

@@ -433,7 +433,8 @@ DIGEST_QUEUE_PATH = ROOT / "logs" / "discord_digest_queue.jsonl"
 # pages at once — it needs a human now, not in the evening digest
 TEXT_PAGE_EVENTS = {"ops_alarm", "session_stopped", "approval_needed", "token_renewal_failed"}
 BUDGET_ALWAYS = {"system_crash", "live_exit_needs_review", "live_entry_needs_review", "token_renewal_failed",
-                 "node_reconcile"}   # #144: the home node's one daily report card, never spooled
+                 "node_reconcile",   # #144: the home node's one daily report card, never spooled
+                 "tip_trade"}        # #189: fills/exits of trades the owner confirmed by hand
 BUDGET_SCHEDULED = {"eod", "ceo_brief", "darling_tiers", "digest", "dashboard_link", "morning_brief",
                     "performance", "weekly_digest", "macro_heartbeat"}
 BUDGET_DROP = {"portfolio_report"}

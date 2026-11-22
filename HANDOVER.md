@@ -43,6 +43,13 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-22 (Sun) — Dhan data plan had lapsed 11-11; RENEWED today (valid to 2026-12-23); no code change (ledger Issue 60)
+
+- **What happened:** the Data API plan lapsed on 11-11, so the VM traded blind for 7 sessions (11-12 to 11-20): every Dhan data call returned DH-902, marks froze at 11-11 15:24, and no entries were taken after 11-11 09:19. Adding funds does not renew the plan. The owner subscribed 11-22; `dataPlan: Active`, `dataValidity: 2026-12-23`, live LTP and daily history verified from the VM. No restart, no deploy; VM still on `f97ec8b`.
+- **Casualty:** learner `6ff8f4b1` (NIFTY 50 iron butterfly, exp 11-17) settled 11-20 at max loss, −Rs.3,897, basis `no_price_data_max_loss`. Not repaired (owner decision).
+- **Watch Mon 11-23:** 31 open rows expire 11-23 (LIVE, LIVE_GEX, learner). Confirm the 09:15 sweep prices them, `last_mark_ts` moves past 11-11, and the expiry rows settle on `last_close_on_or_before_expiry`, not max loss. PAPER_10L / ROT / LIVE are still halted since 11-09 (#181); the daily card still shows the wrong 2.92% (Issue 59, not fixed).
+- **Next lapse: 2026-12-23.** Nothing in the system warns before it; a `dataValidity` check in the ops card would be the fix (not built).
+
 ## 2026-11-06 (Fri, ~21:00) — NotebookLM Docs carry dates and a current-state preface
 
 - **Owner report:** the notebook "seems stale and old". Verified the 4 Docs were current (generated 19:38 IST from `7b26e46`, contained #186 and that evening's HANDOVER). The stale feel comes from the history inside them (HANDOVER back to July, July/August docs), which NotebookLM cannot date.

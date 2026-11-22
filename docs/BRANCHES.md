@@ -24,7 +24,7 @@ listed at the bottom.
 
 <!-- BEGIN AUTO: scripts/branch_report.py -->
 
-## Snapshot 2026-11-23 (compared against `origin/main` at 8973ff7 2026-11-23)
+## Snapshot 2026-11-23 (compared against `origin/main` at c3601cd 2026-11-23)
 
 **10 branch(es) hold work not in main.** STALE = no commit for over 30 days: probably abandoned or superseded; read it before merging or deleting.
 
@@ -32,7 +32,7 @@ listed at the bottom.
 
 - **Where:** local
 - **Last commit:** 2026-10-28 by mahakagrawal963-hub (26 days ago)
-- **Not in main:** 1 commit(s); main is 188 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 197 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -42,25 +42,11 @@ listed at the bottom.
 
     PROP_ROADMAP.md | 18 +++++++++++++++++-
 
-### `feat/paper-halt-advisory` — ACTIVE
-
-- **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/523cb9e2-9fb7-4f04-aaed-48a1518653e1/scratchpad/wt2`
-- **Last commit:** 2026-11-23 by mahakagrawal963-hub (0 days ago)
-- **Not in main:** 1 commit(s); main is 0 commits ahead of this branch
-
-**Commits not in main (oldest first):**
-
-- `8089cde` 2026-11-23 — docs(handover): 11-23 ~02:00 — #187 no paper freezes, #188 owner trades filed apart, VM 8973ff7
-
-**Files changed vs. where it left main (1 file changed, 8 insertions(+)):**
-
-    HANDOVER.md | 8 ++++++++
-
 ### `feature/direction-backtest` — ACTIVE
 
 - **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtdir`
 - **Last commit:** 2026-11-06 by mahakagrawal963-hub (17 days ago)
-- **Not in main:** 1 commit(s); main is 13 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 22 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -72,11 +58,26 @@ listed at the bottom.
     src/research/direction_backtest.py | 148 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     tests/test_direction_backtest.py   |  48 +++++++++++++++++++
 
+### `feature/discord-tip-desk` — ACTIVE
+
+- **Where:** local; checked out at `/Users/adityagupta/Documents/Claude/alpha_trading/.claude/worktrees/discord-tip-desk`
+- **Last commit:** 2026-11-23 by mahakagrawal963-hub (0 days ago)
+- **Not in main:** 1 commit(s); main is 0 commits ahead of this branch
+
+**Commits not in main (oldest first):**
+
+- `946c141` 2026-11-23 — docs(handover): 11-23 04:22 — #189/#190 + Issue 62 deployed to the VM (c3601cd); inert until the owner adds the Discord ids
+
+**Files changed vs. where it left main (2 files changed, 12 insertions(+), 2 deletions(-)):**
+
+    HANDOVER.md                     | 13 +++++++++++--
+    docs/observation_week_ledger.md |  1 +
+
 ### `feature/graphrag-altdata-wiring` — ACTIVE
 
 - **Where:** local, origin; checked out at `/Users/adityagupta/Documents/Claude/alpha_trading`
 - **Last commit:** 2026-11-06 by mahakagrawal963-hub (17 days ago)
-- **Not in main:** 1 commit(s); main is 59 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 68 commits ahead of this branch
 - **⚠️ Decision number clash #177:** the branch uses it for "15 MORE NEWS FEEDS FOR THE GRAPHRAG SHADOW ONLY; SHADOW CAP 300 → 600 (owner, 2026-11-06)."; main already uses it for "ALTDATA EDGE-CLASS PROVING COURT; PROMOTION IS A PERSON'S COMMAND (architect directive, 2026-11-03).". Renumber before merging.
 
 **Commits not in main (oldest first):**
@@ -97,7 +98,7 @@ listed at the bottom.
 
 - **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtbt`
 - **Last commit:** 2026-11-07 by mahakagrawal963-hub (16 days ago)
-- **Not in main:** 5 commit(s); main is 15 commits ahead of this branch
+- **Not in main:** 5 commit(s); main is 24 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -118,7 +119,7 @@ listed at the bottom.
 
 - **Where:** local, origin; checked out at `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/97350a14-1ddc-487e-9acf-568ca4a806d4/scratchpad/wtopt`
 - **Last commit:** 2026-11-07 by mahakagrawal963-hub (16 days ago)
-- **Not in main:** 6 commit(s); main is 13 commits ahead of this branch
+- **Not in main:** 6 commit(s); main is 22 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -143,7 +144,7 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-11-02 by Claude (21 days ago)
-- **Not in main:** 1 commit(s); main is 73 commits ahead of this branch
+- **Not in main:** 1 commit(s); main is 82 commits ahead of this branch
 - **⚠️ Decision number clash #176:** the branch uses it for "STOCK OPTIONS ARE COLLARED AT 33% OF THE ACTIVE OPTIONS BUDGET; INDEX OPTIONS AND THE SHADOW LEARNER ARE UNTOUCHED (owner, 2026-11-02)."; main already uses it for "CORPORATE RISK VETO TRIAGES THE NSE LABEL FIRST: DETERMINISTIC TABLE, NOT AN LLM (owner, 2026-11-02; recorded 2026-11-03).". Renumber before merging.
 
 **Commits not in main (oldest first):**
@@ -175,17 +176,18 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-11-22 by Claude (1 days ago)
-- **Not in main:** 3 commit(s); main is 8 commits ahead of this branch
+- **Not in main:** 4 commit(s); main is 17 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
 - `1e58771` 2026-11-22 — feat(node): guest_user_setup.sh — capped, secret-blind guest login on the Mini PC
 - `056e5f4` 2026-11-22 — fix(node): guest_user_setup.sh accepts a root login via OWNER_USER
 - `a9dd3d2` 2026-11-22 — feat(node): guest_web_terminal.sh — login-protected browser terminal for the guest user
+- `6968a23` 2026-11-22 — docs(handover): guest web terminal run on the node; open items recorded
 
-**Files changed vs. where it left main (5 files changed, 170 insertions(+)):**
+**Files changed vs. where it left main (5 files changed, 172 insertions(+)):**
 
-    HANDOVER.md                   |  7 +++++
+    HANDOVER.md                   |  9 +++++++
     MODULES.md                    |  2 ++
     docs/BRANCHES.md              |  1 +
     scripts/guest_user_setup.sh   | 88 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -195,7 +197,7 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-09-09 by Claude (75 days ago)
-- **Not in main:** 2 commit(s); main is 453 commits ahead of this branch
+- **Not in main:** 2 commit(s); main is 462 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -217,7 +219,7 @@ listed at the bottom.
 
 - **Where:** origin
 - **Last commit:** 2026-07-22 by Claude (124 days ago)
-- **Not in main:** 9 commit(s); main is 620 commits ahead of this branch
+- **Not in main:** 9 commit(s); main is 629 commits ahead of this branch
 
 **Commits not in main (oldest first):**
 
@@ -331,12 +333,14 @@ listed at the bottom.
   - `scripts/update_graph_altdata.py` (M)
   - `src/analysis/altdata_graph.py` (M)
   - `tests/test_altdata_graph.py` (M)
-- `/private/tmp/claude-501/-Users-adityagupta-Documents-Claude-alpha-trading/523cb9e2-9fb7-4f04-aaed-48a1518653e1/scratchpad/wt2` on `feat/paper-halt-advisory`: 1 uncommitted file(s)
+- `/Users/adityagupta/Documents/Claude/alpha_trading/.claude/worktrees/discord-tip-desk` on `feature/discord-tip-desk`: 1 uncommitted file(s)
   - `PROJECT_TIMELINE.md` (M)
+- `/Users/adityagupta/Documents/Claude/alpha_trading/.claude/worktrees/ecstatic-lalande-28bf3f` on `feature/events-universe-widen`: 1 uncommitted file(s)
+  - `src/ingestion/fo_bhavcopy.py` (M)
 
 ## Branches with nothing left to merge
 
-`claude/blissful-pascal-73dd54`, `claude/diag-fixes-1016`, `claude/earnings-s1-s3`, `claude/gex-seam`, `claude/mobile-hello-7nrjqn`, `claude/sharp-kalam-d5aaee`, `claude/test-coverage-analysis-o9bf3n`, `claude/trading-discord-message-tjdakj`, `claude/upbeat-hamilton-haw8tp`, `claude/vigilant-feynman-i2kz45`, `docs/notebooklm-autosync`, `docs/notebooklm-docs-only`, `docs/notebooklm-freshness`, `docs/refresh-2026-11-06`, `feature/altdata-expansion`, `feature/altdata-fleet`, `feature/altdata-live-fixes`, `feature/bucket-migration`, `feature/cross-asset-alpha`, `feature/dept5-proving-court`, `feature/deterministic-risk-triage`, `feature/gex-vex-cex`, `feature/graph-patch-and-rbi`, `feature/m4-bucket-isolation`, `feature/mcx-contract-roller`, `feature/notebookllm-sync`, `feature/oms-recon-daemon`, `feature/semantic-transcript-router`, `fix/data-plan-alert-issue59`, `fix/day1-audit-findings`, `phase1-graphrag`  
+`claude/blissful-pascal-73dd54`, `claude/diag-fixes-1016`, `claude/earnings-s1-s3`, `claude/ecstatic-lalande-28bf3f`, `claude/gex-seam`, `claude/mobile-hello-7nrjqn`, `claude/sharp-kalam-d5aaee`, `claude/test-coverage-analysis-o9bf3n`, `claude/trading-discord-message-tjdakj`, `claude/upbeat-hamilton-haw8tp`, `claude/vigilant-feynman-i2kz45`, `docs/notebooklm-autosync`, `docs/notebooklm-docs-only`, `docs/notebooklm-freshness`, `docs/refresh-2026-11-06`, `feat/paper-halt-advisory`, `feature/altdata-expansion`, `feature/altdata-fleet`, `feature/altdata-live-fixes`, `feature/bucket-migration`, `feature/cross-asset-alpha`, `feature/dept5-proving-court`, `feature/deterministic-risk-triage`, `feature/events-universe-widen`, `feature/gex-vex-cex`, `feature/graph-patch-and-rbi`, `feature/m4-bucket-isolation`, `feature/mcx-contract-roller`, `feature/notebookllm-sync`, `feature/oms-recon-daemon`, `feature/semantic-transcript-router`, `fix/data-plan-alert-issue59`, `fix/day1-audit-findings`, `phase1-graphrag`  
 Everything on these is already in main; they are safe to delete once nobody is using them.
 
 <!-- END AUTO -->

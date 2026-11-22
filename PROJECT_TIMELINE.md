@@ -235,8 +235,16 @@ regenerates that day's entry rather than duplicating it.
 
 <!-- WRAP_SESSION:INSERT_BELOW -->
 
-### 2026-11-23 · 3 commits · 19 files touched
+### 2026-11-23 · 11 commits · 43 files touched
 
+- `946c141` docs(handover): 11-23 04:22 — #189/#190 + Issue 62 deployed to the VM (c3601cd); inert until the owner adds the Discord ids
+- `c3601cd` docs: #189/#190 + Issue 62 fix merged to main (owner go 11-23); not deployed
+- `beb369b` fix(tip-desk): review fixes — 60 s gateway timeout behind the chain lane, typing indicator, Dhan app symbols in Order details (#189)
+- `578dcb5` feat(tip-desk): Arm 2 — record and grade the tipster's direction calls, 1D/5D (#190)
+- `a60ca54` docs(ledger): Issue 62 VM check — PAPER_EVENTS never traded, nothing to repair (#189)
+- `ec24b5a` test(tip-desk): replay the 11-17 NIFTY 25400 CE tip — T1 booked, rest trailed out at the T1 stop (#189)
+- `df6231a` feat(tip-desk): owner-pasted Discord tips -> 1-tap paper cards on isolated PAPER_TIP_SANDBOX (#189)
+- `319271c` docs(handover): 11-23 correction — owner will not trade by hand; real-order path requested, not built (Rule 7 stands)
 - `8089cde` docs(handover): 11-23 ~02:00 — #187 no paper freezes, #188 owner trades filed apart, VM 8973ff7
 - `8973ff7` feat(risk): 10% drawdown line recorded not enforced on paper books (#187); owner's real Dhan trades filed apart by recon (#188)
 - `b991c9a` docs(handover): 11-23 pre-open — Issue 59+60 fixes deployed (VM 49ce242), data-gap thread closed

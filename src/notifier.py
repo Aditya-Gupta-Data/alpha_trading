@@ -116,16 +116,26 @@ def send_digest(subject: str, lines: list) -> None:
     _send_email(subject, "\n".join(lines))
 
 
+def owner_ping_id() -> str | None:
+    """The owner's numeric Discord user id (env DISCORD_OWNER_USER_ID), or None — a card never pings without it."""
+    uid = str(os.environ.get("DISCORD_OWNER_USER_ID") or "").strip()
+    return uid if uid.isdigit() else None
+
+
 async def send_discord_message(message: str, thread_id: str = None, *,
-                               event: str = "text_note", page: bool = False) -> bool:
+                               event: str = "text_note", page: bool = False, ping: bool = False) -> bool:
     """The one plain-text door. Architect ruling B3 (2026-10-09): every text
     message is an event card through the budget gate — `page=True` (a
-    failure) sends at once, anything else spools to the digest."""
+    failure) sends at once, anything else spools to the digest. `ping=True`
+    @mentions the owner on delivery (needs DISCORD_OWNER_USER_ID)."""
     if webhooks_muzzled():
         return _muzzle_log("discord message", repr(message[:120]))
     if page:
         TEXT_PAGE_EVENTS.add(event)
-    return await broadcast_alert({"event": event, "text": message, "ticker": "desk"})
+    payload = {"event": event, "text": message, "ticker": "desk"}
+    if ping:
+        payload["ping"] = True
+    return await broadcast_alert(payload)
 
 
 # ---- broadcast_alert: structured Discord embed notifications -------------
@@ -634,6 +644,10 @@ async def broadcast_alert(payload: dict) -> bool:
         return False
 
     body = {"embeds": [_build_embed(payload)]}
+    owner = owner_ping_id() if payload.get("ping") else None
+    if owner:                                   # a mention only pings from `content`, never from an embed
+        body["content"] = f"<@{owner}> needs a human now"
+        body["allowed_mentions"] = {"users": [owner]}
     if node_label():                            # the sender name shows the machine
         body["username"] = f"Alpha Trading · {node_label()}"
     try:

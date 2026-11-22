@@ -39,7 +39,7 @@ injectable, so the whole surface tests offline.
 import json
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from src import nse_calendar
@@ -224,9 +224,100 @@ def auth_alarms(problems: list) -> list:
         for code in DHAN_CODE_PATTERN.findall(p.get("line", "")):
             if code in AUTH_CODES:
                 counts[code] = counts.get(code, 0) + int(p.get("count", 1))
-    return [{"kind": "auth", "code": code, "count": n,
+    return [{"kind": "auth", "code": code, "count": n, "red": True,
              "text": f"🔴 AUTH/DATA ACCESS: {code} x{n} — {AUTH_CODES[code]}"}
             for code, n in sorted(counts.items())]
+
+
+# Dhan Data API plan (Issue 60, 2026-11-22): the plan lapsed 11-11 and the
+# DH-902 card (no "red" key then) queued into the digest instead of paging.
+PLAN_WARN_DAYS = 5
+PLAN_ALARM_KINDS = ("plan", "plan_expiring")
+DATA_ALARM_KINDS = ("auth", "zero_capture") + PLAN_ALARM_KINDS     # these ping the owner when they page
+PLAN_STATE_NAME = ".plan_alarm_state.json"
+
+
+def fetch_data_plan(read_fn=None) -> dict | None:
+    """Dhan /v2/profile (GET, one call a night) or None when unreadable. `read_fn() -> dict` is the test seam."""
+    try:
+        if read_fn is not None:
+            body = read_fn()
+        else:
+            if os.environ.get("PYTEST_CURRENT_TEST"):
+                return None                       # RULE 6: tests never dial Dhan
+            import requests
+            from src.dhan_client import _throttle
+            from src.execution.recon_engine import BASE_URL, TIMEOUT_SECONDS, _headers
+            headers = _headers()
+            if headers is None:
+                return None
+            _throttle()
+            resp = requests.get(BASE_URL + "/profile", headers=headers, timeout=TIMEOUT_SECONDS)
+            if resp.status_code >= 300:
+                return None
+            body = resp.json()
+    except Exception as exc:
+        print(f"  (data-plan check skipped — failing open: {type(exc).__name__}: {exc})")
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _valid_until(raw) -> date | None:
+    try:
+        return date.fromisoformat(str(raw).strip()[:10])
+    except ValueError:
+        return None
+
+
+def plan_alarm(profile, today: date = None) -> dict | None:
+    """RED when the plan is not Active (or its validity has passed); a paging ⚠️ within PLAN_WARN_DAYS of the end."""
+    if not isinstance(profile, dict):
+        return None
+    plan = str(profile.get("dataPlan") or "").strip()
+    if not plan:
+        return None                               # no field -> abstain
+    today = today or date.today()
+    until = _valid_until(profile.get("dataValidity"))
+    if plan.lower() != "active":
+        return {"kind": "plan", "red": True,
+                "text": (f"🔴 DHAN DATA PLAN NOT ACTIVE (profile says '{plan}') — every price call is refused "
+                         "(DH-902); renew the Data API plan at Dhan, a fresh token will NOT fix this")}
+    if until is None:
+        return None
+    left = (until - today).days
+    if left < 0:
+        return {"kind": "plan", "red": True,
+                "text": f"🔴 DHAN DATA PLAN validity ended {until.isoformat()} — renew it at Dhan"}
+    if left <= PLAN_WARN_DAYS:
+        when = "today" if left == 0 else f"in {left} day(s)"
+        return {"kind": "plan_expiring", "red": False, "page": True, "days_left": left,
+                "text": (f"⚠️ Dhan data plan ends {when} (valid to {until.isoformat()}) — "
+                         "confirm auto-pay is on and the Dhan balance covers it")}
+    return None
+
+
+def plan_alarm_once_a_day(alarm: dict | None, today: date, state_path: Path) -> dict | None:
+    """At most one plan card per kind per IST day: a same-day re-run gets None. Fails open (state IO) to the alarm."""
+    if not alarm:
+        return None
+    key = f"{alarm['kind']}:{today.isoformat()}"
+    try:
+        state = json.loads(Path(state_path).read_text())
+    except (OSError, ValueError):
+        state = {}
+    if state.get("sent") == key:
+        return None
+    try:
+        Path(state_path).write_text(json.dumps({"sent": key}))
+    except OSError:
+        pass
+    return alarm
+
+
+def page_decision(alarms: list) -> tuple:
+    """(page, ping): any red alarm or any alarm marked `page` goes past the Discord budget; a data/plan one also pings."""
+    paging = [a for a in (alarms or []) if a.get("red") or a.get("page")]
+    return bool(paging), any(a.get("kind") in DATA_ALARM_KINDS for a in paging)
 
 
 def capture_alarm(blind: dict) -> dict | None:
@@ -668,8 +759,11 @@ def _blocks_line(n: int) -> str:
 
 def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
               problems_path: Path = PROBLEMS_PATH, now: datetime = None,
-              notify_fn=None, staleness_root=None) -> dict:
+              notify_fn=None, staleness_root=None, plan_fn=None) -> dict:
     """The full nightly pass. Returns a summary dict (also printed).
+
+    `plan_fn() -> profile dict | None` reads the Dhan data plan (default:
+    `fetch_data_plan`, muzzled under pytest).
 
     `staleness_root` is the guard's data root — None means the real repo, and
     tests pass a tempdir so no assertion here ever depends on the mtime of a
@@ -698,17 +792,26 @@ def run_sweep(logs_dir: Path = LOGS_DIR, state_path: Path = STATE_PATH,
 
     telemetry = system_telemetry()
     alarms = collect_alarms(problems, telemetry, logs_dir, now)
+    try:                                           # fail-open: a broken plan check costs its own line
+        profile = (plan_fn or fetch_data_plan)()
+        extra = plan_alarm_once_a_day(plan_alarm(profile, now.date()), now.date(),
+                                      Path(logs_dir) / PLAN_STATE_NAME)
+        if extra:
+            alarms.append(extra)
+    except Exception as e:
+        print(f"  (data-plan alarm skipped — failing open: {e})")
     card = build_card(problems, missing, when, telemetry=telemetry, stale=stale,
                       alarms=alarms, designed_blocks=sum(blocks.values()))
     print(card, flush=True)
     if notify_fn is None:
-        red = any(a.get("red") for a in (alarms or []))
+        red, ping = page_decision(alarms)
 
         def notify_fn(text):
             import asyncio
             from src.notifier import send_discord_message
-            try:                                   # B3: a RED night pages, a clean night spools
-                return asyncio.run(send_discord_message(text, event="ops_alarm" if red else "ops_card", page=red))
+            try:                                   # B3: a RED night pages past the budget, a clean night spools
+                return asyncio.run(send_discord_message(text, event="ops_alarm" if red else "ops_card",
+                                                        page=red, ping=ping))
             except Exception as e:
                 print(f"  (ops card notify failed: {e})")
                 return False

@@ -506,4 +506,165 @@ def test_a_null_error_field_in_a_healthy_status_dict_is_not_a_problem():
     # a real error value, prose, and an unquoted key all still fire
     assert om.is_problem_line('[link] {"announced": false, "error": "tunnel journal unreadable", "url": null}')
     assert om.is_problem_line("error: None of the feeds answered")
+
+
+# ---- Issue 60: the Dhan data-plan alarm + the pager decision -------------
+
+from datetime import date
+
+
+def _capture_notify(monkeypatch):
+    """Replace the notifier's text door; returns the list of kwargs each send used."""
+    sent = []
+
+    async def fake(message, thread_id=None, *, event="text_note", page=False, ping=False):
+        sent.append({"event": event, "page": page, "ping": ping, "text": message})
+        return True
+
+    from src import notifier
+    monkeypatch.setattr(notifier, "send_discord_message", fake)
+    return sent
+
+
+def _sweep(tmp, files, plan_fn=lambda: None, now=MONDAY):
+    logs = make_logs(tmp, files)
+    return om.run_sweep(logs_dir=logs, state_path=logs / ".s.json", problems_path=logs / "p.jsonl",
+                        now=now, staleness_root=tmp, plan_fn=plan_fn)
+
+
+def test_a_dh902_only_night_pages_with_a_ping_instead_of_queueing(monkeypatch):
+    """Issue 60: auth alarms had no 'red' key, so the card said RED but the pager saw none."""
+    sent = _capture_notify(monkeypatch)
+    monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
+    with tempfile.TemporaryDirectory() as tmp:
+        _sweep(tmp, {"master_scheduler.log": DH902_LINE + "\n"})
+    assert len(sent) == 1
+    assert sent[0]["event"] == "ops_alarm" and sent[0]["page"] is True and sent[0]["ping"] is True
+    assert "RED alarm" in sent[0]["text"]
+
+
+def test_a_clean_night_spools_and_never_pings(monkeypatch):
+    sent = _capture_notify(monkeypatch)
+    monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
+    with tempfile.TemporaryDirectory() as tmp:
+        _sweep(tmp, {"a.log": "all fine\n"})
+    assert sent[0]["event"] == "ops_card" and sent[0]["page"] is False and sent[0]["ping"] is False
+
+
+def test_a_red_non_data_alarm_pages_without_a_ping(monkeypatch):
+    sent = _capture_notify(monkeypatch)
+    monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 50, "mem_used_pct": 95})
+    with tempfile.TemporaryDirectory() as tmp:
+        _sweep(tmp, {"a.log": "all fine\n"})
+    assert sent[0]["page"] is True and sent[0]["ping"] is False
+
+
+def test_plan_alarm_red_when_the_profile_says_not_active():
+    for profile in ({"dataPlan": "Deactive", "dataValidity": "NA"}, {"dataPlan": "Expired"}):
+        a = om.plan_alarm(profile, date(2026, 11, 22))
+        assert a["kind"] == "plan" and a["red"] is True and "NOT ACTIVE" in a["text"]
+
+
+def test_plan_alarm_warns_inside_five_days_and_not_before():
+    today = date(2026, 12, 18)
+    ok = {"dataPlan": "Active", "dataValidity": "2026-12-24 00:00:00.0"}       # 6 days left
+    assert om.plan_alarm(ok, today) is None
+    for until, left in (("2026-12-23", 5), ("2026-12-19", 1), ("2026-12-18", 0)):
+        a = om.plan_alarm({"dataPlan": "Active", "dataValidity": until + " 00:00:00.0"}, today)
+        assert a["kind"] == "plan_expiring" and a["page"] is True and a["red"] is False
+        assert a["days_left"] == left
+    assert "today" in om.plan_alarm({"dataPlan": "Active", "dataValidity": "2026-12-18"}, today)["text"]
+
+
+def test_plan_alarm_red_when_the_validity_has_passed():
+    a = om.plan_alarm({"dataPlan": "Active", "dataValidity": "2026-12-17 00:00:00.0"}, date(2026, 12, 18))
+    assert a["kind"] == "plan" and a["red"] is True
+
+
+def test_plan_alarm_abstains_on_missing_or_unreadable_fields():
+    today = date(2026, 12, 18)
+    assert om.plan_alarm(None, today) is None
+    assert om.plan_alarm({}, today) is None
+    assert om.plan_alarm({"dataPlan": "Active"}, today) is None
+    assert om.plan_alarm({"dataPlan": "Active", "dataValidity": "NA"}, today) is None
+    assert om.plan_alarm("garbage", today) is None
+
+
+def test_plan_alarm_is_once_per_kind_per_day():
+    with tempfile.TemporaryDirectory() as tmp:
+        state = Path(tmp) / "plan.json"
+        alarm = {"kind": "plan_expiring", "red": False, "page": True, "text": "x"}
+        assert om.plan_alarm_once_a_day(alarm, date(2026, 12, 20), state) == alarm
+        assert om.plan_alarm_once_a_day(alarm, date(2026, 12, 20), state) is None     # same-day re-run
+        assert om.plan_alarm_once_a_day(alarm, date(2026, 12, 21), state) == alarm    # next day again
+        assert om.plan_alarm_once_a_day(None, date(2026, 12, 22), state) is None
+
+
+def test_plan_alarm_dedupe_fails_open_when_the_state_file_is_unwritable():
+    alarm = {"kind": "plan", "red": True, "text": "x"}
+    assert om.plan_alarm_once_a_day(alarm, date(2026, 12, 20), Path("/nonexistent-dir/x/plan.json")) == alarm
+
+
+def test_an_expired_plan_pages_and_pings_in_the_sweep(monkeypatch):
+    sent = _capture_notify(monkeypatch)
+    monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _sweep(tmp, {"a.log": "fine\n"},
+                     plan_fn=lambda: {"dataPlan": "Deactive", "dataValidity": "NA"})
+    assert out["alarms"] == ["plan"] and out["red_alarms"] == 1
+    assert sent[0]["page"] is True and sent[0]["ping"] is True
+    assert "DHAN DATA PLAN NOT ACTIVE" in sent[0]["text"]
+
+
+def test_the_expiry_warning_pages_but_is_not_counted_red(monkeypatch):
+    sent = _capture_notify(monkeypatch)
+    monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
+    monkeypatch.setattr(om, "calendar_alarm", lambda now=None: None)   # an unrelated alarm that fires in Dec
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _sweep(tmp, {"a.log": "fine\n"}, now=datetime(2026, 12, 20, 20, 30),
+                     plan_fn=lambda: {"dataPlan": "Active", "dataValidity": "2026-12-23 00:00:00.0"})
+    assert out["alarms"] == ["plan_expiring"] and out["red_alarms"] == 0
+    assert sent[0]["page"] is True and sent[0]["ping"] is True and sent[0]["event"] == "ops_alarm"
+    assert "ends in 3 day(s)" in sent[0]["text"]
+
+
+def test_a_healthy_active_plan_adds_nothing(monkeypatch):
+    sent = _capture_notify(monkeypatch)
+    monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _sweep(tmp, {"a.log": "fine\n"}, now=datetime(2026, 11, 22, 20, 30),
+                     plan_fn=lambda: {"dataPlan": "Active", "dataValidity": "2026-12-23 00:00:00.0"})
+    assert out["alarms"] == [] and sent[0]["event"] == "ops_card"
+
+
+def test_a_broken_plan_check_never_breaks_the_sweep_and_later_stages_still_run(monkeypatch):
+    sent = _capture_notify(monkeypatch)
+    monkeypatch.setattr(om, "system_telemetry", lambda *a, **k: {"mem_available_mb": 480})
+
+    def boom():
+        raise RuntimeError("profile endpoint down")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _sweep(tmp, {"a.log": "an error appeared\n"}, plan_fn=boom)
+    assert out["distinct_problems"] == 1          # the sweep itself completed
+    assert len(sent) == 1                          # ...and the card still went out
+
+
+def test_fetch_data_plan_fails_open_and_is_muzzled_under_pytest():
+    assert om.fetch_data_plan() is None            # never dials Dhan from a test
+    assert om.fetch_data_plan(read_fn=lambda: {"dataPlan": "Active"}) == {"dataPlan": "Active"}
+    assert om.fetch_data_plan(read_fn=lambda: ["not", "a", "dict"]) is None
+
+    def boom():
+        raise ConnectionError("down")
+
+    assert om.fetch_data_plan(read_fn=boom) is None
+
+
+def test_page_decision_is_pure():
+    assert om.page_decision([]) == (False, False)
+    assert om.page_decision([{"kind": "auth", "red": True}]) == (True, True)
+    assert om.page_decision([{"kind": "low_disk", "red": True}]) == (True, False)
+    assert om.page_decision([{"kind": "zero_capture", "red": False}]) == (False, False)
+    assert om.page_decision([{"kind": "plan_expiring", "red": False, "page": True}]) == (True, True)
     assert om.is_problem_line('{"error": null} but the upload failed')

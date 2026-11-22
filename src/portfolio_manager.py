@@ -480,6 +480,31 @@ def _daily_breaker_card(conn, verdict: dict) -> None:
         print(f"  (daily breaker card skipped: {e})")
 
 
+def _latch_record(conn):
+    """(ts, detail) of the latest `ruin_halt_latched` row — what the brake itself recorded — or None."""
+    try:
+        row = conn.execute("SELECT ts, detail FROM account_events WHERE event_type = ? "
+                           "ORDER BY ts DESC, rowid DESC LIMIT 1", (HALT_LATCH_EVENT,)).fetchone()
+    except Exception:
+        return None
+    return (str(row[0]), str(row[1])) if row else None
+
+
+def ruin_halt_reading(conn) -> str:
+    """Plain English for the halt card and banner: the reading right now, its basis, and why the latch tripped.
+
+    The reading abstains from open losses when prices are over 45 min old (pre-market, after the close, a
+    data blackout), so it can sit far below the figure that latched the halt (Issue 59)."""
+    dd = ruin_drawdown_pct(conn)
+    basis = ("open losses counted" if _ruin_basis(conn) == "true-equity"
+             else "booked results only — open losses count only while fresh prices exist")
+    text = f"{dd:.2f}% from peak equity now ({basis})"
+    rec = _latch_record(conn)
+    if rec:
+        text += f"; the halt latched {rec[0][:16].replace('T', ' ')} IST on: {rec[1]}"
+    return text
+
+
 def _ruin_halt_card(conn) -> None:
     """The 🔴 SYSTEM PAUSED card for the risk-of-ruin halt (Walkaway
     Protocol, Directive 3 — docs/walkaway_protocol_design.md). Owner
@@ -497,14 +522,15 @@ def _ruin_halt_card(conn) -> None:
         if seen:
             return
         dd = ruin_drawdown_pct(conn)
+        reading = ruin_halt_reading(conn)
         log_event(conn, "ruin_halt_card",
-                  f"SYSTEM PAUSED card fired (drawdown {dd:.2f}%)")
+                  f"SYSTEM PAUSED card fired (drawdown {dd:.2f}%; {reading})")
         from src.notifier import fire_broadcast
         fire_broadcast({
             "event": "ruin_halt", "ticker": "ACCOUNT", "date": today,
             "description": (
                 f"🔴 SYSTEM PAUSED — risk-of-ruin halt\n"
-                f"Drawdown is {dd:.2f}% from peak equity (limit "
+                f"Drawdown reading: {reading} (limit "
                 f"{MAX_DRAWDOWN_PCT:g}%). ALL new entries are blocked, "
                 "on both desks.\n"
                 "Open positions are still being managed — exits, stops "
@@ -537,9 +563,9 @@ def halt_banner_lines(conn=None) -> list:
         if not trading_halted(conn):
             return []
         _ruin_halt_card(conn)
-        return [(f"🔴 SYSTEM PAUSED — risk-of-ruin halt LATCHED (drawdown "
-                 f"{ruin_drawdown_pct(conn):.2f}% vs the {MAX_DRAWDOWN_PCT:g}% "
-                 "limit on peak equity). New entries are blocked on both "
+        return [(f"🔴 SYSTEM PAUSED — risk-of-ruin halt LATCHED (drawdown reading: "
+                 f"{ruin_halt_reading(conn)}; limit {MAX_DRAWDOWN_PCT:g}% on peak equity). "
+                 "New entries are blocked on both "
                  "desks; open positions are still managed "
                  "(exits/stops/settlements run). It will not lift by "
                  "itself and capital cannot lift it — resume is a "

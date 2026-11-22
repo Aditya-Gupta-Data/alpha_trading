@@ -4,7 +4,8 @@ The VM half, part 2: manage and settle PAPER_EVENTS positions.
     python -m src.event_engine.settler [--force-hours]
 
 VM ONLY. A long option's worst case is the premium already paid, so there is NO stop: the exits are
-  pre_expiry   the ONE forced pre-expiry predicate every book obeys (`plan_tracker.in_forced_exit_window`)
+  pre_expiry   the ONE forced pre-expiry predicate every book obeys (`plan_tracker.in_forced_exit_window`;
+               an extension stock (#191) is held to the stock-option 7-day window)
   take_profit  the bid reaches `take_profit_multiple` × the entry premium (default 5×, the penny-to-1 aim)
   horizon      the card's horizon (days since opening) has run out
   expired      past expiry with no chain → settled at zero (the premium is lost)
@@ -32,7 +33,7 @@ def decide(pos: dict, bid: float | None, today: date, cfg: dict, forced_fn=None)
     if today > expiry:
         return "expired"
     if forced_fn is None:
-        from src.plan_tracker import in_forced_exit_window as forced_fn
+        from src.event_engine.universe import in_forced_exit_window as forced_fn
     if forced_fn(pos["underlying"], expiry, today):
         return "pre_expiry"
     if bid is not None and bid >= float(cfg["take_profit_multiple"]) * float(pos["entry_premium"]):

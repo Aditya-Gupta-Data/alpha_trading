@@ -19,7 +19,7 @@ import json
 import re
 from pathlib import Path
 
-from src.event_engine import INBOX_DIR, STATE_DIR
+from src.event_engine import INBOX_DIR, ROOT, STATE_DIR
 
 TYPES = ("trade_deal", "import_duty", "gst", "pli", "safeguard_duty", "rbi", "sebi", "other")
 STAGES = ("rumour", "proposed", "concluded", "signed", "in_force")
@@ -46,9 +46,8 @@ def title_key(item: dict) -> str | None:
     return "t:" + hashlib.sha256(t.encode()).hexdigest()[:16] if t else None
 
 
-# Pre-LLM universe relevance (Architect 2026-10-28): the VM trades options on 4 indices + 5 stocks
-# (options_proposer.LOT_SIZES / EQUITY_OPTION_UNDERLYINGS), so a feed item spends an LLM call only when
-# its text names one of those stocks or an index-level / policy term that moves the indices.
+# Pre-LLM universe relevance (Architect 2026-10-28; widened by #191): a feed item spends an LLM call only
+# when its text names a core option stock, an event-book extension stock, or an index-level / policy term.
 STOCK_ALIASES = {"RELIANCE": ("reliance", "ril"), "HDFCBANK": ("hdfc bank", "hdfcbank"),
                  "ICICIBANK": ("icici bank", "icicibank"), "INFY": ("infosys", "infy"),
                  "TCS": ("tcs", "tata consultancy")}
@@ -57,9 +56,31 @@ INDEX_TERMS = ("nifty", "sensex", "midcap", "rbi", "reserve bank", "repo rate", 
                "fii", "fpi", "foreign investors", "banks", "banking", "lenders", "nbfc", "financial services")
 
 
-def _universe_pattern():
+# Event-book extension (#191): F&O symbols that are ordinary words match only by company name.
+WORD_SYMBOLS = {"IDEA", "SAIL", "LT", "ETERNAL", "HAL", "STAR", "OIL", "BEL"}
+COMPANIES_PATH = ROOT / "config" / "nse_companies.json"
+_PATTERN = None                                   # built once per process (one emit run)
+
+
+def _extension_terms(cfg=None, fo=None, companies_path=None) -> set:
+    """Lower-case symbols and company names of the event book's extension stocks (fail-open: empty)."""
+    from src.event_engine import settings, universe
+    try:
+        syms = universe.extension_symbols(cfg or settings(), fo)
+        names = json.loads(Path(companies_path or COMPANIES_PATH).read_text()).get("companies") or {}
+    except (OSError, ValueError):
+        return set()
+    terms = set()
+    for sym in syms:
+        if sym not in WORD_SYMBOLS:
+            terms.add(sym.lower())
+        terms.update(n.lower() for n in names.get(sym) or () if n.upper() not in WORD_SYMBOLS)
+    return terms
+
+
+def _universe_pattern(cfg=None, fo=None, companies_path=None):
     from src.options_proposer import EQUITY_OPTION_UNDERLYINGS
-    terms = set(INDEX_TERMS)
+    terms = set(INDEX_TERMS) | _extension_terms(cfg, fo, companies_path)
     for sym in EQUITY_OPTION_UNDERLYINGS:
         base = sym.removesuffix(".NS")
         terms.add(base.lower())
@@ -73,7 +94,10 @@ def in_universe(item: dict) -> bool:
     index-level / policy term. Text only — the exact underlying is the LLM's call, after this."""
     if str(item.get("source") or "").startswith("inbox:"):
         return True
-    return bool(_universe_pattern().search(f"{item.get('title') or ''} {item.get('text') or ''}"))
+    global _PATTERN
+    if _PATTERN is None:
+        _PATTERN = _universe_pattern()
+    return bool(_PATTERN.search(f"{item.get('title') or ''} {item.get('text') or ''}"))
 
 
 def inbox_items(inbox_dir=None) -> list:

@@ -43,6 +43,21 @@ the agent's job under the Session Wrap rule above.
 > section contradicts a newer one, **the newer one wins.** For the narrative
 > arc, see `PROJECT_TIMELINE.md`; for the reasoning, `DECISIONS.md`.
 
+## 2026-11-23 (Mon, ~05:00 IST) — why PAPER_EVENTS never traded (Issue 63, verified); owner: "widen the lists" → #191 built on branch `feature/events-universe-widen`; NOT merged, NOT deployed
+
+- **Cause (verified read-only on the VM and Mini PC):** the job runs and the cards ship. All 11 trade ideas on the 7 cards that reached the VM named stocks outside the VM's 9-name option list (4 indices + 5 stocks), so each one abstained at the first gate. No later gate has ever run live. Detail: ledger Issue 63.
+- **Built on the branch (#191, PAPER_EVENTS only):** the event book may now trade the tier1 + tier2 F&O stocks (59 names on the 11-20 file) that are not banned and have a Dhan id. Lot sizes come from NSE's own daily F&O file (quantity ÷ contracts, per expiry). A new stock is held to the stock-option 7-day exit window. The ₹5,000 cap, the main books and the tip desk are unchanged. 13 new tests.
+- **Replay of the past 11 ideas:** 6 would now pass the stock check (ADANIGREEN ×2, NTPC, BSE, PAYTM, INDIGO). Each still has to fit ₹5,000 for one lot, which many stock options will not (NTPC lot 1,500, INDIGO 150).
+- **This morning is untouched:** nothing from this branch was pulled onto the VM, Mini PC or Mac checkout. The VM is on `c3601cd` (the 04:22 tip-desk deploy below), which does not include this branch.
+- **To deploy (owner's go, after the 15:30 close), any order is safe:**
+  1. Merge the branch to `main` and push.
+  2. Mac main checkout: `git pull` (the next F&O snapshot then carries `lots`; until it does, new stocks abstain with "no exchange lot size").
+  3. VM: `cd ~/alpha_trading && git fetch -q && git merge --ff-only origin/main` (no restart needed: the executor runs fresh from cron at 09:35).
+  4. Mini PC: the same pull. Its `data/fo_liquidity.json` and `data/darling_ids.json` are dated 10-16, so the widened news filter there uses 10-16 tiers until they refresh.
+  5. Next market day after 09:35, read `logs/event_executor.log`.
+- **Owner choices still open:** add `"illiquid"` to `event_engine.universe_tiers` in `config.json` to go wider (CONCOR, TATAPOWER would also need a Dhan id). The ₹5,000 cap is untouched.
+- **Found on the way (NOT fixed):** NSE revised lot sizes for the Jan-2027 contracts (HDFCBANK 650→750, INFY 400→500, TCS 225→250). `options_proposer.EQUITY_OPTION_UNDERLYINGS` hard-codes the old ones, so the main books would mis-size a Jan-2027 stock contract. That needs a fix before those contracts are traded.
+
 ## 2026-11-23 (Mon, 04:22 IST) — #tip-desk (#189) + Arm 2 call grading (#190) + Issue 62 fix DEPLOYED to the VM (`c3601cd`, owner go "now, before open") — but INERT until the owner adds two Discord ids
 
 - **Live now (verified on the VM 04:22):** code `c3601cd` (ff from `8973ff7`); cron 45 → 47 lines (#41 `14 9 * * 1-5 src.tip_desk.manager`, #42 `40 20 * * 1-5 src.tip_desk.calls --grade --notify`; backup `~/user_crontab.bak-20261123-tipdesk`); `alpha-trading`, `alpha-discord-bot`, `cloudflared-tunnel` active; the bot reconnected to the Discord gateway; `/api/tipdesk/open` → `PAPER_TIP_SANDBOX` ₹20,000 free, 0 open; tables `tip_ledger` / `tip_cards` / `tip_positions` created (`tip_calls` appears on the first ingest).

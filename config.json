@@ -18,7 +18,9 @@
     "graphrag_shadow_enabled": true,
     "graphrag_shadow_daily_cap": 600,
     "move_per_revenue_pct": 1.0,
-    "priced_in_tolerance_pct": 1.0
+    "priced_in_tolerance_pct": 1.0,
+    "universe_tiers": ["tier1", "tier2"],
+    "universe_max_age_days": 5
   },
   "rsi_overbought": 70,
   "rsi_oversold": 30,

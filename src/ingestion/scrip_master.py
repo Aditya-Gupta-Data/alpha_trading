@@ -812,7 +812,8 @@ def _darling_symbols(tiers_path=None, journal_path=None,
                 for r in rows if r.get("symbol")}
     return sorted(screened | _open_position_symbols(journal_path)
                   | _already_resolved_symbols(out_path)
-                  | _tier1_fo_symbols(fo_path))
+                  | _tier1_fo_symbols(fo_path)
+                  | _event_fo_symbols(fo_path))
 
 
 def _tier1_fo_symbols(fo_path=None) -> set:
@@ -830,6 +831,16 @@ def _tier1_fo_symbols(fo_path=None) -> set:
     return {str(sym).upper() for sym, row in (fo.get("symbols") or {}).items()
             if isinstance(row, dict) and row.get("tier") == "tier1"
             and str(sym).upper() not in banned}
+
+
+def _event_fo_symbols(fo_path=None) -> set:
+    """decision #191: the event book's extension stocks (its configured tiers) need ids too."""
+    try:
+        from src.event_engine import settings, universe
+        fo = universe.load_fo(fo_path) if fo_path else universe.load_fo()
+        return universe.extension_symbols(settings(), fo)
+    except Exception:
+        return set()
 
 
 def build_darling_ids(symbols=None, fetch_fn=None, out_path=None,

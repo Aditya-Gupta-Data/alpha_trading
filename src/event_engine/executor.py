@@ -9,9 +9,10 @@ only; ₹5,000 max loss a trade (the premium paid IS the stop); abstain when one
 strike paths (A fixed OTM, B the LLM's price range) open as separate, tagged trades.
 
 Gates, in order, every one named when it refuses: analytics node · `execute_enabled` (a real run) ·
-market open · card already seen · card schema/age · the ticker has an option contract in the VM's
-universe · an expiry clears the entry floor · the live chain answers · a strike exists · the ask is
-quoted (BUY at the ask, the #70 rule) · ≤ ₹5,000 · the paper-account door approves (its halts and cash).
+market open · card already seen · card schema/age · the ticker is in the event book's universe
+(`universe.resolve`, #191) · an expiry clears the entry floor · the exchange lot for that expiry is known ·
+the live chain answers · a strike exists · the ask is quoted (BUY at the ask, the #70 rule) · ≤ ₹5,000 ·
+the paper-account door approves (its halts and cash).
 """
 from __future__ import annotations
 
@@ -21,16 +22,16 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
-from src.event_engine import ACCOUNT, CARD_DIR, IST, ROOT, settings, store, strikes
+from src.event_engine import ACCOUNT, CARD_DIR, IST, ROOT, settings, store, strikes, universe
 from src.event_engine.card import validate
 
 VM_INBOX = ROOT / "data"                       # where the node's ship lane lands cards
-INDEX_ALIASES = {"NIFTY": "NIFTY 50", "NIFTY50": "NIFTY 50", "BANKNIFTY": "NIFTY BANK",
-                 "FINNIFTY": "NIFTY FIN SERVICE", "MIDCPNIFTY": "NIFTY MID SELECT"}
+INDEX_ALIASES = universe.INDEX_ALIASES
 
 
 def instrument(ticker: str):
-    """(underlying key, lot size) in the VM's option universe, or (None, reason)."""
+    """(underlying key, lot size) in the CORE option universe, or (None, reason). The tip desk's door;
+    the event book itself resolves through `universe.resolve`."""
     from src.options_proposer import EQUITY_OPTION_UNDERLYINGS, LOT_SIZES
     t = str(ticker or "").strip().upper().removesuffix(".NS")
     t = INDEX_ALIASES.get(t, t)
@@ -55,19 +56,16 @@ def card_files(dirs=None) -> list:
 
 
 def _default_expiries(underlying):
-    from src.dhan_client import get_expiry_list
-    return get_expiry_list(underlying) or []
+    return universe.expiries(underlying)
 
 
 def _default_chain(underlying, expiry):
-    from src.execution.live_pricer import _default_chain as chain
-    return chain(underlying, expiry)
+    return universe.chain(underlying, expiry)
 
 
 def _floor_days(underlying: str) -> int:
     try:
-        from src.options_proposer import min_days_to_expiry_for
-        return int(min_days_to_expiry_for(underlying))
+        return universe.floor_days(underlying)
     except Exception:
         return 7
 
@@ -84,10 +82,11 @@ def execute_suggestion(conn, card: dict, s: dict, today: date, dry_run: bool, cf
         if not dry_run:
             store.action(conn, eid, ticker, path, kind, reason, detail)
 
-    und, lot = instrument(ticker)
-    if und is None:
-        note(None, "abstained", lot)
+    meta = universe.resolve(ticker, cfg, today)
+    if not meta["ok"]:
+        note(None, "abstained", meta["reason"])
         return results
+    und = meta["underlying"]
     ot = strikes.option_type_for(s.get("direction"))
     if ot is None:
         note(None, "abstained", f"direction {s.get('direction')!r}")
@@ -102,6 +101,10 @@ def execute_suggestion(conn, card: dict, s: dict, today: date, dry_run: bool, cf
                                    _floor_days(und))
     if expiry is None:
         note(None, "abstained", "no expiry clears the entry floor")
+        return results
+    lot, why_lot = universe.lot_for(meta, expiry)
+    if lot is None:
+        note(None, "abstained", why_lot)
         return results
     try:
         chain = (chain_fn or _default_chain)(und, expiry)

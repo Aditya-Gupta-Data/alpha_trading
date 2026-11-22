@@ -157,6 +157,7 @@ EVENT_ENGINE_DEFAULTS = {
     "llm_daily_call_cap": 300, "llm_run_call_cap": 150, "move_per_revenue_pct": 1.0, "priced_in_tolerance_pct": 1.0,
     "graphrag_enabled": False, "graphrag_daily_cap": 100,
     "graphrag_shadow_enabled": False, "graphrag_shadow_daily_cap": 300,
+    "universe_tiers": ["tier1", "tier2"], "universe_max_age_days": 5,     # #191: the event book's F&O extension
 }
 EVENT_ENGINE = dict(EVENT_ENGINE_DEFAULTS, **(_CONFIG.get("event_engine") or {}))
 # #tip-desk (decision #189): owner-pasted tips → 1-tap paper cards on the isolated PAPER_TIP_SANDBOX book.

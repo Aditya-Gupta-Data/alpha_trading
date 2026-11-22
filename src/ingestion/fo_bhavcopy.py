@@ -136,6 +136,28 @@ def parse_fo_csv(text: str) -> dict:
     return out
 
 
+def parse_lot_sizes(text: str) -> dict:
+    """{SYM: {expiry ISO: lot}} for stock F&O: traded quantity ÷ contracts, the exchange's own lot.
+    Kept only when the division is exact and every row of that expiry agrees (#191)."""
+    seen = {}
+    for row in csv.DictReader(io.StringIO(text)):
+        r = {(k or "").strip().rstrip("*"): (v or "").strip() for k, v in row.items() if k}
+        sym = r.get("SYMBOL", "").upper()
+        if not sym or r.get("INSTRUMENT") not in ("OPTSTK", "FUTSTK"):
+            continue
+        qty, cont = _num(r.get("TRD_QTY")), _num(r.get("NO_OF_CONT"))
+        try:
+            exp = datetime.strptime(r.get("EXP_DATE", ""), "%d/%m/%Y").date().isoformat()
+        except ValueError:
+            continue
+        if not qty or not cont or cont <= 0 or qty % cont:
+            continue
+        seen.setdefault(sym, {}).setdefault(exp, set()).add(int(qty // cont))
+    out = {sym: {e: next(iter(v)) for e, v in sorted(exps.items()) if len(v) == 1}
+           for sym, exps in seen.items()}
+    return {sym: lots for sym, lots in out.items() if lots}
+
+
 def parse_secban(text: str) -> list:
     """Ban csv -> [SYMBOL, ...]. Format: 'sr,SYMBOL' rows after a header
     line; NULL-honest on shape surprises."""
@@ -163,7 +185,9 @@ def liquidity_snapshot(lake_dir=None, out_path=None,
         return {"status": "no_data"}
     day = fo_days[-1]
     fo_file = day / "fo.csv"
-    per_symbol = parse_fo_csv(fo_file.read_text(errors="replace"))
+    fo_text = fo_file.read_text(errors="replace")
+    per_symbol = parse_fo_csv(fo_text)
+    lots = parse_lot_sizes(fo_text)
     banned = []
     for d in reversed(days):              # newest ban list anywhere in lake
         sb = d / "secban.csv"
@@ -187,6 +211,8 @@ def liquidity_snapshot(lake_dir=None, out_path=None,
         symbols[sym] = {**{k: round(v, 2)
                            for k, v in per_symbol[sym].items()},
                         "rank": i, "tier": tier}
+        if lots.get(sym):
+            symbols[sym]["lots"] = lots[sym]
     snap = {"as_of": day.name, "generated_at":
             datetime.now(IST).replace(tzinfo=None)
                              .isoformat(timespec="seconds"),
